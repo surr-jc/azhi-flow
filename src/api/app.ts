@@ -24,6 +24,7 @@ import { newApiToken } from '../security/tokens.js';
 import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
+import { isWebPath, registerWebRoutes } from '../web/routes.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -61,7 +62,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz') return;
+    if (req.url === '/healthz' || isWebPath(req.url)) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -71,6 +72,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   };
   const notFound = (what: string) => new AzhiError(ErrorClass.invalidInput, `${what} not found`);
 
+  registerWebRoutes(app);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -197,14 +199,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     if (!v) throw notFound(`workflow version ${body.version}`);
     // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
     // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
+    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
     if (!body.test) {
-      const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
       if (!plan.ok) {
         const first = plan.blockers[0]!;
         throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
       }
     }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
+    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
     return reply.status(202).send({ run_id: r.runId });
   });
 

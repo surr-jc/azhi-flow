@@ -5,6 +5,7 @@ import type pg from 'pg';
 import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
+import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
 import type { RunSnapshot } from '../runtime/types.js';
 import { loadCatalog } from './catalog.js';
 import type { AppContext } from './context.js';
@@ -23,6 +24,8 @@ export interface CreateRunOptions {
   /** `azhi test-node`: run only this node, with upstream outputs from fixtures. */
   testNode?: { node: string; fixtures: Record<string, unknown> };
   interpreterBuild: string;
+  /** The run plan already built for this request; built here when absent (schedules). */
+  plan?: RunPlanReport;
 }
 
 /**
@@ -58,6 +61,10 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     )
   ).rows[0] as { userId: string; role: string } | undefined;
 
+  // The plan as it stood when the run was created is kept with the run, so the run page shows
+  // the coverage this run actually had, not whatever the workers look like later.
+  const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal));
+
   const runId = newId('run');
   const snapshot: RunSnapshot = {
     reference_time: (o.referenceTime ?? new Date()).toISOString(),
@@ -83,6 +90,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
       return { runId: existing, created: false };
     }
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger })]);
+    await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.planned',$3)`, [workspaceId, runId, JSON.stringify(plan)]);
     await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
     await c.query(`NOTIFY azhi_outbox`);
     return { runId, created: true };
@@ -107,7 +115,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     )
   ).rows[0];
   if (!run) return undefined;
-  const [attempts, actions, transitions, requests, decisions, usage, manifests] = await Promise.all([
+  const [attempts, actions, transitions, requests, decisions, usage, manifests, planned] = await Promise.all([
     ctx.pool.query(`SELECT node_id, attempt, state, worker_id, started_at, ended_at, error, output FROM node_attempts WHERE run_id=$1 ORDER BY started_at, node_id, attempt`, [runId]),
     ctx.pool.query(`SELECT id, node_id, tool, effect, state, fence, receipt, error, target, created_at, updated_at FROM actions WHERE run_id=$1 ORDER BY created_at`, [runId]),
     ctx.pool.query(
@@ -122,9 +130,11 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
       [runId],
     ),
     ctx.pool.query(`SELECT node_id, attempt, turn, tainted, items, total_tokens, token_source FROM context_manifests WHERE run_id=$1 ORDER BY node_id, attempt, turn`, [runId]),
+    ctx.pool.query(`SELECT data FROM run_events WHERE run_id=$1 AND kind='run.planned' ORDER BY seq LIMIT 1`, [runId]),
   ]);
   return {
     run,
+    plan: (planned.rows[0]?.data as RunPlanReport | undefined) ?? null,
     approvals: requests.rows.map((r) => {
       const d = decisions.rows.find((x) => x.node_id === r.node_id);
       return { node_id: r.node_id, requested_at: r.at, request: r.data, ...(d ? { decision: d.decision, decided_by: d.decided_by, decided_at: d.decided_at, data: d.data } : { decision: null }) };

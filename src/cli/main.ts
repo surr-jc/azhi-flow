@@ -204,6 +204,16 @@ program
   });
 
 program
+  .command('open')
+  .description('Print a link to the run page (or the runs list) that signs this browser tab in')
+  .argument('[run-id]')
+  .action((runId: string | undefined) => {
+    const cfg = resolveCliConfig(program.opts());
+    // The token rides in the URL fragment, which browsers never send to the server or in Referer.
+    console.log(`${cfg.url.replace(/\/$/, '')}/ui${runId ? `/runs/${encodeURIComponent(runId)}` : ''}#token=${encodeURIComponent(cfg.token)}`);
+  });
+
+program
   .command('runs')
   .description('List recent runs')
   .option('-n, --limit <n>', 'how many', '20')
