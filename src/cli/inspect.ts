@@ -25,6 +25,21 @@ export function printInspect(d: any) {
       ]),
     ]);
   }
+  if (d.usage?.turns) {
+    const u = d.usage;
+    const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out`;
+    const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.label} cost ${u.cost.amount.toFixed(4)} ${u.cost.currency} (pricing ${u.cost.pricing_revision})`;
+    console.log(`\n${bold('Usage')}  ${u.turns} model turns, ${u.completeness_pct}% complete, tokens ${tokens}, ${cost}`);
+  }
+  if (d.context_manifests?.length) {
+    console.log(`\n${bold('Context manifests')}`);
+    for (const m of d.context_manifests) {
+      const kinds = new Map<string, number>();
+      for (const i of m.items) kinds.set(i.kind, (kinds.get(i.kind) ?? 0) + 1);
+      console.log(`${m.node_id} turn ${m.turn}  ${m.total_tokens} tokens (${m.token_source})${m.tainted ? ` ${yellow('tainted')}` : ''}  ${dim([...kinds].map(([k, n]) => `${n} ${k}`).join(', '))}`);
+    }
+    console.log(dim(`    azhi inspect ${r.id} --context <node> for every item`));
+  }
   if (d.approvals?.length) {
     console.log(`\n${bold('Approvals')}`);
     for (const a of d.approvals) {
@@ -44,4 +59,16 @@ export function printInspect(d: any) {
       for (const t of a.transitions) console.log(dim(`    ${new Date(t.at).toISOString()}  ${t.state.padEnd(16)} attempt ${t.fence}${t.note ? `  ${t.note}` : ''}`));
     }
   }
+}
+
+/** Every item of the latest manifest of one agent node: source, reason and tokens. */
+export function printContext(d: any, node: string) {
+  const ms = (d.context_manifests ?? []).filter((m: any) => m.node_id === node);
+  if (!ms.length) {
+    console.log(`no context manifest for node ${node}`);
+    return;
+  }
+  const m = ms[ms.length - 1];
+  console.log(`${bold(node)} turn ${m.turn}: ${m.total_tokens} tokens (${m.token_source})${m.tainted ? ` ${yellow('tainted')}` : ''}`);
+  table([['KIND', 'SOURCE', 'REASON', 'TOKENS~'], ...m.items.map((i: any) => [i.kind, i.source, i.reason, String(i.tokens)])]);
 }

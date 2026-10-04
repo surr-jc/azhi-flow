@@ -35,6 +35,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   const catalog = await loadCatalog(ctx, workspaceId);
   const toolRevisions: Record<string, number> = {};
   for (const n of o.version.plan.nodes) if (n.tool) toolRevisions[n.tool.ref] = n.tool.revision ?? catalog.revisions.get(n.tool.ref) ?? 0;
+  for (const n of o.version.plan.nodes) for (const t of n.agentTools ?? []) toolRevisions[t.ref] ??= t.revision ?? catalog.revisions.get(t.ref) ?? 0;
   toolRevisions['slack.post-message@1'] ??= 0;
 
   const runId = newId('run');
@@ -83,7 +84,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     )
   ).rows[0];
   if (!run) return undefined;
-  const [attempts, actions, transitions, requests, decisions] = await Promise.all([
+  const [attempts, actions, transitions, requests, decisions, usage, manifests] = await Promise.all([
     ctx.pool.query(`SELECT node_id, attempt, state, worker_id, started_at, ended_at, error, output FROM node_attempts WHERE run_id=$1 ORDER BY started_at, node_id, attempt`, [runId]),
     ctx.pool.query(`SELECT id, node_id, tool, effect, state, fence, receipt, error, target, created_at, updated_at FROM actions WHERE run_id=$1 ORDER BY created_at`, [runId]),
     ctx.pool.query(
@@ -92,6 +93,12 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     ),
     ctx.pool.query(`SELECT node_id, data, at FROM run_events WHERE run_id=$1 AND kind='approval.requested' ORDER BY seq`, [runId]),
     ctx.pool.query(`SELECT node_id, decision, decided_by, data, decided_at FROM approvals WHERE run_id=$1`, [runId]),
+    ctx.pool.query(
+      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision
+       FROM usage_records WHERE run_id=$1 ORDER BY seq`,
+      [runId],
+    ),
+    ctx.pool.query(`SELECT node_id, attempt, turn, tainted, items, total_tokens, token_source FROM context_manifests WHERE run_id=$1 ORDER BY node_id, attempt, turn`, [runId]),
   ]);
   return {
     run,
@@ -99,6 +106,8 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
       const d = decisions.rows.find((x) => x.node_id === r.node_id);
       return { node_id: r.node_id, requested_at: r.at, request: r.data, ...(d ? { decision: d.decision, decided_by: d.decided_by, decided_at: d.decided_at, data: d.data } : { decision: null }) };
     }),
+    usage: summariseUsage(usage.rows),
+    context_manifests: manifests.rows,
     attempts: attempts.rows,
     actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
   };
@@ -113,4 +122,19 @@ export async function runEvents(ctx: AppContext, workspaceId: string, runId: str
       limit,
     ])
   ).rows as Array<{ seq: number; at: Date; kind: string; node_id: string | null; data: Record<string, unknown> }>;
+}
+
+/** Usage completeness (spec section 11): the share of turns whose token usage is known. */
+export function summariseUsage(rows: Array<Record<string, any>>) {
+  const known = rows.filter((r) => r.input_tokens !== null && r.output_tokens !== null);
+  const sum = (k: string) => (known.length ? known.reduce((n, r) => n + (r[k] ?? 0), 0) : null);
+  const costs = rows.filter((r) => r.cost_label !== 'unavailable');
+  return {
+    turns: rows.length,
+    completeness_pct: rows.length ? Math.round((known.length / rows.length) * 100) : null,
+    input_tokens: sum('input_tokens'),
+    output_tokens: sum('output_tokens'),
+    cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
+    records: rows,
+  };
 }

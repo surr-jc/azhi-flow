@@ -1,0 +1,28 @@
+# Fetch -> model agent (scripted provider) -> notify: exercises the platform-owned tool loop.
+schema_version: "2.0"
+id: agent-check
+config:
+  channel: C-QUALITY
+nodes:
+  - id: fetch
+    type: tool
+    tool: ci.list-runs@1
+    arguments: {team: payments}
+    project: [id, status]
+  - id: explain
+    type: agent
+    profile: analyst@1
+    input: {map: "{'runs': nodes.fetch.output}"}
+    tools: [ci.list-runs@1]
+    output_schema:
+      type: object
+      properties: {summary: {type: string}, failed: {type: integer}}
+      required: [summary, failed]
+      additionalProperties: false
+    budget: {max_tool_calls: 3}
+  - id: post
+    type: notify
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.explain.output.summary}
+    guard: "args.channel == config.channel"

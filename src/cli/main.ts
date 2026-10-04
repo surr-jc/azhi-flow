@@ -13,7 +13,7 @@ import { staticCatalog, type ToolCatalog } from '../gateway/types.js';
 import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
-import { printInspect } from './inspect.js';
+import { printContext, printInspect } from './inspect.js';
 import { signForUpload } from './signing-client.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
@@ -160,9 +160,11 @@ program
   .description('Show a run: state, flags, nodes, attempts and the action ledger')
   .argument('<run-id>')
   .option('--json', 'print raw JSON')
-  .action(async (runId: string, opts: { json?: boolean }) => {
+  .option('--context <node>', 'show the context manifest of an agent node')
+  .action(async (runId: string, opts: { json?: boolean; context?: string }) => {
     const d = await client().get<any>(`/v1/runs/${runId}`);
     if (opts.json) console.log(JSON.stringify(d, null, 2));
+    else if (opts.context) printContext(d, opts.context);
     else printInspect(d);
   });
 

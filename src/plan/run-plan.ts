@@ -1,7 +1,10 @@
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
 import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js';
+import { parseProfile } from '../agents/profile.js';
+import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
+import { packageFile } from '../server/packages.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
@@ -147,6 +150,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           { name: 'usage reporting', mark: mark('usage', c.usage !== 'unavailable'), detail: c.usage },
           { name: 'cancellation', mark: mark('cancellation', c.cancellation !== 'none'), detail: c.cancellation },
         );
+        if (executor === 'model-agent') np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing)));
         if (def.tools?.length) np.requirements.push({ name: 'gateway tools', mark: mark('gatewayTools', c.gatewayTools !== 'none', c.gatewayTools === 'bridged'), detail: c.gatewayTools });
         for (const t of def.tools ?? []) np.requirements.push(toolRequirement(n, t));
         if (def.requires?.enforced_restrictions && c.ambientTools === 'uncontrolled') {
@@ -216,4 +220,45 @@ const RANK: Record<string, number> = { viewer: 0, operator: 1, author: 2, admin:
 export function datasetAllows(acl: { roles?: string[]; users?: string[] }, p: { userId: string; role: string }): boolean {
   if (acl.users?.includes(p.userId)) return true;
   return (acl.roles ?? []).some((r) => RANK[p.role]! >= RANK[r]!);
+}
+
+/** The model binding, credential and budget enforceability of a model-agent node. */
+async function modelRequirements(
+  ctx: AppContext,
+  workspaceId: string,
+  packageHash: string,
+  def: AgentNode,
+  node: string,
+  secrets: Set<string>,
+  missing: RunPlanReport['missing_grants'],
+): Promise<Requirement[]> {
+  const path = profilePath(def.profile);
+  let profile;
+  try {
+    profile = parseProfile((await packageFile(ctx, workspaceId, packageHash, path)).toString('utf8'), path);
+  } catch (e) {
+    return [{ name: `profile ${def.profile}`, mark: 'unsupported', detail: (e as Error).message }];
+  }
+  const reqs: Requirement[] = [];
+  if (profile.model.provider === 'scripted') {
+    reqs.push({ name: 'model binding', mark: 'native', detail: 'scripted provider (fixtures and tests only)' });
+  } else {
+    const model = profile.model.name && profile.model.name !== 'default' ? profile.model.name : ctx.settings.anthropicModel;
+    reqs.push(
+      model
+        ? { name: 'model binding', mark: 'native', detail: `anthropic ${model}${profile.model.name && profile.model.name !== 'default' ? '' : ' (server default)'}` }
+        : { name: 'model binding', mark: 'unsupported', detail: 'the profile uses the default model and AZHI_ANTHROPIC_MODEL is not set' },
+    );
+    const credential = profile.model.credential ?? 'anthropic-api-key';
+    if (!secrets.has(credential)) missing.push({ kind: 'secret', name: credential, node });
+    reqs.push({ name: `credential ${credential}`, mark: secrets.has(credential) ? 'native' : 'unsupported', detail: secrets.has(credential) ? 'set' : `MISSING (azhi secret set ${credential})` });
+  }
+  if (def.budget?.max_cost_usd !== undefined) {
+    reqs.push(
+      profile.pricing
+        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'native', detail: `estimated from pricing ${profile.pricing.revision}` }
+        : { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'the profile declares no pricing, so cost is unavailable and this cap cannot be enforced' },
+    );
+  }
+  return reqs;
 }

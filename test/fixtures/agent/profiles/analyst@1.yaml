@@ -1,0 +1,8 @@
+# Scripted provider: deterministic turns for tests. Turn 2 submits an invalid output to exercise repair.
+model: {provider: scripted}
+instructions: Explain the CI runs in one sentence. Do not recalculate numbers.
+pricing: {currency: USD, input_per_mtok: 1, output_per_mtok: 5, revision: test-2026-10}
+script:
+  - {tool: ci.list-runs@1, args: {team: payments}}
+  - {output: {summary: 1}}
+  - {output: {summary: "1 of 4 runs failed (r3).", failed: 1}}

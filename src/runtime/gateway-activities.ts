@@ -1,4 +1,5 @@
 import { Context } from '@temporalio/activity';
+import { agentBegin, agentTurn } from '../agents/model-agent.js';
 import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import { asArtifact, callTool } from '../gateway/gateway.js';
 import { byteSize } from '../lib/json.js';
@@ -163,6 +164,51 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
 
     async issueRunToken(workspaceId, runId, nodeId, tools) {
       return signRunToken(ctx.secretKey, { ws: workspaceId, run: runId, node: nodeId, tools, exp: Math.floor(Date.now() / 1000) + 3600 });
+    },
+
+    async agentBegin(input) {
+      await ctx.pool.query(
+        `INSERT INTO node_attempts(workspace_id, run_id, node_id, attempt, state, worker_id) VALUES ($1,$2,$3,1,'running',$4)
+         ON CONFLICT (run_id, node_id, attempt) DO UPDATE SET state='running'`,
+        [input.workspaceId, input.runId, input.nodeId, `model-agent:${process.pid}`],
+      );
+      try {
+        return await agentBegin(ctx, input);
+      } catch (err) {
+        throw toFailure(err);
+      }
+    },
+
+    async agentTurn(input) {
+      const c = Context.current();
+      const hb = setInterval(() => c.heartbeat(), 5000);
+      try {
+        const r = await agentTurn(ctx, input, { fence: c.info.attempt, signal: c.cancellationSignal });
+        if (r.done) {
+          const stored = byteSize(r.output) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, input.workspaceId, r.output) : r.output;
+          await ctx.pool.query(`UPDATE node_attempts SET state='succeeded', ended_at=now(), output=$4 WHERE run_id=$1 AND node_id=$2 AND attempt=$3`, [
+            input.runId,
+            input.nodeId,
+            1,
+            JSON.stringify(stored ?? null),
+          ]);
+        }
+        return r;
+      } catch (err) {
+        throw toFailure(err);
+      } finally {
+        clearInterval(hb);
+      }
+    },
+
+    async agentFailed(runId, workspaceId, nodeId, error) {
+      await ctx.pool.query(`UPDATE node_attempts SET state='failed', ended_at=now(), error=$4 WHERE run_id=$1 AND node_id=$2 AND attempt=$3 AND workspace_id=$5`, [
+        runId,
+        nodeId,
+        1,
+        JSON.stringify(error),
+        workspaceId,
+      ]);
     },
 
     async requestApproval(runId, workspaceId, nodeId, request) {

@@ -20,7 +20,7 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { ApprovalNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
+import type { AgentNode, ApprovalNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
@@ -44,6 +44,17 @@ function gatewayOn(queue: string, node: PlanNode) {
     startToCloseTimeout: node.timeoutMs,
     heartbeatTimeout: node.type === 'notify' || node.tool?.effect !== 'read' ? '20s' : undefined,
     retry: { initialInterval: '1s', backoffCoefficient: 2, maximumInterval: '1m', maximumAttempts: node.maxAttempts, nonRetryableErrorTypes: NON_RETRYABLE },
+  });
+}
+
+/** One model turn per activity; transient provider errors retry, contract and budget errors don't. */
+function agentOn(queue: string, node: PlanNode) {
+  return proxyActivities<GatewayActivities>({
+    taskQueue: queue,
+    startToCloseTimeout: '5m',
+    heartbeatTimeout: '30s',
+    cancellationType: ActivityCancellationType.TRY_CANCEL,
+    retry: { initialInterval: '2s', backoffCoefficient: 2, maximumInterval: '1m', maximumAttempts: node.maxAttempts, nonRetryableErrorTypes: NON_RETRYABLE },
   });
 }
 
@@ -105,6 +116,47 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     } else if (!first && waiting?.reason === 'approval') {
       const { waiting_reason: _cleared, ...flags } = status.flags;
       await setState('running', { flags, event: 'run.resumed' });
+    }
+  };
+
+  const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
+    if ((def.executor ?? 'model-agent') !== 'model-agent') {
+      throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${def.executor}' is not available on this interpreter build`, nonRetryable: true });
+    }
+    const act = agentOn(gatewayQueue, node);
+    const tools = (node.agentTools ?? []).map((t) => ({ ref: t.ref, effect: t.effect, safeForTainted: t.safeForTainted, revision: snapshot.tool_revisions[t.ref] ?? t.revision }));
+    const deadline = Date.now() + node.timeoutMs;
+    try {
+      let state = await act.agentBegin({
+        runId,
+        workspaceId,
+        nodeId: node.id,
+        packageHash: snapshot.package_hash,
+        profile: def.profile,
+        outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
+        tools,
+        input: resolveValue(def.input, s) ?? null,
+        inputSources: node.dataDeps,
+      });
+      for (;;) {
+        if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });
+        const r = await act.agentTurn({
+          runId,
+          workspaceId,
+          nodeId: node.id,
+          packageHash: snapshot.package_hash,
+          tools,
+          tainted: plan.taint.tainted[node.id],
+          budget: def.budget,
+          state,
+        });
+        if (!r.usageKnown && !status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
+        if (r.done) return r.output;
+        state = r.state;
+      }
+    } catch (err) {
+      if (!isCancellation(err)) await bookkeeping.agentFailed(runId, workspaceId, node.id, toNodeError(err));
+      throw err;
     }
   };
 
@@ -294,6 +346,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         }
         return { output: { items: results, completed, failed } };
       }
+      case 'agent':
+        return { output: await runAgent(node, node.def as AgentNode, s) };
       case 'approval':
         return { output: await awaitApproval(node, node.def as ApprovalNode, s) };
       default:
