@@ -415,9 +415,12 @@ users.command('list').action(async () => {
 program
   .command('login')
   .description('Save the server URL and API token for this CLI')
-  .requiredOption('--url <url>')
-  .requiredOption('--token <token>')
-  .action(async (opts: { url: string; token: string }) => {
+  .option('--url <url>', 'server URL')
+  .option('--token <token>', 'API token')
+  .action(async (cmdOpts: { url?: string; token?: string }) => {
+    // --url and --token are also global options, so commander hands them to the program, not to login.
+    const opts = { ...program.opts(), ...cmdOpts } as { url?: string; token?: string };
+    if (!opts.url || !opts.token) throw new Error('azhi login needs --url <url> and --token <token>');
     saveCliConfig({ url: opts.url, token: opts.token });
     const me = await client().get<any>('/v1/me');
     console.log(`logged in to ${opts.url} as ${me.userId} (${me.role})`);
