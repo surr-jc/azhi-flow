@@ -78,15 +78,16 @@ async function upload(path: string) {
 }
 
 const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), '../../examples');
+const templateNames = () => (existsSync(TEMPLATES) ? readdirSync(TEMPLATES) : []);
 
 program
   .command('init')
   .description('Create a workflow package from a template (default: the weekly quality report)')
   .argument('[dir]', 'directory to create', 'quality-report')
-  .option('-t, --template <name>', `template: ${readdirSync(TEMPLATES).join(' | ')}`, 'quality-report')
+  .option('-t, --template <name>', `template: ${templateNames().join(' | ') || 'quality-report'}`, 'quality-report')
   .action((dir: string, opts: { template: string }) => {
     const from = join(TEMPLATES, opts.template);
-    if (!existsSync(from)) throw new Error(`no template '${opts.template}' (have: ${readdirSync(TEMPLATES).join(', ')})`);
+    if (!existsSync(from)) throw new Error(`no template '${opts.template}' (have: ${templateNames().join(', ') || 'none'})`);
     if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} exists and is not empty`);
     cpSync(from, dir, { recursive: true });
     console.log(`${green('created')} ${resolve(dir)} from the ${opts.template} template`);

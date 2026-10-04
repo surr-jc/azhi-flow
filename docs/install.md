@@ -45,6 +45,8 @@ Options, all environment variables:
 | `AZHI_AUTH_MODE`, `AZHI_OIDC_ISSUER`, `AZHI_OIDC_AUDIENCE` | `local` | switch to OIDC for a team |
 | `AZHI_COMPOSE_PROJECT` | `azhi` | run a second, isolated stack on one host |
 
+Existing installs from before commit "Docker image includes examples/" crash on start (`ENOENT ... /app/examples`); update the repo and re-run `deploy/install.sh` to rebuild the image.
+
 Do not delete `deploy/.env` while the database volume exists: the database keeps the password it
 was created with.
 
