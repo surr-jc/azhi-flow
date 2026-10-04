@@ -378,7 +378,7 @@ function collectDocuments(paths: string[]): Array<{ path: string; content: strin
 function readSecretStdin(): string {
   const raw = readFileSync(0);
   const utf16 = raw[0] === 0xff && raw[1] === 0xfe ? raw.subarray(2).toString('utf16le') : raw.length > 1 && raw[1] === 0 ? raw.toString('utf16le') : undefined;
-  return (utf16 ?? raw.toString('utf8')).replace(/^﻿/, '').replace(/ /g, '').trim();
+  return (utf16 ?? raw.toString('utf8')).replace(/^FEFF/, '').replace(/ /g, '').trim();
 }
 
 const secret = program.command('secret').description('Manage workspace secrets');
