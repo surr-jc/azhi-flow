@@ -1,6 +1,7 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { compile } from '../compiler/compile.js';
 import { loadAdminConfig } from '../config/admin.js';
 import { settings } from '../config/settings.js';
@@ -75,6 +76,22 @@ async function upload(path: string) {
   }
   return r.version!;
 }
+
+const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), '../../examples');
+
+program
+  .command('init')
+  .description('Create a workflow package from a template (default: the weekly quality report)')
+  .argument('[dir]', 'directory to create', 'quality-report')
+  .option('-t, --template <name>', `template: ${readdirSync(TEMPLATES).join(' | ')}`, 'quality-report')
+  .action((dir: string, opts: { template: string }) => {
+    const from = join(TEMPLATES, opts.template);
+    if (!existsSync(from)) throw new Error(`no template '${opts.template}' (have: ${readdirSync(TEMPLATES).join(', ')})`);
+    if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} exists and is not empty`);
+    cpSync(from, dir, { recursive: true });
+    console.log(`${green('created')} ${resolve(dir)} from the ${opts.template} template`);
+    console.log(`next: azhi apply ${join(dir, 'azhi.config.yaml')} && azhi plan ${dir}`);
+  });
 
 program
   .command('validate')

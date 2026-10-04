@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "compare": "tsx bench/compare.ts"
+    "compare": "tsx bench/compare.ts",
+    "demo": "tsx demo/demo.ts"
   },
   "dependencies": {
     "@marcbachmann/cel-js": "8.0.0",

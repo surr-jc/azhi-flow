@@ -1,0 +1,94 @@
+{
+  "at": "2026-10-04T13:17:35.056Z",
+  "real_model": false,
+  "results": [
+    {
+      "n": 1,
+      "title": "Fresh install of server plus one worker in under 15 minutes",
+      "pass": null,
+      "evidence": [
+        "not run: pass --install to time deploy/install.sh on this host (see docs/install.md)"
+      ]
+    },
+    {
+      "n": 2,
+      "title": "`azhi plan` shows capabilities, coverage and taint paths; an ungated tainted write is rejected",
+      "pass": true,
+      "evidence": [
+        "azhi plan exited 0; full output in /tmp/azhi-demo-T4edph/plan.txt",
+        "  | enforced      ci.list-runs@1 (read) gateway authorises, validates and projects",
+        "  | enforced      tests.list-flaky@1 (read) gateway authorises, validates and projects",
+        "  | enforced      incidents.list-open@1 (read) gateway authorises, validates and projects",
+        "  | enforced      tool calls from the script only through the gateway with a run-scoped token",
+        "  | unobservable  network and filesystem access from the script process a subprocess is not a sandbox; trusted-author packages only",
+        "  | analyse agent · model-agent tainted: reads incidents, whose output of incidents.list-open@1 is not marked trusted",
+        "  | enforced      gateway tool calls platform-owned tool loop",
+        "  | enforced      ambient (built-in) tools none exist",
+        "without the guard: exit 1: error tainted_write_ungated [post]: write 'post' can receive output of tainted agent 'analyse' (reads incidents, whose output of incidents.list-open@1 is not marked trusted) via analyse -> report -> post with no approval, CEL guard or safe-for-tainted tool"
+      ]
+    },
+    {
+      "n": 3,
+      "title": "The scheduled run completes with no client attached; Slack gets citations and as-of times",
+      "pass": true,
+      "evidence": [
+        "published quality-report@1 (sha256:48e91955e41e)",
+        "schedule sch_01a1070b33034d8314aa1411: next occurrence 2026-10-04T13:13:00.000Z (every minute for the demo; the package says Mondays 08:00)",
+        "no CLI or browser is attached; waiting for the message to reach Slack",
+        "  slack | *Weekly quality report: payments*",
+        "  slack | Pass rate fell 10 points to 85.0%; most failures were the flaky checkout test.",
+        "  slack | • Pass rate 85% (-10 pts week over week), 17 of 20 main runs",
+        "  slack | • Flake rate 66.7% (-33.3 pts); 2 flaky tests, 1 quarantined",
+        "  slack | • Mean time to green 12 h (4 h)",
+        "  slack | • Open incidents: 1",
+        "  slack | – Two of three failures were test_checkout_timeout, which is flaky and not quarantined yet. [1]",
+        "  slack | – Mean time to green rose by 4.0 h. [2]",
+        "  slack | [1] quality-guidelines.md › Quality guidelines > Flaky tests > Flake rate (quality-guidelines@1)",
+        "  slack | [2] quality-guidelines.md › Quality guidelines > Pass rate (quality-guidelines@1)",
+        "  slack | _ci data as of 2026-10-04T13:13:03.111Z_",
+        "  slack | _flaky-tests data as of 2026-10-04T13:13:03.110Z_",
+        "  slack | _incidents data as of 2026-10-04T13:13:03.099Z_",
+        "run run_01a1070be643cfe89b2567ce: succeeded, trigger schedule"
+      ]
+    },
+    {
+      "n": 4,
+      "title": "The process posting to Slack is killed mid-post; recovery sends exactly one message",
+      "pass": true,
+      "evidence": [
+        "the Slack post runs in the gateway, so the gateway is the process killed (after the send, before the receipt)",
+        "started run_01a1070bfa1db976634f92db; gateway exited with SIGKILL; messages in Slack so far: 1",
+        "run succeeded; Slack messages for this run: 1",
+        "ledger act_06e82cc9bd33ff5549b884eb532cfc04: planned → dispatched → outcome_unknown (attempt 1 ended without a receipt) → confirmed (reconciled: found on target by dedupe key)"
+      ]
+    },
+    {
+      "n": 5,
+      "title": "A worker with the `self` trust policy refuses another author's package at plan time",
+      "pass": true,
+      "evidence": [
+        "  | signer: usr_01a1070c57d20896adbfb0dd",
+        "  | unsupported   worker trust policy accepts the package signer demo-worker: policy 'self' accepts only usr_local; package signed by usr_01a1070c57d20896adbfb0dd",
+        "  | unobservable  network and filesystem access from the script process a subprocess is not a sandbox; trusted-author packages only",
+        "  | analyse agent · model-agent tainted: reads incidents, whose output of incidents.list-open@1 is not marked trusted",
+        "  | ✗ demo-worker {\"kind\":\"self\"} policy 'self' accepts only usr_local; package signed by usr_01a1070c57d20896adbfb0dd",
+        "  | blocked worker_trust_denied: no capable worker will run this package (demo-worker: policy 'self' accepts only usr_local; package signed by usr_01a1070c57d20896adbfb0dd)",
+        "azhi run as the second author: exit 1: error: run plan has 2 blocker(s): no capable worker will run this package (demo-worker: policy 'self' accepts only usr_local; package signed by usr_01a1070c57d20896adbfb0dd); metrics: worker trust policy accepts the package signer: demo-worker: policy 'self' accepts only usr_local; package signed by usr_01a1070c57d20896adbfb0dd"
+      ]
+    },
+    {
+      "n": 6,
+      "title": "The same 30 fixtures through the model agent and OpenCode",
+      "pass": true,
+      "evidence": [
+        "  | | agent | opencode |",
+        "  | Contract success | 30 / 30 | 30 / 30 |",
+        "  | Median agent-node latency | 207 ms | 5975 ms |",
+        "  | Total cost | $0.0432 (estimated) | $0.0636 (estimated) |",
+        "  | Runs with complete usage | 30 / 30 | 0 / 30 |",
+        "  | Runs offered a non-gateway tool | 0 / 30 | 0 / 30 |",
+        "report: /tmp/azhi-demo-T4edph/executor-comparison.md"
+      ]
+    }
+  ]
+}

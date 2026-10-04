@@ -13,7 +13,8 @@ Plan for the design.
 | 0. Spikes and kill criteria | Done: [docs/phase-0-results.md](docs/phase-0-results.md) |
 | 1. Durable core | Done: [docs/phase-1.md](docs/phase-1.md) |
 | 2. Agents and trust | Done: [docs/phase-2.md](docs/phase-2.md) |
-| 3. Flagship workflow and alpha demo | Not started |
+| 3. Flagship workflow and alpha demo | Done: [docs/phase-3.md](docs/phase-3.md); checks 2 to 6 pass in `npm run demo`, check 1 timed in [docs/install.md](docs/install.md) |
+| 4. First release | Outlined in [docs/phase-3.md](docs/phase-3.md#phase-4-first-release-outline) |
 
 ## What works today
 
@@ -34,6 +35,21 @@ Plan for the design.
   validated output with two repairs, budgets, usage with null for unknown, a context manifest per turn.
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
+- The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to
+  immutable excerpts and per-source as-of times.
+- OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
+  `npm run compare` runs 30 fixtures through both executors and writes a report.
+- A read-only web run page (`azhi open <run>`): graph, timeline, ledger, policy coverage, context
+  manifest and usage, updated live over SSE.
+- A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
+
+## Install for a team
+
+```bash
+deploy/install.sh     # PostgreSQL + pgvector, Temporal and the server, healthy, with an owner token
+```
+
+See [docs/install.md](docs/install.md) for options, documented hardware, timings and workers.
 
 ## Quick start (local)
 
@@ -86,6 +102,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 
 | Command | What it does |
 |---------|--------------|
+| `azhi init [dir] [-t template]` | Create a package from a template (default: the quality report) |
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
 | `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |
@@ -103,6 +120,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi server start [--roles ...]`, `azhi server migrate` | Run the server; roles: `api,interpreter,gateway,scheduler` |
 | `azhi worker start` | Run an execution worker on this host |
 | `azhi login --url --token` | Save credentials for a remote server |
+| `azhi open [run]` | Print a link to the web run page that signs the browser tab in |
 
 ## Tests
 
@@ -113,12 +131,21 @@ npm test     # unit tests; end-to-end tests run when Temporal is reachable on AZ
 
 End-to-end tests create a fresh database per file on `AZHI_TEST_DATABASE_URL`
 (default `postgres://azhi:azhi@localhost:5433/azhi`). `test/gate1.test.ts` is the phase 1 gate and `test/gate2.test.ts` the phase 2 gate
-(refresh its golden plan with `UPDATE_GOLDEN=1` after an intended change).
+(refresh its golden plan with `UPDATE_GOLDEN=1` after an intended change). `test/opencode.test.ts`
+runs OpenCode for real against a scripted Anthropic-compatible endpoint, and `test/web.test.ts`
+drives the run page in Chromium.
+
+```bash
+npm run compare   # model agent vs OpenCode on 30 fixtures -> docs/executor-comparison.md
+npm run demo      # the six alpha checks (see demo/README.md)
+```
 
 ## Repository layout
 
 ```
-deploy/       Docker Compose for the team install
+bench/        Executor comparison: 30 fixtures and the runner
+demo/         The six-check alpha demo
+deploy/       Docker Compose and install.sh for the team install
 docs/         Phase results and architecture decision records
 examples/     Example workflow packages
 migrations/   SQL migrations (source of truth for the schema)
@@ -137,6 +164,8 @@ src/
   security/   Secrets, tokens, package signing and trust policies
   runtime/    Temporal interpreter workflow and activities
   server/     Server process, outbox, scheduler, services
+  testing/    Fake Slack and Anthropic endpoints for tests, the comparison and the demo
+  web/        The read-only run page
   worker/     Execution worker and script runtimes
 test/         Unit and end-to-end tests
 ```
