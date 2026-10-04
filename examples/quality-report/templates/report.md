@@ -13,6 +13,10 @@
 _The analyst flagged insufficient evidence for part of this explanation._
 {{/a.insufficient_evidence}}
 
+{{#citations}}
+[{{n}}] {{document}} › {{heading}} ({{dataset}}@{{revision}})
+{{/citations}}
+
 {{#as_of}}
 _{{source}} data as of {{observed_at}}_
 {{/as_of}}

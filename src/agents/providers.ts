@@ -114,8 +114,18 @@ export function scriptedProvider(script: ScriptedTurn[]): ModelProvider {
       const usage: Usage =
         entry && 'usage' in entry && entry.usage === null ? UNKNOWN_USAGE : { input_tokens: 100, output_tokens: 20, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
       const id = `call_${turn + 1}`;
+      // `{{chunk:N}}` in a scripted output stands for the Nth excerpt ID the agent was shown.
+      const shown = [...JSON.stringify(req.messages[0]?.content ?? []).matchAll(/\[(c_[0-9a-f]{20})\]/g)].map((m) => m[1]!);
+      const fill = (v: unknown): unknown =>
+        typeof v === 'string'
+          ? v.replace(/\{\{chunk:(\d+)\}\}/g, (_, n) => shown[Number(n)] ?? 'c_00000000000000000000')
+          : Array.isArray(v)
+            ? v.map(fill)
+            : v && typeof v === 'object'
+              ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)]))
+              : v;
       if (entry && 'tool' in entry) return { content: [{ type: 'tool_use', id, name: toolName(String(entry.tool)), input: (entry.args as Record<string, unknown>) ?? {} }], stop: 'tool_use', usage, model: 'scripted' };
-      if (entry && 'output' in entry) return { content: [{ type: 'tool_use', id, name: SUBMIT_TOOL, input: entry.output as Record<string, unknown> }], stop: 'tool_use', usage, model: 'scripted' };
+      if (entry && 'output' in entry) return { content: [{ type: 'tool_use', id, name: SUBMIT_TOOL, input: fill(entry.output) as Record<string, unknown> }], stop: 'tool_use', usage, model: 'scripted' };
       return { content: [{ type: 'text', text: String(entry?.text ?? '') }], stop: 'end', usage, model: 'scripted' };
     },
   };

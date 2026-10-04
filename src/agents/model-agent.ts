@@ -11,6 +11,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
+import { citationIds } from '../runtime/report.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
 import { anthropicProvider, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
@@ -70,6 +71,8 @@ interface Transcript {
   /** The output schema was not an object, so submit_output takes `{ value }`. */
   wrapped: boolean;
   items: ManifestItem[];
+  /** Chunk IDs the agent was shown; citing anything else is a contract violation. */
+  chunkIds?: string[];
 }
 
 export interface AgentState {
@@ -218,6 +221,7 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<A
     wrapped,
     messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
     items,
+    chunkIds: (i.chunks ?? []).map((c) => c.id),
   };
   return { transcript: saveTranscript(ctx, t), turn: 0, toolCalls: 0, outputTokens: 0, cost: 0, repairs: 0, failures: {} };
 }
@@ -292,6 +296,15 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
     if (call.name === SUBMIT_TOOL) {
       const value = t.wrapped ? (call.input as { value?: unknown }).value : call.input;
       const validate = ajv.compile(t.outputSchema);
+      const unknownCitations = citationIds(value).filter((id) => !(t.chunkIds ?? []).includes(id));
+      if (validate(value) && unknownCitations.length) {
+        state.repairs++;
+        if (state.repairs > MAX_REPAIRS) throw new AzhiError(ErrorClass.contractViolation, `output cites excerpts it was not given: ${unknownCitations.join(', ')}`);
+        const feedback = JSON.stringify({ error: 'contract_violation', message: `cite only the excerpt ids you were given; unknown: ${unknownCitations.join(', ')}` });
+        results.push({ type: 'tool_result', tool_use_id: call.id, content: feedback, is_error: true });
+        t.items.push(item('repair', 'platform', `output cited unknown excerpts (repair ${state.repairs} of ${MAX_REPAIRS})`, feedback, store));
+        continue;
+      }
       if (validate(value)) {
         output = value;
         done = true;

@@ -10,7 +10,7 @@ import { packageFile } from '../server/packages.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
 import type { GatewayActivities, NotifyNodeInput, RecordRunPatch, ReportNodeInput, ToolNodeInput } from './activity-types.js';
 import { toFailure } from './activity-errors.js';
-import { renderReport } from './report.js';
+import { citationIds, renderReport } from './report.js';
 import { TERMINAL_STATES, type NodeError } from './types.js';
 
 const SLACK_TOOL = 'slack.post-message@1';
@@ -139,7 +139,18 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
     async reportNode(input: ReportNodeInput) {
       return attempt(input.runId, input.workspaceId, input.nodeId, async () => {
         const template = (await packageFile(ctx, input.workspaceId, input.packageHash, input.template)).toString('utf8');
-        return renderReport(template, input.input, { summary: input.summary, asOf: input.asOf, format: input.format });
+        // Citation IDs in the input resolve to their immutable excerpts (dataset, revision, offsets).
+        const ids = citationIds(input.input);
+        const sources = ids.length
+          ? (
+              await ctx.pool.query(
+                `SELECT c.id, d.name AS dataset, c.revision, c.path AS document, coalesce(c.heading, '') AS heading, c.start_offset AS start, c.end_offset AS "end"
+                 FROM chunks c JOIN datasets d ON d.id = c.dataset_id WHERE d.workspace_id=$1 AND c.id = ANY($2)`,
+                [input.workspaceId, ids],
+              )
+            ).rows
+          : [];
+        return renderReport(template, input.input, { summary: input.summary, asOf: input.asOf, format: input.format, sources });
       });
     },
 
