@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 export interface WorkerCapabilities {
   platform: NodeJS.Platform;
   arch: string;
-  runtimes: { python?: { version: string; via: 'uv' | 'python3' }; bun?: { version: string }; opencode?: { version: string; path: string } };
+  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
 }
@@ -27,9 +27,12 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     const v = tryRun('uv', ['run', '--no-project', '--python', pythonVersion, 'python', '-c', 'import platform;print(platform.python_version())']);
     if (v) python = { version: v, via: 'uv' };
   }
-  if (!python) {
-    const v = tryRun('python3', ['-c', 'import platform;print(platform.python_version())']);
-    if (v) python = { version: v, via: 'python3' };
+  // Windows installs Python as `python` or the `py` launcher, not `python3`.
+  const plain = process.platform === 'win32' ? (['python', 'py'] as const) : ([] as const);
+  for (const via of ['python3', ...plain] as const) {
+    if (python) break;
+    const v = tryRun(via, [...(via === 'py' ? ['-3'] : []), '-c', 'import platform;print(platform.python_version())']);
+    if (v) python = { version: v, via };
   }
   const bun = tryRun('bun', ['--version']);
   const ocPath = opencodeBinary();
@@ -46,7 +49,8 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
 /** AZHI_OPENCODE_BIN, the pinned copy in node_modules, or `opencode` on PATH. */
 export function opencodeBinary(): string | undefined {
   if (process.env.AZHI_OPENCODE_BIN) return process.env.AZHI_OPENCODE_BIN;
-  const pinned = fileURLToPath(new URL('../../node_modules/.bin/opencode', import.meta.url));
+  const win = process.platform === 'win32';
+  const pinned = fileURLToPath(new URL(`../../node_modules/.bin/opencode${win ? '.cmd' : ''}`, import.meta.url));
   if (existsSync(pinned)) return pinned;
-  return tryRun('which', ['opencode']) || undefined;
+  return tryRun(win ? 'where' : 'which', ['opencode'])?.split(/\r?\n/)[0] || undefined;
 }

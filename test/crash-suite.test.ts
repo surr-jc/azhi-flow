@@ -14,7 +14,7 @@ import { startServer, type ServerHandle } from '../src/server/server.js';
 import { startFakeSlack } from '../src/testing/fake-slack.js';
 import { ApiClient } from '../src/worker/api-client.js';
 import { startWorker } from '../src/worker/worker.js';
-import { freshDatabase, TEMPORAL, temporalAvailable, uploadDir, waitForRun } from './helpers/harness.js';
+import { freshDatabase, PGLITE, TEMPORAL, temporalAvailable, uploadDir, waitForRun } from './helpers/harness.js';
 
 const up = await temporalAvailable();
 
@@ -24,7 +24,8 @@ const CASES = [
   { point: 'ledger.sent', sentBeforeCrash: true, transitions: ['planned', 'dispatched', 'outcome_unknown', 'confirmed'] },
 ];
 
-describe.skipIf(!up)('crash suite: kill the gateway at every ledger state', () => {
+// A second server process shares the database, which an embedded (PGlite) database cannot do.
+describe.skipIf(!up || PGLITE)('crash suite: kill the gateway at every ledger state', () => {
   let server: ServerHandle;
   let api: ApiClient;
   let slack: Awaited<ReturnType<typeof startFakeSlack>>;

@@ -1,6 +1,7 @@
 # Local mode: Azhi Flow without Docker
 
-Status: proposal, not started. Owner: Suresh. Written 2026-10-04.
+Status: steps 0–3 built on Linux (WSL2); step 4 started; steps 5–6 not started. Owner: Suresh.
+Written 2026-10-04. See "Progress" at the end.
 
 ## Goal
 
@@ -132,3 +133,27 @@ Steps 0–4 are roughly two to three weeks for one developer, with Windows the l
 2. Is local mode free (open source) with paid hosting and team features, or part of a paid desktop
    app? This affects licensing (the repo is Apache 2.0 today).
 3. Desktop shell: Tauri (smaller, Rust) or Electron (larger, all JavaScript)?
+
+## Progress
+
+**2026-10-04, on `dev`, tested on Linux (Ubuntu 24.04 in WSL2):**
+
+- Step 1: `src/db/pglite.ts` puts PGlite (with `@electric-sql/pglite-pgvector`) behind the `pg`
+  Pool interface; `pglite://<dir>` or `pglite://memory` selects it. The outbox and scheduler now
+  open transactions through `transaction()` in `src/db/pool.ts`, which PGlite serialises (nested
+  ones become savepoints).
+- Step 2: `src/local/temporal.ts` downloads Temporal CLI 1.9.1 for the host platform, verifies
+  its SHA-256 against pinned values, and runs `temporal server start-dev` with SQLite storage.
+- Step 3: `azhi up` / `azhi down` (`src/local/up.ts`). Checked end to end: `azhi doctor` all ok
+  and a Python script workflow succeeded, with no Docker. On disk: database 40 MB, Temporal state
+  under 1 MB, Temporal CLI 150 MB.
+- Step 4 (started): process trees are stopped with `taskkill /T` on Windows
+  (`src/lib/process.ts`); Python is found as `python3`, `python` or `py -3`; OpenCode is found
+  with `where` on Windows. Not yet run on native Windows or macOS.
+- Tests: `npm run test:local` runs the suite on PGlite. With a Temporal dev server: 69 passed,
+  8 skipped. Skipped: the crash suite and Gate 1, which run a second server process on the same
+  database and so cannot use an embedded one; 2 OpenAI tests without a key. `web.test.ts` needs
+  Chromium, which this machine lacks.
+
+**Still open:** a single-process crash test for PGlite durability, native Windows and macOS runs
+with CI, `azhi up --background`, step 5 (decision needed), and step 6.

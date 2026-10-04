@@ -1,6 +1,7 @@
 import { Client, WorkflowExecutionAlreadyStartedError, WorkflowNotFoundError } from '@temporalio/client';
 import type pg from 'pg';
 import { TASK_QUEUES } from '../config/settings.js';
+import { transaction } from '../db/pool.js';
 import type { ExecutionPlan } from '../compiler/plan.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import type { AppContext } from './context.js';
@@ -15,10 +16,8 @@ export function startOutboxDispatcher(ctx: AppContext, client: Client, log: (m: 
   let wake: () => void = () => {};
   let listener: pg.PoolClient | undefined;
 
-  const processBatch = async (): Promise<number> => {
-    const c = await ctx.pool.connect();
-    try {
-      await c.query('BEGIN');
+  const processBatch = (): Promise<number> =>
+    transaction(ctx.pool, async (c) => {
       const rows = (await c.query(`SELECT id, workspace_id, kind, payload FROM outbox WHERE processed_at IS NULL ORDER BY id LIMIT 20 FOR UPDATE SKIP LOCKED`)).rows;
       for (const row of rows) {
         try {
@@ -29,15 +28,8 @@ export function startOutboxDispatcher(ctx: AppContext, client: Client, log: (m: 
           await c.query(`UPDATE outbox SET attempts=attempts+1, last_error=$2 WHERE id=$1`, [row.id, (err as Error).message]);
         }
       }
-      await c.query('COMMIT');
       return rows.length;
-    } catch (err) {
-      await c.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      c.release();
-    }
-  };
+    });
 
   const loop = async () => {
     const l = await ctx.pool.connect();

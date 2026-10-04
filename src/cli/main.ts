@@ -444,6 +444,36 @@ program
     process.exitCode = ok ? 0 : 1;
   });
 
+program
+  .command('up')
+  .description('Run Azhi on this machine without Docker: embedded database, Temporal dev server, server and a worker')
+  .option('--port <port>', 'web and API port (default: $AZHI_PORT or 7400)')
+  .option('--no-worker', 'do not start an execution worker')
+  .action(async (opts: { port?: string; worker: boolean }) => {
+    const { startLocal } = await import('../local/up.js');
+    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker });
+    console.log(`\n${green('Azhi is running')} at ${h.url}`);
+    console.log(`Web UI: ${h.url.replace(/\/$/, '')}/ui#token=${encodeURIComponent(h.token)}`);
+    console.log(dim(`Data in ${(await import('../local/up.js')).localHome()}. Stop with Ctrl+C or 'azhi down'.\n`));
+    let stopping = false;
+    const shutdown = async () => {
+      if (stopping) return;
+      stopping = true;
+      await h.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  });
+
+program
+  .command('down')
+  .description("Stop Azhi started with 'azhi up'")
+  .action(async () => {
+    const { stopLocal } = await import('../local/up.js');
+    console.log((await stopLocal()) ? 'stopped' : 'Azhi is not running locally');
+  });
+
 const server = program.command('server').description('Run the Azhi server');
 server
   .command('start')
