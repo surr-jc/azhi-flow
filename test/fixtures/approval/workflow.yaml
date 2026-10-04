@@ -1,0 +1,29 @@
+# Fetch, ask an operator, then post: the approval shows the concrete destination and text.
+schema_version: "2.0"
+id: approval-check
+inputs:
+  type: object
+  properties: {team: {type: string}, expires: {type: string}}
+config:
+  channel: C-QUALITY
+nodes:
+  - id: fetch
+    type: tool
+    tool: ci.list-runs@1
+    arguments: {team: {ref: inputs.team}, since: {cel: "string(now - duration('24h'))"}}
+    project: [id, status]
+  - id: approve
+    type: approval
+    role: operator
+    message: {cel: "'Post ' + string(size(nodes.fetch.output)) + ' runs to ' + config.channel + '?'"}
+    payload: {map: "{'destination': config.channel, 'runs': nodes.fetch.output}"}
+    decision_schema: {type: object, properties: {note: {type: string}}, additionalProperties: false}
+    expires_in: 1h
+    on_expiry: reject
+  - id: post
+    type: notify
+    depends_on: [approve]
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "'approved by ' + nodes.approve.output.by"}
+    guard: "args.channel == config.channel"

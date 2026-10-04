@@ -25,6 +25,18 @@ export function printInspect(d: any) {
       ]),
     ]);
   }
+  if (d.approvals?.length) {
+    console.log(`\n${bold('Approvals')}`);
+    for (const a of d.approvals) {
+      const state = a.decision ? `${stateColor(a.decision)} by ${a.decided_by}` : `waiting for ${a.request.role} until ${a.request.expires_at}`;
+      console.log(`${a.node_id}  ${state}`);
+      if (!a.decision) {
+        if (a.request.message) console.log(`    ${typeof a.request.message === 'string' ? a.request.message : JSON.stringify(a.request.message)}`);
+        if (a.request.payload !== null) console.log(dim(`    payload ${JSON.stringify(a.request.payload)}`));
+        console.log(dim(`    azhi approve ${r.id} ${a.node_id}   (or --reject)`));
+      }
+    }
+  }
   if (d.actions.length) {
     console.log(`\n${bold('Action ledger')}`);
     for (const a of d.actions) {

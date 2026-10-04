@@ -164,6 +164,36 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
     async issueRunToken(workspaceId, runId, nodeId, tools) {
       return signRunToken(ctx.secretKey, { ws: workspaceId, run: runId, node: nodeId, tools, exp: Math.floor(Date.now() / 1000) + 3600 });
     },
+
+    async requestApproval(runId, workspaceId, nodeId, request) {
+      const output = byteSize(request) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, workspaceId, request) : request;
+      await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'approval.requested',$3,$4)`, [
+        workspaceId,
+        runId,
+        nodeId,
+        JSON.stringify(output),
+      ]);
+    },
+
+    async recordApproval(runId, workspaceId, nodeId, d) {
+      // Idempotent under activity retries: the primary key holds one decision per approval node.
+      await ctx.pool.query(
+        `INSERT INTO approvals(run_id, node_id, workspace_id, decision, decided_by, data, decided_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+        [runId, nodeId, workspaceId, d.recorded, d.by, JSON.stringify(d.data), d.at],
+      );
+      const output = { decision: d.decision, by: d.by, at: d.at, data: d.data };
+      await ctx.pool.query(
+        `INSERT INTO node_attempts(workspace_id, run_id, node_id, attempt, state, ended_at, output) VALUES ($1,$2,$3,1,'succeeded',now(),$4)
+         ON CONFLICT (run_id, node_id, attempt) DO NOTHING`,
+        [workspaceId, runId, nodeId, JSON.stringify(output)],
+      );
+      await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'approval.decided',$3,$4)`, [
+        workspaceId,
+        runId,
+        nodeId,
+        JSON.stringify({ decision: d.recorded, by: d.by }),
+      ]);
+    },
   };
 }
 

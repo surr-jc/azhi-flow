@@ -83,16 +83,22 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     )
   ).rows[0];
   if (!run) return undefined;
-  const [attempts, actions, transitions] = await Promise.all([
+  const [attempts, actions, transitions, requests, decisions] = await Promise.all([
     ctx.pool.query(`SELECT node_id, attempt, state, worker_id, started_at, ended_at, error, output FROM node_attempts WHERE run_id=$1 ORDER BY started_at, node_id, attempt`, [runId]),
     ctx.pool.query(`SELECT id, node_id, tool, effect, state, fence, receipt, error, target, created_at, updated_at FROM actions WHERE run_id=$1 ORDER BY created_at`, [runId]),
     ctx.pool.query(
       `SELECT t.action_id, t.state, t.fence, t.note, t.at FROM action_transitions t JOIN actions a ON a.id = t.action_id WHERE a.run_id=$1 ORDER BY t.seq`,
       [runId],
     ),
+    ctx.pool.query(`SELECT node_id, data, at FROM run_events WHERE run_id=$1 AND kind='approval.requested' ORDER BY seq`, [runId]),
+    ctx.pool.query(`SELECT node_id, decision, decided_by, data, decided_at FROM approvals WHERE run_id=$1`, [runId]),
   ]);
   return {
     run,
+    approvals: requests.rows.map((r) => {
+      const d = decisions.rows.find((x) => x.node_id === r.node_id);
+      return { node_id: r.node_id, requested_at: r.at, request: r.data, ...(d ? { decision: d.decision, decided_by: d.decided_by, decided_at: d.decided_at, data: d.data } : { decision: null }) };
+    }),
     attempts: attempts.rows,
     actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
   };

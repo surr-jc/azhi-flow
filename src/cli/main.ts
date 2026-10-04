@@ -185,6 +185,19 @@ program
   });
 
 program
+  .command('approve')
+  .description('Decide an approval node of a waiting run')
+  .argument('<run-id>')
+  .argument('<node>', 'approval node ID')
+  .option('--reject', 'reject instead of approve; nodes downstream are skipped')
+  .option('--data <json>', 'decision data matching the node decision_schema')
+  .action(async (runId: string, node: string, opts: { reject?: boolean; data?: string }) => {
+    const decision = opts.reject ? 'rejected' : 'approved';
+    await client().post(`/v1/runs/${runId}/approvals`, { node, decision, data: opts.data ? JSON.parse(opts.data) : {} });
+    console.log(`${decision === 'approved' ? green('approved') : yellow('rejected')} ${node} on ${runId}`);
+  });
+
+program
   .command('publish')
   .description('Upload a package and publish it as the version schedules run')
   .argument('[path]', 'package directory', '.')

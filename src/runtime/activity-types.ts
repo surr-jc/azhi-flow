@@ -74,6 +74,30 @@ export interface GatewayActivities {
   /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
   checkWorkers(workspaceId: string, packageHash: string, runtime: string): Promise<WorkerSelection>;
   issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[]): Promise<string>;
+  /** Records what approvers are asked to decide: the concrete message and payload. */
+  requestApproval(runId: string, workspaceId: string, nodeId: string, request: ApprovalRequest): Promise<void>;
+  /** The interpreter is the single writer of decisions, so a late signal can't race an expiry. */
+  recordApproval(runId: string, workspaceId: string, nodeId: string, decision: ApprovalDecision & { recorded: 'approved' | 'rejected' | 'expired' }): Promise<void>;
+}
+
+export interface ApprovalRequest {
+  message: unknown;
+  payload: unknown;
+  role: string;
+  expires_at: string;
+  on_expiry: 'fail' | 'reject';
+}
+
+export interface ApprovalDecision {
+  decision: 'approved' | 'rejected';
+  by: string;
+  at: string;
+  data: Record<string, unknown>;
+}
+
+/** Signal sent by the API after it has checked the approver's role and the decision schema. */
+export interface ApprovalSignal extends ApprovalDecision {
+  node: string;
 }
 
 export interface ExecActivities {

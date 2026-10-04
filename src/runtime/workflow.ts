@@ -9,7 +9,9 @@ import {
   ActivityCancellationType,
   ApplicationFailure,
   CancellationScope,
+  condition,
   defineQuery,
+  defineSignal,
   isCancellation,
   proxyActivities,
   setHandler,
@@ -18,13 +20,14 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
+import type { ApprovalNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
-import type { ExecActivities, GatewayActivities } from './activity-types.js';
+import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
 import { resolveValue, type ValueScope } from './values.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
+export const approvalSignal = defineSignal<[ApprovalSignal]>('approval');
 
 const WORKER_OFFLINE_EXPIRY_MS = 30 * 60_000;
 
@@ -68,6 +71,13 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const status: RunStatus = { state: 'running', flags: {}, nodes: {} };
   for (const n of plan.nodes) status.nodes[n.id] = { status: 'pending' };
   setHandler(statusQuery, () => status);
+  // First decision per node wins; the API has already checked the approver's role and schema.
+  const decisions = new Map<string, ApprovalDecision>();
+  const rejected = new Set<string>();
+  const pendingApprovals = new Map<string, string>();
+  setHandler(approvalSignal, (s) => {
+    if (!decisions.has(s.node) && pendingApprovals.has(s.node)) decisions.set(s.node, { decision: s.decision, by: s.by, at: s.at, data: s.data });
+  });
 
   const outputs: Record<string, { output?: unknown }> = {};
   const asOf: Record<string, string> = {};
@@ -85,6 +95,49 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const setNode = async (id: string, s: NodeStatus, data: { output?: unknown; error?: NodeError; route?: string } = {}) => {
     status.nodes[id] = { status: s, ...(data.error ? { error: data.error } : {}), ...(data.route ? { route: data.route } : {}) };
     await bookkeeping.recordNode(runId, workspaceId, id, s, data);
+  };
+
+  const refreshWaiting = async () => {
+    const waiting = status.flags.waiting_reason;
+    const [first] = pendingApprovals;
+    if (first && waiting?.reason !== 'approval') {
+      await setState('waiting', { flags: { ...status.flags, waiting_reason: { reason: 'approval', node: first[0], expires_at: first[1] } } });
+    } else if (!first && waiting?.reason === 'approval') {
+      const { waiting_reason: _cleared, ...flags } = status.flags;
+      await setState('running', { flags, event: 'run.resumed' });
+    }
+  };
+
+  const awaitApproval = async (node: PlanNode, def: ApprovalNode, s: ValueScope) => {
+    const expiresAt = new Date(Date.now() + node.timeoutMs).toISOString();
+    const onExpiry = def.on_expiry ?? 'fail';
+    await bookkeeping.requestApproval(runId, workspaceId, node.id, {
+      message: resolveValue(def.message, s) ?? null,
+      payload: resolveValue(def.payload, s) ?? null,
+      role: def.role ?? 'operator',
+      expires_at: expiresAt,
+      on_expiry: onExpiry,
+    });
+    pendingApprovals.set(node.id, expiresAt);
+    await refreshWaiting();
+    let decided: boolean;
+    try {
+      decided = await condition(() => decisions.has(node.id), node.timeoutMs);
+    } finally {
+      pendingApprovals.delete(node.id);
+    }
+    await refreshWaiting();
+    if (!decided) {
+      const at = new Date().toISOString();
+      await bookkeeping.recordApproval(runId, workspaceId, node.id, { decision: 'rejected', by: 'expiry', at, data: {}, recorded: 'expired' });
+      if (onExpiry === 'fail') throw ApplicationFailure.create({ type: 'expired', message: `approval '${node.id}' expired at ${expiresAt}`, nonRetryable: true });
+      rejected.add(node.id);
+      return { decision: 'rejected' as const, by: 'expiry', at, data: {} };
+    }
+    const d = decisions.get(node.id)!;
+    await bookkeeping.recordApproval(runId, workspaceId, node.id, { ...d, recorded: d.decision });
+    if (d.decision === 'rejected') rejected.add(node.id);
+    return d;
   };
 
   const selectWorker = async (nodeId: string, runtime: string, attempt: number): Promise<string> => {
@@ -241,6 +294,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         }
         return { output: { items: results, completed, failed } };
       }
+      case 'approval':
+        return { output: await awaitApproval(node, node.def as ApprovalNode, s) };
       default:
         throw ApplicationFailure.create({ type: 'unsupported_capability', message: `node type '${node.type}' cannot run on this interpreter build yet`, nonRetryable: true });
     }
@@ -251,7 +306,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       const cond = status.nodes[node.route.condition];
       if (cond?.status === 'skipped' || cond?.route !== node.route.route) return true;
     }
-    return node.deps.some((d) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed');
+    // A rejected approval skips everything downstream of it.
+    return node.deps.some((d) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed' || rejected.has(d));
   };
 
   const runNode = async (node: PlanNode) => {

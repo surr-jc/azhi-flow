@@ -1,6 +1,10 @@
 import type { Client } from '@temporalio/client';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { z, ZodError } from 'zod';
+import type { ExecutionPlan } from '../compiler/plan.js';
+import type { ApprovalNode } from '../definition/types.js';
+import { TERMINAL_STATES } from '../runtime/types.js';
 import { callTool } from '../gateway/gateway.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
@@ -11,7 +15,10 @@ import { buildRunPlan } from '../plan/run-plan.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { listSecrets, setSecret } from '../server/secrets.js';
 import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
+import type { Role } from '../db/schema.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
+
+const ajv = new Ajv2020({ allErrors: true, strict: false });
 import { newApiToken } from '../security/tokens.js';
 import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
@@ -245,6 +252,34 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'operator');
     await requestCancel(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId);
     return { ok: true };
+  });
+
+  // Approvals (spec section 7): the API checks the approver's role and the decision schema, then
+  // signals the interpreter, which records the first decision and resumes the run.
+  app.post('/v1/runs/:id/approvals', async (req, reply) => {
+    const p = user(req);
+    const { id } = req.params as { id: string };
+    const b = z.object({ node: z.string(), decision: z.enum(['approved', 'rejected']), data: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
+    const row = (
+      await ctx.pool.query(`SELECT r.state, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [id, p.workspaceId])
+    ).rows[0];
+    if (!row) throw notFound('run');
+    const node = (row.plan as ExecutionPlan).nodes.find((n) => n.id === b.node);
+    if (!node || node.type !== 'approval') throw new AzhiError(ErrorClass.invalidInput, `run ${id} has no approval node '${b.node}'`);
+    const def = node.def as ApprovalNode;
+    requireRole(p, (def.role ?? 'operator') as Role);
+    if (b.decision === 'approved' && def.decision_schema) {
+      const validate = ajv.compile(def.decision_schema);
+      if (!validate(b.data)) throw new AzhiError(ErrorClass.invalidInput, `decision data does not match the decision schema: ${ajv.errorsText(validate.errors)}`);
+    }
+    const decided = (await ctx.pool.query(`SELECT decision FROM approvals WHERE run_id=$1 AND node_id=$2`, [id, b.node])).rows[0];
+    if (decided) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' was already decided: ${decided.decision}`);
+    const requested = (await ctx.pool.query(`SELECT 1 FROM run_events WHERE run_id=$1 AND node_id=$2 AND kind='approval.requested'`, [id, b.node])).rowCount;
+    if (!requested || TERMINAL_STATES.includes(row.state)) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' is not waiting for a decision (run is ${row.state})`);
+    if (!temporal) throw new AzhiError(ErrorClass.transient, 'not connected to Temporal');
+    await temporal.workflow.getHandle(id).signal('approval', { node: b.node, decision: b.decision, by: p.userId, at: new Date().toISOString(), data: b.data });
+    await audit(ctx, p.workspaceId, p.userId, 'approval.submitted', { run: id, node: b.node, decision: b.decision });
+    return reply.status(202).send({ ok: true });
   });
 
   // Workers report script attempts here (they have no database access).

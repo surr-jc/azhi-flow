@@ -373,7 +373,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     }
     outputs.set(id, outputSchema);
 
-    const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.timeout;
+    const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.type === 'approval' && n.expires_in ? n.expires_in : n.timeout;
     let timeoutMs = DEFAULT_TIMEOUTS[n.type];
     if (timeout) {
       try {
