@@ -31,7 +31,7 @@ Plan for the design.
 - Signed packages: every upload is signed with a per-publisher key certified by the workspace root.
   Workers enforce a trust policy (`self`, `authors:<ids>`, `workspace-publishers`).
 - The taint rule: an ungated write after an agent that read untrusted data fails to compile.
-- The built-in model agent (Anthropic, plus a scripted provider for fixtures): gateway-only tools,
+- The built-in model agent (Anthropic or OpenAI, chosen per profile, plus a scripted provider for fixtures): gateway-only tools,
   validated output with two repairs, budgets, usage with null for unknown, a context manifest per turn.
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
@@ -78,7 +78,9 @@ npx azhi run examples/ci-digest -i team=payments --wait
 npx azhi inspect <run-id>
 ```
 
-The flagship package needs a dataset and, for real model calls, an Anthropic key and model:
+The flagship package needs a dataset and, for real model calls, a provider key and model. The
+example profile uses Anthropic; set `model: {provider: openai, name: default}` in
+`profiles/quality-analyst@1.yaml` to use OpenAI with `openai-api-key` and `AZHI_OPENAI_MODEL` instead.
 
 ```bash
 npx azhi apply examples/quality-report/azhi.config.yaml

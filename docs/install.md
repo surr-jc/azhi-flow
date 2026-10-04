@@ -41,7 +41,7 @@ Options, all environment variables:
 | `AZHI_TEMPORAL_VERSION` | 1.29.1 | Temporal server image tag |
 | `AZHI_NODE_IMAGE` | `node:22-bookworm-slim` | base image, e.g. `mirror.gcr.io/library/node:22-bookworm-slim` when Docker Hub rate-limits |
 | `AZHI_SKIP_BUILD` | unset | `1` uses an `azhi-flow/server` image that is already loaded |
-| `AZHI_ANTHROPIC_MODEL` | unset | model for agent profiles that say `name: default` |
+| `AZHI_ANTHROPIC_MODEL`, `AZHI_OPENAI_MODEL` | unset | model for Anthropic or OpenAI agent profiles that say `name: default` |
 | `AZHI_AUTH_MODE`, `AZHI_OIDC_ISSUER`, `AZHI_OIDC_AUDIENCE` | `local` | switch to OIDC for a team |
 | `AZHI_COMPOSE_PROJECT` | `azhi` | run a second, isolated stack on one host |
 

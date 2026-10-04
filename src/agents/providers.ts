@@ -1,7 +1,11 @@
 import { AzhiError, ErrorClass } from '../lib/errors.js';
+import type { Settings } from '../config/settings.js';
 import type { ScriptedTurn } from './profile.js';
 
-/** Provider-neutral transcript blocks; they map one to one onto the Anthropic Messages API. */
+/**
+ * Provider-neutral transcript blocks. They map one to one onto the Anthropic Messages API; the
+ * OpenAI adapter translates them to and from Chat Completions messages.
+ */
 export type Block =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
@@ -76,12 +80,7 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
       } catch {
         throw new AzhiError(ErrorClass.transient, `anthropic returned HTTP ${res.status} with a non-JSON body`);
       }
-      if (!res.ok) {
-        const message = `anthropic HTTP ${res.status}: ${body?.error?.message ?? text.slice(0, 200)}`;
-        if (res.status === 401 || res.status === 403) throw new AzhiError(ErrorClass.authorization, message);
-        if (res.status === 400 || res.status === 404) throw new AzhiError(ErrorClass.invalidInput, message);
-        throw new AzhiError(ErrorClass.transient, message);
-      }
+      if (!res.ok) throw httpError('anthropic', res.status, body?.error?.message ?? text.slice(0, 200));
       const u = body.usage ?? {};
       const num = (v: unknown) => (typeof v === 'number' ? v : null);
       return {
@@ -93,6 +92,96 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
           cache_read_tokens: num(u.cache_read_input_tokens),
           cache_write_tokens: num(u.cache_creation_input_tokens),
           reasoning_tokens: null,
+        },
+        model: body.model ?? req.model,
+      };
+    },
+  };
+}
+
+/** Server-side defaults per provider: the model for `name: default`, the API URL, the credential. */
+export const PROVIDER_DEFAULTS = {
+  anthropic: { credential: 'anthropic-api-key', modelEnv: 'AZHI_ANTHROPIC_MODEL', model: (s: Settings) => s.anthropicModel, apiUrl: (s: Settings) => s.anthropicApiUrl },
+  openai: { credential: 'openai-api-key', modelEnv: 'AZHI_OPENAI_MODEL', model: (s: Settings) => s.openaiModel, apiUrl: (s: Settings) => s.openaiApiUrl },
+} as const;
+export type HostedProvider = keyof typeof PROVIDER_DEFAULTS;
+
+function httpError(provider: string, status: number, message: string): AzhiError {
+  const m = `${provider} HTTP ${status}: ${message}`;
+  if (status === 401 || status === 403) return new AzhiError(ErrorClass.authorization, m);
+  if (status === 400 || status === 404) return new AzhiError(ErrorClass.invalidInput, m);
+  return new AzhiError(ErrorClass.transient, m);
+}
+
+/**
+ * OpenAI Chat Completions (also served by OpenAI-compatible gateways at the same path). Tool
+ * calls map to `tool_use` blocks and tool results to `tool` messages. Cached and reasoning tokens
+ * are recorded when the response reports them and are null otherwise.
+ */
+export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProvider {
+  return {
+    id: 'openai',
+    async complete(req) {
+      const messages: unknown[] = [{ role: 'system', content: req.system }];
+      for (const m of req.messages) {
+        const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
+        if (m.role === 'assistant') {
+          const calls = m.content.filter((b) => b.type === 'tool_use') as Array<Extract<Block, { type: 'tool_use' }>>;
+          messages.push({
+            role: 'assistant',
+            content: text || null,
+            ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input) } })) } : {}),
+          });
+          continue;
+        }
+        for (const b of m.content) if (b.type === 'tool_result') messages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.is_error ? `ERROR: ${b.content}` : b.content });
+        if (text) messages.push({ role: 'user', content: text });
+      }
+      const res = await fetch(`${o.apiUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}` },
+        body: JSON.stringify({
+          model: req.model,
+          max_completion_tokens: req.maxTokens,
+          messages,
+          ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
+          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        }),
+        signal: req.signal,
+      });
+      const raw = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        throw new AzhiError(ErrorClass.transient, `openai returned HTTP ${res.status} with a non-JSON body`);
+      }
+      if (!res.ok) throw httpError('openai', res.status, body?.error?.message ?? raw.slice(0, 200));
+      const choice = body.choices?.[0];
+      if (!choice) throw new AzhiError(ErrorClass.transient, 'openai returned no choices');
+      const content: Block[] = [];
+      if (typeof choice.message?.content === 'string' && choice.message.content) content.push({ type: 'text', text: choice.message.content });
+      for (const c of choice.message?.tool_calls ?? []) {
+        let input: Record<string, unknown>;
+        try {
+          input = JSON.parse(c.function?.arguments || '{}');
+        } catch {
+          // Invalid JSON goes to the schema check like any other bad output, so the agent can repair it.
+          input = { _invalid_json: String(c.function?.arguments ?? '') };
+        }
+        content.push({ type: 'tool_use', id: c.id, name: c.function?.name ?? '', input });
+      }
+      const u = body.usage ?? {};
+      const num = (v: unknown) => (typeof v === 'number' ? v : null);
+      return {
+        content,
+        stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : choice.finish_reason === 'length' ? 'max_tokens' : 'end',
+        usage: {
+          input_tokens: num(u.prompt_tokens),
+          output_tokens: num(u.completion_tokens),
+          cache_read_tokens: num(u.prompt_tokens_details?.cached_tokens),
+          cache_write_tokens: null,
+          reasoning_tokens: num(u.completion_tokens_details?.reasoning_tokens),
         },
         model: body.model ?? req.model,
       };

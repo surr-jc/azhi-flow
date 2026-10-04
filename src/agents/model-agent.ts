@@ -13,7 +13,7 @@ import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { citationIds } from '../runtime/report.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
-import { anthropicProvider, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
+import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
 /**
  * The built-in model agent (spec section 9): a platform-owned tool loop. Each model turn is one
@@ -140,16 +140,21 @@ export function resolveModelName(ctx: AppContext, profile: AgentProfile): string
   if (profile.model.provider === 'scripted') return 'scripted';
   const name = profile.model.name ?? 'default';
   if (name !== 'default') return name;
-  if (!ctx.settings.anthropicModel) throw new AzhiError(ErrorClass.unsupportedCapability, 'the profile uses the default model but AZHI_ANTHROPIC_MODEL is not set on the server');
-  return ctx.settings.anthropicModel;
+  const d = PROVIDER_DEFAULTS[profile.model.provider];
+  const model = d.model(ctx.settings);
+  if (!model) throw new AzhiError(ErrorClass.unsupportedCapability, `the profile uses the default ${profile.model.provider} model but ${d.modelEnv} is not set on the server`);
+  return model;
 }
 
 async function providerFor(ctx: AppContext, workspaceId: string, profile: AgentProfile): Promise<ModelProvider> {
   if (profile.model.provider === 'scripted') return scriptedProvider(profile.script ?? []);
-  const credential = profile.model.credential ?? 'anthropic-api-key';
+  const provider = profile.model.provider;
+  const d = PROVIDER_DEFAULTS[provider];
+  const credential = profile.model.credential ?? d.credential;
   const key = await resolveSecret(ctx, workspaceId, credential);
-  if (!key) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' for the anthropic provider is not set`);
-  return anthropicProvider({ apiUrl: ctx.settings.anthropicApiUrl, apiKey: key.value });
+  if (!key) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' for the ${provider} provider is not set`);
+  const make = provider === 'openai' ? openaiProvider : anthropicProvider;
+  return make({ apiUrl: d.apiUrl(ctx.settings), apiKey: key.value });
 }
 
 /** Replaces artifact handles and deferred refs in the agent input with their content. */
@@ -409,6 +414,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, execut
   const state = await agentBegin(ctx, i);
   const t = loadTranscript(ctx, state.transcript);
   const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
+  // The adapter configures OpenCode's Anthropic provider only; the run plan marks other providers unsupported.
   if (profile.model.provider !== 'anthropic') throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs an anthropic profile, not ${profile.model.provider}`);
   const items = [
     ...t.items,

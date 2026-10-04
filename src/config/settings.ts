@@ -23,6 +23,9 @@ export function settings() {
     /** Model for agent profiles that say `name: default`. */
     anthropicModel: process.env.AZHI_ANTHROPIC_MODEL || undefined,
     anthropicApiUrl: process.env.AZHI_ANTHROPIC_API_URL ?? 'https://api.anthropic.com',
+    /** Model for OpenAI profiles that say `name: default`. */
+    openaiModel: process.env.AZHI_OPENAI_MODEL || undefined,
+    openaiApiUrl: process.env.AZHI_OPENAI_API_URL ?? 'https://api.openai.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
     /** Deployments sharing one Temporal namespace need distinct gateway queues. */

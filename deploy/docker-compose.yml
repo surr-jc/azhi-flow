@@ -53,6 +53,7 @@ services:
       AZHI_SECRET_KEY: ${AZHI_SECRET_KEY:-}
       AZHI_PUBLIC_URL: ${AZHI_PUBLIC_URL:-http://localhost:7400}
       AZHI_ANTHROPIC_MODEL: ${AZHI_ANTHROPIC_MODEL:-}
+      AZHI_OPENAI_MODEL: ${AZHI_OPENAI_MODEL:-}
       AZHI_STORE_CONTEXT_CONTENT: ${AZHI_STORE_CONTEXT_CONTENT:-0}
       # Only for local trials without a Slack workspace (see src/testing/fake-slack.ts).
       AZHI_SLACK_API_URL: ${AZHI_SLACK_API_URL:-}

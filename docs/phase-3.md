@@ -16,7 +16,7 @@ available). Results from 2026-10-04 are in [alpha-demo-results.json](alpha-demo-
 | 3 | Scheduled run completes with no client attached; citations and per-source as-of times | Pass | Fired from a one-minute schedule; the Slack message has numbered citations to `quality-guidelines@1` excerpts and as-of times for ci, flaky-tests and incidents |
 | 4 | Process killed during the Slack post; exactly one message; ledger shows how | Pass | Gateway SIGKILLed after the send, before the receipt; ledger `planned → dispatched → outcome_unknown → confirmed (reconciled: found on target by dedupe key)`; one message |
 | 5 | `self`-policy worker refuses another author's package at plan time | Pass | Plan blocker `worker_trust_denied`; `azhi run` refused, nothing executed |
-| 6 | Same 30 fixtures through the model agent and OpenCode | Pass | 30/30 contract success on both; median node latency 0.2 s vs 6.0 s; usage complete 30/30 vs 0/30; no non-gateway tool offered to either. [executor-comparison.md](executor-comparison.md) |
+| 6 | Same 30 fixtures through the model agent and OpenCode | Pass | 30/30 contract success on all three (model agent on Anthropic, on OpenAI, and OpenCode); median node latency 0.2 s vs 6.0 s; usage complete 30/30 vs 0/30; no non-gateway tool offered to either. [executor-comparison.md](executor-comparison.md) |
 
 What still has to happen for the alpha gate as the spec words it ("live, on a fresh install"):
 run `npm run demo -- --install` once on a clean VM of the documented hardware with Docker Hub
@@ -37,6 +37,13 @@ access, and once with a real Anthropic key (`ANTHROPIC_API_KEY`, `AZHI_ANTHROPIC
 | Demo | `demo/`, `npm run demo` | The six checks, PASS/FAIL with evidence |
 
 ## Decisions and defaults taken in this phase
+
+- **Model providers: Anthropic and OpenAI** (Suresh chose both on the decision card). A profile
+  picks one with `model.provider`; `name: default` takes the server's `AZHI_ANTHROPIC_MODEL` or
+  `AZHI_OPENAI_MODEL`, and the default credentials are `anthropic-api-key` and `openai-api-key`.
+  OpenAI goes through Chat Completions; cached and reasoning tokens are recorded when reported. The
+  OpenCode adapter stays Anthropic-only for now, and the run plan marks an OpenAI profile on OpenCode
+  unsupported. The comparison runs the model agent on both providers.
 
 - **The process killed in check 4 is the gateway**, because the Slack post runs there, not on a
   worker. The spec's wording ("the worker is killed") assumed the post runs on a worker; the

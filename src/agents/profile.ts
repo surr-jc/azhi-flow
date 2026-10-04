@@ -3,12 +3,13 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 
 /**
  * An agent profile (`profiles/<name>@<version>.yaml` in the package): instructions plus the
- * model binding. `name: default` defers the model choice to the server (AZHI_ANTHROPIC_MODEL),
+ * model binding. `name: default` defers the model choice to the server (AZHI_ANTHROPIC_MODEL or
+ * AZHI_OPENAI_MODEL),
  * so packages stay portable across workspaces with different model access.
  */
 export interface AgentProfile {
   model: {
-    provider: 'anthropic' | 'scripted';
+    provider: 'anthropic' | 'openai' | 'scripted';
     name?: string;
     /** Workspace secret holding the provider API key. */
     credential?: string;
@@ -40,7 +41,7 @@ export function parseProfile(text: string, path: string): AgentProfile {
     throw new AzhiError(ErrorClass.invalidInput, `${path}: ${(e as Error).message}`);
   }
   if (!p || typeof p !== 'object') throw new AzhiError(ErrorClass.invalidInput, `${path}: not a mapping`);
-  if (!p.model || !['anthropic', 'scripted'].includes(p.model.provider)) throw new AzhiError(ErrorClass.invalidInput, `${path}: model.provider must be anthropic or scripted`);
+  if (!p.model || !['anthropic', 'openai', 'scripted'].includes(p.model.provider)) throw new AzhiError(ErrorClass.invalidInput, `${path}: model.provider must be anthropic, openai or scripted`);
   if (typeof p.instructions !== 'string' || !p.instructions.trim()) throw new AzhiError(ErrorClass.invalidInput, `${path}: instructions are required`);
   if (p.model.provider === 'scripted' && !Array.isArray(p.script)) throw new AzhiError(ErrorClass.invalidInput, `${path}: a scripted profile needs a script`);
   return p;
