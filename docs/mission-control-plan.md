@@ -1,6 +1,7 @@
 # Mission control: the Azhi Flow web app
 
-Status: increment 1 in progress on branch `mission-control`. Written 2026-10-04. Owner: Suresh.
+Status: increment 1 built on branch `mission-control`, with most of increment 2 (usage, audit,
+alerts, run again). Suresh picked Operations as the next increment (2026-10-04). Written 2026-10-04. Owner: Suresh.
 
 ## Goal
 
