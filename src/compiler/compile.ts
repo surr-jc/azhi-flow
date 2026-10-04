@@ -19,9 +19,12 @@ import {
   type PlanNode,
 } from './plan.js';
 import { compatible, projectSchema, resolvePath, schemaOfLiteral, typesOf } from './schema-path.js';
+import { analyseTaint, type DatasetInfo } from './taint.js';
 
 export interface CompileOptions {
   pkg?: PackageSource;
+  /** Dataset trust, for taint analysis. Unknown datasets are treated as trusted. */
+  datasets?: (ref: string) => DatasetInfo | undefined;
   /** Without a catalog, tool references cannot be checked and a warning says so. */
   catalog?: ToolCatalog;
   /** Node types the current release can execute. */
@@ -122,6 +125,8 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
 
   // Dependencies
   const deps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set(n.depends_on ?? [])]));
+  // Data edges only (refs and CEL references); taint flows along these.
+  const dataDeps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set<string>()]));
   for (const n of def.nodes) {
     for (const d of n.depends_on ?? []) if (!byId.has(d)) err('unknown_dependency', `depends_on '${d}' is not a node`, n.id);
   }
@@ -174,6 +179,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
               continue;
             }
             deps.get(n.id)!.add(target);
+            dataDeps.get(n.id)!.add(target);
           }
           refs.push({ site, segments });
         } else {
@@ -181,7 +187,10 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
           if (!check.valid) err('invalid_cel', `${site.kind} expression at ${site.path}: ${check.error}`, n.id, site.path);
           for (const target of referencedNodes(site.text)) {
             if (!byId.has(target)) err('unknown_ref_node', `expression at ${site.path} names unknown node '${target}'`, n.id, site.path);
-            else if (target !== n.id) deps.get(n.id)!.add(target);
+            else if (target !== n.id) {
+              deps.get(n.id)!.add(target);
+              dataDeps.get(n.id)!.add(target);
+            }
           }
         }
       }
@@ -191,7 +200,10 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       if (!check.valid) err('invalid_cel', `${path}: ${check.error}`, n.id, path);
       for (const target of referencedNodes(text)) {
         if (!byId.has(target)) err('unknown_ref_node', `${path} names unknown node '${target}'`, n.id, path);
-        else if (target !== n.id) deps.get(n.id)!.add(target);
+        else if (target !== n.id) {
+          deps.get(n.id)!.add(target);
+          dataDeps.get(n.id)!.add(target);
+        }
       }
     }
     nodeRefs.set(n.id, refs);
@@ -206,6 +218,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
 
   // Output schemas, in dependency order
   const outputs = new Map<string, JsonSchema | undefined>();
+  const agentToolsById = new Map<string, NonNullable<PlanNode['agentTools']>>();
   const planNodes = new Map<string, PlanNode>();
   const loadSchema = (ref: string | JsonSchema | undefined, nodeId: string, field: string): JsonSchema | undefined => {
     if (ref === undefined) return undefined;
@@ -313,9 +326,18 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         outputSchema = loadSchema(n.output_schema, n.id, 'output_schema');
         if (!n.output_schema) warn('untyped_output', `script '${n.id}' declares no output_schema; downstream refs are not type-checked`, n.id);
         break;
-      case 'agent':
+      case 'agent': {
         outputSchema = loadSchema(n.output_schema, n.id, 'output_schema');
+        if (opts.pkg && opts.pkg.readText(profilePath(n.profile)) === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
+        const agentTools: NonNullable<PlanNode['agentTools']> = [];
+        for (const ref of n.tools ?? []) {
+          const spec = opts.catalog?.get(ref);
+          if (opts.catalog && !spec) err('unknown_tool', `agent tool '${ref}' is not registered in this workspace`, n.id, 'tools');
+          if (spec) agentTools.push({ ref, effect: spec.effect, outputTrusted: spec.output_trusted === true, safeForTainted: spec.safe_for_tainted === true, revision: spec.revision });
+        }
+        agentToolsById.set(n.id, agentTools);
         break;
+      }
       case 'retrieve':
         outputSchema = RETRIEVE_OUTPUT_SCHEMA;
         break;
@@ -364,12 +386,14 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       id,
       type: n.type,
       deps: [...deps.get(id)!].sort(),
+      dataDeps: [...dataDeps.get(id)!].sort(),
       def: n,
       outputSchema,
       timeoutMs,
       maxAttempts: n.retry?.max_attempts ?? 3,
       ...(toolInfo ? { tool: toolInfo } : {}),
       ...(routeOf.has(id) ? { route: routeOf.get(id)! } : {}),
+      ...(agentToolsById.has(id) ? { agentTools: agentToolsById.get(id)! } : {}),
     });
   }
 
@@ -378,6 +402,13 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     if (runtime === 'python' && ext !== 'py') err('runtime_mismatch', `python entrypoint must be a .py file: ${entrypoint}`, nodeId, 'entrypoint');
     if (runtime === 'bun' && !['ts', 'js', 'mjs'].includes(ext ?? '')) err('runtime_mismatch', `bun entrypoint must be .ts or .js: ${entrypoint}`, nodeId, 'entrypoint');
     if (opts.pkg && opts.pkg.read(entrypoint) === undefined) err('missing_file', `entrypoint '${entrypoint}' is not in the package`, nodeId, 'entrypoint');
+  }
+
+  const orderedNodes = order.order.map((id) => planNodes.get(id)!);
+  const taint = analyseTaint(orderedNodes, opts.datasets);
+  diags.push(...taint.diagnostics);
+  for (const n of def.nodes) {
+    if (n.type === 'approval' && n.payload === undefined) warn('approval_without_payload', `approval '${n.id}' shows no payload; approvers should see the concrete target and payload`, n.id);
   }
 
   const errors = diags.filter((d) => d.severity === 'error');
@@ -392,9 +423,15 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     ...(def.inputs ? { inputsSchema: def.inputs } : {}),
     config: def.config ?? {},
     ...(def.trigger ? { trigger: def.trigger } : {}),
-    nodes: order.order.map((id) => planNodes.get(id)!),
+    nodes: orderedNodes,
+    taint: taint.report,
   };
   return { ok: true, diagnostics: diags, plan };
+}
+
+/** Agent profiles live in the package: `quality-analyst@1` -> `profiles/quality-analyst@1.yaml`. */
+export function profilePath(profile: string): string {
+  return `profiles/${profile}.yaml`;
 }
 
 function topoSort(ids: string[], deps: Map<string, Set<string>>): { ok: true; order: string[] } | { ok: false; cycle: string[] } {

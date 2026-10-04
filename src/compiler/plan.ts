@@ -7,6 +7,8 @@ export interface PlanNode {
   type: NodeDef['type'];
   /** All upstream node IDs: data refs, CEL references, depends_on and condition routes. */
   deps: string[];
+  /** Upstream nodes whose outputs this node reads (refs and CEL). Taint flows along these. */
+  dataDeps: string[];
   def: NodeDef;
   outputSchema?: JsonSchema;
   /** Resolved input schemas loaded from the package (script/agent output schemas). */
@@ -14,6 +16,8 @@ export interface PlanNode {
   maxAttempts: number;
   tool?: { ref: string; effect: EffectClass; revision?: number; outputTrusted: boolean; safeForTainted: boolean };
   route?: { condition: string; route: string };
+  /** Agent nodes: the tools the agent may call, as registered. */
+  agentTools?: Array<{ ref: string; effect: EffectClass; outputTrusted: boolean; safeForTainted: boolean; revision?: number }>;
 }
 
 /** The compiler's execution plan: what the interpreter runs, pinned to one definition. */
@@ -28,6 +32,7 @@ export interface ExecutionPlan {
   trigger?: WorkflowDefinition['trigger'];
   /** Topologically ordered. */
   nodes: PlanNode[];
+  taint: import('./taint.js').TaintReport;
 }
 
 export const REPORT_OUTPUT_SCHEMA: JsonSchema = {
