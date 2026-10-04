@@ -390,6 +390,10 @@ secret
   .option('--value <value>', 'secret value (default: read from stdin)')
   .action(async (name: string, opts: { value?: string }) => {
     const value = opts.value ?? readSecretStdin();
+    // API keys and tokens travel in HTTP headers, which reject control and non-ASCII characters.
+    // Report where they are (never the value) so a bad paste is caught here, not mid-run.
+    const odd = [...value].flatMap((c, i) => (c.charCodeAt(0) < 0x20 || c.charCodeAt(0) > 0x7e ? [`position ${i + 1}: U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`] : []));
+    if (odd.length) console.log(yellow(`warning: the value (${value.length} characters) contains characters an API key cannot have: ${odd.slice(0, 5).join(', ')}`));
     const r = await client().put<{ version: number }>(`/v1/secrets/${name}`, { value });
     console.log(`secret ${name} set (version ${r.version})`);
   });
