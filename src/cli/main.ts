@@ -12,6 +12,7 @@ import { packageFromDirectory, type PackageSource } from '../definition/package.
 import { workflowSchema } from '../definition/schema.js';
 import { staticCatalog, type ToolCatalog } from '../gateway/types.js';
 import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
+import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
 import { printContext, printInspect } from './inspect.js';
@@ -415,13 +416,16 @@ users.command('list').action(async () => {
 
 program
   .command('login')
-  .description('Save the server URL and API token for this CLI')
-  .requiredOption('--url <url>')
-  .requiredOption('--token <token>')
-  .action(async (opts: { url: string; token: string }) => {
-    saveCliConfig({ url: opts.url, token: opts.token });
-    const me = await client().get<any>('/v1/me');
-    console.log(`logged in to ${opts.url} as ${me.userId} (${me.role})`);
+  .description('Save the server URL and API token for this CLI (--url and --token)')
+  .action(async () => {
+    // --url and --token are program-level options, so commander parses them before this
+    // subcommand runs; read them from there rather than declaring them again on `login`.
+    const { url, token } = program.opts<{ url?: string; token?: string }>();
+    if (!url || !token) throw new Error('usage: azhi login --url <server> --token <token>');
+    // Check the credentials before saving them, so a typo never replaces a working login.
+    const me = await new ApiClient(url, token).get<any>('/v1/me');
+    saveCliConfig({ url, token });
+    console.log(`logged in to ${url} as ${me.userId} (${me.role})`);
   });
 
 program
