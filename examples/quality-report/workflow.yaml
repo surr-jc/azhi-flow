@@ -1,0 +1,56 @@
+# Weekly engineering quality report: the flagship workflow (spec section 4).
+# Numbers come from the metrics script and are authoritative; the agent explains them.
+schema_version: "2.0"
+id: quality-report
+name: Weekly quality report
+trigger:
+  schedule: {cron: "0 8 * * 1", timezone: "Asia/Kolkata"}
+  manual: true
+inputs:
+  type: object
+  properties: {team: {type: string}}
+  required: [team]
+config:
+  channel: C-QUALITY
+nodes:
+  - id: ci_runs
+    type: tool
+    tool: ci.list-runs@1
+    arguments: {team: {ref: inputs.team}, since: {cel: "string(now - duration('336h'))"}}
+    project: [id, status, branch, started_at, finished_at, failed_tests]
+  - id: flaky
+    type: tool
+    tool: tests.list-flaky@1
+    arguments: {team: {ref: inputs.team}}
+    project: [test, failures, quarantined]
+  - id: incidents
+    type: tool
+    tool: incidents.list-open@1
+    arguments: {team: {ref: inputs.team}}
+    project: [id, title, severity, opened_at]
+  - id: metrics
+    type: script
+    runtime: python
+    entrypoint: scripts/metrics.py
+    input: {map: "{'runs': nodes.ci_runs.output, 'flaky': nodes.flaky.output, 'incidents': nodes.incidents.output}"}
+    output_schema: schemas/metrics.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: analyse
+    type: agent
+    profile: quality-analyst@1
+    datasets: [quality-guidelines@approved]
+    input: {map: "{'team': inputs.team, 'metrics': nodes.metrics.output, 'incidents': nodes.incidents.output}"}
+    output_schema: schemas/analysis.json
+    budget: {max_output_tokens: 4000, max_tool_calls: 0}
+  - id: report
+    type: report
+    template: templates/report.md
+    input: {map: "{'team': inputs.team, 'm': nodes.metrics.output, 'a': nodes.analyse.output}"}
+  - id: post
+    type: notify
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.report.output.markdown}
+    # Taint gate (ADR-10): analyse read untrusted tool output, so the post may only go to the
+    # team's configured channel. Without this guard the compiler rejects the workflow.
+    guard: "args.channel == config.channel"

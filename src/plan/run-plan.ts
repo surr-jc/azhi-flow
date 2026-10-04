@@ -170,6 +170,12 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         for (const d of (n.def as RetrieveNode).datasets) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
         np.coverage.push({ action: 'dataset reads', enforcement: 'enforced', detail: 'dataset ACL checked before ranking' });
         break;
+      case 'report':
+        np.coverage.push({ action: 'rendering', enforcement: 'enforced', detail: 'logic-less template in the server; figures pass through unchanged' });
+        break;
+      case 'condition':
+        np.coverage.push({ action: 'routing', enforcement: 'enforced', detail: 'CEL evaluated by the interpreter' });
+        break
       case 'approval':
         np.coverage.push({ action: 'decision', enforcement: 'enforced', detail: 'recorded with identity, role check and timestamp' });
         break;

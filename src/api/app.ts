@@ -183,7 +183,16 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/runs', async (req, reply) => {
     const p = user(req);
     requireRole(p, 'operator');
-    const body = z.object({ version: z.string(), inputs: z.record(z.string(), z.unknown()).default({}), test: z.boolean().optional() }).parse(req.body);
+    const body = z
+      .object({
+        version: z.string(),
+        inputs: z.record(z.string(), z.unknown()).default({}),
+        test: z.boolean().optional(),
+        node: z.string().optional(),
+        fixtures: z.record(z.string(), z.unknown()).optional(),
+      })
+      .parse(req.body);
+    if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
     const v = await resolveVersion(ctx, p.workspaceId, body.version);
     if (!v) throw notFound(`workflow version ${body.version}`);
     // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
@@ -195,7 +204,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
       }
     }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild });
+    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
     return reply.status(202).send({ run_id: r.runId });
   });
 

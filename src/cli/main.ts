@@ -142,6 +142,33 @@ program
   });
 
 program
+  .command('test-node')
+  .description('Run one node on fixture inputs with writes mocked (a test run, excluded from analytics)')
+  .argument('<node>', 'node ID')
+  .argument('[path]', 'package directory', '.')
+  .option('-f, --fixture <file>', 'JSON: { "inputs": {...}, "nodes": { "<upstream id>": <output> } }')
+  .action(async (node: string, path: string, opts: { fixture?: string }) => {
+    const fixture = opts.fixture ? (JSON.parse(readFileSync(opts.fixture, 'utf8')) as { inputs?: Record<string, unknown>; nodes?: Record<string, unknown> }) : {};
+    const version = (await upload(path)).id;
+    const api = client();
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: fixture.inputs ?? {}, test: true, node, fixtures: fixture.nodes ?? {} });
+    for (;;) {
+      const d = await api.get<any>(`/v1/runs/${run_id}`);
+      if (['succeeded', 'delivery_failed', 'failed', 'cancelled', 'expired'].includes(d.run.state)) {
+        const a = d.attempts.filter((x: any) => x.node_id === node).at(-1);
+        console.log(`${bold(node)} ${a?.state === 'succeeded' ? green('succeeded') : red(a?.state ?? d.run.state)} ${dim(`test run ${run_id}`)}`);
+        if (a?.error) console.log(red(`[${a.error.class}] ${a.error.message}`));
+        else if (d.run.error) console.log(red(`[${d.run.error.class}] ${d.run.error.message}`));
+        if (a?.output !== undefined && a?.output !== null) console.log(JSON.stringify(a.output, null, 2));
+        if (d.usage?.turns) console.log(dim(`${d.usage.turns} model turns; azhi inspect ${run_id} --context ${node}`));
+        process.exitCode = a?.state === 'succeeded' ? 0 : 1;
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  });
+
+program
   .command('plan')
   .description('Show the run plan: capability marks, policy coverage, taint paths, missing grants and blockers')
   .argument('[path]', 'package directory, or workflow@version with --published', '.')

@@ -1,3 +1,4 @@
+import type { Settings } from '../../src/config/settings.js';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,7 +45,7 @@ export interface Harness {
   stop(): Promise<void>;
 }
 
-export async function startHarness(opts: { worker?: boolean; roles?: ServerRole[]; build?: string } = {}): Promise<Harness> {
+export async function startHarness(opts: { worker?: boolean; roles?: ServerRole[]; build?: string; settings?: Partial<Settings> } = {}): Promise<Harness> {
   const dataDir = mkdtempSync(join(tmpdir(), 'azhi-test-'));
   const slack = await startFakeSlack();
   const server = await startServer({
@@ -60,6 +61,7 @@ export async function startHarness(opts: { worker?: boolean; roles?: ServerRole[
       authMode: 'local',
       interpreterBuild: opts.build ?? `test${Date.now().toString(36)}`,
       gatewayQueue: `azhi-gateway-${dataDir.slice(-8)}`,
+      ...opts.settings,
     },
   });
   const token = readFileSync(server.localTokenFile!, 'utf8').trim();

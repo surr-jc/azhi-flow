@@ -1,0 +1,217 @@
+{
+  "workflow": "quality-report",
+  "version": 1,
+  "package_hash": "<package-hash>",
+  "signer": {
+    "publisher": "<publisher>",
+    "verified": true
+  },
+  "ok": true,
+  "nodes": [
+    {
+      "id": "ci_runs",
+      "type": "tool",
+      "requirements": [
+        {
+          "name": "tool ci.list-runs@1",
+          "mark": "native",
+          "detail": "read via builtin"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "ci.list-runs@1 (read)",
+          "enforcement": "enforced",
+          "detail": "gateway authorises, validates and projects"
+        }
+      ]
+    },
+    {
+      "id": "flaky",
+      "type": "tool",
+      "requirements": [
+        {
+          "name": "tool tests.list-flaky@1",
+          "mark": "native",
+          "detail": "read via builtin"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "tests.list-flaky@1 (read)",
+          "enforcement": "enforced",
+          "detail": "gateway authorises, validates and projects"
+        }
+      ]
+    },
+    {
+      "id": "incidents",
+      "type": "tool",
+      "requirements": [
+        {
+          "name": "tool incidents.list-open@1",
+          "mark": "native",
+          "detail": "read via builtin"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "incidents.list-open@1 (read)",
+          "enforcement": "enforced",
+          "detail": "gateway authorises, validates and projects"
+        }
+      ]
+    },
+    {
+      "id": "metrics",
+      "type": "script",
+      "requirements": [
+        {
+          "name": "python runtime on a worker",
+          "mark": "native",
+          "detail": "<worker>: python <version>"
+        },
+        {
+          "name": "memory limit 512 MB",
+          "mark": "native",
+          "detail": "prlimit"
+        },
+        {
+          "name": "worker trust policy accepts the package signer",
+          "mark": "native",
+          "detail": "accepted by <worker>"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "tool calls from the script",
+          "enforcement": "enforced",
+          "detail": "only through the gateway with a run-scoped token"
+        },
+        {
+          "action": "network and filesystem access from the script process",
+          "enforcement": "unobservable",
+          "detail": "a subprocess is not a sandbox; trusted-author packages only"
+        }
+      ]
+    },
+    {
+      "id": "analyse",
+      "type": "agent",
+      "requirements": [
+        {
+          "name": "structured output",
+          "mark": "native",
+          "detail": "validated; up to 2 repair attempts"
+        },
+        {
+          "name": "usage reporting",
+          "mark": "native",
+          "detail": "reported"
+        },
+        {
+          "name": "cancellation",
+          "mark": "native",
+          "detail": "confirmed"
+        },
+        {
+          "name": "model binding",
+          "mark": "native",
+          "detail": "anthropic server-default-model (server default)"
+        },
+        {
+          "name": "credential anthropic-api-key",
+          "mark": "native",
+          "detail": "set"
+        },
+        {
+          "name": "dataset quality-guidelines@approved",
+          "mark": "native",
+          "detail": "revision 1"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "gateway tool calls",
+          "enforcement": "enforced",
+          "detail": "platform-owned tool loop"
+        },
+        {
+          "action": "ambient (built-in) tools",
+          "enforcement": "enforced",
+          "detail": "none exist"
+        }
+      ],
+      "tainted": "reads incidents, whose output of incidents.list-open@1 is not marked trusted",
+      "executor": "model-agent"
+    },
+    {
+      "id": "report",
+      "type": "report",
+      "requirements": [],
+      "coverage": [
+        {
+          "action": "rendering",
+          "enforcement": "enforced",
+          "detail": "logic-less template in the server; figures pass through unchanged"
+        }
+      ]
+    },
+    {
+      "id": "post",
+      "type": "notify",
+      "requirements": [
+        {
+          "name": "tool slack.post-message@1",
+          "mark": "native",
+          "detail": "write-dedupable via builtin, credential 'slack-bot-token' set"
+        }
+      ],
+      "coverage": [
+        {
+          "action": "slack.post-message@1 (write-dedupable)",
+          "enforcement": "enforced",
+          "detail": "gateway ledgers the post; dedupe by action ID in message metadata"
+        }
+      ]
+    }
+  ],
+  "taint": {
+    "paths": [
+      {
+        "gate": "guard",
+        "path": [
+          "analyse",
+          "report",
+          "post"
+        ],
+        "agent": "analyse",
+        "write": "post"
+      }
+    ],
+    "tainted": {
+      "analyse": "reads incidents, whose output of incidents.list-open@1 is not marked trusted"
+    },
+    "untrusted": {
+      "post": "output of tainted agent analyse",
+      "flaky": "output of tests.list-flaky@1 is not marked trusted",
+      "report": "output of tainted agent analyse",
+      "analyse": "output of tainted agent analyse",
+      "ci_runs": "output of ci.list-runs@1 is not marked trusted",
+      "metrics": "derived from ci_runs",
+      "incidents": "output of incidents.list-open@1 is not marked trusted"
+    }
+  },
+  "missing_grants": [],
+  "worker_trust": [
+    {
+      "worker": "<worker-id>",
+      "name": "<worker>",
+      "policy": {
+        "kind": "self"
+      },
+      "accepted": true
+    }
+  ],
+  "blockers": []
+}

@@ -1,0 +1,12 @@
+{
+  "inputs": {"team": "payments"},
+  "nodes": {
+    "ci_runs": [
+      {"id": "r1", "status": "success", "branch": "main", "started_at": "2026-09-27T08:00:00Z", "finished_at": "2026-09-27T08:12:00Z", "failed_tests": []},
+      {"id": "r2", "status": "failure", "branch": "main", "started_at": "2026-09-27T12:00:00Z", "finished_at": "2026-09-27T12:12:00Z", "failed_tests": ["test_checkout_timeout"]},
+      {"id": "r3", "status": "success", "branch": "main", "started_at": "2026-09-27T14:00:00Z", "finished_at": "2026-09-27T14:12:00Z", "failed_tests": []}
+    ],
+    "flaky": [{"test": "test_checkout_timeout", "failures": 3, "quarantined": false}],
+    "incidents": []
+  }
+}

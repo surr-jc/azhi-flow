@@ -20,6 +20,8 @@ export interface CreateRunOptions {
   referenceTime?: Date;
   occurrenceId?: string;
   test?: boolean;
+  /** `azhi test-node`: run only this node, with upstream outputs from fixtures. */
+  testNode?: { node: string; fixtures: Record<string, unknown> };
   interpreterBuild: string;
 }
 
@@ -40,6 +42,12 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   for (const n of o.version.plan.nodes) for (const t of n.agentTools ?? []) toolRevisions[t.ref] ??= t.revision ?? catalog.revisions.get(t.ref) ?? 0;
   toolRevisions['slack.post-message@1'] ??= 0;
 
+  if (o.testNode) {
+    const target = o.version.plan.nodes.find((n) => n.id === o.testNode!.node);
+    if (!target) throw new AzhiError(ErrorClass.invalidInput, `workflow has no node '${o.testNode.node}'`);
+    const missingDeps = target.dataDeps.filter((d) => !(d in o.testNode!.fixtures));
+    if (missingDeps.length) throw new AzhiError(ErrorClass.invalidInput, `fixture needs outputs for ${missingDeps.map((d) => `nodes.${d}`).join(', ')}`);
+  }
   const datasetRefs = o.version.plan.nodes.flatMap((n) => (n.type === 'retrieve' ? (n.def as RetrieveNode).datasets : n.type === 'agent' ? ((n.def as AgentNode).datasets ?? []) : []));
   const datasetRevisions = datasetRefs.length ? await pinDatasets(ctx, workspaceId, datasetRefs) : undefined;
   // Dataset access is checked as the run's creator; scheduled runs act as the version's publisher.
@@ -59,6 +67,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     tool_revisions: toolRevisions,
     trigger: o.trigger,
     gateway_queue: ctx.settings.gatewayQueue,
+    ...(o.testNode ? { test_node: o.testNode } : {}),
     ...(datasetRevisions ? { dataset_revisions: datasetRevisions } : {}),
     ...(principal ? { principal } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),

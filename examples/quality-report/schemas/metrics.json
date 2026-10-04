@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "window": {"type": "object"},
+    "runs": {"type": "integer"},
+    "passed": {"type": "integer"},
+    "pass_rate_pct": {"type": ["number", "null"]},
+    "pass_rate_delta_pct": {"type": ["number", "null"]},
+    "flake_rate_pct": {"type": ["number", "null"]},
+    "flake_rate_delta_pct": {"type": ["number", "null"]},
+    "mttg_hours": {"type": ["number", "null"]},
+    "mttg_delta_hours": {"type": ["number", "null"]},
+    "flaky_tests": {"type": "integer"},
+    "quarantined": {"type": "integer"},
+    "open_incidents": {"type": "integer"}
+  },
+  "required": ["runs", "passed", "pass_rate_pct", "flake_rate_pct", "mttg_hours"],
+  "additionalProperties": false
+}

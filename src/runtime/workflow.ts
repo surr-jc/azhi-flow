@@ -81,6 +81,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const gateway = (node: PlanNode) => gatewayOn(gatewayQueue, node);
   const status: RunStatus = { state: 'running', flags: {}, nodes: {} };
   for (const n of plan.nodes) status.nodes[n.id] = { status: 'pending' };
+  const testNode = snapshot.test_node;
   setHandler(statusQuery, () => status);
   // First decision per node wins; the API has already checked the approver's role and schema.
   const decisions = new Map<string, ApprovalDecision>();
@@ -91,6 +92,16 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   });
 
   const outputs: Record<string, { output?: unknown }> = {};
+  if (testNode) {
+    // test-node: upstream outputs come from the fixture; nothing else runs.
+    for (const n of plan.nodes) {
+      if (n.id === testNode.node) continue;
+      if (n.id in testNode.fixtures) {
+        outputs[n.id] = { output: testNode.fixtures[n.id] };
+        status.nodes[n.id] = { status: 'succeeded' };
+      } else status.nodes[n.id] = { status: 'skipped' };
+    }
+  }
   const asOf: Record<string, string> = {};
   const scope = (): ValueScope => ({ inputs: input.inputs, nodes: outputs, config: plan.config, now: snapshot.reference_time, run: { id: runId, attempt: workflowInfo().attempt } });
   const allowedTools = [...new Set(plan.nodes.flatMap((n) => (n.tool ? [n.tool.ref] : [])))];
@@ -156,6 +167,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
           tools,
           tainted: plan.taint.tainted[node.id],
           budget: def.budget,
+          mockWrites: input.mockWrites,
           state,
         });
         if (!r.usageKnown && !status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
@@ -382,6 +394,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   };
 
   const shouldSkip = (node: PlanNode): boolean => {
+    if (testNode?.node === node.id) return false;
     if (node.route) {
       const cond = status.nodes[node.route.condition];
       if (cond?.status === 'skipped' || cond?.route !== node.route.route) return true;
@@ -411,6 +424,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
 
   try {
     await setState('running', { event: 'run.started' });
+    if (testNode) for (const n of plan.nodes) if (status.nodes[n.id]!.status === 'skipped') await setNode(n.id, 'skipped');
     await CancellationScope.cancellable(async () => {
       const inFlight = new Map<string, Promise<void>>();
       for (;;) {

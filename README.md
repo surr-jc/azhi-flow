@@ -12,7 +12,7 @@ Plan for the design.
 |-------|-------|
 | 0. Spikes and kill criteria | Done: [docs/phase-0-results.md](docs/phase-0-results.md) |
 | 1. Durable core | Done: [docs/phase-1.md](docs/phase-1.md) |
-| 2. Agents and trust | Not started |
+| 2. Agents and trust | Done: [docs/phase-2.md](docs/phase-2.md) |
 | 3. Flagship workflow and alpha demo | Not started |
 
 ## What works today
@@ -24,6 +24,16 @@ Plan for the design.
 - A tool gateway with projection, observation records and the action ledger. Killing the process
   mid-Slack-post produces exactly one message, and `azhi inspect` shows how.
 - A REST API (local-token or OIDC auth) and a Linux worker that runs Python (uv) and Bun scripts.
+- The run plan (`azhi plan`): each requirement marked native, bridged, unsupported or unverified;
+  policy coverage (enforced, harness, unobservable); taint paths and their gates; missing grants.
+  Runs whose plan has blockers are refused before anything executes.
+- Signed packages: every upload is signed with a per-publisher key certified by the workspace root.
+  Workers enforce a trust policy (`self`, `authors:<ids>`, `workspace-publishers`).
+- The taint rule: an ungated write after an agent that read untrusted data fails to compile.
+- The built-in model agent (Anthropic, plus a scripted provider for fixtures): gateway-only tools,
+  validated output with two repairs, budgets, usage with null for unknown, a context manifest per turn.
+- Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
+  `azhi test-node` for one node on fixtures with writes mocked.
 
 ## Quick start (local)
 
@@ -52,6 +62,21 @@ npx azhi run examples/ci-digest -i team=payments --wait
 npx azhi inspect <run-id>
 ```
 
+The flagship package needs a dataset and, for real model calls, an Anthropic key and model:
+
+```bash
+npx azhi apply examples/quality-report/azhi.config.yaml
+npx azhi dataset create quality-guidelines
+npx azhi dataset add quality-guidelines examples/quality-report/knowledge
+npx azhi dataset publish quality-guidelines --tag approved
+npx azhi secret set anthropic-api-key --value sk-ant-...
+export AZHI_ANTHROPIC_MODEL=<model id>   # set on the server; profiles say `name: default`
+npx azhi plan examples/quality-report     # capabilities, coverage, taint paths, blockers
+npx azhi test-node metrics examples/quality-report --fixture fixtures/metrics.json
+npx azhi run examples/quality-report -i team=payments --wait
+npx azhi inspect <run-id> --context analyse
+```
+
 Without a Slack workspace, point the server at a fake Slack API for local runs:
 `AZHI_SLACK_API_URL=http://127.0.0.1:<port>/api` (see `src/testing/fake-slack.ts`).
 
@@ -64,7 +89,12 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
 | `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |
-| `azhi inspect <run>` | State, flags, attempts per node, and the action ledger with every transition |
+| `azhi plan [path]` | The run plan: capability marks, policy coverage, taint paths, missing grants, blockers |
+| `azhi test-node <node> [path] -f fixture.json` | Run one node on fixture outputs with writes mocked (a test run) |
+| `azhi inspect <run> [--context <node>]` | State, flags, attempts, approvals, usage, context manifests and the action ledger |
+| `azhi approve <run> <node> [--reject] [--data json]` | Decide an approval node |
+| `azhi dataset create/add/publish/tag/revoke/search/list` | Knowledge datasets (Markdown and text) |
+| `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
 | `azhi secret set <name>` | Store an encrypted workspace secret |
@@ -82,7 +112,8 @@ npm test     # unit tests; end-to-end tests run when Temporal is reachable on AZ
 ```
 
 End-to-end tests create a fresh database per file on `AZHI_TEST_DATABASE_URL`
-(default `postgres://azhi:azhi@localhost:5433/azhi`). `test/gate1.test.ts` is the phase 1 gate.
+(default `postgres://azhi:azhi@localhost:5433/azhi`). `test/gate1.test.ts` is the phase 1 gate and `test/gate2.test.ts` the phase 2 gate
+(refresh its golden plan with `UPDATE_GOLDEN=1` after an intended change).
 
 ## Repository layout
 
@@ -93,12 +124,17 @@ examples/     Example workflow packages
 migrations/   SQL migrations (source of truth for the schema)
 spikes/       Phase 0 spike scripts
 src/
+  agents/     Model agent: profiles, providers, the tool loop, context manifests
   api/        Fastify REST API and auth
   cel/        The single CEL evaluator (compiler and runtime)
   cli/        The azhi command
   compiler/   Definition -> execution plan
   definition/ Workflow schema, YAML loader, packages
+  executors/  Executor capability declarations
   gateway/    Tool gateway, executors, projection, action ledger
+  knowledge/  Datasets: chunking, embedding, hybrid retrieval
+  plan/       The run plan
+  security/   Secrets, tokens, package signing and trust policies
   runtime/    Temporal interpreter workflow and activities
   server/     Server process, outbox, scheduler, services
   worker/     Execution worker and script runtimes

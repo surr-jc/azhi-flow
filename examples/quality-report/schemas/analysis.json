@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "headline": {"type": "string", "maxLength": 200},
+    "points": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"},
+          "citations": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["text", "citations"],
+        "additionalProperties": false
+      }
+    },
+    "insufficient_evidence": {"type": "boolean"}
+  },
+  "required": ["headline", "points", "insufficient_evidence"],
+  "additionalProperties": false
+}

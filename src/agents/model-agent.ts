@@ -109,6 +109,8 @@ export interface AgentTurnInput {
   tools: AgentTool[];
   tainted?: string;
   budget?: { max_output_tokens?: number; max_tool_calls?: number; max_cost_usd?: number };
+  /** Test runs: write tools return a mock receipt instead of executing. */
+  mockWrites?: boolean;
   state: AgentState;
 }
 
@@ -325,6 +327,8 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
         i.nodeId,
         JSON.stringify({ tool: ref, reason: 'tainted_write' }),
       ]);
+    } else if (i.mockWrites && tool.effect !== 'read') {
+      content = JSON.stringify({ mocked: true, tool: ref, args: call.input });
     } else {
       try {
         const r = await callTool(ctx, {
