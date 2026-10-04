@@ -23,7 +23,20 @@ export const CEL_VARIABLES = ['inputs', 'nodes', 'config', 'now', 'item', 'args'
 
 let shared: Environment | undefined;
 
+/**
+ * Temporal's workflow sandbox replaces `Date` with a wrapper that shares the original prototype,
+ * so `new Date().constructor` is not the `Date` the CEL library registered as its timestamp type.
+ * Point the prototype's constructor at the active `Date` so timestamps are recognised. Outside the
+ * sandbox this is a no-op.
+ */
+function alignDateConstructor() {
+  if (new Date(0).constructor !== Date) {
+    Object.defineProperty(Date.prototype, 'constructor', { value: Date, writable: true, configurable: true, enumerable: false });
+  }
+}
+
 export function celEnvironment(): Environment {
+  alignDateConstructor();
   shared ??= new Environment({ homogeneousAggregateLiterals: false, enableOptionalTypes: true })
     .registerVariable('inputs', 'dyn')
     .registerVariable('nodes', 'dyn')

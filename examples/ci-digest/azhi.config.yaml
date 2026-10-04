@@ -1,0 +1,32 @@
+# Admin configuration for the example: apply with `azhi apply examples/ci-digest/azhi.config.yaml`.
+tools:
+  - id: ci.list-runs
+    version: 1
+    description: List CI runs for a team (fixture data for the example)
+    effect: read
+    source: ci
+    transport:
+      kind: builtin
+      name: fixture
+      config:
+        data:
+          - {id: "r1", status: success, duration_s: 312, branch: main}
+          - {id: "r2", status: success, duration_s: 298, branch: main}
+          - {id: "r3", status: failure, duration_s: 401, branch: main}
+          - {id: "r4", status: success, duration_s: 305, branch: main}
+    input_schema:
+      type: object
+      properties: {team: {type: string}, since: {type: string}}
+      required: [team]
+      additionalProperties: false
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: {type: string}
+          status: {type: string}
+          duration_s: {type: number}
+          branch: {type: string}
+secrets:
+  - slack-bot-token

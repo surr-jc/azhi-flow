@@ -1,0 +1,109 @@
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import type pg from 'pg';
+import { tx } from '../db/pool.js';
+import { AzhiError, ErrorClass } from '../lib/errors.js';
+import { newId } from '../lib/ids.js';
+import type { RunSnapshot } from '../runtime/types.js';
+import { loadCatalog } from './catalog.js';
+import type { AppContext } from './context.js';
+import type { VersionRow } from './workflows.js';
+
+const ajv = new Ajv2020({ allErrors: true, strict: false });
+
+export interface CreateRunOptions {
+  version: VersionRow;
+  inputs: Record<string, unknown>;
+  trigger: RunSnapshot['trigger'];
+  createdBy: string | null;
+  referenceTime?: Date;
+  occurrenceId?: string;
+  test?: boolean;
+  interpreterBuild: string;
+}
+
+/**
+ * Creates a run and its outbox entry in one transaction. The outbox dispatcher starts the
+ * Temporal workflow, so a crash between the two never loses a run or starts one twice.
+ * A schedule occurrence ID makes creation idempotent.
+ */
+export async function createRun(ctx: AppContext, workspaceId: string, o: CreateRunOptions): Promise<{ runId: string; created: boolean }> {
+  const schema = o.version.plan.inputsSchema;
+  if (schema) {
+    const validate = ajv.compile(schema);
+    if (!validate(o.inputs)) throw new AzhiError(ErrorClass.invalidInput, `inputs do not match the workflow's input schema: ${ajv.errorsText(validate.errors)}`);
+  }
+  const catalog = await loadCatalog(ctx, workspaceId);
+  const toolRevisions: Record<string, number> = {};
+  for (const n of o.version.plan.nodes) if (n.tool) toolRevisions[n.tool.ref] = n.tool.revision ?? catalog.revisions.get(n.tool.ref) ?? 0;
+  toolRevisions['slack.post-message@1'] ??= 0;
+
+  const runId = newId('run');
+  const snapshot: RunSnapshot = {
+    reference_time: (o.referenceTime ?? new Date()).toISOString(),
+    interpreter_build: o.interpreterBuild,
+    package_hash: o.version.package_hash,
+    workflow_version_id: o.version.id,
+    tool_revisions: toolRevisions,
+    trigger: o.trigger,
+    ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
+  };
+  return tx(ctx.db, async (c: pg.PoolClient) => {
+    const r = await c.query(
+      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by)
+       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (occurrence_id) DO NOTHING`,
+      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy],
+    );
+    if (r.rowCount === 0) {
+      const existing = (await c.query(`SELECT id FROM runs WHERE occurrence_id=$1`, [o.occurrenceId])).rows[0].id as string;
+      return { runId: existing, created: false };
+    }
+    await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger })]);
+    await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
+    await c.query(`NOTIFY azhi_outbox`);
+    return { runId, created: true };
+  });
+}
+
+export async function requestCancel(ctx: AppContext, workspaceId: string, runId: string, actor: string) {
+  const r = await ctx.pool.query(`SELECT state FROM runs WHERE id=$1 AND workspace_id=$2`, [runId, workspaceId]);
+  if (!r.rows[0]) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} not found`);
+  await ctx.pool.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.cancel',$2)`, [workspaceId, JSON.stringify({ run_id: runId, by: actor })]);
+  await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.cancel_requested',$3)`, [workspaceId, runId, JSON.stringify({ by: actor })]);
+  await ctx.pool.query(`NOTIFY azhi_outbox`);
+}
+
+export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: string) {
+  const run = (
+    await ctx.pool.query(
+      `SELECT r.*, w.slug AS workflow, v.version AS workflow_version FROM runs r
+       JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+       WHERE r.id=$1 AND r.workspace_id=$2`,
+      [runId, workspaceId],
+    )
+  ).rows[0];
+  if (!run) return undefined;
+  const [attempts, actions, transitions] = await Promise.all([
+    ctx.pool.query(`SELECT node_id, attempt, state, worker_id, started_at, ended_at, error, output FROM node_attempts WHERE run_id=$1 ORDER BY started_at, node_id, attempt`, [runId]),
+    ctx.pool.query(`SELECT id, node_id, tool, effect, state, fence, receipt, error, target, created_at, updated_at FROM actions WHERE run_id=$1 ORDER BY created_at`, [runId]),
+    ctx.pool.query(
+      `SELECT t.action_id, t.state, t.fence, t.note, t.at FROM action_transitions t JOIN actions a ON a.id = t.action_id WHERE a.run_id=$1 ORDER BY t.seq`,
+      [runId],
+    ),
+  ]);
+  return {
+    run,
+    attempts: attempts.rows,
+    actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
+  };
+}
+
+export async function runEvents(ctx: AppContext, workspaceId: string, runId: string, after = 0, limit = 500) {
+  return (
+    await ctx.pool.query(`SELECT seq, at, kind, node_id, data FROM run_events WHERE run_id=$1 AND workspace_id=$2 AND seq > $3 ORDER BY seq LIMIT $4`, [
+      runId,
+      workspaceId,
+      after,
+      limit,
+    ])
+  ).rows as Array<{ seq: number; at: Date; kind: string; node_id: string | null; data: Record<string, unknown> }>;
+}

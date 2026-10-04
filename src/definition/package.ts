@@ -19,7 +19,7 @@ export interface PackageSource {
   readText(path: string): string | undefined;
 }
 
-const IGNORED = new Set(['node_modules', '.venv', '__pycache__', '.git', '.azhi', 'fixtures']);
+const IGNORED = new Set(['node_modules', '.venv', '__pycache__', '.git', '.azhi', 'fixtures', 'azhi.config.yaml']);
 const WORKFLOW_FILES = ['workflow.yaml', 'workflow.yml', 'azhi.yaml'];
 
 export function packageFromDirectory(dir: string): PackageSource {

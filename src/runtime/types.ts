@@ -1,0 +1,50 @@
+import type { ExecutionPlan } from '../compiler/plan.js';
+
+/** ADR-09: four live states, five terminal. */
+export type RunState = 'queued' | 'running' | 'waiting' | 'cancelling' | 'succeeded' | 'delivery_failed' | 'failed' | 'cancelled' | 'expired';
+export const TERMINAL_STATES: RunState[] = ['succeeded', 'delivery_failed', 'failed', 'cancelled', 'expired'];
+export const LIVE_STATES: RunState[] = ['queued', 'running', 'waiting', 'cancelling'];
+
+export interface RunFlags {
+  waiting_reason?: { reason: 'approval' | 'external_event' | 'worker_offline'; node?: string; expires_at: string };
+  termination_unconfirmed?: boolean;
+  interrupted_sessions?: string[];
+  usage_incomplete?: boolean;
+}
+
+export type NodeStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
+
+export interface RunSnapshot {
+  /** ADR-08: `now` in CEL. */
+  reference_time: string;
+  interpreter_build: string;
+  package_hash: string;
+  workflow_version_id: string;
+  tool_revisions: Record<string, number>;
+  trigger: 'manual' | 'schedule' | 'api' | 'test';
+  occurrence_id?: string;
+  settings?: Record<string, unknown>;
+}
+
+export interface RunInput {
+  runId: string;
+  workspaceId: string;
+  plan: ExecutionPlan;
+  inputs: Record<string, unknown>;
+  snapshot: RunSnapshot;
+  /** test-node / test runs: write tools are mocked. */
+  mockWrites?: boolean;
+}
+
+export interface NodeError {
+  class: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface RunStatus {
+  state: RunState;
+  flags: RunFlags;
+  nodes: Record<string, { status: NodeStatus; error?: NodeError; route?: string }>;
+  error?: NodeError;
+}

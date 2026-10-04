@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "runs": {"type": "integer"},
+    "passed": {"type": "integer"},
+    "pass_rate": {"type": ["number", "null"]},
+    "pass_rate_pct": {"type": ["number", "null"]},
+    "mean_duration_s": {"type": ["number", "null"]}
+  },
+  "required": ["runs", "passed", "pass_rate"],
+  "additionalProperties": false
+}

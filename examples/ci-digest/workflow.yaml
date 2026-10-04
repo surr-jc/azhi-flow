@@ -1,0 +1,36 @@
+# A small tool -> script -> report -> notify workflow: the phase 1 gate workflow.
+schema_version: "2.0"
+id: ci-digest
+name: Daily CI digest
+trigger:
+  schedule: {cron: "0 9 * * *", timezone: "Asia/Kolkata"}
+inputs:
+  type: object
+  properties: {team: {type: string}}
+  required: [team]
+config:
+  channel: C-QUALITY
+nodes:
+  - id: fetch
+    type: tool
+    tool: ci.list-runs@1
+    arguments: {team: {ref: inputs.team}, since: {cel: "string(now - duration('24h'))"}}
+    project: [id, status, duration_s]
+  - id: metrics
+    type: script
+    runtime: python
+    entrypoint: scripts/metrics.py
+    input: {ref: nodes.fetch.output}
+    output_schema: schemas/metrics.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: report
+    type: report
+    template: templates/digest.md
+    input: {map: "{'team': inputs.team, 'm': nodes.metrics.output}"}
+  - id: post
+    type: notify
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.report.output.markdown}
+    # Taint gate (ADR-10): the post may only go to the configured channel.
+    guard: "args.channel == config.channel"
