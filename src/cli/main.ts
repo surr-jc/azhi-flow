@@ -371,13 +371,23 @@ function collectDocuments(paths: string[]): Array<{ path: string; content: strin
   return out;
 }
 
+/**
+ * A secret piped on stdin. Windows PowerShell 5.1 pipes text to programs as UTF-16 or with a
+ * byte-order mark, which would end up inside the secret (and break HTTP headers), so both are undone.
+ */
+function readSecretStdin(): string {
+  const raw = readFileSync(0);
+  const utf16 = raw[0] === 0xff && raw[1] === 0xfe ? raw.subarray(2).toString('utf16le') : raw.length > 1 && raw[1] === 0 ? raw.toString('utf16le') : undefined;
+  return (utf16 ?? raw.toString('utf8')).replace(/^﻿/, '').replace(/ /g, '').trim();
+}
+
 const secret = program.command('secret').description('Manage workspace secrets');
 secret
   .command('set')
   .argument('<name>')
   .option('--value <value>', 'secret value (default: read from stdin)')
   .action(async (name: string, opts: { value?: string }) => {
-    const value = opts.value ?? readFileSync(0, 'utf8').trim();
+    const value = opts.value ?? readSecretStdin();
     const r = await client().put<{ version: number }>(`/v1/secrets/${name}`, { value });
     console.log(`secret ${name} set (version ${r.version})`);
   });
