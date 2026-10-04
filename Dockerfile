@@ -10,6 +10,7 @@ RUN npm ci --omit=dev --ignore-scripts=false && rm -rf node_modules/opencode-ai 
 COPY bin ./bin
 COPY src ./src
 COPY migrations ./migrations
+COPY examples ./examples
 COPY tsconfig.json ./
 VOLUME /data
 EXPOSE 7400
