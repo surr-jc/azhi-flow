@@ -68,7 +68,11 @@ export async function freePort(preferred: number): Promise<number> {
     new Promise<number | undefined>((resolve) => {
       const s = net.createServer();
       s.once('error', () => resolve(undefined));
-      s.listen(port, '127.0.0.1', () => s.close(() => resolve((s.address() as net.AddressInfo | null)?.port ?? port)));
+      s.listen(port, '127.0.0.1', () => {
+        // Read the port before closing: a closed server has no address (and port 0 means "any").
+        const got = (s.address() as net.AddressInfo).port;
+        s.close(() => resolve(got));
+      });
     });
   return (await tryPort(preferred)) ?? (await tryPort(0))!;
 }

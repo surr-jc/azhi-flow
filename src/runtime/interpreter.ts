@@ -21,7 +21,8 @@ const INTERPRETER_SOURCES = [
 
 export function interpreterBuildId(override?: string): string {
   if (override) return override;
-  const h = INTERPRETER_SOURCES.map((p) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8')).join('\0');
+  // Line endings are normalised so a Windows checkout (CRLF) gets the same build ID as Linux.
+  const h = INTERPRETER_SOURCES.map((p) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8').replace(/\r\n/g, '\n')).join('\0');
   return `b${sha256(h).slice(0, 12)}`;
 }
 

@@ -1,6 +1,6 @@
 # Local mode: Azhi Flow without Docker
 
-Status: steps 0–3 built on Linux (WSL2); step 4 started; steps 5–6 not started. Owner: Suresh.
+Status: steps 0–3 built; step 4 done for Windows (macOS untested); steps 5–6 not started. Owner: Suresh.
 Written 2026-10-04. See "Progress" at the end.
 
 ## Goal
@@ -155,5 +155,12 @@ Steps 0–4 are roughly two to three weeks for one developer, with Windows the l
   database and so cannot use an embedded one; 2 OpenAI tests without a key. `web.test.ts` needs
   Chromium, which this machine lacks.
 
-**Still open:** a single-process crash test for PGlite durability, native Windows and macOS runs
-with CI, `azhi up --background`, step 5 (decision needed), and step 6.
+**2026-10-04, native Windows 11 (PowerShell, Node 24, Python 3.14):** `azhi up`, `azhi doctor`
+(all ok), a Python script workflow and `azhi down` all work, and data survives a stop and restart.
+Fixes it needed: the free-port check returned port 0 when the preferred port was busy; SWC's
+native addon refuses `%LOCALAPPDATA%` when that folder grants rights to an app container, so
+`bin/azhi.js` points `SWC_NATIVE_BINDING_CACHE` at `~/.azhi/swc-cache`; and the interpreter build
+ID now ignores CRLF line endings, so a Windows checkout gets the same ID as Linux. `azhi down`
+on Windows stops the process hard (no SIGTERM there); PGlite and Temporal recovered cleanly.
+
+**Still open:** a single-process crash test for PGlite durability, macOS runs, CI on Windows and macOS, `azhi up --background`, step 5 (decision needed), and step 6.
