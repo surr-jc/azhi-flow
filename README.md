@@ -43,18 +43,90 @@ Plan for the design.
   manifest and usage, updated live over SSE.
 - A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
 
-## Install for a team
+## Install
+
+Azhi Flow is a server stack (PostgreSQL with pgvector, Temporal and the Azhi server, all in Docker)
+plus one or more **workers** that run scripts and harnesses. In the alpha, workers are supported on
+**Linux only**, so on Windows you work inside WSL2 and on macOS you run a development setup.
+
+| Platform | Supported as | How |
+|----------|--------------|-----|
+| Linux | Server and workers | [Linux](#linux) |
+| Windows 10/11 | Everything, inside WSL2 (Ubuntu) | [Windows](#windows-wsl2) |
+| macOS | Server and a development worker, not certified | [macOS](#macos) |
+
+Common requirements: Git, Node.js 22+ and Docker with the Compose plugin. For script nodes, add
+[uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on each worker host.
+Documented hardware, install timings and every `deploy/install.sh` option are in
+[docs/install.md](docs/install.md).
+
+### Linux
 
 ```bash
-deploy/install.sh     # PostgreSQL + pgvector, Temporal and the server, healthy, with an owner token
+git clone https://github.com/surr-jc/azhi-flow && cd azhi-flow
+npm ci
+deploy/install.sh        # PostgreSQL + pgvector, Temporal and the server; prints an owner token
 ```
 
-See [docs/install.md](docs/install.md) for options, documented hardware, timings and workers.
+Then, on each worker host (this one or another Linux machine):
 
-## Quick start (local)
+```bash
+export AZHI_TEMPORAL_ADDRESS=<server>:7233       # localhost:7233 on the same machine
+npx azhi login --url http://<server>:7400 --token <owner token>
+npx azhi worker start --trust workspace-publishers
+npx azhi doctor                                  # database, Temporal, workers online
+```
 
-Requirements: Linux, Node.js 22+, Docker with Compose, and for script nodes
-[uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh).
+### Windows (WSL2)
+
+Native Windows is not supported: workers are Linux-only and the installer is a bash script. Run
+everything inside WSL2.
+
+1. In an admin PowerShell, run `wsl --install -d Ubuntu`, then reboot.
+2. Install Docker Desktop and enable WSL integration for Ubuntu (Settings > Resources > WSL
+   integration).
+3. In the Ubuntu shell, install Node.js 22+ and git, then follow the [Linux](#linux) steps. Clone
+   into the Linux filesystem (`~/azhi-flow`), not `/mnt/c`, which is slow and breaks file permissions.
+4. Open the web run page in your Windows browser: WSL2 forwards `localhost`, so
+   `http://localhost:7400` works, and `npx azhi open <run-id>` prints a ready-to-paste link.
+
+If the page does not load, check that `docker ps` shows port 7400 published, wait about 15 seconds
+after the installer, and make sure `localhostForwarding` is not disabled in `%UserProfile%\.wslconfig`.
+
+### macOS
+
+Docker Desktop runs the server stack on macOS, and the CLI and a worker run natively. Workers are
+not certified on macOS in the alpha, and the install has not been tested on a Mac. One known
+limit: script memory limits are enforced with `prlimit`, which macOS lacks, so the run plan marks
+any `memory_mb` limit unsupported and refuses the run. The flagship's `metrics` script sets
+`limits.memory_mb`; to run it on a Mac, remove that line from `examples/quality-report/workflow.yaml`
+or use a Linux worker.
+
+```bash
+brew install node@22 git
+brew install --cask docker          # start Docker Desktop once and wait until it is running
+brew install uv                     # optional: Python script nodes (Bun: brew install oven-sh/bun/bun)
+git clone https://github.com/surr-jc/azhi-flow && cd azhi-flow
+npm ci
+deploy/install.sh
+export AZHI_TEMPORAL_ADDRESS=localhost:7233
+npx azhi login --url http://localhost:7400 --token <owner token>
+npx azhi worker start
+```
+
+For production use, run the worker on a Linux host instead. Apple Silicon works through Docker
+Desktop's amd64/arm64 images, but only Linux x86-64 has been exercised.
+
+### After installing
+
+Add model access, then run the flagship (see the quick start below for the full sequence): store a
+provider key with `npx azhi secret set anthropic-api-key --value ...` (or `openai-api-key`), and put
+`AZHI_ANTHROPIC_MODEL` (or `AZHI_OPENAI_MODEL`) in `deploy/.env`, then re-run `deploy/install.sh`.
+
+## Quick start (local development)
+
+Runs the server from this checkout instead of the Docker image, for working on Azhi itself.
+Requirements are the same as above.
 
 ```bash
 npm install
