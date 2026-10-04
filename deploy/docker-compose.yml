@@ -38,5 +38,29 @@ services:
       retries: 60
       start_period: 10s
 
+  azhi:
+    build: {context: .., dockerfile: Dockerfile}
+    image: azhi-flow/server:${AZHI_VERSION:-dev}
+    depends_on:
+      postgres: {condition: service_healthy}
+      temporal: {condition: service_healthy}
+    environment:
+      AZHI_DATABASE_URL: postgres://${AZHI_PG_USER:-azhi}:${AZHI_PG_PASSWORD:-azhi}@postgres:5432/azhi
+      AZHI_TEMPORAL_ADDRESS: temporal:7233
+      AZHI_AUTH_MODE: ${AZHI_AUTH_MODE:-local}
+      AZHI_OIDC_ISSUER: ${AZHI_OIDC_ISSUER:-}
+      AZHI_OIDC_AUDIENCE: ${AZHI_OIDC_AUDIENCE:-}
+      AZHI_SECRET_KEY: ${AZHI_SECRET_KEY:-}
+      AZHI_PUBLIC_URL: ${AZHI_PUBLIC_URL:-http://localhost:7400}
+    ports: ["${AZHI_PORT:-7400}:7400"]
+    volumes: [azhidata:/data]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7400/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    profiles: ["server"]
+
 volumes:
   pgdata: {}
+  azhidata: {}

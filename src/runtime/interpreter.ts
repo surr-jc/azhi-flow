@@ -33,7 +33,7 @@ export function installTemporalRuntime() {
   if (runtimeInstalled) return;
   runtimeInstalled = true;
   try {
-    Runtime.install({ logger: new DefaultLogger((process.env.AZHI_TEMPORAL_LOG_LEVEL ?? 'WARN') as LogLevel) });
+    Runtime.install({ logger: new DefaultLogger((process.env.AZHI_TEMPORAL_LOG_LEVEL ?? 'ERROR') as LogLevel) });
   } catch {
     // Already installed by the host process.
   }

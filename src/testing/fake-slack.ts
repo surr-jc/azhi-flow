@@ -13,8 +13,9 @@ export interface FakeSlackMessage {
  * (with `include_all_metadata`). Used by tests, the recovery suite and local demos so that
  * Slack delivery can be exercised without a workspace. Point `AZHI_SLACK_API_URL` at it.
  */
-export async function startFakeSlack(port = 0, opts: { token?: string } = {}) {
+export async function startFakeSlack(port = 0, opts: { token?: string; postDelayMs?: number } = {}) {
   const messages: FakeSlackMessage[] = [];
+  const state = { postDelayMs: opts.postDelayMs ?? 0 };
   let seq = 0;
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -33,6 +34,9 @@ export async function startFakeSlack(port = 0, opts: { token?: string } = {}) {
       if (!params.channel) return send({ ok: false, error: 'channel_not_found' });
       const ts = `${Math.floor(Date.now() / 1000)}.${String(++seq).padStart(6, '0')}`;
       messages.push({ ts, channel: params.channel, text: params.text ?? '', blocks: params.blocks, metadata: params.metadata });
+      // The message is posted before the response is sent: a crash in this window is
+      // exactly the "sent, no receipt" case the ledger must reconcile.
+      if (state.postDelayMs) await new Promise((r) => setTimeout(r, state.postDelayMs));
       return send({ ok: true, channel: params.channel, ts });
     }
     if (method === 'conversations.history') {
@@ -53,6 +57,7 @@ export async function startFakeSlack(port = 0, opts: { token?: string } = {}) {
   return {
     url: `http://127.0.0.1:${address.port}/api`,
     messages,
+    state,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }

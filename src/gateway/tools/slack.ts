@@ -17,7 +17,14 @@ async function call(cfg: SlackConfig, method: string, body: Record<string, unkno
     body: JSON.stringify(body),
   });
   if (res.status === 429) throw Object.assign(new Error('slack rate limited'), { retryable: true });
-  const json = (await res.json()) as { ok: boolean; error?: string; [k: string]: unknown };
+  const text = await res.text();
+  let json: { ok: boolean; error?: string; [k: string]: unknown };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // Not a Slack API answer (a proxy or gateway error): the outcome of a post is unknown.
+    throw new Error(`slack ${method}: HTTP ${res.status}, non-JSON response: ${text.slice(0, 80)}`);
+  }
   if (!json.ok) throw Object.assign(new Error(`slack ${method}: ${json.error}`), { slackError: json.error });
   return json;
 }
