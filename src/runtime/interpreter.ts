@@ -59,7 +59,7 @@ export async function createGatewayWorker(connection: NativeConnection, namespac
   return Worker.create({
     connection,
     namespace,
-    taskQueue: TASK_QUEUES.gateway,
+    taskQueue: ctx.settings.gatewayQueue,
     activities: gatewayActivities(ctx),
     maxConcurrentActivityTaskExecutions: 50,
   });

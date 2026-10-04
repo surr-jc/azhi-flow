@@ -23,6 +23,8 @@ export interface RunSnapshot {
   tool_revisions: Record<string, number>;
   trigger: 'manual' | 'schedule' | 'api' | 'test';
   occurrence_id?: string;
+  /** The deployment's gateway task queue; absent on older runs. */
+  gateway_queue?: string;
   settings?: Record<string, unknown>;
 }
 

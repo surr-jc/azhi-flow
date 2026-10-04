@@ -5,6 +5,7 @@ import { byteSize } from '../lib/json.js';
 import { signRunToken } from '../security/tokens.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
+import { evaluateWorkerTrust } from '../server/trust.js';
 import type { GatewayActivities, NotifyNodeInput, RecordRunPatch, ReportNodeInput, ToolNodeInput } from './activity-types.js';
 import { toFailure } from './activity-errors.js';
 import { renderReport } from './report.js';
@@ -140,12 +141,24 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       });
     },
 
-    async checkWorkers(workspaceId, queue) {
-      const r = await ctx.pool.query(`SELECT count(*)::int AS n FROM workers WHERE workspace_id=$1 AND task_queue=$2 AND last_heartbeat > now() - interval '30 seconds'`, [
-        workspaceId,
-        queue,
-      ]);
-      return { online: r.rows[0].n as number };
+    async checkWorkers(workspaceId, packageHash, runtime) {
+      const sig = (await ctx.pool.query(`SELECT signature FROM workflow_versions WHERE workspace_id=$1 AND package_hash=$2 AND signature IS NOT NULL LIMIT 1`, [workspaceId, packageHash])).rows[0]
+        ?.signature;
+      const trust = await evaluateWorkerTrust(ctx, workspaceId, sig ?? null, packageHash);
+      const rows = (
+        await ctx.pool.query(`SELECT id, task_queue, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds' ORDER BY id`, [
+          workspaceId,
+        ])
+      ).rows as Array<{ id: string; task_queue: string; capabilities: { runtimes?: Record<string, unknown> } }>;
+      const accepted: Array<{ id: string; queue: string }> = [];
+      const refused: Array<{ id: string; reason: string }> = [];
+      for (const w of rows) {
+        const t = trust.workers.find((x) => x.worker === w.id);
+        if (!w.capabilities.runtimes?.[runtime]) refused.push({ id: w.id, reason: `no ${runtime} runtime` });
+        else if (!t?.accepted) refused.push({ id: w.id, reason: t?.reason ?? 'trust policy refused the package' });
+        else accepted.push({ id: w.id, queue: w.task_queue });
+      }
+      return { online: rows.length, accepted, refused };
     },
 
     async issueRunToken(workspaceId, runId, nodeId, tools) {

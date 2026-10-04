@@ -26,37 +26,45 @@ import { resolveValue, type ValueScope } from './values.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
 
-const GATEWAY_QUEUE = 'azhi-gateway';
-const EXEC_QUEUE = 'azhi-exec';
 const WORKER_OFFLINE_EXPIRY_MS = 30 * 60_000;
 
-const bookkeeping = proxyActivities<GatewayActivities>({
-  taskQueue: GATEWAY_QUEUE,
-  startToCloseTimeout: '30s',
-  retry: { initialInterval: '1s', maximumInterval: '30s' },
-});
+const bookkeepingFor = (queue: string) =>
+  proxyActivities<GatewayActivities>({
+    taskQueue: queue,
+    startToCloseTimeout: '30s',
+    retry: { initialInterval: '1s', maximumInterval: '30s' },
+  });
 
-function gateway(node: PlanNode) {
+function gatewayOn(queue: string, node: PlanNode) {
   return proxyActivities<GatewayActivities>({
-    taskQueue: GATEWAY_QUEUE,
+    taskQueue: queue,
     startToCloseTimeout: node.timeoutMs,
     heartbeatTimeout: node.type === 'notify' || node.tool?.effect !== 'read' ? '20s' : undefined,
     retry: { initialInterval: '1s', backoffCoefficient: 2, maximumInterval: '1m', maximumAttempts: node.maxAttempts, nonRetryableErrorTypes: NON_RETRYABLE },
   });
 }
 
-function exec(node: PlanNode) {
+/**
+ * Scripts go to one chosen worker's own queue. Temporal retries are off here: the interpreter
+ * retries, re-selecting a worker each time, so a dead worker's queue never strands an attempt.
+ */
+function exec(node: PlanNode, queue: string) {
   return proxyActivities<ExecActivities>({
-    taskQueue: EXEC_QUEUE,
+    taskQueue: queue,
+    scheduleToStartTimeout: '1m',
     startToCloseTimeout: node.timeoutMs + 60_000,
     heartbeatTimeout: '30s',
     cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-    retry: { initialInterval: '2s', backoffCoefficient: 2, maximumInterval: '1m', maximumAttempts: node.maxAttempts, nonRetryableErrorTypes: NON_RETRYABLE },
+    retry: { maximumAttempts: 1 },
   });
 }
 
 export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const { plan, runId, workspaceId, snapshot } = input;
+  // The gateway queue travels in the snapshot, never in module state: a reused V8 context shares it.
+  const gatewayQueue = snapshot.gateway_queue ?? 'azhi-gateway';
+  const bookkeeping = bookkeepingFor(gatewayQueue);
+  const gateway = (node: PlanNode) => gatewayOn(gatewayQueue, node);
   const status: RunStatus = { state: 'running', flags: {}, nodes: {} };
   for (const n of plan.nodes) status.nodes[n.id] = { status: 'pending' };
   setHandler(statusQuery, () => status);
@@ -79,36 +87,57 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     await bookkeeping.recordNode(runId, workspaceId, id, s, data);
   };
 
-  const waitForWorkers = async (nodeId: string) => {
-    let { online } = await bookkeeping.checkWorkers(workspaceId, EXEC_QUEUE);
-    if (online > 0) return;
-    const expiresAt = Date.now() + WORKER_OFFLINE_EXPIRY_MS;
-    await setState('waiting', { flags: { ...status.flags, waiting_reason: { reason: 'worker_offline', node: nodeId, expires_at: new Date(expiresAt).toISOString() } } });
-    while (online === 0) {
-      if (Date.now() >= expiresAt) throw ApplicationFailure.create({ type: 'expired', message: `no worker came online for node ${nodeId} within 30 minutes`, nonRetryable: true });
-      await sleep('10s');
-      ({ online } = await bookkeeping.checkWorkers(workspaceId, EXEC_QUEUE));
+  const selectWorker = async (nodeId: string, runtime: string, attempt: number): Promise<string> => {
+    let sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+    if (sel.online > 0 && sel.accepted.length === 0) {
+      throw ApplicationFailure.create({
+        type: 'worker_trust_denied',
+        message: `no online worker will run this package: ${sel.refused.map((r) => `${r.id}: ${r.reason}`).join('; ')}`,
+        nonRetryable: true,
+      });
     }
-    const { waiting_reason: _cleared, ...flags } = status.flags;
-    await setState('running', { flags, event: 'run.worker_online' });
+    if (sel.accepted.length === 0) {
+      const expiresAt = Date.now() + WORKER_OFFLINE_EXPIRY_MS;
+      await setState('waiting', { flags: { ...status.flags, waiting_reason: { reason: 'worker_offline', node: nodeId, expires_at: new Date(expiresAt).toISOString() } } });
+      while (sel.accepted.length === 0) {
+        if (Date.now() >= expiresAt) throw ApplicationFailure.create({ type: 'expired', message: `no worker came online for node ${nodeId} within 30 minutes`, nonRetryable: true });
+        await sleep('10s');
+        sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+      }
+      const { waiting_reason: _cleared, ...flags } = status.flags;
+      await setState('running', { flags, event: 'run.worker_online' });
+    }
+    // Spread attempts across accepting workers; deterministic because the list comes from history.
+    return sel.accepted[(attempt - 1) % sel.accepted.length]!.queue;
   };
 
   const runScript = async (node: PlanNode, def: Omit<ScriptNode, 'id'>, value: unknown, ordinal?: number) => {
-    await waitForWorkers(node.id);
-    const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, allowedTools);
-    return exec(node).runScript({
-      runId,
-      workspaceId,
-      nodeId: ordinal === undefined ? node.id : `${node.id}[${ordinal}]`,
-      packageHash: snapshot.package_hash,
-      runtime: def.runtime,
-      entrypoint: def.entrypoint,
-      lockfile: def.lockfile,
-      input: value,
-      outputSchema: (node.type === 'parallel' ? undefined : node.outputSchema) ?? def.output_schema,
-      limits: { timeMs: node.timeoutMs, memoryMb: def.limits?.memory_mb },
-      runToken,
-    });
+    const nodeId = ordinal === undefined ? node.id : `${node.id}[${ordinal}]`;
+    for (let attempt = 1; ; attempt++) {
+      const queue = await selectWorker(node.id, def.runtime, attempt);
+      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, allowedTools);
+      try {
+        return await exec(node, queue).runScript({
+          runId,
+          workspaceId,
+          nodeId,
+          packageHash: snapshot.package_hash,
+          runtime: def.runtime,
+          entrypoint: def.entrypoint,
+          lockfile: def.lockfile,
+          input: value,
+          outputSchema: (node.type === 'parallel' ? undefined : node.outputSchema) ?? def.output_schema,
+          limits: { timeMs: node.timeoutMs, memoryMb: def.limits?.memory_mb },
+          runToken,
+          attempt,
+        });
+      } catch (err) {
+        if (isCancellation(err)) throw err;
+        const e = toNodeError(err);
+        if (NON_RETRYABLE.includes(e.class as never) || attempt >= node.maxAttempts) throw err;
+        await sleep(Math.min(2000 * 2 ** (attempt - 1), 60_000));
+      }
+    }
   };
 
   const runTool = async (node: PlanNode, def: Omit<ToolNode, 'id'>, s: ValueScope, ordinal?: number) => {

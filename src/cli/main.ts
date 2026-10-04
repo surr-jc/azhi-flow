@@ -14,7 +14,10 @@ import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
 import { printInspect } from './inspect.js';
-import { bold, dim, green, printDiagnostics, red, table, yellow } from './output.js';
+import { signForUpload } from './signing-client.js';
+import { parseTrustPolicy } from '../security/signing.js';
+import type { RunPlanReport } from '../plan/run-plan.js';
+import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
 
 const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0');
 program.option('--url <url>', 'server URL (default: $AZHI_URL, saved login, or the local server)').option('--token <token>', 'API token');
@@ -57,10 +60,14 @@ const collect = (v: string, prev: string[] = []) => [...prev, v];
 
 async function upload(path: string) {
   const pkg = loadPackage(path);
-  const r = await client().post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number; package_hash: string } }>(
-    '/v1/packages',
-    packageUpload(pkg),
-  );
+  const api = client();
+  const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition;
+  // Every upload is signed with this user's publisher key, so workers can apply trust policies.
+  const signature = def ? await signForUpload(api, pkg, def.id) : undefined;
+  const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number; package_hash: string } }>('/v1/packages', {
+    ...packageUpload(pkg),
+    signature,
+  });
   printDiagnostics(r.diagnostics);
   if (!r.ok) {
     console.error(red('package rejected by the server compiler'));
@@ -132,6 +139,20 @@ program
       }
       await new Promise((r) => setTimeout(r, 500));
     }
+  });
+
+program
+  .command('plan')
+  .description('Show the run plan: capability marks, policy coverage, taint paths, missing grants and blockers')
+  .argument('[path]', 'package directory, or workflow@version with --published', '.')
+  .option('--published', 'plan a published version instead of uploading')
+  .option('--json', 'print raw JSON')
+  .action(async (path: string, opts: { published?: boolean; json?: boolean }) => {
+    const version = opts.published ? path : (await upload(path)).id;
+    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan`);
+    if (opts.json) console.log(JSON.stringify(plan, null, 2));
+    else printPlan(plan);
+    process.exitCode = plan.ok ? 0 : 1;
   });
 
 program
@@ -222,6 +243,21 @@ program
     console.log(`schedule ${s.id}: next occurrence ${new Date(s.next_occurrence_at).toISOString()}`);
   });
 
+const users = program.command('user').description('Manage workspace users (admin)');
+users
+  .command('add')
+  .argument('<name>')
+  .requiredOption('--role <role>', 'admin | author | operator | viewer')
+  .option('--email <email>')
+  .action(async (name: string, opts: { role: string; email?: string }) => {
+    const r = await client().post<{ id: string; token: string }>('/v1/users', { display_name: name, role: opts.role, email: opts.email });
+    console.log(`user ${r.id} (${opts.role}) created. API token, shown once:\n  ${r.token}`);
+  });
+users.command('list').action(async () => {
+  const rows = await client().get<any[]>('/v1/users');
+  table([['ID', 'NAME', 'ROLE'], ...rows.map((u) => [u.id, u.display_name ?? '', u.role])]);
+});
+
 program
   .command('login')
   .description('Save the server URL and API token for this CLI')
@@ -278,9 +314,10 @@ worker
   .command('start')
   .option('--name <name>', 'worker name (default: hostname)')
   .option('--temporal <address>', 'Temporal address', process.env.AZHI_TEMPORAL_ADDRESS ?? 'localhost:7233')
-  .action(async (opts: { name?: string; temporal: string }) => {
+  .option('--trust <policy>', 'whose packages this worker runs: self | authors:<user,...> | workspace-publishers', 'self')
+  .action(async (opts: { name?: string; temporal: string; trust: string }) => {
     const cfg = resolveCliConfig(program.opts());
-    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name });
+    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name, trustPolicy: parseTrustPolicy(opts.trust) });
     const shutdown = async () => {
       await w.stop();
       process.exit(0);

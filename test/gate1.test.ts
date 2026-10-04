@@ -36,12 +36,12 @@ describe.skipIf(!up)('Gate 1: scheduled run survives a crash during the Slack po
     slack = await startFakeSlack(0, { postDelayMs: 3000 });
     const databaseUrl = await freshDatabase();
     const build = `gate1${Date.now().toString(36)}`;
-    env = { ...process.env, AZHI_DATABASE_URL: databaseUrl, AZHI_DATA_DIR: dataDir, AZHI_SLACK_API_URL: slack.url, AZHI_TEMPORAL_ADDRESS: TEMPORAL, AZHI_PORT: '0' };
+    env = { ...process.env, AZHI_DATABASE_URL: databaseUrl, AZHI_DATA_DIR: dataDir, AZHI_SLACK_API_URL: slack.url, AZHI_TEMPORAL_ADDRESS: TEMPORAL, AZHI_PORT: '0', AZHI_GATEWAY_QUEUE: `azhi-gateway-${build}` };
     // API, interpreter and scheduler in this process; gateway activities in a child we can kill.
     server = await startServer({
       roles: ['api', 'interpreter', 'scheduler'],
       log: () => {},
-      settings: { databaseUrl, dataDir, artifactDir: join(dataDir, 'artifacts'), temporalAddress: TEMPORAL, port: 0, slackApiUrl: slack.url, interpreterBuild: build },
+      settings: { databaseUrl, dataDir, artifactDir: join(dataDir, 'artifacts'), temporalAddress: TEMPORAL, port: 0, slackApiUrl: slack.url, interpreterBuild: build, gatewayQueue: `azhi-gateway-${build}` },
     });
     const token = readFileSync(server.localTokenFile!, 'utf8').trim();
     api = new ApiClient(server.url, token);

@@ -45,6 +45,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     workflow_version_id: o.version.id,
     tool_revisions: toolRevisions,
     trigger: o.trigger,
+    gateway_queue: ctx.settings.gatewayQueue,
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {

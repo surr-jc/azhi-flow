@@ -55,6 +55,14 @@ export interface ScriptNodeInput {
   outputSchema?: Record<string, unknown> | string;
   limits: { timeMs: number; memoryMb?: number };
   runToken: string;
+  /** Interpreter-level attempt number (workers are re-selected between attempts). */
+  attempt: number;
+}
+
+export interface WorkerSelection {
+  online: number;
+  accepted: Array<{ id: string; queue: string }>;
+  refused: Array<{ id: string; reason: string }>;
 }
 
 export interface GatewayActivities {
@@ -63,7 +71,8 @@ export interface GatewayActivities {
   toolNode(input: ToolNodeInput): Promise<{ output: unknown; observation: { source: string; observed_at: string } & Record<string, unknown>; action?: { id: string; reused: boolean } }>;
   notifyNode(input: NotifyNodeInput): Promise<{ action_id: string; delivered: boolean; receipt: unknown }>;
   reportNode(input: ReportNodeInput): Promise<unknown>;
-  checkWorkers(workspaceId: string, queue: string): Promise<{ online: number }>;
+  /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
+  checkWorkers(workspaceId: string, packageHash: string, runtime: string): Promise<WorkerSelection>;
   issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[]): Promise<string>;
 }
 

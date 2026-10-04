@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import { packageFromDirectory } from '../../src/definition/package.js';
+import { loadDefinitionText } from '../../src/definition/load.js';
+import { signForUpload } from '../../src/cli/signing-client.js';
 import { startServer, type ServerHandle, type ServerRole } from '../../src/server/server.js';
 import { startFakeSlack } from '../../src/testing/fake-slack.js';
 import { ApiClient } from '../../src/worker/api-client.js';
@@ -57,6 +59,7 @@ export async function startHarness(opts: { worker?: boolean; roles?: ServerRole[
       slackApiUrl: slack.url,
       authMode: 'local',
       interpreterBuild: opts.build ?? `test${Date.now().toString(36)}`,
+      gatewayQueue: `azhi-gateway-${dataDir.slice(-8)}`,
     },
   });
   const token = readFileSync(server.localTokenFile!, 'utf8').trim();
@@ -77,11 +80,25 @@ export async function startHarness(opts: { worker?: boolean; roles?: ServerRole[
   };
 }
 
-export async function uploadDir(api: ApiClient, dir: string) {
+export async function uploadDir(api: ApiClient, dir: string, opts: { sign?: boolean; keyDir?: string } = {}) {
   const pkg = packageFromDirectory(dir);
   const files: Record<string, string> = {};
   for (const f of pkg.manifest.files) files[f.path] = pkg.read(f.path)!.toString('base64');
-  return api.post<{ ok: boolean; diagnostics: unknown[]; version: { id: string; workflow: string; version: number } }>('/v1/packages', { workflow: pkg.manifest.workflow, files });
+  const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+  const signature = opts.sign === false ? undefined : await signForUpload(api, pkg, def.id, opts.keyDir ?? keyDirFor(api));
+  return api.post<{ ok: boolean; diagnostics: any[]; version: { id: string; workflow: string; version: number; package_hash: string; signed: boolean } }>('/v1/packages', {
+    workflow: pkg.manifest.workflow,
+    files,
+    signature,
+  });
+}
+
+const keyDirs = new Map<string, string>();
+/** Test publisher keys live in a temp dir per API client, never in the real home directory. */
+export function keyDirFor(api: ApiClient): string {
+  const k = api.baseUrl;
+  if (!keyDirs.has(k)) keyDirs.set(k, mkdtempSync(join(tmpdir(), 'azhi-keys-')));
+  return keyDirs.get(k)!;
 }
 
 export async function waitForRun(api: ApiClient, runId: string, timeoutMs = 60_000) {

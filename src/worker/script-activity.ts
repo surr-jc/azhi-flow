@@ -91,7 +91,7 @@ export function scriptActivities(o: ScriptWorkerOptions): ExecActivities {
   return {
     async runScript(input: ScriptNodeInput) {
       const ctx = Context.current();
-      const attempt = ctx.info.attempt;
+      const attempt = input.attempt;
       const record = (body: Record<string, unknown>) =>
         o.api.post(`/v1/runs/${input.runId}/attempts`, { node_id: input.nodeId, attempt, worker_id: o.workerId, ...body }).catch(() => {});
       await record({ state: 'running' });

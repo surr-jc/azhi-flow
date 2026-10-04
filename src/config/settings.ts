@@ -20,12 +20,14 @@ export function settings() {
     publicUrl: process.env.AZHI_PUBLIC_URL ?? `http://127.0.0.1:${port}`,
     slackApiUrl: process.env.AZHI_SLACK_API_URL,
     interpreterBuild: process.env.AZHI_INTERPRETER_BUILD,
+    /** Deployments sharing one Temporal namespace need distinct gateway queues. */
+    gatewayQueue: process.env.AZHI_GATEWAY_QUEUE ?? 'azhi-gateway',
   };
 }
 export type Settings = ReturnType<typeof settings>;
 
 export const TASK_QUEUES = {
   interpreter: (build: string) => `azhi-interpreter-${build}`,
-  gateway: 'azhi-gateway',
-  exec: 'azhi-exec',
+  /** Each execution worker polls its own queue so the interpreter can route by trust policy. */
+  exec: (workerId: string) => `azhi-exec-${workerId}`,
 };

@@ -7,10 +7,15 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit, loadCatalog, registerTool } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
+import { buildRunPlan } from '../plan/run-plan.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { listSecrets, setSecret } from '../server/secrets.js';
 import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
+import { newApiToken } from '../security/tokens.js';
+import { newId } from '../lib/ids.js';
+import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
+import { keyId } from '../security/signing.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -23,6 +28,7 @@ const STATUS: Record<string, number> = {
   [ErrorClass.invalidInput]: 400,
   [ErrorClass.contractViolation]: 422,
   [ErrorClass.unsupportedCapability]: 422,
+  [ErrorClass.workerTrustDenied]: 422,
   [ErrorClass.transient]: 503,
 };
 
@@ -65,19 +71,29 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/packages', async (req) => {
     const p = user(req);
     requireRole(p, 'author');
-    const body = z.object({ workflow: z.string(), files: z.record(z.string(), z.string()) }).parse(req.body);
+    const body = z.object({ workflow: z.string(), files: z.record(z.string(), z.string()), signature: z.record(z.string(), z.unknown()).optional() }).parse(req.body);
     const r = await uploadPackage(ctx, p.workspaceId, body, p.userId);
     if (!r.ok) return { ok: false, diagnostics: r.diagnostics };
     const v = r.version;
-    return { ok: true, diagnostics: r.diagnostics, version: { id: v.id, workflow: v.slug, version: v.version, package_hash: v.package_hash, draft: v.draft } };
+    if (body.signature) {
+      await requireValidSignature(ctx, p.workspaceId, body.signature, v.package_hash, p.userId);
+      await ctx.pool.query(`UPDATE workflow_versions SET signature=$2 WHERE id=$1 AND signature IS NULL`, [v.id, JSON.stringify(body.signature)]);
+    }
+    const signed = (await ctx.pool.query(`SELECT signature IS NOT NULL AS signed FROM workflow_versions WHERE id=$1`, [v.id])).rows[0].signed as boolean;
+    return { ok: true, diagnostics: r.diagnostics, version: { id: v.id, workflow: v.slug, version: v.version, package_hash: v.package_hash, draft: v.draft, signed } };
   });
 
   app.post('/v1/versions/:id/publish', async (req) => {
     const p = user(req);
     requireRole(p, 'author');
     const { id } = req.params as { id: string };
-    const body = z.object({ signature: z.unknown().optional() }).parse(req.body ?? {});
-    const v = await publishVersion(ctx, p.workspaceId, id, p.userId, body.signature);
+    const body = z.object({ signature: z.record(z.string(), z.unknown()).optional() }).parse(req.body ?? {});
+    const current = (await ctx.pool.query(`SELECT package_hash, signature FROM workflow_versions WHERE id=$1 AND workspace_id=$2`, [id, p.workspaceId])).rows[0];
+    if (!current) throw notFound('workflow version');
+    // Publishing requires a valid signature by the publishing user (ADR-06, ADR-11).
+    const signature = body.signature ?? current.signature;
+    await requireValidSignature(ctx, p.workspaceId, signature, current.package_hash, p.userId);
+    const v = await publishVersion(ctx, p.workspaceId, id, p.userId, signature);
     return { id: v.id, workflow: v.slug, version: v.version, draft: v.draft };
   });
 
@@ -86,6 +102,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
     return v;
+  });
+
+  // The run plan (spec section 3): what will run where, under which controls, and what blocks it.
+  app.get('/v1/versions/:ref/plan', async (req) => {
+    const p = user(req);
+    const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
+    if (!v) throw notFound('workflow version');
+    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
   });
 
   app.get('/v1/workflows', async (req) => {
@@ -104,6 +128,49 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     return packageManifest(ctx, ws, decodeURIComponent((req.params as { hash: string }).hash));
   });
 
+  app.get('/v1/packages/:hash/signature', async (req) => {
+    const hash = decodeURIComponent((req.params as { hash: string }).hash);
+    const row = (await ctx.pool.query(`SELECT signature FROM workflow_versions WHERE workspace_id=$1 AND package_hash=$2 AND signature IS NOT NULL LIMIT 1`, [req.principal.workspaceId, hash]))
+      .rows[0];
+    return { signature: row?.signature ?? null };
+  });
+
+  // Signing and trust
+  app.get('/v1/trust/root', async (req) => {
+    const root = await workspaceRoot(ctx, req.principal.workspaceId);
+    return { public_key: root.publicKey, key_id: keyId(root.publicKey) };
+  });
+
+  app.post('/v1/publisher-keys', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const { public_key } = z.object({ public_key: z.string().min(40) }).parse(req.body);
+    return registerPublisherKey(ctx, p.workspaceId, p.userId, public_key);
+  });
+
+  app.post('/v1/signatures/verify', async (req) => {
+    const b = z.object({ package_hash: z.string(), signature: z.record(z.string(), z.unknown()).nullable() }).parse(req.body);
+    return checkSignature(ctx, req.principal.workspaceId, b.signature as never, b.package_hash);
+  });
+
+  // Users (admin)
+  app.post('/v1/users', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ display_name: z.string(), email: z.string().optional(), role: z.enum(['admin', 'author', 'operator', 'viewer']) }).parse(req.body);
+    const id = newId('usr');
+    await ctx.pool.query(`INSERT INTO users(id, workspace_id, email, display_name, role) VALUES ($1,$2,$3,$4,$5)`, [id, p.workspaceId, b.email ?? null, b.display_name, b.role]);
+    const t = newApiToken();
+    await ctx.pool.query(`INSERT INTO api_tokens(id, workspace_id, user_id, name, token_hash) VALUES ($1,$2,$3,$4,$5)`, [newId('tok'), p.workspaceId, id, b.display_name, t.hash]);
+    await audit(ctx, p.workspaceId, p.userId, 'user.created', { user: id, role: b.role });
+    return { id, role: b.role, token: t.token };
+  });
+
+  app.get('/v1/users', async (req) => {
+    const p = user(req);
+    return (await ctx.pool.query(`SELECT id, display_name, email, role, created_at FROM users WHERE workspace_id=$1 ORDER BY created_at`, [p.workspaceId])).rows;
+  });
+
   // Runs
   app.post('/v1/runs', async (req, reply) => {
     const p = user(req);
@@ -111,6 +178,15 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const body = z.object({ version: z.string(), inputs: z.record(z.string(), z.unknown()).default({}), test: z.boolean().optional() }).parse(req.body);
     const v = await resolveVersion(ctx, p.workspaceId, body.version);
     if (!v) throw notFound(`workflow version ${body.version}`);
+    // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
+    // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
+    if (!body.test) {
+      const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
+      if (!plan.ok) {
+        const first = plan.blockers[0]!;
+        throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
+      }
+    }
     const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild });
     return reply.status(202).send({ run_id: r.runId });
   });
@@ -284,6 +360,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     if (existing && JSON.stringify(existing.trust_policy) !== JSON.stringify(b.trust_policy ?? { kind: 'workspace-publishers' })) {
       await audit(ctx, p.workspaceId, p.userId, 'worker.trust_policy_changed', { worker: b.id, trust_policy: b.trust_policy });
     }
+    return { ok: true };
+  });
+
+  // A worker shutting down says so, so runs report worker_offline at once rather than after 30 s.
+  app.post('/v1/workers/:id/offline', async (req) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    await ctx.pool.query(`UPDATE workers SET last_heartbeat = 'epoch' WHERE id=$1 AND workspace_id=$2 AND owner_id=$3`, [(req.params as { id: string }).id, p.workspaceId, p.userId]);
     return { ok: true };
   });
 
