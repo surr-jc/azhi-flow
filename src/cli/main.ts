@@ -224,7 +224,7 @@ program
 
 program
   .command('open')
-  .description('Print a link to the run page (or the runs list) that signs this browser tab in')
+  .description('Print a link to mission control (or one run) that signs this browser tab in')
   .argument('[run-id]')
   .action((runId: string | undefined) => {
     const cfg = resolveCliConfig(program.opts());

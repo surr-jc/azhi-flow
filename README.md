@@ -39,8 +39,11 @@ Plan for the design.
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
-- A read-only web run page (`azhi open <run>`): graph, timeline, ledger, policy coverage, context
-  manifest and usage, updated live over SSE.
+- Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
+  decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
+  timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,
+  approving and cancelling go through the same API and role checks as the CLI.
+  See [docs/mission-control-plan.md](docs/mission-control-plan.md).
 - A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
 
 ## Install
@@ -130,6 +133,7 @@ Requirements are the same as above.
 
 ```bash
 npm install
+npm run build:web        # the web app; rerun after pulling changes to web/
 
 # 1. PostgreSQL + Temporal
 docker compose -f deploy/docker-compose.yml up -d --wait
@@ -194,7 +198,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi server start [--roles ...]`, `azhi server migrate` | Run the server; roles: `api,interpreter,gateway,scheduler` |
 | `azhi worker start` | Run an execution worker on this host |
 | `azhi login --url --token` | Save credentials for a remote server |
-| `azhi open [run]` | Print a link to the web run page that signs the browser tab in |
+| `azhi open [run]` | Print a link to mission control (or one run) that signs the browser tab in |
 
 ## Tests
 
