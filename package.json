@@ -21,6 +21,7 @@
   "dependencies": {
     "@marcbachmann/cel-js": "8.0.0",
     "@modelcontextprotocol/sdk": "1.32.0",
+    "@opencode-ai/sdk": "1.18.34",
     "@temporalio/activity": "1.24.0",
     "@temporalio/client": "1.24.0",
     "@temporalio/common": "1.24.0",
@@ -35,18 +36,19 @@
     "jose": "6.2.12",
     "mustache": "4.2.0",
     "pg": "8.23.1",
+    "tsx": "4.23.15",
     "yaml": "2.9.1",
     "zod": "4.6.5"
   },
+  "optionalDependencies": {
+    "opencode-ai": "1.18.34"
+  },
   "devDependencies": {
-    "@opencode-ai/sdk": "1.18.34",
     "@temporalio/testing": "1.24.0",
     "@types/mustache": "4.2.6",
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
-    "opencode-ai": "1.18.34",
     "playwright-core": "1.56.1",
-    "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vitest": "5.0.3"
   }

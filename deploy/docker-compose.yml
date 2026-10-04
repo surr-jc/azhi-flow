@@ -20,7 +20,7 @@ services:
       retries: 30
 
   temporal:
-    image: temporalio/auto-setup:${AZHI_TEMPORAL_VERSION:-latest}
+    image: temporalio/auto-setup:${AZHI_TEMPORAL_VERSION:-1.29.1}
     depends_on:
       postgres: {condition: service_healthy}
     environment:
@@ -39,7 +39,7 @@ services:
       start_period: 10s
 
   azhi:
-    build: {context: .., dockerfile: Dockerfile}
+    build: {context: .., dockerfile: Dockerfile, args: {NODE_IMAGE: "${AZHI_NODE_IMAGE:-node:22-bookworm-slim}"}}
     image: azhi-flow/server:${AZHI_VERSION:-dev}
     depends_on:
       postgres: {condition: service_healthy}
@@ -52,6 +52,11 @@ services:
       AZHI_OIDC_AUDIENCE: ${AZHI_OIDC_AUDIENCE:-}
       AZHI_SECRET_KEY: ${AZHI_SECRET_KEY:-}
       AZHI_PUBLIC_URL: ${AZHI_PUBLIC_URL:-http://localhost:7400}
+      AZHI_ANTHROPIC_MODEL: ${AZHI_ANTHROPIC_MODEL:-}
+      AZHI_STORE_CONTEXT_CONTENT: ${AZHI_STORE_CONTEXT_CONTENT:-0}
+      # Only for local trials without a Slack workspace (see src/testing/fake-slack.ts).
+      AZHI_SLACK_API_URL: ${AZHI_SLACK_API_URL:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports: ["${AZHI_PORT:-7400}:7400"]
     volumes: [azhidata:/data]
     healthcheck:

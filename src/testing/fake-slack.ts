@@ -13,7 +13,7 @@ export interface FakeSlackMessage {
  * (with `include_all_metadata`). Used by tests, the recovery suite and local demos so that
  * Slack delivery can be exercised without a workspace. Point `AZHI_SLACK_API_URL` at it.
  */
-export async function startFakeSlack(port = 0, opts: { token?: string; postDelayMs?: number } = {}) {
+export async function startFakeSlack(port = 0, opts: { token?: string; postDelayMs?: number; host?: string } = {}) {
   const messages: FakeSlackMessage[] = [];
   const state = { postDelayMs: opts.postDelayMs ?? 0 };
   let seq = 0;
@@ -52,7 +52,7 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
     res.statusCode = 404;
     send({ ok: false, error: 'unknown_method' });
   });
-  await new Promise<void>((r) => server.listen(port, '127.0.0.1', r));
+  await new Promise<void>((r) => server.listen(port, opts.host ?? '127.0.0.1', r));
   const address = server.address() as { port: number };
   return {
     url: `http://127.0.0.1:${address.port}/api`,

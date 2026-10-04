@@ -11,22 +11,22 @@ export function settings() {
     temporalNamespace: process.env.AZHI_TEMPORAL_NAMESPACE ?? 'default',
     dataDir,
     artifactDir: process.env.AZHI_ARTIFACT_DIR ?? join(dataDir, 'artifacts'),
-    secretKey: process.env.AZHI_SECRET_KEY,
+    secretKey: process.env.AZHI_SECRET_KEY || undefined,
     authMode: (process.env.AZHI_AUTH_MODE ?? 'local') as 'local' | 'oidc',
-    oidcIssuer: process.env.AZHI_OIDC_ISSUER,
-    oidcAudience: process.env.AZHI_OIDC_AUDIENCE,
+    oidcIssuer: process.env.AZHI_OIDC_ISSUER || undefined,
+    oidcAudience: process.env.AZHI_OIDC_AUDIENCE || undefined,
     host: process.env.AZHI_HOST ?? '127.0.0.1',
     port,
     publicUrl: process.env.AZHI_PUBLIC_URL ?? `http://127.0.0.1:${port}`,
-    slackApiUrl: process.env.AZHI_SLACK_API_URL,
+    slackApiUrl: process.env.AZHI_SLACK_API_URL || undefined,
     interpreterBuild: process.env.AZHI_INTERPRETER_BUILD,
-    /** Deployments sharing one Temporal namespace need distinct gateway queues. */
     /** Model for agent profiles that say `name: default`. */
-    anthropicModel: process.env.AZHI_ANTHROPIC_MODEL,
+    anthropicModel: process.env.AZHI_ANTHROPIC_MODEL || undefined,
     anthropicApiUrl: process.env.AZHI_ANTHROPIC_API_URL ?? 'https://api.anthropic.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
-    gatewayQueue: process.env.AZHI_GATEWAY_QUEUE ?? 'azhi-gateway',
+    /** Deployments sharing one Temporal namespace need distinct gateway queues. */
+    gatewayQueue: process.env.AZHI_GATEWAY_QUEUE || 'azhi-gateway',
   };
 }
 export type Settings = ReturnType<typeof settings>;
