@@ -88,6 +88,7 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
   if (inserted.rowCount === 1) {
     await scope.pool.query(`INSERT INTO action_transitions(action_id, state, fence) VALUES ($1,'planned',$2)`, [id, scope.fence]);
   }
+  crashPoint('ledger.planned');
   const row = (await scope.pool.query(`SELECT id, state, fence, receipt, created_at FROM actions WHERE id=$1`, [id])).rows[0] as ActionRow;
   if (row.fence > scope.fence) throw new AzhiError(ErrorClass.needsOperator, `action ${id} belongs to a newer attempt (${row.fence})`);
 
@@ -116,9 +117,11 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
   }
 
   await transition('dispatched');
+  crashPoint('ledger.dispatched');
   let receipt: R;
   try {
     receipt = await handlers.send(id);
+    crashPoint('ledger.sent');
   } catch (err) {
     const definite = err instanceof SendError && err.definite;
     const cls = err instanceof SendError ? err.errorClass : err instanceof AzhiError ? err.errorClass : ErrorClass.transient;
@@ -127,4 +130,12 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
   }
   await transition('confirmed', undefined, { receipt });
   return { actionId: id, receipt, reused: false };
+}
+
+/**
+ * Crash-suite fault injection: with AZHI_FAULT=<point> the process kills itself at that point,
+ * exactly as a power loss would. Never set in production.
+ */
+function crashPoint(point: string) {
+  if (process.env.AZHI_FAULT === point) process.kill(process.pid, 'SIGKILL');
 }
