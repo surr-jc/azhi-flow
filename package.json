@@ -15,7 +15,8 @@
     "azhi": "tsx src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "compare": "tsx bench/compare.ts"
   },
   "dependencies": {
     "@marcbachmann/cel-js": "8.0.0",
