@@ -10,6 +10,7 @@ RUN npm ci --omit=dev --ignore-scripts=false && rm -rf node_modules/opencode-ai 
 COPY bin ./bin
 COPY src ./src
 COPY migrations ./migrations
+# `azhi init` templates; the CLI in the image reads them at start-up.
 COPY examples ./examples
 COPY tsconfig.json ./
 VOLUME /data

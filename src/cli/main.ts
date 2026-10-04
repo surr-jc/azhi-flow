@@ -12,6 +12,7 @@ import { packageFromDirectory, type PackageSource } from '../definition/package.
 import { workflowSchema } from '../definition/schema.js';
 import { staticCatalog, type ToolCatalog } from '../gateway/types.js';
 import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
+import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
 import { printContext, printInspect } from './inspect.js';
@@ -78,15 +79,16 @@ async function upload(path: string) {
 }
 
 const TEMPLATES = join(dirname(fileURLToPath(import.meta.url)), '../../examples');
+const templateNames = () => (existsSync(TEMPLATES) ? readdirSync(TEMPLATES) : []);
 
 program
   .command('init')
   .description('Create a workflow package from a template (default: the weekly quality report)')
   .argument('[dir]', 'directory to create', 'quality-report')
-  .option('-t, --template <name>', `template: ${readdirSync(TEMPLATES).join(' | ')}`, 'quality-report')
+  .option('-t, --template <name>', `template: ${templateNames().join(' | ') || 'quality-report'}`, 'quality-report')
   .action((dir: string, opts: { template: string }) => {
     const from = join(TEMPLATES, opts.template);
-    if (!existsSync(from)) throw new Error(`no template '${opts.template}' (have: ${readdirSync(TEMPLATES).join(', ')})`);
+    if (!existsSync(from)) throw new Error(`no template '${opts.template}' (have: ${templateNames().join(', ') || 'none'})`);
     if (existsSync(dir) && readdirSync(dir).length) throw new Error(`${dir} exists and is not empty`);
     cpSync(from, dir, { recursive: true });
     console.log(`${green('created')} ${resolve(dir)} from the ${opts.template} template`);
@@ -414,16 +416,16 @@ users.command('list').action(async () => {
 
 program
   .command('login')
-  .description('Save the server URL and API token for this CLI')
-  .option('--url <url>', 'server URL')
-  .option('--token <token>', 'API token')
-  .action(async (cmdOpts: { url?: string; token?: string }) => {
-    // --url and --token are also global options, so commander hands them to the program, not to login.
-    const opts = { ...program.opts(), ...cmdOpts } as { url?: string; token?: string };
-    if (!opts.url || !opts.token) throw new Error('azhi login needs --url <url> and --token <token>');
-    saveCliConfig({ url: opts.url, token: opts.token });
-    const me = await client().get<any>('/v1/me');
-    console.log(`logged in to ${opts.url} as ${me.userId} (${me.role})`);
+  .description('Save the server URL and API token for this CLI (--url and --token)')
+  .action(async () => {
+    // --url and --token are program-level options, so commander parses them before this
+    // subcommand runs; read them from there rather than declaring them again on `login`.
+    const { url, token } = program.opts<{ url?: string; token?: string }>();
+    if (!url || !token) throw new Error('usage: azhi login --url <server> --token <token>');
+    // Check the credentials before saving them, so a typo never replaces a working login.
+    const me = await new ApiClient(url, token).get<any>('/v1/me');
+    saveCliConfig({ url, token });
+    console.log(`logged in to ${url} as ${me.userId} (${me.role})`);
   });
 
 program
