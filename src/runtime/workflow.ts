@@ -137,12 +137,60 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       return { ref, revision };
     });
 
+  /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
+  const runHarness = async (node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
+    try {
+      const prep = await act.harnessPrepare({
+        runId,
+        workspaceId,
+        nodeId: node.id,
+        packageHash: snapshot.package_hash,
+        profile: def.profile,
+        outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
+        tools: tools as never,
+        input: resolveValue(def.input, s) ?? null,
+        inputSources: node.dataDeps,
+        ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+      });
+      const queue = await selectWorker(node.id, 'opencode', 1);
+      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential]);
+      const r = await exec(node, queue).runHarness({
+        runId,
+        workspaceId,
+        nodeId: node.id,
+        packageHash: snapshot.package_hash,
+        runToken,
+        credential: prep.credential,
+        providerUrl: prep.providerUrl,
+        model: prep.model,
+        system: prep.system,
+        prompt: prep.prompt,
+        tools: prep.tools,
+        outputSchema: prep.outputSchema,
+        maxToolCalls: def.budget?.max_tool_calls,
+        timeoutMs: node.timeoutMs,
+      });
+      const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
+      const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
+      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor: 'opencode', tainted: plan.taint.tainted[node.id], result: { ...r, ...(error ? { error } : {}) } });
+      // OpenCode reports usage per message but not for its own side calls, so totals are partial.
+      if (!status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
+      if (error) throw ApplicationFailure.create({ type: error.class, message: error.message, nonRetryable: true });
+      return r.output;
+    } catch (err) {
+      if (!isCancellation(err)) await bookkeeping.agentFailed(runId, workspaceId, node.id, toNodeError(err));
+      throw err;
+    }
+  };
+
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
-    if ((def.executor ?? 'model-agent') !== 'model-agent') {
-      throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${def.executor}' is not available on this interpreter build`, nonRetryable: true });
+    const executor = def.executor ?? 'model-agent';
+    if (executor !== 'model-agent' && executor !== 'opencode') {
+      throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${executor}' is not available on this interpreter build`, nonRetryable: true });
     }
     const act = agentOn(gatewayQueue, node);
     const tools = (node.agentTools ?? []).map((t) => ({ ref: t.ref, effect: t.effect, safeForTainted: t.safeForTainted, revision: snapshot.tool_revisions[t.ref] ?? t.revision }));
+    if (executor === 'opencode') return runHarness(node, def, s, act, tools);
     const deadline = Date.now() + node.timeoutMs;
     try {
       let state = await act.agentBegin({

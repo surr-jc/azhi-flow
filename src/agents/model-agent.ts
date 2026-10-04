@@ -399,3 +399,36 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
   const per = (n: number | null, price: number | undefined) => ((n ?? 0) * (price ?? 0)) / 1_000_000;
   return per(u.input_tokens, pricing.input_per_mtok) + per(u.output_tokens, pricing.output_per_mtok) + per(u.cache_read_tokens, pricing.cache_read_per_mtok) + per(u.cache_write_tokens, pricing.cache_write_per_mtok);
 }
+
+/**
+ * Harness executors get the same context the model agent would: platform rules and profile as
+ * the system prompt, the input and retrieved excerpts as the prompt, the node's gateway tools.
+ * The manifest adds one item for what the harness owns and Azhi cannot see.
+ */
+export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, executor: string) {
+  const state = await agentBegin(ctx, i);
+  const t = loadTranscript(ctx, state.transcript);
+  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
+  if (profile.model.provider !== 'anthropic') throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs an anthropic profile, not ${profile.model.provider}`);
+  const items = [
+    ...t.items,
+    { kind: 'instructions' as const, source: executor, reason: 'harness-owned system prompt, built-in tool schemas and compaction; not observable', tokens: 0, content_hash: 'unobservable' },
+  ];
+  await ctx.pool.query(
+    `INSERT INTO context_manifests(workspace_id, run_id, node_id, attempt, turn, tainted, items, total_tokens, token_source) VALUES ($1,$2,$3,1,1,$4,$5,NULL,'estimated')
+     ON CONFLICT (run_id, node_id, attempt, turn) DO UPDATE SET items=EXCLUDED.items`,
+    [i.workspaceId, i.runId, i.nodeId, false, JSON.stringify(items)],
+  );
+  const first = t.messages[0]!.content[0];
+  return {
+    system: t.system,
+    prompt: first && first.type === 'text' ? first.text : '',
+    tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
+    outputSchema: t.outputSchema,
+    model: t.model,
+    credential: profile.model.credential ?? 'anthropic-api-key',
+    providerUrl: ctx.settings.anthropicApiUrl,
+  };
+}
+
+export { loadProfile };

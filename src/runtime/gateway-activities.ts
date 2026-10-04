@@ -1,5 +1,5 @@
 import { Context } from '@temporalio/activity';
-import { agentBegin, agentTurn } from '../agents/model-agent.js';
+import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
 import { retrieve } from '../knowledge/datasets.js';
 import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import { asArtifact, callTool } from '../gateway/gateway.js';
@@ -17,6 +17,7 @@ const SLACK_TOOL = 'slack.post-message@1';
 
 /** Activities that run in the server process on the `azhi-gateway` task queue. */
 export function gatewayActivities(ctx: AppContext): GatewayActivities {
+  const withChunks = (input: AgentBeginInput) => withChunksFor(ctx, input);
   /** Records one attempt of an activity-backed node in node_attempts. */
   async function attempt<T>(runId: string, workspaceId: string, nodeId: string, fn: () => Promise<T>): Promise<T> {
     const n = Context.current().info.attempt;
@@ -174,8 +175,8 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       return { online: rows.length, accepted, refused };
     },
 
-    async issueRunToken(workspaceId, runId, nodeId, tools) {
-      return signRunToken(ctx.secretKey, { ws: workspaceId, run: runId, node: nodeId, tools, exp: Math.floor(Date.now() / 1000) + 3600 });
+    async issueRunToken(workspaceId, runId, nodeId, tools, creds) {
+      return signRunToken(ctx.secretKey, { ws: workspaceId, run: runId, node: nodeId, tools, ...(creds?.length ? { creds } : {}), exp: Math.floor(Date.now() / 1000) + 3600 });
     },
 
     async agentBegin(input) {
@@ -185,17 +186,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         [input.workspaceId, input.runId, input.nodeId, `model-agent:${process.pid}`],
       );
       try {
-        // The context builder retrieves with the node input as the query (spec section 11).
-        const chunks = input.datasets?.length
-          ? (await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(input.input), principal: input.principal })).map((c) => ({
-              id: c.citation_id,
-              dataset: c.dataset,
-              revision: c.revision,
-              heading: c.heading,
-              text: c.text,
-            }))
-          : undefined;
-        return await agentBegin(ctx, { ...input, ...(chunks ? { chunks } : {}) });
+        return await agentBegin(ctx, await withChunks(input));
       } catch (err) {
         throw toFailure(err);
       }
@@ -221,6 +212,64 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       } finally {
         clearInterval(hb);
       }
+    },
+
+    async harnessPrepare(input) {
+      await ctx.pool.query(
+        `INSERT INTO node_attempts(workspace_id, run_id, node_id, attempt, state, worker_id) VALUES ($1,$2,$3,1,'running',NULL)
+         ON CONFLICT (run_id, node_id, attempt) DO UPDATE SET state='running'`,
+        [input.workspaceId, input.runId, input.nodeId],
+      );
+      try {
+        return await harnessPrepare(ctx, await withChunks(input), 'opencode');
+      } catch (err) {
+        throw toFailure(err);
+      }
+    },
+
+    async harnessRecord(input) {
+      const r = input.result;
+      const { profile } = await loadProfile(ctx, input.workspaceId, input.packageHash, input.profile);
+      const cost = estimateCost(r.usage, profile.pricing);
+      await ctx.pool.query(
+        `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision)
+         VALUES ($1,$2,$3,1,1,$4,'anthropic',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (run_id, node_id, attempt, turn) DO NOTHING`,
+        [
+          input.workspaceId,
+          input.runId,
+          input.nodeId,
+          `${r.harness.name}@${r.harness.version}`,
+          resolveModelName(ctx, profile),
+          r.usage.input_tokens,
+          r.usage.output_tokens,
+          r.usage.cache_read_tokens,
+          r.usage.cache_write_tokens,
+          r.usage.reasoning_tokens,
+          cost,
+          cost === null ? null : profile.pricing!.currency,
+          cost === null ? 'unavailable' : 'estimated',
+          cost === null ? null : profile.pricing!.revision,
+        ],
+      );
+      await ctx.pool.query(`UPDATE context_manifests SET tainted=$4, total_tokens=$5, token_source=$6 WHERE run_id=$1 AND node_id=$2 AND attempt=$3`, [
+        input.runId,
+        input.nodeId,
+        1,
+        Boolean(input.tainted),
+        r.usage.input_tokens,
+        r.usage.input_tokens === null ? 'estimated' : 'reported',
+      ]);
+      const ok = r.output !== undefined && !r.error;
+      const stored = ok ? (byteSize(r.output) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, input.workspaceId, r.output) : r.output) : null;
+      await ctx.pool.query(`UPDATE node_attempts SET state=$4, ended_at=now(), output=$5, error=$6, worker_id=$7 WHERE run_id=$1 AND node_id=$2 AND attempt=$3`, [
+        input.runId,
+        input.nodeId,
+        1,
+        ok ? 'succeeded' : 'failed',
+        JSON.stringify(stored),
+        r.error ? JSON.stringify({ ...r.error, retryable: false }) : null,
+        `${r.harness.name}@${r.harness.version}`,
+      ]);
     },
 
     async agentFailed(runId, workspaceId, nodeId, error) {
@@ -280,4 +329,11 @@ function textOf(v: unknown): string {
   if (Array.isArray(v)) return v.map(textOf).join(' ');
   if (typeof v === 'object') return Object.entries(v as object).map(([k, x]) => `${k} ${textOf(x)}`).join(' ');
   return '';
+}
+
+/** The context builder retrieves with the node input as the query (spec section 11). */
+async function withChunksFor(ctx: AppContext, input: AgentBeginInput): Promise<AgentBeginInput> {
+  if (!input.datasets?.length) return input;
+  const found = await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(input.input), principal: input.principal });
+  return { ...input, chunks: found.map((c) => ({ id: c.citation_id, dataset: c.dataset, revision: c.revision, heading: c.heading, text: c.text })) };
 }

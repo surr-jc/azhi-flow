@@ -7,6 +7,7 @@ import { installTemporalRuntime } from '../runtime/interpreter.js';
 import { newId } from '../lib/ids.js';
 import { ApiClient } from './api-client.js';
 import { detectCapabilities } from './capabilities.js';
+import { harnessActivities } from './harness-activity.js';
 import { scriptActivities, type ScriptWorkerOptions } from './script-activity.js';
 import { ApplicationFailure } from '@temporalio/common';
 import { ErrorClass } from '../lib/errors.js';
@@ -75,7 +76,10 @@ export async function startWorker(o: WorkerOptions) {
     connection,
     namespace: o.namespace ?? 'default',
     taskQueue: TASK_QUEUES.exec(workerId),
-    activities: scriptActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage }),
+    activities: {
+      ...scriptActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage }),
+      ...harnessActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage }),
+    },
     maxConcurrentActivityTaskExecutions: Number(process.env.AZHI_WORKER_CONCURRENCY ?? 4),
   });
   const running = worker.run();

@@ -1,3 +1,4 @@
+import type { HarnessInput, HarnessResult } from '../worker/harness-activity.js';
 import type { AgentBeginInput, AgentState, AgentTurnInput, AgentTurnResult } from '../agents/model-agent.js';
 /** Activity signatures shared by the interpreter workflow and the processes that implement them. */
 import type { NodeError, RunFlags, RunState } from './types.js';
@@ -74,11 +75,15 @@ export interface GatewayActivities {
   reportNode(input: ReportNodeInput): Promise<unknown>;
   /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
   checkWorkers(workspaceId: string, packageHash: string, runtime: string): Promise<WorkerSelection>;
-  issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[]): Promise<string>;
+  issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[], creds?: string[]): Promise<string>;
   /** Model agent: builds the context and the first manifest items (attempt row goes running). */
   agentBegin(input: AgentBeginInput): Promise<AgentState>;
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
+  /** Harness executors: builds the same context as the model agent, for a worker to run. */
+  harnessPrepare(input: AgentBeginInput): Promise<HarnessPlan>;
+  /** Harness executors: records usage, the context manifest and the attempt outcome. */
+  harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Records the failure of an agent node on its attempt row. */
   agentFailed(runId: string, workspaceId: string, nodeId: string, error: NodeError): Promise<void>;
   /** Hybrid retrieval over pinned dataset revisions, with citations. */
@@ -111,6 +116,8 @@ export interface ApprovalSignal extends ApprovalDecision {
 
 export interface ExecActivities {
   runScript(input: ScriptNodeInput): Promise<unknown>;
+  /** Harness executors (OpenCode) run on workers. */
+  runHarness(input: HarnessInput): Promise<HarnessResult>;
 }
 
 export interface RetrieveNodeInput {
@@ -121,4 +128,25 @@ export interface RetrieveNodeInput {
   query: string;
   topK?: number;
   principal?: { userId: string; role: string };
+}
+
+export interface HarnessPlan {
+  system: string;
+  prompt: string;
+  tools: Array<{ name: string; ref: string; description: string; input_schema: Record<string, unknown> }>;
+  outputSchema: Record<string, unknown>;
+  model: string;
+  credential: string;
+  providerUrl: string;
+}
+
+export interface HarnessRecordInput {
+  runId: string;
+  workspaceId: string;
+  nodeId: string;
+  packageHash: string;
+  profile: string;
+  executor: string;
+  tainted?: string;
+  result: HarnessResult;
 }

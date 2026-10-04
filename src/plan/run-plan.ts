@@ -151,7 +151,8 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           { name: 'usage reporting', mark: mark('usage', c.usage !== 'unavailable'), detail: c.usage },
           { name: 'cancellation', mark: mark('cancellation', c.cancellation !== 'none'), detail: c.cancellation },
         );
-        if (executor === 'model-agent') np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing)));
+        if (executor === 'model-agent' || executor === 'opencode') np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing)));
+        if (executor === 'opencode') np.requirements.push(...workerRequirements('opencode'));
         if (def.tools?.length) np.requirements.push({ name: 'gateway tools', mark: mark('gatewayTools', c.gatewayTools !== 'none', c.gatewayTools === 'bridged'), detail: c.gatewayTools });
         for (const t of def.tools ?? []) np.requirements.push(toolRequirement(n, t));
         if (def.requires?.enforced_restrictions && c.ambientTools === 'uncontrolled') {

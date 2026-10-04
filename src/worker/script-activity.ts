@@ -29,7 +29,7 @@ export interface ScriptWorkerOptions {
 }
 
 /** Downloads (once) and verifies every file of a package into the worker cache. */
-async function preparePackage(o: ScriptWorkerOptions, packageHash: string): Promise<{ dir: string; manifest: PackageManifest }> {
+export async function preparePackage(o: ScriptWorkerOptions, packageHash: string): Promise<{ dir: string; manifest: PackageManifest }> {
   const manifest = await o.api.get<PackageManifest>(`/v1/packages/${encodeURIComponent(packageHash)}/manifest`);
   const computed = `sha256:${createHash('sha256').update(canonicalJson(manifest)).digest('hex')}`;
   if (computed !== packageHash) throw fail(ErrorClass.workerTrustDenied, `package manifest hash mismatch: expected ${packageHash}, got ${computed}`);
@@ -87,7 +87,7 @@ function commandFor(o: ScriptWorkerOptions, input: ScriptNodeInput, dir: string)
   return ['bun', 'run', input.entrypoint];
 }
 
-export function scriptActivities(o: ScriptWorkerOptions): ExecActivities {
+export function scriptActivities(o: ScriptWorkerOptions): Pick<ExecActivities, 'runScript'> {
   return {
     async runScript(input: ScriptNodeInput) {
       const ctx = Context.current();

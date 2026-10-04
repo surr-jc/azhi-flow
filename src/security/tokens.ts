@@ -20,6 +20,8 @@ export interface RunTokenClaims {
   run: string;
   node: string;
   tools: string[];
+  /** Workspace secrets this token may read: only a harness's provider credential. */
+  creds?: string[];
   exp: number;
 }
 

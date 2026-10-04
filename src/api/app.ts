@@ -14,7 +14,7 @@ import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
-import { listSecrets, setSecret } from '../server/secrets.js';
+import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import type { Role } from '../db/schema.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
@@ -490,8 +490,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'gateway calls need a run-scoped token');
     const c = req.principal.claims;
     const b = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()).default({}), project: z.array(z.string()).optional() }).parse(req.body);
-    const run = (await ctx.pool.query(`SELECT snapshot FROM runs WHERE id=$1 AND workspace_id=$2`, [c.run, c.ws])).rows[0];
+    const run = (
+      await ctx.pool.query(`SELECT r.snapshot, r.test, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [c.run, c.ws])
+    ).rows[0];
     if (!run) throw notFound('run');
+    // ADR-10 at the gateway: a tainted agent (or a harness acting for one) cannot call a write
+    // tool unless it is marked safe for tainted callers.
+    const node = (run.plan as ExecutionPlan).nodes.find((n) => n.id === c.node);
+    const agentTool = node?.agentTools?.find((t) => t.ref === b.tool);
+    const tainted = (run.plan as ExecutionPlan).taint?.tainted?.[c.node];
+    if (tainted && agentTool && agentTool.effect !== 'read' && !agentTool.safeForTainted) {
+      await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'gateway.refused',$3,$4)`, [c.ws, c.run, c.node, JSON.stringify({ tool: b.tool, reason: 'tainted_write' })]);
+      throw new AzhiError(ErrorClass.authorization, `refused: node ${c.node} is tainted (${tainted}) and ${b.tool} is a ${agentTool.effect} tool not marked safe_for_tainted`);
+    }
+    if (run.test && agentTool && agentTool.effect !== 'read') return { output: { mocked: true, tool: b.tool, args: b.args }, observation: { source: 'mock' } };
     const r = await callTool(ctx, {
       workspaceId: c.ws,
       runId: c.run,
@@ -504,6 +516,18 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
       allowed: c.tools,
     });
     return r;
+  });
+
+  // A harness fetches its provider key with the run token; only credentials named in the token.
+  app.get('/v1/gateway/credentials/:name', async (req) => {
+    if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'credentials need a run-scoped token');
+    const c = req.principal.claims;
+    const name = (req.params as { name: string }).name;
+    if (!c.creds?.includes(name)) throw new AzhiError(ErrorClass.authorization, `this run token may not read credential ${name}`);
+    const s = await resolveSecret(ctx, c.ws, name);
+    if (!s) throw notFound(`credential ${name}`);
+    await audit(ctx, c.ws, `run:${c.run}`, 'credential.read', { name, node: c.node });
+    return { value: s.value };
   });
 
   app.get('/v1/doctor', async (req) => {

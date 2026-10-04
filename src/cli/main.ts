@@ -142,6 +142,14 @@ program
   });
 
 program
+  .command('gateway-mcp', { hidden: true })
+  .description('Serve the tool gateway over stdio MCP for a harness (configured by the adapter)')
+  .action(async () => {
+    const { runGatewayBridge } = await import('../agents/gateway-mcp.js');
+    await runGatewayBridge();
+  });
+
+program
   .command('test-node')
   .description('Run one node on fixture inputs with writes mocked (a test run, excluded from analytics)')
   .argument('<node>', 'node ID')
