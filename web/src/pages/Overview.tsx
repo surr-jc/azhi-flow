@@ -26,7 +26,7 @@ export function Overview() {
       </div>
 
       <div className="grid-2">
-        <Panel title="Alerts">
+        <Panel title="Alerts" action={<Link to="/ui/alerts">History and Slack</Link>}>
           {alerts.data ? <AlertList alerts={alerts.data} /> : <Loading />}
         </Panel>
         <Panel title="Next scheduled runs" action={<Link to="/ui/schedules">All schedules</Link>}>

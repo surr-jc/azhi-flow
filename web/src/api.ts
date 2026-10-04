@@ -95,6 +95,7 @@ export interface Approval {
 }
 
 export interface Alert {
+  key: string;
   level: 'critical' | 'warning' | 'info';
   kind: string;
   message: string;

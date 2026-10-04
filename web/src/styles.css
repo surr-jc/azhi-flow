@@ -129,3 +129,9 @@ svg .node.st-skipped rect, svg .node.st-pending rect { stroke-dasharray: 4 3; }
 .chart .bar:hover .fill { opacity: 0.8; }
 .chart .bar:hover .hit { fill: var(--idle-bg); }
 .nowrap { white-space: nowrap; }
+.meter { height: 6px; background: var(--idle-bg); border-radius: 3px; overflow: hidden; margin-bottom: 4px; max-width: 220px; }
+.meter span { display: block; height: 100%; background: var(--run); border-radius: 3px; }
+.meter span.warn { background: var(--warn); }
+.meter span.bad { background: var(--bad); }
+.limit-form { margin-top: 12px; }
+.limit-form input { width: 140px; }

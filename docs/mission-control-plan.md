@@ -1,7 +1,7 @@
 # Mission control: the Azhi Flow web app
 
-Status: increment 1 built on branch `mission-control`, with most of increment 2 (usage, audit,
-alerts, run again). Suresh picked Operations as the next increment (2026-10-04). Written 2026-10-04. Owner: Suresh.
+Status: increments 1 and 2 built on branch `mission-control` (2026-10-04). Suresh picked
+Operations as increment 2. Next: increment 3 (authoring) unless Suresh says otherwise. Written 2026-10-04. Owner: Suresh.
 
 ## Goal
 
@@ -58,7 +58,20 @@ Computed by the server from state it already has (no new subsystem):
 - scheduled workflows whose current run plan has blockers (the next occurrence will be refused);
 - runs waiting longer than their expected time.
 
-Increment 4 can push alerts to Slack through the existing gateway tool.
+The scheduler role checks once a minute, records every alert in `alert_state` (first seen,
+last seen, cleared) and posts each new alert once to the workspace's Slack channel
+(`PUT /v1/settings/alerts`, admin), with the same `slack-bot-token` secret workflows use. These
+posts are platform notifications, not workflow writes, so they are audited (`alert.sent`) but
+not in any run's action ledger. A Slack failure is kept on the alert and retried next pass.
+
+### Spend limits
+
+A limit (`PUT /v1/budgets`, admin, audited) applies to one workflow or the whole workspace, per
+UTC day or month. Spend is measured model cost; unpriced turns are not counted, so it is a lower
+bound. Once a limit is used up, the run plan of every workflow with agent steps under it gets a
+`budget_exceeded` blocker: API and web runs are refused, and scheduled occurrences are skipped
+and audited (`schedule.occurrence_refused`) instead of retried. Test runs still work. Alerts
+fire at 80% and at 100%.
 
 ## New API endpoints
 
@@ -71,6 +84,8 @@ All read endpoints are workspace-scoped and need a user token; writes reuse exis
 - `GET /v1/runs?state=&workflow=&before=`: filters and paging on the existing list.
 - `GET /v1/usage/summary?days=`: spend and tokens by day and workflow.
 - `GET /v1/audit?limit=&before=`: audit events (role admin).
+- `GET /v1/alerts/history`, `GET|PUT /v1/settings/alerts`, `POST /v1/settings/alerts/test`.
+- `GET|PUT /v1/budgets`, `DELETE /v1/budgets/:id`.
 - `PATCH /v1/schedules/:id`: enable or disable (admin, audited).
 - `GET /v1/workflows` gains schedule, signature and last-run columns.
 
@@ -92,12 +107,12 @@ Monaco in the first release. Mission control follows it:
 1. **Mission control read side + the two most common actions.** Overview, runs, run page
    (ported), approvals inbox with approve/reject, workflows with run plan and "start run" form,
    schedules, workers, secrets (names and set value), health. New endpoints above.
-2. **Operations.** Usage and cost dashboard, audit log, alerts list, tools and datasets views,
-   cancel from the list, rerun with the same inputs.
+2. **Operations** (built). Usage and cost dashboard, audit log, alerts with history and Slack
+   delivery, spend limits, tools and datasets views, run again with the same inputs.
 3. **Authoring.** Upload a package, view the definition (Monaco, read-only first), publish with
    the signature check, dataset upload and publish, schedule editing.
 4. **Team and channels.** Sign in with OIDC in the browser (PKCE) instead of pasting a token,
-   user and role management, alerts to Slack, Slack approval buttons (Phase 4 item 5).
+   user and role management, Slack approval buttons (Phase 4 item 5).
 5. **Visual editor** (React Flow), after the YAML round trip is proven.
 
 ## Out of scope for now

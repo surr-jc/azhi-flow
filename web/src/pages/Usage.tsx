@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { api } from '../api';
-import { ErrorNote, Loading, money, num, PageHead, Panel, Table } from '../ui';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type FormEvent } from 'react';
+import { api, atLeast, type WorkflowSummary } from '../api';
+import { useMe } from '../App';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, when } from '../ui';
 
 interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null }
 interface UsageSummary { days: number; by_day: Array<Row & { day: string }>; by_workflow: Array<Row & { workflow: string; runs: number }> }
@@ -22,6 +23,7 @@ export function Usage() {
       />
       <ErrorNote error={q.error} />
       {!q.data ? <Loading /> : <UsageBody data={q.data} />}
+      <SpendLimits />
     </>
   );
 }
@@ -86,3 +88,67 @@ function DayBars({ days, rows }: { days: number; rows: UsageSummary['by_day'] })
 
 const roundedTop = (x: number, y: number, w: number, h: number, r: number) =>
   `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
+
+interface Budget { id: string; workflow: string | null; period: 'day' | 'month'; limit: number; currency: string; spent: number; unpriced_turns: number; used_pct: number; exceeded: boolean; resets_at: string }
+
+/** Limits hold back new runs of workflows with agent nodes once used up; test runs still work. */
+function SpendLimits() {
+  const me = useMe();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['budgets'], queryFn: () => api<Budget[]>('/v1/budgets'), refetchInterval: 30_000 });
+  const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
+  const [workflow, setWorkflow] = useState('');
+  const [period, setPeriod] = useState<'day' | 'month'>('month');
+  const [limit, setLimit] = useState('');
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ['budgets'] });
+    void qc.invalidateQueries({ queryKey: ['alerts'] });
+    void qc.invalidateQueries({ queryKey: ['plan'] });
+  };
+  const save = useMutation({ mutationFn: () => api('/v1/budgets', { method: 'PUT', body: { workflow: workflow || null, period, limit: Number(limit) } }), onSuccess: () => { setLimit(''); done(); } });
+  const remove = useMutation({ mutationFn: (id: string) => api(`/v1/budgets/${encodeURIComponent(id)}`, { method: 'DELETE' }), onSuccess: done });
+  const admin = atLeast(me.data?.role, 'admin');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate();
+  };
+  return (
+    <Panel title="Spend limits">
+      <p className="muted small">When a limit is used up, new runs of workflows with agent steps are refused (scheduled ones too) until the period resets at midnight UTC or the start of the month. Test runs still work. Unpriced turns are not counted, so spend is a lower bound.</p>
+      <ErrorNote error={q.error ?? remove.error} />
+      {!q.data ? <Loading /> : (
+        <Table head={['Applies to', 'Period', 'Used', 'Resets', '']} empty="No spend limits set.">
+          {q.data.map((b) => (
+            <tr key={b.id}>
+              <td>{b.workflow ?? <strong>Whole workspace</strong>}</td>
+              <td>{b.period === 'day' ? 'Daily' : 'Monthly'}</td>
+              <td className="budget-cell">
+                <div className="meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(b.used_pct, 100)} aria-label={`${b.used_pct}% used`}>
+                  <span className={b.exceeded ? 'bad' : b.used_pct >= 80 ? 'warn' : ''} style={{ width: `${Math.min(b.used_pct, 100)}%` }} />
+                </div>
+                {money(b.spent, b.currency)} of {money(b.limit, b.currency)} {b.exceeded ? <Badge tone="bad">used up</Badge> : <span className="muted">({b.used_pct}%)</span>}
+              </td>
+              <td title={when(b.resets_at)} className="nowrap">{ago(b.resets_at)}</td>
+              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={() => confirm('Remove this spend limit?') && remove.mutate(b.id)}>Remove</button> : null}</td>
+            </tr>
+          ))}
+        </Table>
+      )}
+      {admin ? (
+        <form onSubmit={submit} className="row limit-form">
+          <select aria-label="Applies to" value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
+            <option value="">Whole workspace</option>
+            {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
+          </select>
+          <select aria-label="Period" value={period} onChange={(e) => setPeriod(e.target.value as 'day' | 'month')}>
+            <option value="day">Per day</option>
+            <option value="month">Per month</option>
+          </select>
+          <input aria-label="Limit in USD" type="number" min="0.01" step="0.01" placeholder="Limit in USD" value={limit} onChange={(e) => setLimit(e.target.value)} required />
+          <button type="submit" className="primary" disabled={save.isPending || !(Number(limit) > 0)}>Set limit</button>
+        </form>
+      ) : null}
+      <ErrorNote error={save.error} />
+    </Panel>
+  );
+}

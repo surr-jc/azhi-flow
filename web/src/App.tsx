@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, getToken, setToken, type Alert, type Me } from './api';
 import { Link, match, useRoute } from './router';
+import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
 import { Audit } from './pages/Audit';
 import { Datasets, Tools } from './pages/Catalog';
@@ -60,10 +61,11 @@ const NAV: Array<[string, string, string?]> = [
   ['/ui', 'Overview'],
   ['/ui/runs', 'Runs'],
   ['/ui/approvals', 'Approvals', 'approvals'],
+  ['/ui/alerts', 'Alerts', 'alerts'],
   ['/ui/workflows', 'Workflows'],
   ['/ui/schedules', 'Schedules'],
   ['/ui/workers', 'Workers'],
-  ['/ui/usage', 'Usage'],
+  ['/ui/usage', 'Usage and limits'],
   ['/ui/secrets', 'Secrets', 'admin'],
   ['/ui/datasets', 'Datasets'],
   ['/ui/tools', 'Tools'],
@@ -90,7 +92,7 @@ function Shell() {
         <button className="menu-btn" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button>
         <Link to="/ui" className="brand">Azhi Flow</Link>
         <span className="top-right">
-          {critical ? <Link to="/ui" className="badge bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
+          {critical ? <Link to="/ui/alerts" className="badge bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
           {role ? <span className="muted small">{role}</span> : null}
           <button className="link small" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>Sign out</button>
         </span>
@@ -98,7 +100,7 @@ function Shell() {
       <nav className="side" aria-label="Main">
         {NAV.filter(([, , need]) => need !== 'admin' || ['admin', 'owner'].includes(role ?? '')).map(([to, label, extra]) => {
           const active = to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/');
-          const count = extra === 'approvals' ? approvals.data?.length : undefined;
+          const count = extra === 'approvals' ? approvals.data?.length : extra === 'alerts' ? critical : undefined;
           return (
             <Link key={to} to={to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
               {label}
@@ -120,6 +122,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/runs') return <Runs />;
   if ((m = match('/ui/runs/:id', path))) return <RunPage id={m.id!} />;
   if (path === '/ui/approvals') return <Approvals />;
+  if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
   if (path === '/ui/schedules') return <Schedules />;

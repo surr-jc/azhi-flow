@@ -1,12 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { ExecutionPlan } from '../compiler/plan.js';
-import type { ApprovalNode } from '../definition/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { buildRunPlan } from '../plan/run-plan.js';
+import { newId } from '../lib/ids.js';
+import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '../server/alerts.js';
+import { budgetStatus } from '../server/budgets.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
-import { resolveVersion } from '../server/workflows.js';
 import { requireRole } from './auth.js';
 
 /**
@@ -19,36 +18,6 @@ const OPEN_STATES = ['queued', 'running', 'waiting', 'cancelling'];
 function user(req: FastifyRequest) {
   if (req.principal.kind !== 'user') throw new AzhiError(ErrorClass.authorization, 'run tokens cannot use this endpoint');
   return req.principal;
-}
-
-/** Approvals waiting for a decision: requested, not decided, run still open. */
-async function pendingApprovals(ctx: AppContext, workspaceId: string) {
-  const rows = (
-    await ctx.pool.query(
-      `SELECT e.run_id, e.node_id, e.data AS request, e.at AS requested_at, r.state, r.test, w.slug AS workflow, v.version, v.plan
-       FROM run_events e JOIN runs r ON r.id = e.run_id JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-       WHERE e.workspace_id=$1 AND e.kind='approval.requested' AND r.state = ANY($2)
-         AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.run_id = e.run_id AND a.node_id = e.node_id)
-       ORDER BY e.at`,
-      [workspaceId, OPEN_STATES],
-    )
-  ).rows;
-  return rows.map((r) => {
-    const def = ((r.plan as ExecutionPlan).nodes.find((n) => n.id === r.node_id)?.def ?? {}) as ApprovalNode;
-    return {
-      run_id: r.run_id,
-      node_id: r.node_id,
-      workflow: r.workflow,
-      version: r.version,
-      run_state: r.state,
-      test: r.test,
-      requested_at: r.requested_at,
-      request: r.request,
-      role: def.role ?? 'operator',
-      decision_schema: def.decision_schema ?? null,
-      expires_at: (r.request as { expires_at?: string }).expires_at ?? null,
-    };
-  });
 }
 
 async function nextSchedules(ctx: AppContext, workspaceId: string, limit?: number) {
@@ -108,7 +77,7 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.get('/v1/alerts', async (req) => {
     const p = user(req);
-    return computeAlerts(ctx, p);
+    return computeAlerts(ctx, p.workspaceId, { userId: p.userId, role: p.role });
   });
 
   app.get('/v1/workflows/summary', async (req) => {
@@ -187,67 +156,82 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
       )
     ).rows;
   });
+
+  // Alert history: every alert raised, when it cleared, and whether Slack got it.
+  app.get('/v1/alerts/history', async (req) => {
+    const p = user(req);
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query);
+    return (
+      await ctx.pool.query(
+        `SELECT key, level, kind, message, run_id, workflow, first_seen, last_seen, resolved_at, notified_at, notify_error FROM alert_state WHERE workspace_id=$1 ORDER BY last_seen DESC LIMIT $2`,
+        [p.workspaceId, limit],
+      )
+    ).rows;
+  });
+
+  app.get('/v1/settings/alerts', async (req) => {
+    const p = user(req);
+    const s = await alertSettings(ctx, p.workspaceId);
+    const token = (await ctx.pool.query(`SELECT 1 FROM secrets WHERE workspace_id=$1 AND name='slack-bot-token' LIMIT 1`, [p.workspaceId])).rowCount;
+    return { slack_channel: s.slack_channel ?? null, min_level: s.min_level ?? 'warning', enabled: s.enabled !== false, slack_token_set: Boolean(token) };
+  });
+
+  app.put('/v1/settings/alerts', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ slack_channel: z.string().trim().max(80).nullable(), min_level: z.enum(['critical', 'warning']).default('warning'), enabled: z.boolean().default(true) }).parse(req.body);
+    const value = { ...(b.slack_channel ? { slack_channel: b.slack_channel } : {}), min_level: b.min_level, enabled: b.enabled };
+    await ctx.pool.query(`UPDATE workspaces SET settings = jsonb_set(settings, '{alerts}', $2::jsonb) WHERE id=$1`, [p.workspaceId, JSON.stringify(value)]);
+    await audit(ctx, p.workspaceId, p.userId, 'settings.alerts_changed', value);
+    return value;
+  });
+
+  // Sends one test message so an admin can check the channel and the bot's access.
+  app.post('/v1/settings/alerts/test', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const s = await alertSettings(ctx, p.workspaceId);
+    if (!s.slack_channel) throw new AzhiError(ErrorClass.invalidInput, 'set an alerts channel first');
+    try {
+      const r = await sendSlackAlert(ctx, p.workspaceId, s.slack_channel, ':white_check_mark: Azhi Flow alerts will be posted in this channel.', newId('alerttest'));
+      await audit(ctx, p.workspaceId, p.userId, 'alert.test_sent', { channel: s.slack_channel });
+      return { ok: true, ...r };
+    } catch (err) {
+      throw new AzhiError(ErrorClass.invalidInput, `Slack did not accept the message: ${(err as Error).message}`);
+    }
+  });
+
+  // Spend limits: reading needs any user; changing them needs admin and is audited.
+  app.get('/v1/budgets', async (req) => budgetStatus(ctx, user(req).workspaceId));
+
+  app.put('/v1/budgets', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ workflow: z.string().nullable().default(null), period: z.enum(['day', 'month']), limit: z.number().positive().max(1_000_000) }).parse(req.body);
+    let workflowId: string | null = null;
+    if (b.workflow) {
+      workflowId = (await ctx.pool.query(`SELECT id FROM workflows WHERE workspace_id=$1 AND slug=$2`, [p.workspaceId, b.workflow])).rows[0]?.id ?? null;
+      if (!workflowId) throw new AzhiError(ErrorClass.invalidInput, `workflow ${b.workflow} not found`);
+    }
+    const r = await ctx.pool.query(
+      `INSERT INTO budgets(id, workspace_id, workflow_id, period, limit_amount, created_by) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (workspace_id, workflow_id, period) DO UPDATE SET limit_amount=$5 RETURNING id`,
+      [newId('bud'), p.workspaceId, workflowId, b.period, b.limit, p.userId],
+    );
+    await audit(ctx, p.workspaceId, p.userId, 'budget.changed', { id: r.rows[0].id, workflow: b.workflow, period: b.period, limit: b.limit });
+    return (await budgetStatus(ctx, p.workspaceId)).find((x) => x.id === r.rows[0].id);
+  });
+
+  app.delete('/v1/budgets/:id', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const { id } = req.params as { id: string };
+    const r = await ctx.pool.query(`DELETE FROM budgets WHERE id=$1 AND workspace_id=$2`, [id, p.workspaceId]);
+    if (!r.rowCount) throw new AzhiError(ErrorClass.invalidInput, `budget ${id} not found`);
+    await audit(ctx, p.workspaceId, p.userId, 'budget.removed', { id });
+    return { ok: true };
+  });
 }
 
 const RANK: Record<string, number> = { viewer: 0, operator: 1, author: 2, admin: 3, owner: 4 };
 const canDecide = (role: string, required: string) => (RANK[role] ?? -1) >= (RANK[required] ?? 1);
-
-export interface Alert {
-  level: 'critical' | 'warning' | 'info';
-  kind: string;
-  message: string;
-  run_id?: string;
-  workflow?: string;
-  at?: string;
-}
-
-/** Alerts derived from state the server already keeps (docs/mission-control-plan.md). */
-async function computeAlerts(ctx: AppContext, p: { workspaceId: string; userId: string; role: string }): Promise<Alert[]> {
-  const ws = p.workspaceId;
-  const alerts: Alert[] = [];
-  const [failed, unknown, workers, waitingOffline, approvals, schedules] = await Promise.all([
-    ctx.pool.query(
-      `SELECT r.id, r.state, r.ended_at, r.error, w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-       WHERE r.workspace_id=$1 AND NOT r.test AND r.state IN ('failed','delivery_failed','expired') AND r.ended_at >= now() - interval '24 hours' ORDER BY r.ended_at DESC LIMIT 20`,
-      [ws],
-    ),
-    ctx.pool.query(
-      `SELECT a.id, a.run_id, a.tool, a.updated_at, w.slug FROM actions a JOIN runs r ON r.id = a.run_id JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-       WHERE r.workspace_id=$1 AND a.state='outcome_unknown' ORDER BY a.updated_at DESC LIMIT 20`,
-      [ws],
-    ),
-    ctx.pool.query(`SELECT count(*) FILTER (WHERE last_heartbeat > now() - interval '30 seconds')::int AS online, count(*)::int AS total FROM workers WHERE workspace_id=$1`, [ws]),
-    ctx.pool.query(`SELECT count(*)::int AS n FROM runs WHERE workspace_id=$1 AND state='waiting' AND flags->'waiting_reason'->>'reason' = 'worker_offline'`, [ws]),
-    pendingApprovals(ctx, ws),
-    ctx.pool.query(`SELECT s.id, w.slug FROM schedules s JOIN workflows w ON w.id = s.workflow_id WHERE s.workspace_id=$1 AND s.enabled`, [ws]),
-  ]);
-  for (const r of failed.rows) {
-    alerts.push({ level: 'critical', kind: `run.${r.state}`, message: `${r.slug} ${r.state.replace('_', ' ')}${r.error?.message ? `: ${r.error.message}` : ''}`, run_id: r.id, workflow: r.slug, at: r.ended_at });
-  }
-  for (const a of unknown.rows) {
-    alerts.push({ level: 'critical', kind: 'action.outcome_unknown', message: `${a.tool} in ${a.slug}: the outcome of this write is unknown and needs a person to check it`, run_id: a.run_id, workflow: a.slug, at: a.updated_at });
-  }
-  const w = workers.rows[0];
-  if (w.online === 0) alerts.push({ level: w.total ? 'critical' : 'warning', kind: 'workers.none_online', message: w.total ? `No worker is online (${w.total} registered)` : 'No worker has registered yet' });
-  if (waitingOffline.rows[0].n) alerts.push({ level: 'critical', kind: 'runs.worker_offline', message: `${waitingOffline.rows[0].n} run(s) are waiting for an offline worker` });
-  const soon = Date.now() + 60 * 60 * 1000;
-  for (const a of approvals) {
-    if (a.expires_at && new Date(a.expires_at).getTime() < soon) {
-      alerts.push({ level: 'warning', kind: 'approval.expiring', message: `Approval ${a.node_id} on ${a.workflow} expires within the hour`, run_id: a.run_id, workflow: a.workflow, at: a.expires_at });
-    }
-  }
-  // A scheduled workflow whose current plan has blockers is likely to fail at its next occurrence.
-  for (const s of schedules.rows) {
-    const v = await resolveVersion(ctx, ws, `${s.slug}@latest`);
-    if (!v) {
-      alerts.push({ level: 'warning', kind: 'schedule.no_version', message: `${s.slug} is scheduled but has no published version`, workflow: s.slug });
-      continue;
-    }
-    const plan = await buildRunPlan(ctx, ws, v, { userId: p.userId, role: p.role });
-    if (!plan.ok) {
-      alerts.push({ level: 'warning', kind: 'schedule.plan_blocked', message: `${s.slug}: the run plan has blockers, so the next scheduled run is likely to fail (${plan.blockers.map((b) => b.message).join('; ')})`, workflow: s.slug });
-    }
-  }
-  const rank = { critical: 0, warning: 1, info: 2 };
-  return alerts.sort((a, b) => rank[a.level] - rank[b.level]);
-}

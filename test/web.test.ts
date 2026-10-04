@@ -150,6 +150,24 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('sets a spend limit and the Slack alerts channel from the browser', async () => {
+    const page = await open('/ui/usage');
+    await page.getByRole('heading', { name: 'Spend limits' }).waitFor();
+    await page.getByLabel('Limit in USD').fill('25');
+    await page.getByRole('button', { name: 'Set limit' }).click();
+    await page.getByRole('cell', { name: 'Whole workspace' }).waitFor();
+    expect(await h.api.get<any[]>('/v1/budgets')).toEqual([expect.objectContaining({ workflow: null, period: 'month', limit: 25, exceeded: false })]);
+
+    await page.getByRole('link', { name: 'Alerts', exact: true }).click();
+    await page.getByLabel('Channel ID').fill('C-ALERTS');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByText('Saved.').waitFor();
+    await page.getByRole('button', { name: 'Send a test message' }).click();
+    await page.getByText('Test message posted.').waitFor();
+    expect(h.slack.messages.at(-1)).toMatchObject({ channel: 'C-ALERTS' });
+    await page.close();
+  });
+
   it('asks for a token when none is held, and raised no page errors', async () => {
     const page = await browser.newPage();
     await page.goto(`${h.server.url}/ui/runs`);
