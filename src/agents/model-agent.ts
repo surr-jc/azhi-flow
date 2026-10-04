@@ -96,6 +96,9 @@ export interface AgentBeginInput {
   /** Upstream nodes the input came from, for the manifest. */
   inputSources: string[];
   chunks?: Chunk[];
+  /** Datasets the context builder retrieves from, pinned in the run snapshot. */
+  datasets?: Array<{ ref: string; revision: number }>;
+  principal?: { userId: string; role: string };
 }
 
 export interface AgentTurnInput {

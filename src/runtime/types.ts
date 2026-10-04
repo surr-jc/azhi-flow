@@ -25,6 +25,10 @@ export interface RunSnapshot {
   occurrence_id?: string;
   /** The deployment's gateway task queue; absent on older runs. */
   gateway_queue?: string;
+  /** Dataset refs (tags included) pinned to index revisions when the run was created. */
+  dataset_revisions?: Record<string, number>;
+  /** Whose access dataset reads are checked against. */
+  principal?: { userId: string; role: string };
   settings?: Record<string, unknown>;
 }
 

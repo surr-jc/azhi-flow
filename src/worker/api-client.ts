@@ -31,6 +31,7 @@ export class ApiClient {
   get = <T = unknown>(path: string) => this.request<T>('GET', path);
   post = <T = unknown>(path: string, body?: unknown) => this.request<T>('POST', path, body ?? {});
   put = <T = unknown>(path: string, body?: unknown) => this.request<T>('PUT', path, body ?? {});
+  del = <T = unknown>(path: string) => this.request<T>('DELETE', path);
 }
 
 function safeJson(text: string): unknown {

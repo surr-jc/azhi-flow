@@ -4,6 +4,7 @@ import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js
 import { parseProfile } from '../agents/profile.js';
 import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
+import { resolveDatasetRef } from '../knowledge/datasets.js';
 import { packageFile } from '../server/packages.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
@@ -198,22 +199,18 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
 }
 
 async function datasetRequirement(ctx: AppContext, workspaceId: string, ref: string, node: string, missing: RunPlanReport['missing_grants'], principal?: { userId: string; role: string }): Promise<Requirement> {
-  const [name, tag = 'latest'] = ref.split('@');
-  const ds = (await ctx.pool.query(`SELECT id, acl, trusted FROM datasets WHERE workspace_id=$1 AND name=$2`, [workspaceId, name])).rows[0];
-  if (!ds) {
-    missing.push({ kind: 'dataset', name: ref, node });
-    return { name: `dataset ${ref}`, mark: 'unsupported', detail: 'dataset does not exist' };
+  const name = ref.split('@')[0]!;
+  const r = await resolveDatasetRef(ctx, workspaceId, ref);
+  if (!r) {
+    const exists = (await ctx.pool.query(`SELECT 1 FROM datasets WHERE workspace_id=$1 AND name=$2`, [workspaceId, name])).rowCount;
+    if (!exists) missing.push({ kind: 'dataset', name: ref, node });
+    return { name: `dataset ${ref}`, mark: 'unsupported', detail: exists ? `'${ref}' does not resolve to a published revision` : 'dataset does not exist' };
   }
-  const rev =
-    tag === 'latest'
-      ? (await ctx.pool.query(`SELECT max(revision) AS r FROM dataset_revisions WHERE dataset_id=$1`, [ds.id])).rows[0]?.r
-      : (await ctx.pool.query(`SELECT revision AS r FROM dataset_tags WHERE dataset_id=$1 AND tag=$2`, [ds.id, tag])).rows[0]?.r;
-  if (rev === undefined || rev === null) return { name: `dataset ${ref}`, mark: 'unsupported', detail: `tag '${tag}' does not resolve to a revision` };
-  if (principal && !datasetAllows(ds.acl, principal)) {
+  if (principal && !datasetAllows(r.dataset.acl, principal)) {
     missing.push({ kind: 'dataset', name: ref, node });
     return { name: `dataset ${ref}`, mark: 'unsupported', detail: `${principal.userId} (${principal.role}) has no access` };
   }
-  return { name: `dataset ${ref}`, mark: 'native', detail: `revision ${rev}${ds.trusted ? '' : ', marked untrusted'}` };
+  return { name: `dataset ${ref}`, mark: 'native', detail: `revision ${r.revision}${r.dataset.trusted ? '' : ', marked untrusted'}` };
 }
 
 const RANK: Record<string, number> = { viewer: 0, operator: 1, author: 2, admin: 3, owner: 4 };

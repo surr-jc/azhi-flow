@@ -37,7 +37,9 @@ export async function uploadPackage(
   const loaded = loadDefinitionText(pkg.readText(upload.workflow) ?? '');
   if (!loaded.definition) return { ok: false, diagnostics: loaded.diagnostics };
   const catalog = await loadCatalog(ctx, workspaceId);
-  const compiled = compile(loaded.definition, { pkg, catalog });
+  // Dataset trust feeds taint analysis; unknown datasets are treated as trusted until they exist.
+  const trust = new Map((await ctx.pool.query(`SELECT name, trusted FROM datasets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => [r.name as string, r.trusted as boolean]));
+  const compiled = compile(loaded.definition, { pkg, catalog, datasets: (ref) => (trust.has(ref.split('@')[0]!) ? { trusted: trust.get(ref.split('@')[0]!)! } : undefined) });
   if (!compiled.ok) return { ok: false, diagnostics: compiled.diagnostics };
 
   for (const data of files.values()) {

@@ -20,7 +20,7 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { AgentNode, ApprovalNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
+import type { AgentNode, ApprovalNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
@@ -119,6 +119,13 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     }
   };
 
+  const pinned = (refs: string[]) =>
+    refs.map((ref) => {
+      const revision = snapshot.dataset_revisions?.[ref];
+      if (revision === undefined) throw ApplicationFailure.create({ type: 'invalid_input', message: `dataset ${ref} was not pinned when the run was created`, nonRetryable: true });
+      return { ref, revision };
+    });
+
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
     if ((def.executor ?? 'model-agent') !== 'model-agent') {
       throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${def.executor}' is not available on this interpreter build`, nonRetryable: true });
@@ -137,6 +144,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         tools,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
+        ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
       });
       for (;;) {
         if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });
@@ -345,6 +353,24 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
           throw ApplicationFailure.create({ type: 'transient', message: `all ${failed} parallel items failed`, nonRetryable: true });
         }
         return { output: { items: results, completed, failed } };
+      }
+      case 'retrieve': {
+        const def = node.def as RetrieveNode;
+        if (def.filters && Object.keys(def.filters).length) {
+          throw ApplicationFailure.create({ type: 'unsupported_capability', message: 'retrieve filters arrive with document-level ACL in the first release', nonRetryable: true });
+        }
+        const query = resolveValue(def.query, s);
+        return {
+          output: await gateway(node).retrieveNode({
+            runId,
+            workspaceId,
+            nodeId: node.id,
+            pinned: pinned(def.datasets),
+            query: typeof query === 'string' ? query : JSON.stringify(query),
+            topK: def.top_k,
+            principal: snapshot.principal,
+          }),
+        };
       }
       case 'agent':
         return { output: await runAgent(node, node.def as AgentNode, s) };

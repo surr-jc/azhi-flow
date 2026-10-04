@@ -11,6 +11,7 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit, loadCatalog, registerTool } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
+import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { listSecrets, setSecret } from '../server/secrets.js';
@@ -252,6 +253,66 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'operator');
     await requestCancel(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId);
     return { ok: true };
+  });
+
+  // Knowledge datasets (spec section 11)
+  app.post('/v1/datasets', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = z
+      .object({ name: z.string(), trusted: z.boolean().optional(), acl: z.object({ roles: z.array(z.string()).optional(), users: z.array(z.string()).optional() }).optional() })
+      .parse(req.body);
+    const d = await createDataset(ctx, p.workspaceId, b);
+    await audit(ctx, p.workspaceId, p.userId, 'dataset.created', { name: b.name, trusted: d.trusted });
+    return d;
+  });
+
+  app.get('/v1/datasets', async (req) => listDatasets(ctx, user(req).workspaceId));
+
+  app.post('/v1/datasets/:name/documents', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = z.object({ documents: z.array(z.object({ path: z.string().min(1), content: z.string() })).min(1) }).parse(req.body);
+    return { documents: await addDocuments(ctx, p.workspaceId, (req.params as { name: string }).name, b.documents) };
+  });
+
+  app.delete('/v1/datasets/:name/documents', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const { path } = z.object({ path: z.string() }).parse(req.query);
+    const name = (req.params as { name: string }).name;
+    await revokeDocument(ctx, p.workspaceId, name, path);
+    await audit(ctx, p.workspaceId, p.userId, 'dataset.document_revoked', { name, path });
+    return { ok: true };
+  });
+
+  app.post('/v1/datasets/:name/publish', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = z.object({ tag: z.string().optional() }).parse(req.body ?? {});
+    const name = (req.params as { name: string }).name;
+    const r = await publishRevision(ctx, p.workspaceId, name, b.tag);
+    await audit(ctx, p.workspaceId, p.userId, 'dataset.published', { name, ...r, tag: b.tag });
+    return r;
+  });
+
+  app.put('/v1/datasets/:name/tags/:tag', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const { name, tag } = req.params as { name: string; tag: string };
+    const b = z.object({ revision: z.number().int().min(1) }).parse(req.body);
+    await tagRevision(ctx, p.workspaceId, name, tag, b.revision);
+    await audit(ctx, p.workspaceId, p.userId, 'dataset.tagged', { name, tag, revision: b.revision });
+    return { ok: true };
+  });
+
+  app.post('/v1/datasets/:ref/search', async (req) => {
+    const p = user(req);
+    const ref = (req.params as { ref: string }).ref;
+    const b = z.object({ query: z.string(), top_k: z.number().int().min(1).max(50).optional() }).parse(req.body);
+    const r = await resolveDatasetRef(ctx, p.workspaceId, ref);
+    if (!r) throw notFound(`dataset ${ref}`);
+    return { revision: r.revision, chunks: await retrieve(ctx, p.workspaceId, { pinned: [{ ref, revision: r.revision }], query: b.query, topK: b.top_k, principal: { userId: p.userId, role: p.role } }) };
   });
 
   // Approvals (spec section 7): the API checks the approver's role and the decision schema, then

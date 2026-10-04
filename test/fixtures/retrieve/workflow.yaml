@@ -1,0 +1,13 @@
+# Retrieve -> report: citations flow from a pinned dataset revision into a report.
+schema_version: "2.0"
+id: retrieve-check
+inputs:
+  type: object
+  properties: {question: {type: string}}
+  required: [question]
+nodes:
+  - id: lookup
+    type: retrieve
+    datasets: [guidelines@approved]
+    query: {ref: inputs.question}
+    top_k: 3

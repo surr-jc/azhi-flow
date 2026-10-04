@@ -81,6 +81,8 @@ export interface GatewayActivities {
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Records the failure of an agent node on its attempt row. */
   agentFailed(runId: string, workspaceId: string, nodeId: string, error: NodeError): Promise<void>;
+  /** Hybrid retrieval over pinned dataset revisions, with citations. */
+  retrieveNode(input: RetrieveNodeInput): Promise<{ chunks: unknown[] }>;
   /** Records what approvers are asked to decide: the concrete message and payload. */
   requestApproval(runId: string, workspaceId: string, nodeId: string, request: ApprovalRequest): Promise<void>;
   /** The interpreter is the single writer of decisions, so a late signal can't race an expiry. */
@@ -109,4 +111,14 @@ export interface ApprovalSignal extends ApprovalDecision {
 
 export interface ExecActivities {
   runScript(input: ScriptNodeInput): Promise<unknown>;
+}
+
+export interface RetrieveNodeInput {
+  runId: string;
+  workspaceId: string;
+  nodeId: string;
+  pinned: Array<{ ref: string; revision: number }>;
+  query: string;
+  topK?: number;
+  principal?: { userId: string; role: string };
 }

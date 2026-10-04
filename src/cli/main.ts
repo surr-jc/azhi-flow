@@ -1,6 +1,6 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { compile } from '../compiler/compile.js';
 import { loadAdminConfig } from '../config/admin.js';
 import { settings } from '../config/settings.js';
@@ -229,6 +229,83 @@ program
       for (const name of cfg.secrets) console.log(`secret ${name}: ${set.has(name) ? green('set') : yellow('missing (azhi secret set ' + name + ')')}`);
     }
   });
+
+const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');
+dataset
+  .command('create')
+  .argument('<name>')
+  .option('--untrusted', 'mark content as untrusted: agents that read it are tainted')
+  .option('--roles <roles>', 'comma-separated roles that may read it', 'viewer')
+  .action(async (name: string, opts: { untrusted?: boolean; roles: string }) => {
+    await client().post('/v1/datasets', { name, trusted: !opts.untrusted, acl: { roles: opts.roles.split(',') } });
+    console.log(`dataset ${bold(name)} ready${opts.untrusted ? yellow(' (untrusted)') : ''}`);
+  });
+dataset
+  .command('add')
+  .description('Add or replace documents; files or directories (.md, .txt)')
+  .argument('<name>')
+  .argument('<paths...>')
+  .action(async (name: string, paths: string[]) => {
+    const docs = collectDocuments(paths);
+    const r = await client().post<{ documents: Array<{ path: string; changed: boolean }> }>(`/v1/datasets/${name}/documents`, { documents: docs });
+    for (const d of r.documents) console.log(`  ${d.changed ? green('+') : dim('=')} ${d.path}`);
+    console.log(`${r.documents.filter((d) => d.changed).length} changed; run ${bold(`azhi dataset publish ${name}`)} to index them`);
+  });
+dataset
+  .command('publish')
+  .description('Chunk, embed and publish an immutable index revision')
+  .argument('<name>')
+  .option('-t, --tag <tag>', 'also point this tag (for example approved) at the new revision')
+  .action(async (name: string, opts: { tag?: string }) => {
+    const r = await client().post<{ revision: number; documents: number; chunks: number; embedder: string }>(`/v1/datasets/${name}/publish`, { tag: opts.tag });
+    console.log(`${green('published')} ${name}@${r.revision}: ${r.documents} documents, ${r.chunks} chunks (${r.embedder})${opts.tag ? `, tagged ${opts.tag}` : ''}`);
+  });
+dataset
+  .command('tag')
+  .argument('<name>')
+  .argument('<tag>')
+  .argument('<revision>')
+  .action(async (name: string, tag: string, revision: string) => {
+    await client().put(`/v1/datasets/${name}/tags/${tag}`, { revision: Number(revision) });
+    console.log(`${name}@${tag} -> revision ${revision}`);
+  });
+dataset
+  .command('revoke')
+  .description('Stop a document being retrievable, from every revision')
+  .argument('<name>')
+  .argument('<path>')
+  .action(async (name: string, path: string) => {
+    await client().del(`/v1/datasets/${name}/documents?path=${encodeURIComponent(path)}`);
+    console.log(`revoked ${path} in ${name}`);
+  });
+dataset
+  .command('search')
+  .description('Run hybrid retrieval against a dataset revision')
+  .argument('<ref>', 'name, name@tag or name@revision')
+  .argument('<query>')
+  .option('-k, --top-k <n>', 'chunks to return', '6')
+  .action(async (ref: string, query: string, opts: { topK: string }) => {
+    const r = await client().post<{ revision: number; chunks: any[] }>(`/v1/datasets/${encodeURIComponent(ref)}/search`, { query, top_k: Number(opts.topK) });
+    console.log(dim(`revision ${r.revision}`));
+    for (const c of r.chunks) console.log(`${bold(c.citation_id)} ${c.document}:${c.start}-${c.end} ${dim(c.heading)} ${dim(c.score.toFixed(4))}\n  ${c.text.slice(0, 160).replace(/\n/g, ' ')}`);
+  });
+dataset
+  .command('list')
+  .action(async () => {
+    const rows = await client().get<any[]>('/v1/datasets');
+    table([['DATASET', 'TRUSTED', 'DOCS', 'LATEST', 'TAGS'], ...rows.map((d) => [d.name, d.trusted ? 'yes' : 'no', String(d.documents), String(d.latest_revision ?? '-'), Object.entries(d.tags).map(([t, r]) => `${t}=${r}`).join(' ')])]);
+  });
+
+function collectDocuments(paths: string[]): Array<{ path: string; content: string }> {
+  const out: Array<{ path: string; content: string }> = [];
+  const walk = (p: string, rel: string) => {
+    if (statSync(p).isDirectory()) {
+      for (const f of readdirSync(p).sort()) walk(join(p, f), rel ? `${rel}/${f}` : f);
+    } else if (/\.(md|markdown|txt|text)$/i.test(p)) out.push({ path: rel, content: readFileSync(p, 'utf8') });
+  };
+  for (const p of paths) walk(p, statSync(p).isDirectory() ? '' : basename(p));
+  return out;
+}
 
 const secret = program.command('secret').description('Manage workspace secrets');
 secret

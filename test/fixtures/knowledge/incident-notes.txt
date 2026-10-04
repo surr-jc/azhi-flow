@@ -1,0 +1,4 @@
+Incident notes
+
+When an incident affects CI, link the incident in the weekly report and exclude the affected
+window from the pass rate only if the incident commander approves it.

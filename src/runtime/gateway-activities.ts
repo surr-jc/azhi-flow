@@ -1,5 +1,6 @@
 import { Context } from '@temporalio/activity';
 import { agentBegin, agentTurn } from '../agents/model-agent.js';
+import { retrieve } from '../knowledge/datasets.js';
 import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import { asArtifact, callTool } from '../gateway/gateway.js';
 import { byteSize } from '../lib/json.js';
@@ -173,7 +174,17 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         [input.workspaceId, input.runId, input.nodeId, `model-agent:${process.pid}`],
       );
       try {
-        return await agentBegin(ctx, input);
+        // The context builder retrieves with the node input as the query (spec section 11).
+        const chunks = input.datasets?.length
+          ? (await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(input.input), principal: input.principal })).map((c) => ({
+              id: c.citation_id,
+              dataset: c.dataset,
+              revision: c.revision,
+              heading: c.heading,
+              text: c.text,
+            }))
+          : undefined;
+        return await agentBegin(ctx, { ...input, ...(chunks ? { chunks } : {}) });
       } catch (err) {
         throw toFailure(err);
       }
@@ -211,6 +222,12 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       ]);
     },
 
+    async retrieveNode(input) {
+      return attempt(input.runId, input.workspaceId, input.nodeId, async () => ({
+        chunks: await retrieve(ctx, input.workspaceId, { pinned: input.pinned, query: input.query, topK: input.topK, principal: input.principal }),
+      }));
+    },
+
     async requestApproval(runId, workspaceId, nodeId, request) {
       const output = byteSize(request) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, workspaceId, request) : request;
       await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'approval.requested',$3,$4)`, [
@@ -244,3 +261,12 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
 }
 
 export type { NodeError };
+
+/** Every string and number in a value, as retrieval query text. */
+function textOf(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(textOf).join(' ');
+  if (typeof v === 'object') return Object.entries(v as object).map(([k, x]) => `${k} ${textOf(x)}`).join(' ');
+  return '';
+}

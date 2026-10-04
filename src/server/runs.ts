@@ -1,3 +1,5 @@
+import type { AgentNode, RetrieveNode } from '../definition/types.js';
+import { pinDatasets } from '../knowledge/datasets.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type pg from 'pg';
 import { tx } from '../db/pool.js';
@@ -38,6 +40,16 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   for (const n of o.version.plan.nodes) for (const t of n.agentTools ?? []) toolRevisions[t.ref] ??= t.revision ?? catalog.revisions.get(t.ref) ?? 0;
   toolRevisions['slack.post-message@1'] ??= 0;
 
+  const datasetRefs = o.version.plan.nodes.flatMap((n) => (n.type === 'retrieve' ? (n.def as RetrieveNode).datasets : n.type === 'agent' ? ((n.def as AgentNode).datasets ?? []) : []));
+  const datasetRevisions = datasetRefs.length ? await pinDatasets(ctx, workspaceId, datasetRefs) : undefined;
+  // Dataset access is checked as the run's creator; scheduled runs act as the version's publisher.
+  const principal = (
+    await ctx.pool.query(
+      `SELECT u.id AS "userId", u.role FROM users u WHERE u.id = coalesce((SELECT id FROM users WHERE id=$1), (SELECT published_by FROM workflow_versions WHERE id=$2))`,
+      [o.createdBy, o.version.id],
+    )
+  ).rows[0] as { userId: string; role: string } | undefined;
+
   const runId = newId('run');
   const snapshot: RunSnapshot = {
     reference_time: (o.referenceTime ?? new Date()).toISOString(),
@@ -47,6 +59,8 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     tool_revisions: toolRevisions,
     trigger: o.trigger,
     gateway_queue: ctx.settings.gatewayQueue,
+    ...(datasetRevisions ? { dataset_revisions: datasetRevisions } : {}),
+    ...(principal ? { principal } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {
