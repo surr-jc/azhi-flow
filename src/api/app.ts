@@ -27,6 +27,7 @@ import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
+import { registerCopilotRoutes } from './copilot.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
@@ -82,6 +83,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
   registerExampleRoutes(app, ctx);
+  registerCopilotRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));

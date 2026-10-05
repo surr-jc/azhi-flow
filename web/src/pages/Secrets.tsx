@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
+import { CopilotLogin } from '../components/CopilotLogin';
 import { ago, ErrorNote, Loading, PageHead, Panel, Table, when } from '../ui';
 
 interface Secret { name: string; version: number; updated_at: string }
@@ -62,6 +63,10 @@ export function Secrets() {
             {saved ? <p className="ok-note">{saved}</p> : null}
             <ErrorNote error={set.error} />
           </form>
+        </Panel>
+        <Panel title="GitHub Copilot">
+          <p className="muted small">OpenCode steps can use the models of your GitHub Copilot subscription. Signing in stores the sign-in as the secret github-copilot-token.</p>
+          <CopilotLogin />
         </Panel>
       </div>
     </>

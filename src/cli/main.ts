@@ -330,6 +330,33 @@ example
     console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
   });
 
+const copilot = program.command('copilot').description('GitHub Copilot models for OpenCode steps');
+copilot
+  .command('login')
+  .description('Sign in to GitHub Copilot and store the sign-in as a workspace secret (never shown)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .action(async (opts: { secret: string }) => {
+    const api = client();
+    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/copilot/login', { secret: opts.secret });
+    console.log(`Open ${bold(l.verification_uri)} and enter the code ${bold(l.user_code)}`);
+    console.log(dim(`waiting for GitHub (the code expires in ${Math.round(l.expires_in / 60)} minutes)...`));
+    let interval = l.interval;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await api.post<{ status: string; interval?: number; version?: number; message?: string }>(`/v1/copilot/login/${l.id}`, {});
+      if (r.status === 'done') {
+        console.log(`${green('signed in')} to GitHub Copilot; saved as secret ${opts.secret} (version ${r.version})`);
+        return;
+      }
+      if (r.status !== 'pending') {
+        console.error(red(`not signed in: ${r.message ?? r.status}`));
+        process.exitCode = 1;
+        return;
+      }
+      interval = r.interval ?? interval;
+    }
+  });
+
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');
 dataset
   .command('create')

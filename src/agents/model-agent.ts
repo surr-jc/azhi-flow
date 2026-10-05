@@ -150,6 +150,7 @@ export function resolveModelName(ctx: AppContext, profile: AgentProfile): string
 async function providerFor(ctx: AppContext, workspaceId: string, profile: AgentProfile): Promise<ModelProvider> {
   if (profile.model.provider === 'scripted') return scriptedProvider(profile.script ?? []);
   const provider = profile.model.provider;
+  if (provider === 'github-copilot') throw new AzhiError(ErrorClass.unsupportedCapability, 'GitHub Copilot models run through OpenCode: give this step executor: opencode');
   const d = PROVIDER_DEFAULTS[provider];
   const credential = profile.model.credential ?? d.credential;
   const key = await resolveSecret(ctx, workspaceId, credential);

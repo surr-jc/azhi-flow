@@ -88,11 +88,32 @@ the package files OpenCode loaded; what the agent read in the checkout is not ob
 
 ## Run it
 
-Needs a worker with OpenCode (bundled with `npm install`) and git, an Anthropic key (OpenCode
-drives Anthropic models only), and two GitHub tokens:
+Needs a worker with OpenCode (bundled with `npm install`) and git, a GitHub Copilot subscription
+for the models, and two GitHub tokens:
 
+- `github-copilot-token`: your Copilot sign-in. All four agents run on GitHub Copilot models
+  through OpenCode's own `github-copilot` provider; no Anthropic or OpenAI key is involved.
 - `github-read-token`: fine-grained, read-only **Contents** and **Pull requests** on the repository.
 - `github-comment-token`: **Pull requests: write**, used only by the approved comment step.
+
+### GitHub Copilot models
+
+The profiles say `model: {provider: github-copilot, name: default, credential: github-copilot-token}`.
+`default` is the server's `AZHI_COPILOT_MODEL` (`claude-sonnet-5.5` unless set); put any model your
+Copilot plan offers in `name` instead (Workflows → Edit → reviewer step → Model). Each model call
+counts against your Copilot plan's requests.
+
+Signing in uses GitHub's device flow with OpenCode's own OAuth app (the one `opencode auth login`
+uses, so Copilot accepts the token from OpenCode): **Sign in with GitHub Copilot** on the Examples
+card or the Secrets page, or `azhi copilot login`, shows a code to enter at github.com/login/device.
+The server stores the token GitHub returns as the secret `github-copilot-token`; it is never shown.
+If you already signed in with `opencode auth login`, you can instead paste the token, or the whole
+`~/.local/share/opencode/auth.json`, as that secret.
+
+On the worker the sign-in reaches OpenCode only in memory (`OPENCODE_AUTH_CONTENT`), never on disk,
+and is removed from the environment of the package's MCP servers (OpenCode passes its own
+environment to them). Copilot models run only through OpenCode: the built-in model agent refuses
+a `github-copilot` profile, and the run plan says so.
 
 Setup needs no file editing; do it from either place.
 
@@ -103,7 +124,8 @@ Setup needs no file editing; do it from either place.
    then **Install**. This registers both GitHub tools with those repositories, saves the package as
    a draft and signs it with a publisher key made in this browser (WebCrypto Ed25519, kept
    non-extractable in IndexedDB, certified once by the workspace root).
-2. Fill in the three secrets on the same card; values are sent once and never shown again.
+2. On the same card, click **Sign in with GitHub Copilot** and enter the code it shows at
+   github.com/login/device, then fill in the two GitHub tokens; values are never shown again.
 3. **Open it**, check the run plan, fill in Repository, Pull request number and Post, and **Start run**.
 
 **CLI**:
@@ -111,7 +133,7 @@ Setup needs no file editing; do it from either place.
 ```
 azhi example list
 azhi example install pr-review --repo OWNER/REPO        # --repo again for more; --api-url for GHE
-azhi secret set anthropic-api-key
+azhi copilot login                                       # shows a code for github.com/login/device
 azhi secret set github-read-token
 azhi secret set github-comment-token
 azhi run <version-id> --published -i repo=OWNER/REPO -i pr=123 -i post=false --wait
@@ -139,9 +161,10 @@ the draft, or use `azhi publish`.
 
 ## What is verified
 
-`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 against a scripted
-Anthropic endpoint (no key, no network), a local git host (`git http-backend` behind a token
-check) and a stand-in GitHub API. It checks:
+`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 and its real
+`github-copilot` provider pointed at a scripted Copilot stand-in (`AZHI_COPILOT_API_URL`; no
+subscription, no network), a stand-in for GitHub's device flow, a local git host
+(`git http-backend` behind a token check) and a stand-in GitHub API. It checks:
 
 - the structured review, every reviewer's findings, the approval request and the posted comment
   (with its dedupe marker); with `post=false` the approval and comment are skipped;
@@ -154,14 +177,20 @@ check) and a stand-in GitHub API. It checks:
   denied; the repository's `AGENTS.md`, `opencode.json` and `.opencode/skill` are ignored;
 - shell syntax in the PR body is not run; the checkout folder is gone after the step;
 - the run plan and the context manifest describe the checkout, tools and MCP servers;
+- every model call carries the Copilot sign-in as its bearer token (as OpenCode sends it to
+  Copilot), the sign-in is in no request body, and a package MCP server does not see it or
+  OpenCode's server password in its environment;
+- Copilot sign-in through the API, `azhi copilot login` (real CLI) and the Examples page: the code
+  is shown, the token is stored as a secret and never returned, and only admins can start it;
 - setup without editing files: `azhi example install` (run as the real CLI) registers the tools
   with the given repositories and signs the draft; in Chromium, the Examples page installs, signs
   in the browser, sets a secret and starts a run that completes; the editor changes the workspace,
   command, skills, tools, MCP servers and harness files and saves a signed draft; unsigned drafts
   show the worker trust blocker until signed; harness file paths outside `harness/` are refused.
 
-Not verified: a run with a live model (review quality, whether a real model follows the command
-and uses the tools well), cloning from github.com itself, and GitHub's real API responses for the
+Not verified: a run against GitHub Copilot itself (the real device flow, Copilot's model list,
+review quality, whether a real model follows the command and uses the tools well), Copilot for
+GitHub Enterprise (data residency) sign-in, which `azhi copilot login` does not offer yet, cloning from github.com itself, and GitHub's real API responses for the
 PR and comment calls (the tools follow the documented REST shapes). A worker that crashes mid-step
 leaves its temporary folder behind. A subprocess is not a sandbox: MCP servers and git run as the
 worker's user, so packages with MCP servers should come from trusted authors.

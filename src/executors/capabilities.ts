@@ -18,7 +18,7 @@ export interface ExecutorDeclaration {
   id: string;
   version: string;
   /** Model providers the adapter can drive. */
-  providers: Array<'anthropic' | 'openai'>;
+  providers: Array<'anthropic' | 'openai' | 'github-copilot'>;
   capabilities: ExecutorCapabilities;
   notes: string[];
 }
@@ -45,7 +45,7 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
   opencode: {
     id: 'opencode',
     version: '1.18.34',
-    providers: ['anthropic'],
+    providers: ['anthropic', 'github-copilot'],
     capabilities: {
       streaming: true,
       resume: 'native',

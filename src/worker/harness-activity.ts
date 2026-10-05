@@ -37,7 +37,7 @@ export interface HarnessInput {
   packageHash: string;
   /** Which harness runs the node; OpenCode when absent (older histories). */
   executor?: 'opencode' | 'claude-agent-sdk' | 'codex';
-  provider?: 'anthropic' | 'openai';
+  provider?: 'anthropic' | 'openai' | 'github-copilot';
   runToken: string;
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
@@ -64,6 +64,25 @@ export interface HarnessResult {
   repairs: number;
   duration_ms: number;
   harness: { name: 'opencode' | 'claude-agent-sdk' | 'codex'; version: string };
+}
+
+/**
+ * OpenCode's GitHub Copilot sign-in from the stored secret: the GitHub OAuth token from the Copilot
+ * device flow, or OpenCode's own auth.json (or its github-copilot entry) pasted as is.
+ */
+export function copilotAuth(value: string): { type: 'oauth'; refresh: string; access: string; expires: number; enterpriseUrl?: string } {
+  const v = value.trim();
+  if (v.startsWith('{')) {
+    try {
+      const j = JSON.parse(v);
+      const e = j['github-copilot'] ?? j;
+      if (typeof e?.refresh === 'string' && e.refresh) return { type: 'oauth', refresh: e.refresh, access: e.access ?? e.refresh, expires: 0, ...(e.enterpriseUrl ? { enterpriseUrl: String(e.enterpriseUrl) } : {}) };
+    } catch {
+      // not JSON: a token
+    }
+    throw ApplicationFailure.create({ type: ErrorClass.authorization, message: 'the GitHub Copilot credential is JSON but has no github-copilot sign-in in it', nonRetryable: true });
+  }
+  return { type: 'oauth', refresh: v, access: v, expires: 0 };
 }
 
 export function harnessActivities(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }) {
@@ -107,17 +126,26 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         } else {
           mkdirSync(project);
         }
+        const copilot = input.provider === 'github-copilot';
+        const providerID = copilot ? 'github-copilot' : 'anthropic';
         const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system: input.system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
         writeFileSync(
           join(configDir, 'opencode.json'),
           JSON.stringify({
             $schema: 'https://opencode.ai/config.json',
-            provider: {
-              anthropic: {
-                options: { baseURL: `${input.providerUrl.replace(/\/$/, '')}/v1`, apiKey: key.value },
-                models: { [input.model]: { name: input.model, tool_call: true, limit: { context: 200000, output: 8192 } } },
-              },
-            },
+            provider: copilot
+              ? {
+                  // Copilot's endpoint and model list are OpenCode's own; only a stand-in or proxy URL is set here.
+                  'github-copilot': input.providerUrl
+                    ? { options: { baseURL: input.providerUrl.replace(/\/$/, '') }, models: { [input.model]: { name: input.model, tool_call: true, limit: { context: 200000, output: 8192 } } } }
+                    : {},
+                }
+              : {
+                  anthropic: {
+                    options: { baseURL: `${input.providerUrl.replace(/\/$/, '')}/v1`, apiKey: key.value },
+                    models: { [input.model]: { name: input.model, tool_call: true, limit: { context: 200000, output: 8192 } } },
+                  },
+                },
             mcp: {
               [MCP_NAME]: {
                 type: 'local',
@@ -162,6 +190,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           OPENCODE_DISABLE_AUTOUPDATE: '1',
           // The server listens on loopback only, and still needs a password: no other local process may drive it.
           OPENCODE_SERVER_PASSWORD: password,
+          // The Copilot sign-in reaches OpenCode in memory (OpenCode reads it instead of auth.json); nothing is written to disk.
+          ...(copilot ? { OPENCODE_AUTH_CONTENT: JSON.stringify({ 'github-copilot': copilotAuth(key.value) }) } : {}),
           ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY ?? '127.0.0.1,localhost' } : {}),
           ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}),
         };
@@ -202,7 +232,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           // substituting its arguments, so untrusted text must never be a command argument.
           if (setup?.command && reminders === 0) {
             const added = await step('input', () =>
-              client.session.prompt({ path: { id: session.id }, body: { noReply: true, model: { providerID: 'anthropic', modelID: input.model }, agent: setup.agent, parts: [{ type: 'text', text }] } }),
+              client.session.prompt({ path: { id: session.id }, body: { noReply: true, model: { providerID, modelID: input.model }, agent: setup.agent, parts: [{ type: 'text', text }] } }),
             );
             if (added.error) throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode input: ${JSON.stringify(added.error).slice(0, 300)}` });
           }
@@ -216,10 +246,10 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           }, 300);
           const r = await step('prompt', () =>
             setup?.command && reminders === 0
-              ? client.session.command({ path: { id: session.id }, body: { command: setup.command, arguments: '', agent: setup.agent, model: `anthropic/${input.model}` } })
+              ? client.session.command({ path: { id: session.id }, body: { command: setup.command, arguments: '', agent: setup.agent, model: `${providerID}/${input.model}` } })
               : client.session.prompt({
                   path: { id: session.id },
-                  body: { model: { providerID: 'anthropic', modelID: input.model }, ...(setup ? { agent: setup.agent } : { system: input.system }), parts: [{ type: 'text', text }] },
+                  body: { model: { providerID, modelID: input.model }, ...(setup ? { agent: setup.agent } : { system: input.system }), parts: [{ type: 'text', text }] },
                 }),
           ).finally(() => clearInterval(watch));
           if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled; opencode session aborted');

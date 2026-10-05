@@ -115,6 +115,9 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
 export const PROVIDER_DEFAULTS = {
   anthropic: { credential: 'anthropic-api-key', modelEnv: 'AZHI_ANTHROPIC_MODEL', model: (s: Settings) => s.anthropicModel, apiUrl: (s: Settings) => s.anthropicApiUrl },
   openai: { credential: 'openai-api-key', modelEnv: 'AZHI_OPENAI_MODEL', model: (s: Settings) => s.openaiModel, apiUrl: (s: Settings) => s.openaiApiUrl },
+  // GitHub Copilot models, driven by OpenCode only: the credential is a Copilot sign-in (a GitHub OAuth token,
+  // see src/api/copilot.ts); the API URL is empty for Copilot's own endpoint and set only for tests or proxies.
+  'github-copilot': { credential: 'github-copilot-token', modelEnv: 'AZHI_COPILOT_MODEL', model: (s: Settings) => s.copilotModel, apiUrl: (s: Settings) => s.copilotApiUrl ?? '' },
 } as const;
 export type HostedProvider = keyof typeof PROVIDER_DEFAULTS;
 

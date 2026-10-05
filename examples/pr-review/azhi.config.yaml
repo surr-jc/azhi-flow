@@ -6,7 +6,8 @@
 #                          the PR and to clone the repository on the worker
 #    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
 #                          approval-gated comment step
-#    anthropic-api-key     the reviewers' model key (OpenCode drives Anthropic models)
+#    github-copilot-token  your GitHub Copilot sign-in; the reviewers run on Copilot models through
+#                          OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
 tools:
   - id: github.get-pull-request
     version: 1
@@ -48,4 +49,4 @@ tools:
 secrets:
   - github-read-token
   - github-comment-token
-  - anthropic-api-key
+  - github-copilot-token

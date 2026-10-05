@@ -30,6 +30,12 @@ export function settings() {
     /** Model for OpenAI profiles that say `name: default`. */
     openaiModel: process.env.AZHI_OPENAI_MODEL || undefined,
     openaiApiUrl: process.env.AZHI_OPENAI_API_URL ?? 'https://api.openai.com',
+    /** GitHub Copilot model (through OpenCode) for profiles that say `name: default`. */
+    copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5.5',
+    /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
+    copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
+    /** Where the Copilot sign-in's device flow runs. */
+    copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
     /** Deployments sharing one Temporal namespace need distinct gateway queues. */

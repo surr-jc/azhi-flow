@@ -323,6 +323,8 @@ async function modelRequirements(
     reqs.push(
       isHarness(executor) && !EXECUTORS[executor]!.providers.includes(provider)
         ? { name: 'model binding', mark: 'unsupported', detail: `the ${executor} adapter supports ${EXECUTORS[executor]!.providers.join(' or ')} profiles only, not ${provider}` }
+        : !isHarness(executor) && provider === 'github-copilot'
+          ? { name: 'model binding', mark: 'unsupported', detail: 'GitHub Copilot models run through OpenCode only (executor: opencode)' }
         : model
           ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${explicit ? '' : ' (server default)'}` }
           : { name: 'model binding', mark: 'unsupported', detail: `the profile uses the default ${provider} model and ${d.modelEnv} is not set` },

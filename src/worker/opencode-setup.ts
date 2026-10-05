@@ -56,6 +56,9 @@ function splitFrontmatter(text: string): { description?: string; body: string } 
 const nameOf = (p: string) => basename(p).replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-');
 const markdown = (meta: Record<string, unknown>, body: string) => `---\n${stringify(meta).trim()}\n---\n${body}\n`;
 
+/** OpenCode's own secrets in its environment, never passed on to a package's MCP servers. */
+export const OPENCODE_PRIVATE_ENV = ['OPENCODE_AUTH_CONTENT', 'OPENCODE_SERVER_PASSWORD'];
+
 export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; configDir: string; system: string; gitEnv: NodeJS.ProcessEnv; workspace?: string }): OpencodeSetup {
   const read = (p: string) => readFileSync(inside(o.pkgDir, p)!, 'utf8');
   for (const d of ['agent', 'command', 'skill']) mkdirSync(join(o.configDir, d), { recursive: true });
@@ -85,7 +88,10 @@ export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; conf
     })];
     // Same isolation as the checkout: no host config, credentials or tokens, only what the profile declares.
     const env = Object.fromEntries(Object.entries(o.gitEnv).filter((e): e is [string, string] => typeof e[1] === 'string'));
-    mcp[name] = { type: 'local', command: resolved, environment: { ...env, ...(m.environment ?? {}), ...(o.workspace ? { AZHI_WORKSPACE: o.workspace } : {}) }, enabled: true };
+    // OpenCode starts MCP servers with its own environment added, which holds the model sign-in (OPENCODE_AUTH_CONTENT)
+    // and its server password; `env -u` takes them out before the package's server starts (Linux and macOS).
+    const scrubbed = ['/usr/bin/env', ...OPENCODE_PRIVATE_ENV.flatMap((k) => ['-u', k]), ...resolved];
+    mcp[name] = { type: 'local', command: scrubbed, environment: { ...env, ...(m.environment ?? {}), ...(o.workspace ? { AZHI_WORKSPACE: o.workspace } : {}) }, enabled: true };
     tools[`${name}_*`] = true;
   }
   return { agent, ...(command ? { command } : {}), tools, mcp };

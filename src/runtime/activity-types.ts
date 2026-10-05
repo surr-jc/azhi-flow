@@ -142,7 +142,7 @@ export interface HarnessPlan {
   model: string;
   credential: string;
   providerUrl: string;
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'github-copilot';
 }
 
 export interface HarnessRecordInput {

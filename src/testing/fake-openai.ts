@@ -10,6 +10,8 @@ import type { FakeStep } from './fake-anthropic.js';
  */
 export interface FakeOpenAIRequest {
   model: string;
+  url: string;
+  headers: Record<string, string | string[] | undefined>;
   tools: string[];
   system: string;
   messages: Array<Record<string, any>>;
@@ -26,6 +28,8 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
       const messages = (b.messages ?? []) as Array<Record<string, any>>;
       const r: FakeOpenAIRequest = {
         model: b.model,
+        url: req.url ?? '',
+        headers: req.headers,
         tools: (b.tools ?? []).map((t: { function: { name: string } }) => t.function.name),
         system: messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n'),
         messages,
@@ -40,10 +44,23 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
       const fill = (v: unknown): unknown =>
         typeof v === 'string' ? v.replace(/\{\{chunk:(\d+)\}\}/g, (_, n) => shown[Number(n)] ?? 'c_00000000000000000000') : Array.isArray(v) ? v.map(fill) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)])) : v;
       const usage = o.usage ?? { input: 100, output: 20 };
-      const message =
+      const message: { role: string; content: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } =
         'tool' in step
           ? { role: 'assistant', content: null, tool_calls: [{ id: `call_${turn + 1}`, type: 'function', function: { name: r.tools.find((t) => t === step.tool || t.endsWith(`_${step.tool}`)) ?? step.tool, arguments: JSON.stringify(fill(step.input)) } }] }
           : { role: 'assistant', content: step.text };
+      if (b.stream) {
+        // Streaming (what OpenCode's OpenAI-compatible providers ask for): one chunk with the message, then usage.
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        const chunk = (delta: object, finish: string | null, extra: object = {}) =>
+          res.write(`data: ${JSON.stringify({ id: `chatcmpl_${turn}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: r.model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`);
+        chunk({ role: 'assistant', content: '' }, null);
+        if ('tool' in step) chunk({ tool_calls: message.tool_calls!.map((c, index) => ({ index, ...c })) }, null);
+        else chunk({ content: step.text }, null);
+        chunk({}, 'tool' in step ? 'tool_calls' : 'stop');
+        res.write(`data: ${JSON.stringify({ id: `chatcmpl_${turn}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: r.model, choices: [], usage: { prompt_tokens: usage.input, completion_tokens: usage.output, total_tokens: usage.input + usage.output } })}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       res.setHeader('content-type', 'application/json');
       res.end(
         JSON.stringify({

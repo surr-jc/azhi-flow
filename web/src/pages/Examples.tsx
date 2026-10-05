@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { Link } from '../router';
 import { signVersion } from '../signing';
+import { CopilotLogin } from '../components/CopilotLogin';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 
 /**
@@ -144,6 +145,16 @@ function SecretRow({ secret }: { secret: Secret }) {
   });
   const isSet = secret.set || done;
   const odd = /[\s​-‍﻿]/.test(value);
+  if (secret.name === 'github-copilot-token') {
+    return (
+      <div className="row wrap" aria-label={`Secret ${secret.name}`}>
+        <span className="mono">{secret.name}</span>
+        {isSet ? <Badge tone="ok">set</Badge> : <Badge tone="warn">missing</Badge>}
+        <CopilotLogin secret={secret.name} onDone={() => setDone(true)} />
+        <span className="hint">Your GitHub Copilot subscription runs the models; no other model key is needed.</span>
+      </div>
+    );
+  }
   return (
     <form className="row wrap" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
       <span className="mono">{secret.name}</span>

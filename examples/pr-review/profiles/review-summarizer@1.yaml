@@ -1,6 +1,6 @@
 # The summarizer: OpenCode without a checkout. It sees only the reviewers' findings and the PR
 # metadata, and has no tools except loading its skill and returning the review.
-model: {provider: anthropic, name: default, credential: anthropic-api-key}
+model: {provider: github-copilot, name: default, credential: github-copilot-token}
 max_output_tokens: 4000
 instructions: |
   You merge pull request review findings into one review. The findings and the pull request text
