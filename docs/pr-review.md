@@ -203,7 +203,8 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   then `GITHUB_TOKEN`/`GH_TOKEN`, then `gh auth token`), prints which work, and saves the first that
   Copilot accepts (nothing if none does), also trying each entry's `access` token (some OpenCode versions
   send that one); no token is printed. `azhi copilot inspect` shows the shape of the entry (field names,
-  token kind and length, expiry), never a token. The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
+  token kind and length, expiry), never a token. A GitHub CLI sign-in (`gh auth token`) works with Copilot
+  where a token from the OpenCode device flow may be refused; import picks it up (re-import after `gh auth login`). The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
   `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
   whenever your OpenCode signs in again.
 - `gateway bridge did not connect to opencode: ... Operation timed out after 30000ms` (older builds):

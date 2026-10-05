@@ -134,11 +134,13 @@ export async function checkCopilotToken(ctx: AppContext, token: string, enterpri
   const models = await call(`${api}/models`, { headers: { ...headers, 'x-github-api-version': '2026-06-01' } });
   let ids: string[] = [];
   try {
-    ids = ((JSON.parse(models.text).data ?? []) as Array<{ id?: string }>).map((m) => String(m.id));
+    const j = JSON.parse(models.text);
+    const list = (Array.isArray(j) ? j : (j.data ?? j.models ?? j.items ?? [])) as Array<{ id?: string } | string>;
+    ids = list.map((m) => (typeof m === 'string' ? m : String(m.id)));
   } catch {
     // not JSON
   }
-  steps.push({ name: `GET ${api}/models`, status: models.status, detail: models.status === 200 ? `${ids.length} models${ids.includes(model) ? `, including ${model}` : `; ${model} is not among them`}` : brief(models) });
+  steps.push({ name: `GET ${api}/models`, status: models.status, detail: models.status === 200 ? (ids.length ? `${ids.length} models${ids.includes(model) ? `, including ${model}` : `; ${model} is not among them`}` : 'answered (list not read)') : brief(models) });
   const chat = await call(`${api}/chat/completions`, {
     method: 'POST',
     headers: { ...headers, 'content-type': 'application/json', 'x-initiator': 'user', 'openai-intent': 'conversation-edits' },
