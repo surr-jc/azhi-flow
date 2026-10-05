@@ -251,20 +251,36 @@ function Context({ detail: d }: { detail: any }) {
   );
 }
 
+/** Copilot bills premium requests (prompts x model multiplier), so its cost is shown in those terms. */
+function CopilotUsage({ p }: { p: any }) {
+  const price = p.per_premium_request === null ? 'the configured price per premium request' : `${p.currency} ${p.per_premium_request} per premium request`;
+  return (
+    <p>
+      GitHub Copilot: {p.total} premium request(s) ({p.models.map((m: any) => `${m.model} ${m.premium_requests} at ${m.multiplier}x${m.assumed ? ', multiplier assumed' : ''}`).join('; ')}). Estimated {p.currency} {p.cost.toFixed(4)} at {price}.{' '}
+      <span className="muted">This is an estimate: Copilot counts one premium request per prompt times the model's multiplier, and requests inside your plan's monthly allowance cost nothing extra.</span>
+    </p>
+  );
+}
+
 function UsageTab({ usage: u }: { usage: any }) {
   if (!u.turns) return <p className="muted">No model usage in this run.</p>;
   return (
     <>
       <p>
         {u.turns} turn(s). Usage is known for {u.completeness_pct}% of them. Tokens: {num(u.input_tokens)} in, {num(u.output_tokens)} out.{' '}
-        {u.cost.amount === null ? 'Cost is unavailable: at least one turn has no declared pricing or no token counts.' : `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (pricing ${u.cost.pricing_revision}).`}
+        {u.cost.amount === null
+          ? 'Cost is unavailable: at least one turn has no declared pricing or no token counts.'
+          : u.premium_requests
+            ? `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)}.`
+            : `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (pricing ${u.cost.pricing_revision}).`}
       </p>
+      {u.premium_requests ? <CopilotUsage p={u.premium_requests} /> : null}
       <Panel>
         <Table head={['Node', 'Turn', 'Executor', 'Model', 'In', 'Out', 'Cache read', 'Reasoning', 'Cost']}>
           {u.records.map((x: any, i: number) => (
             <tr key={i}>
               <td>{x.node_id}</td><td>{x.attempt}.{x.turn}</td><td>{x.executor}</td><td>{x.model ?? '—'}</td><td>{num(x.input_tokens)}</td><td>{num(x.output_tokens)}</td><td>{num(x.cache_read_tokens)}</td><td>{num(x.reasoning_tokens)}</td>
-              <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label})`}</td>
+              <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label}${x.premium_requests !== null && x.premium_requests !== undefined ? `, ${x.premium_requests} premium req` : ''})`}</td>
             </tr>
           ))}
         </Table>

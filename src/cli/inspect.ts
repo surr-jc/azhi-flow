@@ -30,6 +30,12 @@ export function printInspect(d: any) {
     const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out`;
     const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.label} cost ${u.cost.amount.toFixed(4)} ${u.cost.currency} (pricing ${u.cost.pricing_revision})`;
     console.log(`\n${bold('Usage')}  ${u.turns} model turns, ${u.completeness_pct}% complete, tokens ${tokens}, ${cost}`);
+    if (u.premium_requests) {
+      const p = u.premium_requests;
+      const each = p.models.map((m: any) => `${m.model} ${m.premium_requests} at ${m.multiplier}x${m.assumed ? ' (multiplier assumed)' : ''}`).join('; ');
+      console.log(`GitHub Copilot  ${p.total} premium requests (${each}), estimated ${p.cost.toFixed(4)} ${p.currency}${p.per_premium_request === null ? '' : ` at ${p.per_premium_request} per request`}`);
+      console.log(dim('    an estimate: requests inside your plan\'s monthly allowance cost nothing extra'));
+    }
   }
   if (d.context_manifests?.length) {
     console.log(`\n${bold('Context manifests')}`);

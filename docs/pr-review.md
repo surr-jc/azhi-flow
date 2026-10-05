@@ -119,8 +119,8 @@ private address also needs `AZHI_EGRESS_ALLOW=HOST` when starting Azhi.
 
 The profiles say `model: {provider: github-copilot, name: default, credential: github-copilot-token}`.
 `default` is the server's `AZHI_COPILOT_MODEL` (`claude-sonnet-5` unless set); put any model your
-Copilot plan offers in `name` instead (Workflows → Edit → reviewer step → Model). Each model call
-counts against your Copilot plan's requests.
+Copilot plan offers in `name` instead (Workflows → Edit → reviewer step → Model). Each prompt Azhi
+sends counts as one premium request times the model's multiplier (see *Cost* below).
 
 Signing in uses GitHub's device flow with OpenCode's own OAuth app (the one `opencode auth login`
 uses, so Copilot accepts the token from OpenCode): **Sign in with GitHub Copilot** on the Examples
@@ -133,6 +133,25 @@ On the worker the sign-in reaches OpenCode only in memory (`OPENCODE_AUTH_CONTEN
 and is removed from the environment of the package's MCP servers (OpenCode passes its own
 environment to them). Copilot models run only through OpenCode: the built-in model agent refuses
 a `github-copilot` profile, and the run plan says so.
+
+**Cost.** Copilot bills premium requests, not tokens, so a Copilot step is priced that way
+(`src/agents/copilot-pricing.ts`): premium requests = prompts Azhi sent the model (the first turn
+plus any reminders to submit; the agent's own tool-call follow-ups are free) x the model's
+multiplier, and estimated cost = premium requests x the price per premium request. The run's usage
+(web UI Usage tab, `azhi inspect`, `GET /v1/runs/:id`) shows tokens, premium requests per model
+with the multiplier, and the estimate; mission control's Usage page and spend limits count it like
+any estimated cost. It is an estimate because Azhi cannot see a seat's remaining allowance: requests
+inside the plan's monthly allowance cost nothing extra.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `AZHI_COPILOT_PREMIUM_REQUEST_USD` | `0.04` (GitHub's overage rate) | price per premium request |
+| `AZHI_COPILOT_MULTIPLIERS` | GitHub's table (late 2025) | `model=multiplier` pairs, comma separated; extend and override the table |
+| profile `pricing.multiplier`, `pricing.per_premium_request`, `pricing.revision` | unset | per-profile override |
+
+A model in neither the settings nor the table is counted at 1 and marked "multiplier assumed".
+The budget `max_cost_usd` is not enforced inside a Copilot step (the count is known when it ends);
+the run plan says so.
 
 Setup needs no file editing; do it from either place.
 

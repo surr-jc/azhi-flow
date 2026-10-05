@@ -422,6 +422,18 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     for (const r of fetches.filter((r) => r.headers.authorization)) expect(r.headers.authorization).toBe(`Basic ${Buffer.from(`x-access-token:${READ_TOKEN}`).toString('base64')}`);
     for (const r of git.requests) expect(r.headers['x-host-leak']).toBeUndefined();
 
+    // Copilot is priced by premium requests: one per prompt Azhi sent (each reviewer and the summarizer
+    // answer in one), times the model's multiplier (assumed 1 for this made-up model), at GitHub's overage rate.
+    expect(d.usage.premium_requests).toEqual({
+      total: 4,
+      cost: 0.16,
+      currency: 'USD',
+      per_premium_request: 0.04,
+      models: [{ model: MODEL, multiplier: 1, premium_requests: 4, cost: 0.16, currency: 'USD', assumed: true }],
+    });
+    expect(d.usage.cost.amount).toBeCloseTo(0.16, 6);
+    expect(d.usage.input_tokens).toBeGreaterThan(0);
+
     // The context manifest records the checkout and the package files OpenCode loaded.
     const m = d.context_manifests.find((x: any) => x.node_id === 'correctness');
     expect(m.items).toContainEqual(expect.objectContaining({ kind: 'input', source: 'workspace acme/payments@refs/pull/7/head (base refs/heads/main)' }));

@@ -151,7 +151,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     ctx.pool.query(`SELECT node_id, data, at FROM run_events WHERE run_id=$1 AND kind='approval.requested' ORDER BY seq`, [runId]),
     ctx.pool.query(`SELECT node_id, decision, decided_by, data, decided_at FROM approvals WHERE run_id=$1`, [runId]),
     ctx.pool.query(
-      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision
+      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision, premium_requests::float8 AS premium_requests, premium_multiplier::float8 AS premium_multiplier
        FROM usage_records WHERE run_id=$1 ORDER BY seq`,
       [runId],
     ),
@@ -194,6 +194,7 @@ export function summariseUsage(rows: Array<Record<string, any>>) {
     input_tokens: sum('input_tokens'),
     output_tokens: sum('output_tokens'),
     cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
+    premium_requests: premiumRequests(rows),
     records: rows,
   };
 }
@@ -205,4 +206,25 @@ export async function loadRunInput(ctx: AppContext, workspaceId: string, runId: 
   ).rows[0] as { id: string; inputs: Record<string, unknown>; snapshot: RunSnapshot; test: boolean; plan: RunInput['plan'] };
   const input: RunInput = { runId: run.id, workspaceId, plan: run.plan, inputs: run.inputs, snapshot: run.snapshot, mockWrites: run.test };
   return input;
+}
+
+
+/** GitHub Copilot turns, per model: premium requests (prompts x multiplier) and their estimated cost. Null without Copilot turns. */
+function premiumRequests(rows: Array<Record<string, any>>) {
+  const copilot = rows.filter((r) => r.premium_requests !== null && r.premium_requests !== undefined);
+  if (!copilot.length) return null;
+  const models = new Map<string, { model: string; multiplier: number; premium_requests: number; cost: number; currency: string; assumed: boolean }>();
+  for (const r of copilot) {
+    const key = `${r.model}|${r.premium_multiplier}`;
+    const m = models.get(key) ?? { model: r.model, multiplier: r.premium_multiplier, premium_requests: 0, cost: 0, currency: r.currency, assumed: /assumed/.test(r.pricing_revision ?? '') };
+    m.premium_requests += r.premium_requests;
+    m.cost += r.cost ?? 0;
+    models.set(key, m);
+  }
+  const list = [...models.values()].map((m) => ({ ...m, premium_requests: Math.round(m.premium_requests * 1000) / 1000, cost: Math.round(m.cost * 1e6) / 1e6 }));
+  const total = list.reduce((n, m) => n + m.premium_requests, 0);
+  const cost = list.reduce((n, m) => n + m.cost, 0);
+  // The price is the same for every Copilot turn unless profiles override it; report it only then.
+  const prices = new Set(copilot.filter((r) => r.premium_requests > 0).map((r) => Math.round((r.cost / r.premium_requests) * 1e6) / 1e6));
+  return { total: Math.round(total * 1000) / 1000, cost: Math.round(cost * 1e6) / 1e6, currency: copilot[0]!.currency, per_premium_request: prices.size === 1 ? [...prices][0]! : null, models: list };
 }

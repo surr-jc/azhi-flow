@@ -268,9 +268,9 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
       res.usage.cache_write_tokens,
       res.usage.reasoning_tokens,
       cost,
-      cost === null ? null : profile.pricing!.currency,
+      cost === null ? null : (profile.pricing!.currency ?? 'USD'),
       cost === null ? 'unavailable' : 'estimated',
-      cost === null ? null : profile.pricing!.revision,
+      cost === null ? null : (profile.pricing!.revision ?? 'unversioned'),
     ],
   );
   const estimated = t.items.reduce((n, x) => n + x.tokens, 0);

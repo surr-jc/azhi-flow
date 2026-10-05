@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { COPILOT_OVERAGE_USD, parseMultipliers } from '../agents/copilot-pricing.js';
 
 /** Server and worker settings, from the environment. */
 export function settings() {
@@ -34,6 +35,14 @@ export function settings() {
     copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5',
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
+    /**
+     * Copilot bills premium requests, not tokens. Estimated cost = premium requests x this price
+     * (USD; GitHub's published overage rate unless set). Requests inside the plan's allowance cost
+     * nothing extra, so the figure is what the run would cost past the allowance.
+     */
+    copilotPremiumRequestUsd: positive(process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD) ?? COPILOT_OVERAGE_USD,
+    /** Premium request multipliers by model, `model=multiplier` pairs; they extend and override GitHub's table. */
+    copilotMultipliers: parseMultipliers(process.env.AZHI_COPILOT_MULTIPLIERS),
     /** Where the Copilot sign-in's device flow runs. */
     copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
@@ -43,6 +52,11 @@ export function settings() {
   };
 }
 export type Settings = ReturnType<typeof settings>;
+
+function positive(v: string | undefined): number | undefined {
+  const n = v === undefined || v.trim() === '' ? NaN : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
 
 export const TASK_QUEUES = {
   interpreter: (build: string) => `azhi-interpreter-${build}`,
