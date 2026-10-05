@@ -381,7 +381,13 @@ copilot
     if (existsSync(file)) {
       try {
         const j = JSON.parse(readFileSync(file, 'utf8'));
-        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) candidates.push({ name: `OpenCode auth.json: ${k}${j[k]?.enterpriseUrl ? ` (${j[k].enterpriseUrl})` : ''}`, auth: JSON.stringify({ [k]: j[k] }) });
+        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
+          const e = j[k];
+          const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
+          candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
+          // Some OpenCode versions send the entry's `access` token rather than `refresh`.
+          if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
+        }
       } catch {
         console.error(dim(`${file} is not JSON; skipped`));
       }
@@ -413,6 +419,35 @@ copilot
     }
     console.log(`${green('imported')} ${r.from}${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
     console.log(green(r.check!.message));
+  });
+
+copilot
+  .command('inspect')
+  .description('Show the shape of the GitHub Copilot sign-in in OpenCode\'s auth.json (field names, lengths, token kind); never the tokens')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .action((opts: { file?: string }) => {
+    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
+    if (!existsSync(file)) {
+      console.error(red(`${file} not found`));
+      process.exitCode = 1;
+      return;
+    }
+    const kind = (v: unknown) => {
+      if (typeof v !== 'string') return typeof v;
+      const m = /^(gh[a-z]_|tid=|github_pat_)/.exec(v);
+      return `${m ? m[1] : 'unrecognised prefix'}... (${v.length} characters)`;
+    };
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    for (const k of Object.keys(j)) {
+      const e = j[k];
+      if (!e || typeof e !== 'object') continue;
+      console.log(bold(k));
+      for (const f of Object.keys(e)) {
+        const v = e[f];
+        const shown = f === 'refresh' || f === 'access' || f === 'key' ? (f === 'access' && v === e.refresh ? 'same as refresh' : kind(v)) : f === 'expires' && typeof v === 'number' ? (v ? `${v} (${new Date(v).toISOString()})` : '0 (no expiry)') : f === 'enterpriseUrl' || f === 'type' ? String(v) : typeof v;
+        console.log(`  ${f}: ${shown}`);
+      }
+    }
   });
 
 copilot

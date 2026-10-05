@@ -623,6 +623,21 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
       expect(many.out).not.toContain('gho_dead');
       expect(many.out).not.toContain(COPILOT_TOKEN);
       expect(many.code).toBe(0);
+      // Some OpenCode versions use the entry's access token: it is tried too.
+      const acc = mkdtempSync(join(tmpdir(), 'azhi-oc-acc-'));
+      mkdirSync(join(acc, 'opencode'), { recursive: true });
+      writeFileSync(join(acc, 'opencode', 'auth.json'), JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: 'gho_dead', access: COPILOT_TOKEN, expires: 0 } }));
+      const viaAccess = await run(['copilot', 'import', '--secret', 'copilot-imp4'], { XDG_DATA_HOME: acc, ...bare });
+      expect(viaAccess.out).toContain('works  OpenCode auth.json: github-copilot, its access token');
+      expect(viaAccess.code).toBe(0);
+      // `inspect` shows the shape and never a token.
+      const insp = await run(['copilot', 'inspect'], { XDG_DATA_HOME: acc, ...bare });
+      expect(insp.out).toContain('github-copilot');
+      expect(insp.out).toContain('refresh: gho_... (8 characters)');
+      expect(insp.out).toMatch(/access: \S+ \(\d+ characters\)/);
+      expect(insp.out).toContain('expires: 0 (no expiry)');
+      expect(insp.out).not.toContain(COPILOT_TOKEN);
+      expect(insp.out).not.toContain('gho_dead');
       // None works: nothing is saved over what is there.
       const before = (await h.api.get<any[]>('/v1/secrets')).find((x) => x.name === 'copilot-imp3').version;
       const none = await run(['copilot', 'import', '--secret', 'copilot-imp3'], { XDG_DATA_HOME: stale, ...bare });
