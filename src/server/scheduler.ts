@@ -1,4 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
+import { audit } from './catalog.js';
 import { transaction } from '../db/pool.js';
 import { createRun } from './runs.js';
 import type { AppContext } from './context.js';
@@ -34,16 +35,24 @@ export function startScheduler(ctx: AppContext, interpreterBuild: string, log: (
         const next = CronExpressionParser.parse(s.cron, { tz: s.timezone, currentDate: occurrence }).next().toDate();
         const version = await resolveVersion(ctx, s.workspace_id, `${s.slug}@latest`);
         if (version) {
-          const r = await createRun(ctx, s.workspace_id, {
-            version,
-            inputs: s.inputs,
-            trigger: 'schedule',
-            createdBy: `schedule:${s.id}`,
-            referenceTime: occurrence,
-            occurrenceId: `${s.id}@${occurrence.toISOString()}`,
-            interpreterBuild,
-          });
-          log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} -> ${r.created ? 'started' : 'already started'} ${r.runId}`);
+          try {
+            const r = await createRun(ctx, s.workspace_id, {
+              version,
+              inputs: s.inputs,
+              trigger: 'schedule',
+              createdBy: `schedule:${s.id}`,
+              referenceTime: occurrence,
+              occurrenceId: `${s.id}@${occurrence.toISOString()}`,
+              interpreterBuild,
+            });
+            log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} -> ${r.created ? 'started' : 'already started'} ${r.runId}`);
+          } catch (err) {
+            // An occurrence refused by a spend limit is skipped, not retried; the schedule moves on.
+            // Anything else rolls the tick back and is retried, as before.
+            if ((err as { details?: { blockers?: Array<{ code: string }> } }).details?.blockers?.[0]?.code !== 'budget_exceeded') throw err;
+            log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} refused: ${(err as Error).message}`);
+            await audit(ctx, s.workspace_id, `schedule:${s.id}`, 'schedule.occurrence_refused', { schedule: s.id, workflow: s.slug, occurrence: occurrence.toISOString(), reason: (err as Error).message });
+          }
         } else {
           log(`schedule ${s.id}: no published version of ${s.slug}`);
         }

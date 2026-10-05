@@ -1,0 +1,117 @@
+# Feature delivery across the SDLC: one ticket from intake to release and retro.
+# Agents draft (requirements, design, change plan, review); people decide at two gates; the
+# quality gate routes on test results and the review verdict. Ticket and CI data are fixture
+# tools here; point them at your tracker and CI (or MCP tools) for real use.
+schema_version: "2.0"
+id: sdlc
+name: Feature delivery (SDLC)
+description: Requirements, design, design review, build, code review, tests, quality gate, release approval, release and retro for one ticket.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    ticket: {type: string, title: Ticket, description: "Tracker key, for example PAY-142"}
+  required: [ticket]
+config:
+  channel: C-DELIVERY
+nodes:
+  - id: intake
+    type: tool
+    description: Read the ticket from the tracker.
+    tool: tracker.get-ticket@1
+    arguments: {key: {ref: inputs.ticket}}
+    project: [key, title, description, priority, reporter]
+
+  - id: requirements
+    type: agent
+    description: Turn the ticket into testable requirements.
+    profile: product-analyst@1
+    input: {map: "{'ticket': nodes.intake.output}"}
+    output_schema: schemas/requirements.json
+    budget: {max_output_tokens: 3000, max_tool_calls: 0}
+
+  - id: design
+    type: agent
+    description: Propose a technical design that meets the requirements.
+    profile: architect@1
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output}"}
+    output_schema: schemas/design.json
+    budget: {max_output_tokens: 4000, max_tool_calls: 0}
+
+  - id: design_review
+    type: approval
+    description: A senior engineer approves the design before any build work.
+    role: author
+    message: {cel: "'Approve the design for ' + inputs.ticket + ': ' + nodes.design.output.summary + '?'"}
+    payload: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output}"}
+    decision_schema: {type: object, properties: {notes: {type: string}}, additionalProperties: false}
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: build
+    type: agent
+    description: Plan the code change. Swap in a harness executor (OpenCode) on a worker to make the change itself.
+    profile: engineer@1
+    depends_on: [design_review]
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output}"}
+    output_schema: schemas/change.json
+    budget: {max_output_tokens: 4000, max_tool_calls: 0}
+
+  - id: code_review
+    type: agent
+    description: Review the change against the requirements and design.
+    profile: reviewer@1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': nodes.build.output}"}
+    output_schema: schemas/review.json
+    budget: {max_output_tokens: 3000, max_tool_calls: 0}
+
+  - id: tests
+    type: tool
+    description: Read the CI pipeline result for the change.
+    tool: ci.get-pipeline@1
+    depends_on: [build]
+    arguments: {ref: {ref: inputs.ticket}}
+    project: [status, passed, failed, coverage_pct]
+
+  - id: quality_gate
+    type: condition
+    description: Ship only when tests pass and the review approves.
+    expression: "nodes.tests.output.status == 'passed' && nodes.code_review.output.approved ? 'ship' : 'fix'"
+    routes: {ship: [release_approval], fix: [send_back]}
+    default: fix
+
+  - id: release_approval
+    type: approval
+    description: The release owner approves the release.
+    role: admin
+    message: {cel: "'Release ' + inputs.ticket + ' (' + nodes.intake.output.title + ')?'"}
+    payload: {map: "{'change': nodes.build.output.summary, 'review': nodes.code_review.output, 'tests': nodes.tests.output}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: release
+    type: notify
+    description: Announce the release.
+    depends_on: [release_approval]
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "'Released ' + inputs.ticket + ': ' + nodes.build.output.summary"}
+    # Taint gate (ADR-10): the agents read the ticket text, so posts may only go to the
+    # configured delivery channel.
+    guard: "args.channel == config.channel"
+
+  - id: send_back
+    type: notify
+    description: Send the change back with the reasons.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "inputs.ticket + ' needs more work: ' + nodes.code_review.output.summary"}
+    guard: "args.channel == config.channel"
+
+  - id: retro
+    type: report
+    description: Write the delivery record and retro notes.
+    depends_on: [release]
+    template: templates/retro.md
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': nodes.build.output, 'review': nodes.code_review.output, 'tests': nodes.tests.output}"}

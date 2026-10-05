@@ -13,11 +13,13 @@
   },
   "scripts": {
     "azhi": "tsx src/cli/main.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p web",
     "test": "vitest run",
     "test:watch": "vitest",
     "compare": "tsx bench/compare.ts",
     "demo": "tsx demo/demo.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "dev:web": "vite --config web/vite.config.ts",
     "test:local": "AZHI_TEST_DATABASE_URL=pglite:// vitest run"
   },
   "dependencies": {
@@ -48,12 +50,20 @@
     "opencode-ai": "1.18.34"
   },
   "devDependencies": {
+    "@tanstack/react-query": "5.104.1",
     "@temporalio/testing": "1.24.0",
     "@types/mustache": "4.2.6",
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "@xyflow/react": "12.12.0",
     "playwright-core": "1.56.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "typescript": "5.9.3",
+    "vite": "7.3.6",
     "vitest": "5.0.3"
   }
 }

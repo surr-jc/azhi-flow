@@ -8,6 +8,7 @@ import { connectTemporal, createGatewayWorker, createInterpreterWorker, interpre
 import { createContext, type AppContext } from './context.js';
 import { startOutboxDispatcher } from './outbox.js';
 import { startScheduler } from './scheduler.js';
+import { startAlertNotifier } from './alerts.js';
 
 export type ServerRole = 'api' | 'interpreter' | 'gateway' | 'scheduler';
 export const ALL_ROLES: ServerRole[] = ['api', 'interpreter', 'gateway', 'scheduler'];
@@ -69,6 +70,8 @@ export async function startServer(opts: { roles?: ServerRole[]; settings?: Parti
   if (roles.includes('scheduler')) {
     scheduler = startScheduler(ctx, build, log);
     stops.unshift(() => scheduler!.stop());
+    const alerts = startAlertNotifier(ctx, log);
+    stops.unshift(() => alerts.stop());
   }
   const heartbeat = setInterval(() => void ctx.pool.query(`UPDATE interpreter_builds SET last_seen=now() WHERE build_id=$1`, [build]).catch(() => {}), 30_000);
   stops.unshift(() => clearInterval(heartbeat));

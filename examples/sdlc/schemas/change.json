@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "files": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "change": {"type": "string"}}, "required": ["path", "change"], "additionalProperties": false}},
+    "tests": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["summary", "files", "tests", "risks"],
+  "additionalProperties": false
+}
