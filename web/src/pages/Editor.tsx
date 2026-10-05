@@ -20,6 +20,7 @@ interface Diagnostic { severity: 'error' | 'warning' | 'info'; code: string; mes
 interface Check { ok: boolean; diagnostics: Diagnostic[]; yaml?: string; plan?: RunPlan }
 interface Source { workflow: string; files: Array<{ path: string; size: number; text?: string }> }
 interface Tool { id: string; version: number; description: string; effect: string }
+interface ExecutorInfo { id: string; version: string; capabilities: Record<string, any>; notes: string[]; providers: string[] }
 
 const STEP_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ADDABLE = ['tool', 'agent', 'script', 'retrieve', 'condition', 'approval', 'parallel', 'report', 'notify'];
@@ -165,6 +166,9 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   const base = useQuery({ queryKey: ['version', from], queryFn: () => api<any>(`/v1/versions/${from}`), enabled: Boolean(from), staleTime: Infinity });
   const source = useQuery({ queryKey: ['source', from], queryFn: () => api<Source>(`/v1/versions/${from}/source`), enabled: Boolean(from), staleTime: Infinity });
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const executors = useQuery({ queryKey: ['executors'], queryFn: () => api<{ executors: ExecutorInfo[] }>('/v1/executors'), staleTime: Infinity });
+  // Profiles written in the harness builder, by package path; they join the draft on save.
+  const [profileEdits, setProfileEdits] = useState<Record<string, string>>({});
 
   const [def, setDef] = useState<Definition>();
   const [past, setPast] = useState<Definition[]>([]);
@@ -188,7 +192,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   };
 
   // The server checks the definition a moment after each change.
-  const text = def ? JSON.stringify(def) : '';
+  const text = def ? JSON.stringify({ definition: def, profiles: profileEdits }) : '';
   const [checked, setChecked] = useState(text);
   useEffect(() => {
     const t = setTimeout(() => setChecked(text), 400);
@@ -196,7 +200,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   }, [text]);
   const check = useQuery({
     queryKey: ['check', from, checked],
-    queryFn: () => api<Check>(`/v1/versions/${from}/check`, { method: 'POST', body: { definition: JSON.parse(checked) } }),
+    queryFn: () => api<Check>(`/v1/versions/${from}/check`, { method: 'POST', body: JSON.parse(checked) }),
     enabled: Boolean(from && checked),
     placeholderData: keepPreviousData,
     staleTime: Infinity,
@@ -204,7 +208,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   const current = check.data && !check.isPlaceholderData && checked === text && !check.isFetching;
 
   const save = useMutation({
-    mutationFn: () => api<{ ok: boolean; diagnostics: Diagnostic[]; version?: { id: string; version: number } }>(`/v1/versions/${from}/drafts`, { method: 'POST', body: { definition: def } }),
+    mutationFn: () => api<{ ok: boolean; diagnostics: Diagnostic[]; version?: { id: string; version: number } }>(`/v1/versions/${from}/drafts`, { method: 'POST', body: { definition: def, profiles: profileEdits } }),
     onSuccess: (r) => {
       if (!r.ok || !r.version) return;
       void qc.invalidateQueries({ queryKey: ['versions', slug] });
@@ -217,7 +221,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   const files = source.data?.files.map((f) => f.path) ?? [];
   const suggestions = {
     tools: (tools.data ?? []).map((t) => `${t.id}@${t.version}`),
-    profiles: files.filter((f) => /^profiles\/.+\.ya?ml$/.test(f)).map((f) => f.replace(/^profiles\//, '').replace(/\.ya?ml$/, '')),
+    profiles: [...new Set([...files, ...Object.keys(profileEdits)])].filter((f) => /^profiles\/.+\.ya?ml$/.test(f)).map((f) => f.replace(/^profiles\//, '').replace(/\.ya?ml$/, '')),
     schemas: files.filter((f) => f.endsWith('.json')),
     files,
   };
@@ -230,7 +234,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   const errors = diagnostics.filter((d) => d.severity === 'error');
   const problems: Record<string, number> = {};
   for (const d of errors) if (d.node) problems[d.node] = (problems[d.node] ?? 0) + 1;
-  const dirty = past.length > 0 && JSON.stringify(def) !== JSON.stringify(base.data.definition);
+  const dirty = (past.length > 0 && JSON.stringify(def) !== JSON.stringify(base.data.definition)) || Object.keys(profileEdits).length > 0;
   const step = def.nodes.find((n) => n.id === selected);
 
   const updateStep = (id: string, patch: (s: Step) => Step) => change({ ...def, nodes: def.nodes.map((n) => (n.id === id ? reorder(patch(n)) : n)) });
@@ -315,6 +319,12 @@ export function WorkflowEditor({ slug }: { slug: string }) {
               all={def.nodes.map((n) => n.id)}
               stillLinked={stillLinked ?? []}
               suggestions={suggestions}
+              harness={{
+                executors: executors.data?.executors ?? [],
+                tools: tools.data ?? [],
+                profileText: (path) => profileEdits[path] ?? source.data?.files.find((f) => f.path === path)?.text,
+                setProfile: (path, t) => setProfileEdits((p) => ({ ...p, [path]: t })),
+              }}
               diagnostics={diagnostics.filter((d) => d.node === step.id)}
               onChange={(s) => updateStep(step.id, () => s)}
               onRename={(to) => {
@@ -371,11 +381,12 @@ function CheckSummary({ check, current, error, onPick }: { check?: Check; curren
   );
 }
 
-function StepForm({ step, all, stillLinked, suggestions, diagnostics, onChange, onRename, onRemove, onClose }: {
+function StepForm({ step, all, stillLinked, suggestions, harness, diagnostics, onChange, onRename, onRemove, onClose }: {
   step: Step;
   all: string[];
   stillLinked: string[];
   suggestions: Record<'tools' | 'profiles' | 'schemas' | 'files', string[]>;
+  harness: HarnessContext;
   diagnostics: Diagnostic[];
   onChange: (s: Step) => void;
   onRename: (to: string) => void;
@@ -423,7 +434,8 @@ function StepForm({ step, all, stillLinked, suggestions, diagnostics, onChange, 
           </div>
           {stillLinked.length ? <span className="muted small">Also after {stillLinked.join(', ')}, because it reads their output or is on their route.</span> : null}
         </div>
-        {[...(FIELDS[step.type] ?? []), ...COMMON].map((f) => <FieldInput key={f.key} field={f} value={step[f.key]} onChange={(v) => set(f.key, v)} />)}
+        {step.type === 'agent' ? <HarnessBuilder step={step} ctx={harness} set={set} /> : null}
+        {[...(FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key))), ...COMMON].map((f) => <FieldInput key={f.key} field={f} value={step[f.key]} onChange={(v) => set(f.key, v)} />)}
       </div>
       <div className="row">
         <button type="button" className="danger" onClick={onRemove}>Remove step</button>
@@ -526,5 +538,188 @@ function WorkflowForm({ def, onChange }: { def: Definition; onChange: (d: Defini
         <ValueInput field={{ key: 'config', label: 'Config', kind: 'value' }} value={def.config} onChange={(v) => set('config', v)} />
       </div>
     </section>
+  );
+}
+
+const HARNESS_FIELDS = new Set(['profile', 'executor', 'tools', 'datasets', 'budget']);
+const PROFILE_REF = /^[a-z0-9][a-z0-9._-]*@\d+$/;
+
+interface HarnessContext {
+  executors: ExecutorInfo[];
+  tools: Tool[];
+  profileText: (path: string) => string | undefined;
+  setProfile: (path: string, text: string) => void;
+}
+
+/** The profile as the builder edits it: the fields it knows, with everything else kept as written. */
+type ProfileDoc = Record<string, any> & { model?: { provider?: string; name?: string; credential?: string }; instructions?: string };
+
+function readProfile(text: string | undefined): ProfileDoc | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const p = parse(text);
+    return p && typeof p === 'object' ? (p as ProfileDoc) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const CAPABILITY_LABELS: Array<[string, string, Record<string, string>]> = [
+  ['gatewayTools', 'Tools', { 'native-mcp': 'every call goes through the gateway', bridged: 'reach the gateway over a bridge', none: 'none' }],
+  ['ambientTools', 'Built-in tools', { disableable: 'none exist', restrictable: 'switched off by permission rules', uncontrolled: 'cannot be restricted' }],
+  ['cancellation', 'Cancel', { confirmed: 'confirmed', 'best-effort': 'best effort', none: 'not possible' }],
+  ['resume', 'Resume', { native: 'native', 'checkpoint-only': 'from a checkpoint', none: 'not possible' }],
+  ['usage', 'Usage figures', { reported: 'reported', partial: 'partly reported', unavailable: 'not available' }],
+];
+
+/**
+ * The harness builder: everything that makes up an agent step in one place. The executor and what
+ * it can enforce, the profile (model, instructions, limits; saved as a versioned profile file in
+ * the package), the tools and datasets the step may use, and its budget. Nodes keep pointing at
+ * `name@version`; the profile file travels with the draft when it is saved.
+ */
+function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; set: (key: string, value: unknown) => void }) {
+  const executor = ctx.executors.find((e) => e.id === (step.executor || 'model-agent'));
+  const ref: string = typeof step.profile === 'string' ? step.profile : '';
+  const path = PROFILE_REF.test(ref) ? `profiles/${ref}.yaml` : undefined;
+  const text = path ? ctx.profileText(path) : undefined;
+  const doc = readProfile(text);
+  const [newName, setNewName] = useState('');
+  const budget: Record<string, number> = step.budget ?? {};
+  const tools: string[] = Array.isArray(step.tools) ? step.tools : [];
+
+  const writeProfile = (patch: (d: ProfileDoc) => ProfileDoc) => {
+    if (!path) return;
+    const next = patch(structuredClone(doc ?? { model: { provider: 'anthropic', name: 'default', credential: 'anthropic-api-key' }, instructions: '' }));
+    ctx.setProfile(path, stringify(next, { lineWidth: 0 }));
+  };
+  const setModel = (k: 'provider' | 'name' | 'credential', v: string) => writeProfile((d) => ({ ...d, model: { ...(d.model ?? {}), [k]: v || undefined } }));
+  const setTop = (k: string, v: unknown) => writeProfile((d) => {
+    const n = { ...d };
+    if (v === undefined || v === '') delete n[k];
+    else n[k] = v;
+    return n;
+  });
+  const setBudget = (k: string, v: number | undefined) => {
+    const b = { ...budget };
+    if (v === undefined || Number.isNaN(v)) delete b[k];
+    else b[k] = v;
+    set('budget', Object.keys(b).length ? b : undefined);
+  };
+  const provider = doc?.model?.provider;
+  const providerOk = !executor || !provider || provider === 'scripted' || executor.providers.includes(provider);
+
+  return (
+    <fieldset className="harness">
+      <legend>Harness</legend>
+      <label>
+        Executor
+        <select value={step.executor ?? ''} onChange={(e) => set('executor', e.target.value || undefined)}>
+          <option value="">model-agent (built in)</option>
+          {ctx.executors.filter((e) => e.id !== 'model-agent').map((e) => <option key={e.id} value={e.id}>{e.id} {e.version}</option>)}
+          {step.executor && !ctx.executors.some((e) => e.id === step.executor) ? <option value={step.executor}>{step.executor} (unknown)</option> : null}
+        </select>
+      </label>
+      {executor ? (
+        <ul className="muted small harness-caps" aria-label="Capabilities">
+          {CAPABILITY_LABELS.map(([k, label, words]) => <li key={k}>{label}: {words[executor.capabilities[k]] ?? executor.capabilities[k]}{executor.capabilities.unverified?.includes(k) ? ' (not yet verified)' : ''}</li>)}
+          <li>Runs on: {executor.capabilities.platforms.join(', ')}</li>
+          {executor.notes.map((n) => <li key={n}>{n}</li>)}
+        </ul>
+      ) : step.executor ? <p className="warn-note small">No executor named {step.executor} is declared on this server.</p> : null}
+
+      <label>
+        Profile
+        <input value={ref} list="ed-profiles" spellCheck={false} onChange={(e) => set('profile', e.target.value)} />
+        <span className="muted small">Name and version, for example <span className="mono">analyst@1</span>. A new name creates a new profile file.</span>
+      </label>
+      {path && !doc ? (
+        <div className="row">
+          <button type="button" className="small" onClick={() => writeProfile((d) => d)}>Create {path}</button>
+          {text !== undefined ? <span className="error small">This profile file does not parse as YAML.</span> : null}
+        </div>
+      ) : null}
+      {path && doc ? (
+        <>
+          <div className="row wrap">
+            <label>Provider
+              <select value={provider ?? 'anthropic'} onChange={(e) => setModel('provider', e.target.value)}>
+                {['anthropic', 'openai', ...(provider === 'scripted' ? ['scripted'] : [])].map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label>Model
+              <input value={doc.model?.name ?? ''} spellCheck={false} onChange={(e) => setModel('name', e.target.value)} />
+              <span className="muted small">default uses the server's model setting</span>
+            </label>
+            <label>Key secret
+              <input value={doc.model?.credential ?? ''} spellCheck={false} onChange={(e) => setModel('credential', e.target.value)} />
+            </label>
+          </div>
+          {!providerOk ? <p className="warn-note small">{executor!.id} supports {executor!.providers.join(', ')} only; this profile uses {provider}.</p> : null}
+          <label>
+            Instructions
+            <textarea rows={8} value={doc.instructions ?? ''} onChange={(e) => setTop('instructions', e.target.value)} />
+          </label>
+          <div className="row wrap">
+            <label>Temperature
+              <input type="number" step="0.1" min="0" max="2" value={typeof doc.temperature === 'number' ? doc.temperature : ''} onChange={(e) => setTop('temperature', e.target.value === '' ? undefined : Number(e.target.value))} />
+            </label>
+            <label>Max turns
+              <input type="number" min="1" value={typeof doc.max_turns === 'number' ? doc.max_turns : ''} onChange={(e) => setTop('max_turns', e.target.value === '' ? undefined : Number(e.target.value))} />
+            </label>
+            <label>Max output tokens
+              <input type="number" min="1" value={typeof doc.max_output_tokens === 'number' ? doc.max_output_tokens : ''} onChange={(e) => setTop('max_output_tokens', e.target.value === '' ? undefined : Number(e.target.value))} />
+            </label>
+          </div>
+        </>
+      ) : null}
+      <div className="row wrap">
+        <input aria-label="New profile name" placeholder="new-profile@1" value={newName} spellCheck={false} onChange={(e) => setNewName(e.target.value)} />
+        <button
+          type="button"
+          className="small"
+          disabled={!PROFILE_REF.test(newName)}
+          onClick={() => {
+            ctx.setProfile(`profiles/${newName}.yaml`, stringify({ model: { provider: 'anthropic', name: 'default', credential: 'anthropic-api-key' }, max_turns: 3, max_output_tokens: 3000, instructions: 'Describe what this agent does and how it should treat untrusted input.' }, { lineWidth: 0 }));
+            set('profile', newName);
+            setNewName('');
+          }}
+        >
+          New profile
+        </button>
+      </div>
+
+      <div className="harness-tools">
+        <span className="label">Tools the agent may call</span>
+        {ctx.tools.length === 0 ? <span className="muted small">No tools are registered.</span> : null}
+        {ctx.tools.map((t) => {
+          const id = `${t.id}@${t.version}`;
+          return (
+            <label key={id} className="check">
+              <input type="checkbox" checked={tools.includes(id)} onChange={(e) => set('tools', e.target.checked ? [...tools, id] : tools.filter((x) => x !== id))} />
+              <span className="mono">{id}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge>
+              <span className="muted small"> {t.description}</span>
+            </label>
+          );
+        })}
+        {tools.filter((x) => !ctx.tools.some((t) => `${t.id}@${t.version}` === x)).map((x) => <span key={x} className="warn-note small">{x} is not registered here.</span>)}
+      </div>
+      <label>
+        Datasets
+        <input defaultValue={Array.isArray(step.datasets) ? step.datasets.join(', ') : ''} spellCheck={false} onChange={(e) => set('datasets', e.target.value.split(',').map((x) => x.trim()).filter(Boolean))} />
+        <span className="muted small">Separate with commas.</span>
+      </label>
+      <div className="row wrap">
+        <label>Budget: output tokens
+          <input type="number" min="1" value={budget.max_output_tokens ?? ''} onChange={(e) => setBudget('max_output_tokens', e.target.value === '' ? undefined : Number(e.target.value))} />
+        </label>
+        <label>tool calls
+          <input type="number" min="0" value={budget.max_tool_calls ?? ''} onChange={(e) => setBudget('max_tool_calls', e.target.value === '' ? undefined : Number(e.target.value))} />
+        </label>
+        <label>cost (USD)
+          <input type="number" min="0" step="0.01" value={budget.max_cost_usd ?? ''} onChange={(e) => setBudget('max_cost_usd', e.target.value === '' ? undefined : Number(e.target.value))} />
+        </label>
+      </div>
+    </fieldset>
   );
 }

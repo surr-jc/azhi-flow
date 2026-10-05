@@ -149,6 +149,14 @@ Smaller additions (2026-10-05): cancel a run from the runs list (operator), sear
 in their inputs or the start of the run id and by date (`GET /v1/runs?q=&since=&before=`), and a
 theme switch (system, light, dark; kept in the browser).
 
+   Step 3 built (2026-10-05): the **harness builder**, a panel on every agent step. It lists the
+   executors the server declares (`GET /v1/executors`, with what each enforces), edits the step's
+   profile (provider, model, key secret, instructions, temperature, turn and token limits) and can
+   create a new `name@version` profile, picks tools from the registry, and sets datasets and the
+   budget. Profiles travel with the draft: `check` and `drafts` take an optional `profiles` map
+   (`profiles/<name>@<n>.yaml` to YAML text, validated with the same parser as the compiler).
+   Not yet: trying a step on one input from the browser (use `azhi test-node`).
+
 ## Out of scope for now
 
 Billing, multi-workspace switching, and a hosted control plane. Those belong to the "sell it"

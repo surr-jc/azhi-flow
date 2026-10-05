@@ -225,3 +225,10 @@ a.button.primary { background: var(--run); border-color: var(--run); color: #fff
 .slack-id { width: 120px; }
 .inputs-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .theme-switch { padding: 3px 6px; font-size: 12px; }
+
+.harness { border: 1px solid var(--border, #8884); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+.harness legend { font-weight: 600; padding: 0 4px; }
+.harness-caps { margin: 0; padding-left: 18px; }
+.harness-tools { display: flex; flex-direction: column; gap: 4px; }
+.harness .check { display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 400; }
+.harness .row.wrap > label { flex: 1 1 120px; display: flex; flex-direction: column; gap: 4px; }
