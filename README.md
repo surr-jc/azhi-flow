@@ -42,7 +42,9 @@ Plan for the design.
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from
-  its profile; an approval gates the PR comment. See [docs/pr-review.md](docs/pr-review.md).
+  its profile; an approval gates the PR comment. Set up from Mission Control's Examples page or
+  `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
+  See [docs/pr-review.md](docs/pr-review.md).
 - Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
   decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
   timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,

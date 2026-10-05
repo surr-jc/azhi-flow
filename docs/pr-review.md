@@ -94,18 +94,48 @@ drives Anthropic models only), and two GitHub tokens:
 - `github-read-token`: fine-grained, read-only **Contents** and **Pull requests** on the repository.
 - `github-comment-token`: **Pull requests: write**, used only by the approved comment step.
 
-Edit `repos` in `examples/pr-review/azhi.config.yaml`, then:
+Setup needs no file editing; do it from either place.
+
+**Web UI** (Mission Control, admin role):
+
+1. **Examples** → *Pull request review (OpenCode)*: type the repositories its GitHub tools may use
+   (`owner/name`; GitHub Enterprise: open *GitHub Enterprise Server* and give the API address),
+   then **Install**. This registers both GitHub tools with those repositories, saves the package as
+   a draft and signs it with a publisher key made in this browser (WebCrypto Ed25519, kept
+   non-extractable in IndexedDB, certified once by the workspace root).
+2. Fill in the three secrets on the same card; values are sent once and never shown again.
+3. **Open it**, check the run plan, fill in Repository, Pull request number and Post, and **Start run**.
+
+**CLI**:
 
 ```
-azhi apply examples/pr-review/azhi.config.yaml
+azhi example list
+azhi example install pr-review --repo OWNER/REPO        # --repo again for more; --api-url for GHE
 azhi secret set anthropic-api-key
 azhi secret set github-read-token
 azhi secret set github-comment-token
-azhi run examples/pr-review -i repo=OWNER/REPO -i pr=123 -i post=false --wait
+azhi run <version-id> --published -i repo=OWNER/REPO -i pr=123 -i post=false --wait
 ```
 
-With `-i post=true` the run waits on `approve_post`; approve it in Mission Control or with
+`example install` prints the draft's version id and signs it with this machine's key
+(`~/.azhi/keys`). With `post=true` the run waits on `approve_post`; approve it in Approvals or with
 `azhi approve <run-id> approve_post`.
+
+### Changing the agents in the editor
+
+In **Workflows** → pr-review → **Edit**, select a reviewer. With executor `opencode` the step shows:
+
+- **Workspace**: repository, ref and base ref (plain text or `{ref: ...}` / `{cel: ...}`), the clone
+  credential secret, host and depth.
+- **OpenCode setup** (in the profile): the agent prompt and first command files with their text
+  (a command using `$ARGUMENTS`, `$1` or `` !`shell` `` is flagged at once), skills (tick, edit, or
+  create one), the read-only built-in tools, MCP servers (name and command), and every other
+  `harness/` file, including MCP server scripts.
+
+Saving checks everything with the compiler, stores a new draft with the edited files and signs it
+in the browser. An upload from **Upload a workflow** is signed the same way. If this browser cannot
+sign (no Ed25519 support, or a non-local `http://` address), the workflow page shows **Sign** for
+the draft, or use `azhi publish`.
 
 ## What is verified
 
@@ -123,7 +153,12 @@ check) and a stand-in GitHub API. It checks:
   effect; a repository symlink to a host file is not followed; reads outside the checkout are
   denied; the repository's `AGENTS.md`, `opencode.json` and `.opencode/skill` are ignored;
 - shell syntax in the PR body is not run; the checkout folder is gone after the step;
-- the run plan and the context manifest describe the checkout, tools and MCP servers.
+- the run plan and the context manifest describe the checkout, tools and MCP servers;
+- setup without editing files: `azhi example install` (run as the real CLI) registers the tools
+  with the given repositories and signs the draft; in Chromium, the Examples page installs, signs
+  in the browser, sets a secret and starts a run that completes; the editor changes the workspace,
+  command, skills, tools, MCP servers and harness files and saves a signed draft; unsigned drafts
+  show the worker trust blocker until signed; harness file paths outside `harness/` are refused.
 
 Not verified: a run with a live model (review quality, whether a real model follows the command
 and uses the tools well), cloning from github.com itself, and GitHub's real API responses for the

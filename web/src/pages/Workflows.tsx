@@ -17,7 +17,7 @@ export function Workflows() {
       <PageHead
         title="Workflows"
         sub={<>Upload a package here as a draft, or sign and publish it with <code>azhi publish</code>.</>}
-        actions={atLeast(me.data?.role, 'author') ? <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link> : undefined}
+        actions={atLeast(me.data?.role, 'author') ? <><Link to="/ui/examples" className="button">Set up an example</Link> <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link></> : undefined}
       />
       <ErrorNote error={q.error} />
       <Panel>

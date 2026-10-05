@@ -232,3 +232,8 @@ a.button.primary { background: var(--run); border-color: var(--run); color: #fff
 .harness-tools { display: flex; flex-direction: column; gap: 4px; }
 .harness .check { display: flex; flex-direction: row; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 400; }
 .harness .row.wrap > label { flex: 1 1 120px; display: flex; flex-direction: column; gap: 4px; }
+.harness-sub { border: 1px dashed var(--border, #8884); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.harness-sub legend { font-weight: 600; padding: 0 4px; }
+.harness-sub textarea { width: 100%; box-sizing: border-box; }
+.harness-file { display: flex; flex-direction: column; gap: 6px; }
+.example-card { display: flex; flex-direction: column; gap: 10px; }

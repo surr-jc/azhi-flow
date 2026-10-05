@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
+import { signVersion } from '../signing';
 import { api, type JsonSchema, type ScheduleRow } from '../api';
 import { Link } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, Table, when } from '../ui';
@@ -47,6 +48,13 @@ export function PublishDraft({ version, slug }: { version: { id: string; version
       void qc.invalidateQueries({ queryKey: ['plan', version.id] });
     },
   });
+  const sign = useMutation({
+    mutationFn: () => signVersion(version.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['versions', slug] });
+      void qc.invalidateQueries({ queryKey: ['plan', version.id] });
+    },
+  });
   if (!version.draft) return null;
   return (
     <div className="publish">
@@ -56,8 +64,12 @@ export function PublishDraft({ version, slug }: { version: { id: string; version
           <span className="muted small"> Schedules and runs of {slug} then use this version.</span>
         </>
       ) : (
-        <p className="muted small">This draft is not signed, so it cannot be published from here. To publish it, run <code>azhi publish</code> in the package folder; it signs with your publisher key.</p>
+        <>
+          <button type="button" className="primary" disabled={sign.isPending} onClick={() => sign.mutate()}>{sign.isPending ? 'Signing…' : `Sign v${version.version}`}</button>
+          <span className="muted small"> Workers run signed packages only. This signs the draft with a key kept in this browser (or run <code>azhi publish</code> in the package folder).</span>
+        </>
       )}
+      <ErrorNote error={sign.error} />
       <ErrorNote error={publish.error} />
     </div>
   );

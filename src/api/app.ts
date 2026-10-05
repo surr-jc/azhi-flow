@@ -26,6 +26,7 @@ import { checkSignature, registerPublisherKey, requireValidSignature, workspaceR
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
 import { registerEditorRoutes } from './editor.js';
+import { registerExampleRoutes } from './examples.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
@@ -80,6 +81,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerWebRoutes(app);
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
+  registerExampleRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
@@ -100,6 +102,22 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     }
     const signed = (await ctx.pool.query(`SELECT signature IS NOT NULL AS signed FROM workflow_versions WHERE id=$1`, [v.id])).rows[0].signed as boolean;
     return { ok: true, diagnostics: r.diagnostics, version: { id: v.id, workflow: v.slug, version: v.version, package_hash: v.package_hash, draft: v.draft, signed } };
+  });
+
+  // Signs an unsigned draft after the fact (mission control signs in the browser, `azhi example install` on the
+  // CLI); workers only run signed packages. The signature must be the caller's own, for this package.
+  app.post('/v1/versions/:id/signature', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const { id } = req.params as { id: string };
+    const { signature } = z.object({ signature: z.record(z.string(), z.unknown()) }).parse(req.body);
+    const current = (await ctx.pool.query(`SELECT package_hash, signature FROM workflow_versions WHERE id=$1 AND workspace_id=$2`, [id, p.workspaceId])).rows[0];
+    if (!current) throw notFound('workflow version');
+    if (current.signature) return { id, signed: true, changed: false };
+    await requireValidSignature(ctx, p.workspaceId, signature, current.package_hash, p.userId);
+    await ctx.pool.query(`UPDATE workflow_versions SET signature=$2 WHERE id=$1 AND signature IS NULL`, [id, JSON.stringify(signature)]);
+    await audit(ctx, p.workspaceId, p.userId, 'version.signed', { id, package_hash: current.package_hash });
+    return { id, signed: true, changed: true };
   });
 
   app.post('/v1/versions/:id/publish', async (req) => {

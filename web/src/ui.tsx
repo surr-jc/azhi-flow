@@ -98,8 +98,13 @@ export function formValues(schema: JsonSchema | null | undefined, raw: Record<st
   const out: Record<string, unknown> = {};
   for (const [name, prop] of Object.entries(schema?.properties ?? {})) {
     const v = raw[name];
-    if (v === undefined || v === '') continue;
     const t = typeOf(prop);
+    // An untouched checkbox shows unchecked, so a required yes/no field left alone means no.
+    if (v === undefined && t === 'boolean' && schema?.required?.includes(name)) {
+      out[name] = false;
+      continue;
+    }
+    if (v === undefined || v === '') continue;
     if (t === 'boolean') out[name] = Boolean(v);
     else if (t === 'number' || t === 'integer') {
       const n = Number(v);

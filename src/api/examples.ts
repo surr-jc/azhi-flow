@@ -1,0 +1,119 @@
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
+import { z } from 'zod';
+import type { AdminConfig } from '../config/admin.js';
+import { packageFromDirectory } from '../definition/package.js';
+import type { ToolSpec } from '../gateway/types.js';
+import { AzhiError, ErrorClass } from '../lib/errors.js';
+import { audit, registerTool } from '../server/catalog.js';
+import type { AppContext } from '../server/context.js';
+import { listSecrets } from '../server/secrets.js';
+import { uploadPackage } from '../server/workflows.js';
+import { requireRole } from './auth.js';
+
+/**
+ * The example workflows that ship with the server (`examples/`), set up in one step from mission
+ * control or `azhi example install`: the example's tools are registered (with the repositories
+ * the person names, for tools that read or write repositories), its package is saved as a draft
+ * version, and the secrets it needs are listed with whether each is set. Nothing is edited by hand.
+ */
+const examplesDir = () => process.env.AZHI_EXAMPLES_DIR ?? fileURLToPath(new URL('../../examples', import.meta.url));
+const ID = /^[a-z0-9][a-z0-9-]*$/;
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+
+interface Example {
+  id: string;
+  name: string;
+  description: string;
+  config: AdminConfig;
+}
+
+function user(req: FastifyRequest) {
+  if (req.principal.kind !== 'user') throw new AzhiError(ErrorClass.authorization, 'run tokens cannot use this endpoint');
+  return req.principal;
+}
+
+function loadExample(id: string): Example | undefined {
+  if (!ID.test(id)) return undefined;
+  const dir = join(examplesDir(), id);
+  if (!existsSync(join(dir, 'workflow.yaml'))) return undefined;
+  const wf = parse(readFileSync(join(dir, 'workflow.yaml'), 'utf8')) ?? {};
+  const configPath = join(dir, 'azhi.config.yaml');
+  const config: AdminConfig = existsSync(configPath) ? (parse(readFileSync(configPath, 'utf8')) ?? {}) : {};
+  return { id, name: String(wf.name ?? id), description: String(wf.description ?? ''), config };
+}
+
+/** A tool whose registration lists repositories; the person names theirs at install time. */
+const needsRepos = (t: ToolSpec) => Array.isArray((t.transport as { config?: { repos?: unknown } }).config?.repos);
+
+/** Secrets the example names: its config's list, the tools' credentials, and model keys in profiles. */
+function secretsOf(e: Example): string[] {
+  const names = new Set<string>(e.config.secrets ?? []);
+  for (const t of e.config.tools ?? []) if (t.credential) names.add(t.credential);
+  return [...names].sort();
+}
+
+export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
+  app.get('/v1/examples', async (req) => {
+    const p = user(req);
+    const set = new Set((await listSecrets(ctx, p.workspaceId)).map((s) => s.name));
+    const ids = existsSync(examplesDir()) ? readdirSync(examplesDir()).filter((d) => ID.test(d)).sort() : [];
+    return ids.flatMap((id) => {
+      const e = loadExample(id);
+      if (!e) return [];
+      return [{
+        id: e.id,
+        name: e.name,
+        description: e.description,
+        tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect, description: t.description, needs_repos: needsRepos(t) })),
+        needs_repos: (e.config.tools ?? []).some(needsRepos),
+        secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
+      }];
+    });
+  });
+
+  app.post('/v1/examples/:id/install', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const id = (req.params as { id: string }).id;
+    const e = loadExample(id);
+    if (!e) throw new AzhiError(ErrorClass.invalidInput, `no example named '${id}'`);
+    const b = z
+      .object({
+        repos: z.array(z.string().regex(REPO, 'repositories are owner/name')).max(50).optional(),
+        /** GitHub Enterprise Server API, for example https://ghe.example.com/api/v3. */
+        api_url: z.string().url().optional(),
+      })
+      .parse(req.body ?? {});
+    const tools = e.config.tools ?? [];
+    if (tools.some(needsRepos) && !b.repos?.length) throw new AzhiError(ErrorClass.invalidInput, `example '${id}' needs the repositories its GitHub tools may use (owner/name)`);
+
+    const registered = [];
+    for (const t of tools) {
+      const spec = structuredClone(t);
+      if (needsRepos(spec)) {
+        const transport = spec.transport as { config: Record<string, unknown> };
+        transport.config = { ...transport.config, repos: b.repos, ...(b.api_url ? { api_url: b.api_url } : {}) };
+      }
+      const r = await registerTool(ctx, p.workspaceId, spec, p.userId);
+      registered.push({ ref: `${spec.id}@${spec.version}`, ...r });
+    }
+
+    const pkg = packageFromDirectory(join(examplesDir(), id));
+    const files = Object.fromEntries(pkg.manifest.files.map((f) => [f.path, pkg.read(f.path)!.toString('base64')]));
+    const up = await uploadPackage(ctx, p.workspaceId, { workflow: pkg.manifest.workflow, files }, p.userId);
+    if (!up.ok) return { ok: false, diagnostics: up.diagnostics, tools: registered };
+    await audit(ctx, p.workspaceId, p.userId, 'example.installed', { example: id, version: up.version.id, tools: registered.map((t) => t.ref), repos: b.repos ?? [] });
+    const set = new Set((await listSecrets(ctx, p.workspaceId)).map((s) => s.name));
+    return {
+      ok: true,
+      diagnostics: up.diagnostics,
+      version: { id: up.version.id, workflow: up.version.slug, version: up.version.version, draft: up.version.draft },
+      tools: registered,
+      secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
+    };
+  });
+}

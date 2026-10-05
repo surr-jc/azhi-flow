@@ -6,6 +6,7 @@ import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
 import { Audit } from './pages/Audit';
 import { Datasets, Tools } from './pages/Catalog';
+import { Examples } from './pages/Examples';
 import { Health } from './pages/Health';
 import { Overview } from './pages/Overview';
 import { RunPage } from './pages/Run';
@@ -85,6 +86,7 @@ const NAV: Array<[string, string, string?]> = [
   ['/ui/approvals', 'Approvals', 'approvals'],
   ['/ui/alerts', 'Alerts', 'alerts'],
   ['/ui/workflows', 'Workflows'],
+  ['/ui/examples', 'Examples', 'admin'],
   ['/ui/schedules', 'Schedules'],
   ['/ui/workers', 'Workers'],
   ['/ui/usage', 'Usage and limits'],
@@ -151,6 +153,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/workflows/upload') return <UploadPackage />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
   if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
+  if (path === '/ui/examples') return <Examples />;
   if (path === '/ui/schedules') return <Schedules />;
   if (path === '/ui/workers') return <Workers />;
   if (path === '/ui/usage') return <Usage />;

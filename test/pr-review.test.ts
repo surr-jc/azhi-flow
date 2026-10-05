@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { chromium, type Browser, type Page } from 'playwright-core';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,9 @@ import { startFakeAnthropic, type FakeRequest, type FakeStep } from '../src/test
 import { startFakeGit } from '../src/testing/fake-git.js';
 import { startFakeGithub } from '../src/testing/fake-github.js';
 import { opencodeBinary } from '../src/worker/capabilities.js';
+import { ApiClient } from '../src/worker/api-client.js';
+import { publisherKey } from '../src/cli/signing-client.js';
+import { signPackage } from '../src/security/signing.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
@@ -28,6 +32,7 @@ const READ_TOKEN = 'ghp_readonly_7f3a';
 const COMMENT_TOKEN = 'ghp_comment_91c2';
 const HOST_SECRET = 'host-leak-5521';
 const PWNED = join(tmpdir(), `azhi-pr-review-pwned-${process.pid}`);
+const CHROMIUM = process.env.AZHI_CHROMIUM ?? '/opt/pw-browsers/chromium';
 const hasGit = (() => {
   try {
     execFileSync('git', ['--version']);
@@ -193,7 +198,9 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;
   let git: Awaited<ReturnType<typeof startFakeGit>>;
   let version: string;
-  const saved = { GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, AZHI_EGRESS_ALLOW: process.env.AZHI_EGRESS_ALLOW };
+  let browser: Browser | undefined;
+  const pageErrors: string[] = [];
+  const saved = { GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, AZHI_EGRESS_ALLOW: process.env.AZHI_EGRESS_ALLOW, AZHI_EXAMPLES_DIR: process.env.AZHI_EXAMPLES_DIR };
 
   beforeAll(async () => {
     const root = mkdtempSync(join(tmpdir(), 'azhi-pr-review-host-'));
@@ -224,7 +231,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-scripted' });
     await h.api.put('/v1/secrets/github-read-token', { value: READ_TOKEN });
     await h.api.put('/v1/secrets/github-comment-token', { value: COMMENT_TOKEN });
-    const up = await uploadDir(h.api, packageFor(git.url));
+    const pkgDir = packageFor(git.url);
+    // The server's examples, with pr-review pointed at the local git host (setup tests below).
+    const examples = mkdtempSync(join(tmpdir(), 'azhi-examples-'));
+    cpSync(pkgDir, join(examples, 'pr-review'), { recursive: true });
+    process.env.AZHI_EXAMPLES_DIR = examples;
+    const up = await uploadDir(h.api, pkgDir);
     expect(up.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
     version = up.version.id;
   });
@@ -233,6 +245,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+    await browser?.close();
     await h?.stop();
     await fake?.close();
     await gh?.stop();
@@ -348,5 +361,169 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(nodeState(d, 'post')).toBe('skipped');
     expect(nodeState(d, 'report')).toBe('succeeded');
     expect(gh.comments.length).toBe(before);
+  });
+
+  async function open(path: string): Promise<Page> {
+    if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execFileSync('npm', ['run', 'build:web'], { stdio: 'ignore' });
+    browser ??= await chromium.launch({ executablePath: CHROMIUM });
+    const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    page.on('pageerror', (e) => pageErrors.push(e.message));
+    await page.goto(`${h.server.url}${path}#token=${encodeURIComponent(token)}`);
+    await page.waitForFunction(() => !location.hash);
+    return page;
+  }
+
+  it('lists the example and refuses an install without repositories or by a non-admin', async () => {
+    const list = await h.api.get<any[]>('/v1/examples');
+    const e = list.find((x) => x.id === 'pr-review');
+    expect(e).toMatchObject({ name: expect.any(String), needs_repos: true });
+    expect(e.secrets.map((x: any) => x.name)).toEqual(['anthropic-api-key', 'github-comment-token', 'github-read-token']);
+    expect(e.tools.map((t: any) => t.ref)).toEqual(['github.get-pull-request@1', 'github.comment-on-pr@1']);
+    await expect(h.api.post('/v1/examples/pr-review/install', {})).rejects.toThrow(/repositories/);
+    await expect(h.api.post('/v1/examples/pr-review/install', { repos: ['not a repo'] })).rejects.toThrow(/owner\/name/);
+    await expect(h.api.post('/v1/examples/nope/install', { repos: ['a/b'] })).rejects.toThrow(/no example/);
+    const u = await h.api.post<{ token: string }>('/v1/users', { display_name: 'author', role: 'author' });
+    await expect(new ApiClient(h.server.url, u.token).post('/v1/examples/pr-review/install', { repos: ['a/b'] })).rejects.toThrow(/admin/);
+  });
+
+  it('is set up and signed with `azhi example install`, with no file edited', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
+    const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
+    const azhi = async (args: string[]) => {
+      const c = spawn(process.execPath, ['bin/azhi.js', ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token } });
+      let out = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.stderr.on('data', (d) => (out += d));
+      const code = await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1)));
+      return { code, out };
+    };
+    const list = await azhi(['example', 'list']);
+    expect(list.code).toBe(0);
+    expect(list.out).toMatch(/pr-review .*--repo/);
+    const r = await azhi(['example', 'install', 'pr-review', '--repo', 'acme/payments', '--api-url', gh.url]);
+    expect(r.out).toContain('installed pr-review');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('secret github-read-token: set');
+    const id = /signed draft (wfv_[\w-]+)/.exec(r.out)![1]!;
+    const versions = await h.api.get<any[]>('/v1/workflows/pr-review/versions');
+    expect(versions.find((v) => v.id === id)).toMatchObject({ draft: true, signed: true });
+    const plan = await h.api.get<any>(`/v1/versions/${id}/plan`);
+    expect(plan.signer.verified).toBe(true);
+    expect(plan.blockers).toEqual([]);
+    const tool = (await h.api.get<any[]>('/v1/tools')).find((t) => t.id === 'github.comment-on-pr');
+    expect(JSON.stringify(tool)).toContain('acme/payments');
+    expect((await h.api.get<any[]>('/v1/audit')).some((e) => e.kind === 'example.installed' && e.data.version === id)).toBe(true);
+  });
+
+  it('an unsigned draft of an OpenCode workflow shows the worker trust blocker until it is signed', async () => {
+    const def = (await h.api.get<any>(`/v1/versions/${version}`)).definition;
+    const draft = await h.api.post<any>(`/v1/versions/${version}/drafts`, { definition: { ...def, description: 'An unsigned edit.' } });
+    expect(draft.version.signed).toBe(false);
+    const before = await h.api.get<any>(`/v1/versions/${draft.version.id}/plan`);
+    expect(before.blockers.map((b: any) => b.code)).toContain('worker_trust_denied');
+    const key = await publisherKey(h.api, mkdtempSync(join(tmpdir(), 'azhi-keys-')));
+    const signed = await h.api.post<any>(`/v1/versions/${draft.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, draft.version.package_hash, 'pr-review') });
+    expect(signed).toMatchObject({ signed: true, changed: true });
+    expect((await h.api.get<any>(`/v1/versions/${draft.version.id}/plan`)).blockers).toEqual([]);
+    // A signature for another package is refused.
+    const other = await h.api.post<any>(`/v1/versions/${version}/drafts`, { definition: { ...def, description: 'Another edit.' } });
+    await expect(h.api.post(`/v1/versions/${other.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, draft.version.package_hash, 'pr-review') })).rejects.toThrow();
+  });
+
+  it('is set up from the Examples page: installed, signed in the browser, secrets set, and run', async () => {
+    const page = await open('/ui/examples');
+    const card = page.locator('section.panel', { hasText: 'pr-review' });
+    await card.getByLabel('Repositories it may use').fill('acme/payments');
+    await card.getByText('GitHub Enterprise Server').click();
+    await card.getByLabel('API address').fill(gh.url);
+    await card.getByRole('button', { name: 'Install' }).click();
+    await card.getByText(/Installed pr-review v\d+ and signed it/).waitFor({ timeout: 30_000 });
+    // Secrets are set in place; the value is never shown back.
+    await card.getByLabel('Value for github-read-token').fill(READ_TOKEN);
+    await card.locator('form', { hasText: 'github-read-token' }).getByRole('button', { name: 'Save' }).click();
+    await card.locator('form', { hasText: 'github-read-token' }).locator('.badge', { hasText: 'set' }).waitFor();
+    expect(await page.content()).not.toContain(READ_TOKEN);
+
+    await card.getByRole('link', { name: /Open it to check the run plan/ }).click();
+    await page.waitForURL(/\/ui\/workflows\/pr-review\?version=wfv_/);
+    const id = new URL(page.url()).searchParams.get('version')!;
+    await page.getByText(/verified, usr_/).waitFor();
+    await page.locator('#f-repo').fill('acme/payments');
+    await page.locator('#f-pr').fill('7');
+    await page.getByRole('button', { name: 'Start run', exact: true }).click();
+    await page.waitForURL(/\/ui\/runs\/run_/).catch(async (e) => {
+      await page.screenshot({ path: join(tmpdir(), 'azhi-examples-run.png'), fullPage: true });
+      throw new Error(`${e.message}\n${(await page.locator('main').innerText()).slice(0, 3000)}`);
+    });
+    const runId = page.url().split('/').pop()!;
+    const d = await waitForRun(h.api, runId, 180_000);
+    expect(d.run.error).toBeNull();
+    expect(d.run.state).toBe('succeeded');
+    expect(d.run.version_id ?? d.run.workflow_version_id ?? id).toBe(id);
+    expect(d.attempts.filter((a: any) => a.node_id === 'summarize').at(-1)?.output).toEqual(REVIEW);
+    await page.close();
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('edits the OpenCode setup and the checkout in the editor, saved and signed as a draft', async () => {
+    const page = await open('/ui/workflows/pr-review');
+    await page.getByRole('link', { name: 'Edit', exact: true }).click();
+    await page.getByText('compiles').waitFor({ timeout: 30_000 });
+    await page.locator('.wf-card', { hasText: 'security' }).first().click();
+    const step = page.getByRole('region', { name: 'Step security' });
+    const ws = step.getByRole('group', { name: 'Workspace' });
+    await expect(ws.getByLabel('Clone credential (secret)').inputValue()).resolves.toBe('github-read-token');
+    await ws.getByLabel('Depth').fill('5');
+
+    const oc = step.getByRole('group', { name: 'OpenCode setup' });
+    expect(await oc.getByLabel('First command', { exact: true }).inputValue()).toBe('harness/commands/review.md');
+    // A template that takes arguments is flagged in place and by the compiler.
+    const cmd = oc.getByLabel('First command text');
+    const original = await cmd.inputValue();
+    await cmd.fill(`${original}\nAlso $ARGUMENTS\n`);
+    await oc.getByText('Commands may not use $ARGUMENTS').waitFor();
+    await page.getByText(/may not use \$ARGUMENTS/).first().waitFor();
+    await cmd.fill(original);
+    // A new skill, the glob tool off, and a second MCP server.
+    await oc.getByLabel('New skill name').fill('payments-rules');
+    await oc.getByRole('button', { name: 'New skill' }).click();
+    await oc.getByLabel('harness/skills/payments-rules/SKILL.md').first().fill('---\nname: payments-rules\ndescription: Payment code rules.\n---\n\nNever eval amounts.\n');
+    await oc.getByRole('checkbox', { name: /glob/ }).uncheck();
+    await oc.getByLabel('New MCP server name').fill('extra-facts');
+    await oc.getByRole('button', { name: 'Add MCP server' }).click();
+    // Its script does not exist yet, so the compiler says so; add it as a harness file.
+    await page.getByText(/harness\/mcp\/extra-facts\.mjs/).first().waitFor();
+    await oc.getByText(/^Harness files/).click();
+    await oc.getByLabel('New harness file').fill('harness/mcp/extra-facts.mjs');
+    await oc.getByRole('button', { name: 'Add file' }).click();
+    await oc.getByLabel('harness/mcp/extra-facts.mjs', { exact: true }).fill(readFileSync(`${PKG}/harness/mcp/repo-facts.mjs`, 'utf8'));
+    await page.getByText('compiles').waitFor();
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.waitForURL(/\/ui\/workflows\/pr-review\?version=wfv_/);
+    const id = new URL(page.url()).searchParams.get('version')!;
+    const v = await h.api.get<any>(`/v1/versions/${id}`);
+    expect(v.signature).toBeTruthy();
+    expect(v.definition.nodes.find((n: any) => n.id === 'security').workspace).toMatchObject({ credential: 'github-read-token', depth: 5 });
+    const files = (await h.api.get<any>(`/v1/versions/${id}/source`)).files;
+    const profile = parse(files.find((f: any) => f.path === 'profiles/security-reviewer@1.yaml').text);
+    expect(profile.harness.opencode.skills).toContain('harness/skills/payments-rules');
+    expect(profile.harness.opencode.tools).not.toContain('glob');
+    expect(profile.harness.opencode.mcp['extra-facts']).toEqual({ command: ['node', 'harness/mcp/extra-facts.mjs'] });
+    expect(files.find((f: any) => f.path === 'harness/skills/payments-rules/SKILL.md').text).toContain('Never eval amounts.');
+    const plan = await h.api.get<any>(`/v1/versions/${id}/plan`);
+    expect(plan.blockers).toEqual([]);
+    await page.close();
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('the editor API takes harness files only under harness/', async () => {
+    const def = (await h.api.get<any>(`/v1/versions/${version}`)).definition;
+    for (const bad of ['../x.md', 'harness/../x.md', 'harness/.hidden/x.md', 'profiles/x.md', 'harness/x.sh']) {
+      await expect(h.api.post(`/v1/versions/${version}/check`, { definition: def, files: { [bad]: 'x' } })).rejects.toThrow(/harness/);
+    }
+    const removed = await h.api.post<any>(`/v1/versions/${version}/check`, { definition: def, files: { 'harness/commands/review.md': null } });
+    expect(removed.ok).toBe(false);
+    expect(JSON.stringify(removed.diagnostics)).toContain("'harness/commands/review.md' is not in the package");
   });
 });

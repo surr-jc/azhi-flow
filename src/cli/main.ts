@@ -16,7 +16,8 @@ import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
 import { printContext, printInspect } from './inspect.js';
-import { signForUpload } from './signing-client.js';
+import { publisherKey, signForUpload } from './signing-client.js';
+import { signPackage } from '../security/signing.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
@@ -292,6 +293,41 @@ program
       const set = new Set((await api.get<Array<{ name: string }>>('/v1/secrets')).map((s) => s.name));
       for (const name of cfg.secrets) console.log(`secret ${name}: ${set.has(name) ? green('set') : yellow('missing (azhi secret set ' + name + ')')}`);
     }
+  });
+
+const example = program.command('example').description('Set up the example workflows that ship with the server');
+example
+  .command('list')
+  .description('List the examples, the tools they register and the secrets they need')
+  .action(async () => {
+    const rows = await client().get<Array<{ id: string; name: string; needs_repos: boolean; secrets: Array<{ name: string; set: boolean }> }>>('/v1/examples');
+    table([['EXAMPLE', 'NAME', 'NEEDS', 'SECRETS'], ...rows.map((e) => [e.id, e.name, e.needs_repos ? '--repo' : '', e.secrets.map((x) => `${x.name}${x.set ? '' : ' (missing)'}`).join(', ')])]);
+  });
+example
+  .command('install')
+  .description('Register the example\'s tools, save it as a signed draft and list the secrets it needs')
+  .argument('<id>', 'example id, for example pr-review')
+  .option('--repo <owner/name>', 'repository its GitHub tools may use; repeatable', collect)
+  .option('--api-url <url>', 'GitHub Enterprise Server API, for example https://ghe.example.com/api/v3')
+  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string }) => {
+    const api = client();
+    const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }> }>(
+      `/v1/examples/${encodeURIComponent(id)}/install`,
+      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}) },
+    );
+    for (const t of r.tools) console.log(`  ${t.changed ? green('+') : dim('=')} tool ${t.ref} (revision ${t.revision})`);
+    if (!r.ok || !r.version) {
+      printDiagnostics(r.diagnostics);
+      process.exitCode = 1;
+      return;
+    }
+    // Workers run signed packages only: sign the draft with this machine's publisher key.
+    const source = await api.get<{ package_hash: string }>(`/v1/versions/${r.version.id}/source`);
+    const key = await publisherKey(api);
+    await api.post(`/v1/versions/${r.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, source.package_hash, r.version.workflow) });
+    console.log(`${green('installed')} ${r.version.workflow} v${r.version.version} (signed draft ${r.version.id})`);
+    for (const x of r.secrets ?? []) console.log(`  secret ${x.name}: ${x.set ? green('set') : yellow(`missing (azhi secret set ${x.name})`)}`);
+    console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
   });
 
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');

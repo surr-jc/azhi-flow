@@ -45,7 +45,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
     return page;
   }
 
-  it('uploads a package folder as an unsigned draft and shows its files', async () => {
+  it('uploads a package folder as a draft signed in the browser and shows its files', async () => {
     const page = await open('/ui/workflows');
     await page.getByRole('link', { name: 'Upload a workflow' }).click();
     await page.getByLabel('Package folder').setInputFiles('examples/sdlc');
@@ -56,9 +56,10 @@ describe.skipIf(!up)('authoring in mission control', () => {
     await page.waitForURL(/\/ui\/workflows\/sdlc\?version=wfv_/);
     const id = new URL(page.url()).searchParams.get('version')!;
     const v = await h.api.get<any>(`/v1/versions/${id}`);
-    expect(v).toMatchObject({ draft: true, signature: null });
+    // Signed with this browser's publisher key (WebCrypto Ed25519), so workers will run it.
+    expect(v).toMatchObject({ draft: true, signature: { package_hash: v.package_hash, publisher: 'usr_local', workflow: 'sdlc' } });
     expect(v.manifest.files.map((f: any) => f.path)).toContain('templates/retro.md');
-    await page.getByText('This draft is not signed').waitFor();
+    await page.getByRole('button', { name: /^Publish v\d+$/ }).waitFor();
 
     await page.getByText('Files in this version').click();
     expect(await page.getByLabel('Contents of workflow.yaml').innerText()).toContain('id: sdlc');

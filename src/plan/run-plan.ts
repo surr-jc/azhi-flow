@@ -255,7 +255,9 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   }
 
   const unique = new Map(blockers.map((b) => [`${b.code}:${b.node ?? ''}:${b.message}`, b]));
-  const needsWorkers = plan.nodes.some((n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool));
+  const needsWorkers = plan.nodes.some(
+    (n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool) || (n.type === 'agent' && isHarness((n.def as AgentNode).executor ?? 'model-agent')),
+  );
   const finalBlockers = [...unique.values()].filter((b) => b.code !== 'worker_trust_denied' || needsWorkers);
   return {
     workflow: version.slug,

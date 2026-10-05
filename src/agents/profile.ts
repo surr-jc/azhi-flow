@@ -75,6 +75,7 @@ export function opencodeHarnessProblems(h: OpencodeHarness, read: (path: string)
   for (const [name, m] of Object.entries(h.mcp ?? {})) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || name === 'azhi') out.push(`harness.opencode.mcp: '${name}' must be lower-case letters, digits and dashes, and not 'azhi'`);
     if (!Array.isArray(m?.command) || !m.command.length || m.command.some((c) => typeof c !== 'string')) out.push(`harness.opencode.mcp.${name}.command must be a list of strings`);
+    else for (const arg of m.command.slice(1)) if (/^harness\//.test(arg)) file(arg, `harness.opencode.mcp.${name} file`);
   }
   return out;
 }
