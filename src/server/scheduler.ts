@@ -1,5 +1,6 @@
 import { CronExpressionParser } from 'cron-parser';
 import { audit } from './catalog.js';
+import { transaction } from '../db/pool.js';
 import { createRun } from './runs.js';
 import type { AppContext } from './context.js';
 import { resolveVersion } from './workflows.js';
@@ -13,10 +14,8 @@ import { resolveVersion } from './workflows.js';
  */
 export function startScheduler(ctx: AppContext, interpreterBuild: string, log: (m: string) => void = () => {}, intervalMs = 5000) {
   let stopped = false;
-  const tick = async () => {
-    const c = await ctx.pool.connect();
-    try {
-      await c.query('BEGIN');
+  const tick = () =>
+    transaction(ctx.pool, async (c) => {
       const due = (
         await c.query(
           `SELECT s.id, s.workspace_id, s.cron, s.timezone, s.inputs, s.next_occurrence_at, w.slug FROM schedules s JOIN workflows w ON w.id = s.workflow_id
@@ -59,14 +58,7 @@ export function startScheduler(ctx: AppContext, interpreterBuild: string, log: (
         }
         await c.query(`UPDATE schedules SET next_occurrence_at=$2 WHERE id=$1`, [s.id, next]);
       }
-      await c.query('COMMIT');
-    } catch (err) {
-      await c.query('ROLLBACK').catch(() => {});
-      log(`scheduler: ${(err as Error).message}`);
-    } finally {
-      c.release();
-    }
-  };
+    }).catch((err) => log(`scheduler: ${(err as Error).message}`));
   const timer = setInterval(() => void (stopped || tick()), intervalMs);
   void tick();
   return {

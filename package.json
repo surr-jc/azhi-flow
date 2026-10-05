@@ -19,9 +19,12 @@
     "compare": "tsx bench/compare.ts",
     "demo": "tsx demo/demo.ts",
     "build:web": "vite build --config web/vite.config.ts",
-    "dev:web": "vite --config web/vite.config.ts"
+    "dev:web": "vite --config web/vite.config.ts",
+    "test:local": "AZHI_TEST_DATABASE_URL=pglite:// vitest run"
   },
   "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@electric-sql/pglite-pgvector": "0.0.9",
     "@marcbachmann/cel-js": "8.0.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@opencode-ai/sdk": "1.18.34",

@@ -24,8 +24,12 @@ export async function temporalAvailable(): Promise<boolean> {
   });
 }
 
+/** Local mode's embedded database (AZHI_TEST_DATABASE_URL=pglite://...): one process per database. */
+export const PGLITE = ADMIN_DB_URL.startsWith('pglite:');
+
 /** A fresh database per test file. */
 export async function freshDatabase(): Promise<string> {
+  if (PGLITE) return 'pglite://memory';
   const name = `azhi_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const admin = new pg.Client({ connectionString: ADMIN_DB_URL });
   await admin.connect();
