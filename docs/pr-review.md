@@ -172,6 +172,17 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   the newest; `grep -h err_XXXX ~/.azhi/logs/opencode/*.log` finds an error reference.
 - Azhi's own server and worker messages are in the window running `azhi up`.
 
+For a GitHub step:
+
+- `repo OWNER/NAME is not one of the repositories this tool may use (...)`: the example's GitHub
+  tools only accept the repositories given at Install. Add more without reinstalling, either on
+  **Examples** under *Allowed repositories* on the installed card, or with
+  `azhi example repos pr-review --add OWNER/NAME` (`--remove` takes one off; with no flags it lists
+  them). This saves a new revision of each GitHub tool; runs started afterwards use it. For a
+  single tool, `azhi tool repos <tool@version> --add OWNER/NAME` does the same. The
+  github-read-token and github-comment-token must also have access to that repository (for an
+  organization repository, the organization may need to approve the token or authorize it for SSO).
+
 ## What is verified
 
 `test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 and its real

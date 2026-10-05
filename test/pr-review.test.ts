@@ -531,6 +531,44 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect((await h.api.get<any[]>('/v1/audit')).some((e) => e.kind === 'example.installed' && e.data.version === id)).toBe(true);
   });
 
+  it('a repository the tools do not allow fails the run with how to add it, and is added without reinstalling', async () => {
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/other', pr: 7, post: false } });
+    const d = await waitForRun(h.api, run_id, 60_000);
+    expect(d.run.state).toBe('failed');
+    const text = JSON.stringify(d);
+    expect(text).toContain('repo acme/other is not one of the repositories this tool may use (acme/payments)');
+    expect(text).toContain('azhi example repos <example> --add acme/other');
+
+    const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
+    const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
+    const azhi = async (args: string[]) => {
+      const c = spawn(process.execPath, ['bin/azhi.js', ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token } });
+      let out = '';
+      c.stdout.on('data', (x) => (out += x));
+      c.stderr.on('data', (x) => (out += x));
+      const code = await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1)));
+      return { code, out };
+    };
+    const added = await azhi(['example', 'repos', 'pr-review', '--add', 'acme/other']);
+    expect(added.out).toContain('allowed acme/payments, acme/other');
+    expect(added.code).toBe(0);
+    expect((await azhi(['example', 'repos', 'pr-review'])).out.trim().split('\n')).toEqual(['acme/payments', 'acme/other']);
+    const ex = (await h.api.get<any[]>('/v1/examples')).find((x) => x.id === 'pr-review');
+    expect(ex.repos).toEqual(['acme/payments', 'acme/other']);
+    for (const ref of ['github.get-pull-request@1', 'github.comment-on-pr@1']) {
+      const t = (await h.api.get<any[]>('/v1/tools')).find((x) => `${x.id}@${x.version}` === ref);
+      expect(t.transport.config.repos).toEqual(['acme/payments', 'acme/other']);
+      expect(t.transport.config.api_url).toBe(gh.url);
+    }
+    // Case does not matter, duplicates are ignored, and the tool keeps at least one repository.
+    expect((await h.api.post<any>('/v1/tools/github.get-pull-request@1/repos', { add: ['ACME/Payments'] })).changed).toBe(false);
+    await expect(h.api.post('/v1/tools/github.get-pull-request@1/repos', { remove: ['acme/payments', 'acme/other'] })).rejects.toThrow(/at least one/);
+    const tool = await azhi(['tool', 'repos', 'github.comment-on-pr@1', '--remove', 'acme/other']);
+    expect(tool.out).toContain('allowed acme/payments');
+    await h.api.post('/v1/examples/pr-review/repos', { remove: ['acme/other'] });
+    expect((await h.api.get<any[]>('/v1/examples')).find((x) => x.id === 'pr-review').repos).toEqual(['acme/payments']);
+  });
+
   it('an unsigned draft of an OpenCode workflow shows the worker trust blocker until it is signed', async () => {
     const def = (await h.api.get<any>(`/v1/versions/${version}`)).definition;
     const draft = await h.api.post<any>(`/v1/versions/${version}/drafts`, { definition: { ...def, description: 'An unsigned edit.' } });
@@ -554,6 +592,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await card.getByLabel('API address').fill(gh.url);
     await card.getByRole('button', { name: 'Install' }).click();
     await card.getByText(/Installed pr-review v\d+ and signed it/).waitFor({ timeout: 30_000 });
+    // Repositories can be added and removed in place afterwards.
+    await card.getByLabel('Add a repository').fill('acme/extra');
+    await card.getByRole('button', { name: 'Add repository' }).click();
+    await card.getByRole('button', { name: 'Remove acme/extra' }).click();
+    await card.getByRole('button', { name: 'Remove acme/extra' }).waitFor({ state: 'detached' });
+    expect((await h.api.get<any[]>('/v1/examples')).find((x) => x.id === 'pr-review').repos).toEqual(['acme/payments']);
     // Secrets are set in place; the value is never shown back.
     await card.getByLabel('Value for github-read-token').fill(READ_TOKEN);
     await card.locator('form', { hasText: 'github-read-token' }).getByRole('button', { name: 'Save' }).click();

@@ -357,6 +357,37 @@ copilot
     }
   });
 
+example
+  .command('repos')
+  .description('Show, add or remove the repositories an installed example\'s GitHub tools may use')
+  .argument('<id>', 'example id, for example pr-review')
+  .option('--add <owner/name>', 'repository to allow; repeatable', collect)
+  .option('--remove <owner/name>', 'repository to stop allowing; repeatable', collect)
+  .action(async (id: string, opts: { add?: string[]; remove?: string[] }) => {
+    const api = client();
+    if (!opts.add?.length && !opts.remove?.length) {
+      const e = (await api.get<Array<{ id: string; repos: string[] }>>('/v1/examples')).find((x) => x.id === id);
+      if (!e) throw new Error(`no example named '${id}'`);
+      console.log(e.repos.length ? e.repos.join('\n') : dim('not installed yet'));
+      return;
+    }
+    const r = await api.post<{ tools: Array<{ ref: string; revision: number }>; repos: string[] }>(`/v1/examples/${encodeURIComponent(id)}/repos`, { add: opts.add ?? [], remove: opts.remove ?? [] });
+    for (const t of r.tools) console.log(`  tool ${t.ref} (revision ${t.revision})`);
+    console.log(`${green('allowed')} ${r.repos.join(', ')}`);
+  });
+
+const tool = program.command('tool').description('Registered tools');
+tool
+  .command('repos')
+  .description('Add or remove repositories a GitHub tool may use (a new revision of the tool)')
+  .argument('<tool>', 'tool@version, for example github.get-pull-request@1')
+  .option('--add <owner/name>', 'repository to allow; repeatable', collect)
+  .option('--remove <owner/name>', 'repository to stop allowing; repeatable', collect)
+  .action(async (ref: string, opts: { add?: string[]; remove?: string[] }) => {
+    const r = await client().post<{ revision: number; repos: string[] }>(`/v1/tools/${encodeURIComponent(ref)}/repos`, { add: opts.add ?? [], remove: opts.remove ?? [] });
+    console.log(`${green('allowed')} ${r.repos.join(', ')} ${dim(`(${ref} revision ${r.revision})`)}`);
+  });
+
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');
 dataset
   .command('create')

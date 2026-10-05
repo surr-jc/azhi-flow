@@ -8,7 +8,7 @@ import { TERMINAL_STATES } from '../runtime/types.js';
 import { callTool } from '../gateway/gateway.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, loadCatalog, registerTool } from '../server/catalog.js';
+import { audit, loadCatalog, registerTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
@@ -434,6 +434,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
 
   // Admin: tools, secrets, schedules, workers
   app.get('/v1/tools', async (req) => (await loadCatalog(ctx, req.principal.workspaceId)).list());
+
+  // Adds or removes repositories on a GitHub-style tool without re-registering it by hand.
+  app.post('/v1/tools/:ref/repos', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ add: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'repositories are owner/name')).optional(), remove: z.array(z.string()).optional() }).parse(req.body ?? {});
+    return updateToolRepos(ctx, p.workspaceId, decodeURIComponent((req.params as { ref: string }).ref), b, p.userId);
+  });
 
   app.post('/v1/tools', async (req) => {
     const p = user(req);

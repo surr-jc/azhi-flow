@@ -8,7 +8,7 @@ import type { AdminConfig } from '../config/admin.js';
 import { packageFromDirectory } from '../definition/package.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, registerTool } from '../server/catalog.js';
+import { audit, loadToolRevision, registerTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { listSecrets } from '../server/secrets.js';
 import { uploadPackage } from '../server/workflows.js';
@@ -56,23 +56,55 @@ function secretsOf(e: Example): string[] {
   return [...names].sort();
 }
 
+/** The repositories the example's installed repository tools allow (all of them, in order). */
+async function installedRepos(ctx: AppContext, workspaceId: string, e: Example): Promise<string[]> {
+  const all: string[] = [];
+  for (const t of (e.config.tools ?? []).filter(needsRepos)) {
+    const spec = await loadToolRevision(ctx, workspaceId, `${t.id}@${t.version}`, undefined);
+    const repos = (spec?.transport as { config?: { repos?: unknown } } | undefined)?.config?.repos;
+    if (Array.isArray(repos)) for (const r of repos) if (typeof r === 'string' && !all.includes(r)) all.push(r);
+  }
+  return all;
+}
+
 export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/examples', async (req) => {
     const p = user(req);
     const set = new Set((await listSecrets(ctx, p.workspaceId)).map((s) => s.name));
     const ids = existsSync(examplesDir()) ? readdirSync(examplesDir()).filter((d) => ID.test(d)).sort() : [];
-    return ids.flatMap((id) => {
+    const out = [];
+    for (const id of ids) {
       const e = loadExample(id);
-      if (!e) return [];
-      return [{
+      if (!e) continue;
+      out.push({
         id: e.id,
         name: e.name,
         description: e.description,
         tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect, description: t.description, needs_repos: needsRepos(t) })),
         needs_repos: (e.config.tools ?? []).some(needsRepos),
         secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
-      }];
-    });
+        /** Repositories its installed tools may use now (empty before install). */
+        repos: await installedRepos(ctx, p.workspaceId, e),
+      });
+    }
+    return out;
+  });
+
+  // Adds or removes repositories on the example's installed GitHub tools, without reinstalling.
+  app.post('/v1/examples/:id/repos', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const id = (req.params as { id: string }).id;
+    const e = loadExample(id);
+    if (!e) throw new AzhiError(ErrorClass.invalidInput, `no example named '${id}'`);
+    const b = z.object({ add: z.array(z.string().regex(REPO, 'repositories are owner/name')).max(50).optional(), remove: z.array(z.string()).max(50).optional() }).parse(req.body ?? {});
+    const tools = [];
+    for (const t of (e.config.tools ?? []).filter(needsRepos)) {
+      const ref = `${t.id}@${t.version}`;
+      if (!(await loadToolRevision(ctx, p.workspaceId, ref, undefined))) throw new AzhiError(ErrorClass.invalidInput, `example '${id}' is not installed yet (no ${ref}); install it first`);
+      tools.push(await updateToolRepos(ctx, p.workspaceId, ref, b, p.userId));
+    }
+    return { tools, repos: await installedRepos(ctx, p.workspaceId, e) };
   });
 
   app.post('/v1/examples/:id/install', async (req) => {

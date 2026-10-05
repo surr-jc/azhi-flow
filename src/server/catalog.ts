@@ -1,6 +1,7 @@
 import { BUILTIN_TOOLS } from '../gateway/executors.js';
 import { toolRef, type ToolCatalog, type ToolSpec } from '../gateway/types.js';
 import { contentHash } from '../lib/hash.js';
+import { AzhiError, ErrorClass } from '../lib/errors.js';
 import type { AppContext } from './context.js';
 
 /** The workspace tool catalog: the latest revision of each registered tool@version plus built-ins. */
@@ -60,6 +61,24 @@ export async function registerTool(ctx: AppContext, workspaceId: string, spec: T
   ]);
   await audit(ctx, workspaceId, actor, 'tool.registered', { tool: toolRef(spec), revision });
   return { revision, changed: true };
+}
+
+/**
+ * Adds or removes repositories on a tool whose registration lists them (`transport.config.repos`),
+ * as a new revision of the same tool; runs started before keep the revision they pinned.
+ */
+export async function updateToolRepos(ctx: AppContext, workspaceId: string, ref: string, change: { add?: string[]; remove?: string[] }, actor: string) {
+  const spec = await loadToolRevision(ctx, workspaceId, ref, undefined);
+  const config = (spec?.transport as { config?: { repos?: unknown } } | undefined)?.config;
+  if (!spec || !Array.isArray(config?.repos)) throw new AzhiError(ErrorClass.invalidInput, `${ref} is not a registered tool with a repository list`);
+  const lower = (r: string) => r.toLowerCase();
+  const removed = new Set((change.remove ?? []).map(lower));
+  const repos = [...(config.repos as string[]), ...(change.add ?? [])].filter((r, i, all) => !removed.has(lower(r)) && all.findIndex((x) => lower(x) === lower(r)) === i);
+  if (!repos.length) throw new AzhiError(ErrorClass.invalidInput, `${ref} needs at least one repository`);
+  const { revision: _r, ...clean } = spec;
+  const next = { ...clean, transport: { ...clean.transport, config: { ...config, repos } } } as ToolSpec;
+  const r = await registerTool(ctx, workspaceId, next, actor);
+  return { ref, revision: r.revision, changed: r.changed, repos };
 }
 
 export async function audit(ctx: AppContext, workspaceId: string, actor: string | null, kind: string, data: Record<string, unknown>) {

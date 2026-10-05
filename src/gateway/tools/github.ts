@@ -132,7 +132,13 @@ export async function incidents(cfg: GithubConfig, token: string | undefined, ti
 function argRepo(cfg: GithubConfig, repo: unknown): string {
   const r = String(repo ?? '');
   if (!/^[\w.-]+\/[\w.-]+$/.test(r)) throw new SendError(`repo must be owner/name, got '${r}'`, true, ErrorClass.invalidInput);
-  if (cfg.repos?.length && !cfg.repos.includes(r)) throw new SendError(`repo ${r} is not in this tool's repos`, true, ErrorClass.authorization);
+  if (cfg.repos?.length && !cfg.repos.some((x) => x.toLowerCase() === r.toLowerCase())) {
+    throw new SendError(
+      `repo ${r} is not one of the repositories this tool may use (${cfg.repos.join(', ')}). Add it on the Examples page (Allowed repositories) or with: azhi example repos <example> --add ${r} (or azhi tool repos <tool> --add ${r})`,
+      true,
+      ErrorClass.authorization,
+    );
+  }
   return r;
 }
 

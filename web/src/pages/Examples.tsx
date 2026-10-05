@@ -19,6 +19,8 @@ interface Example {
   tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean }>;
   needs_repos: boolean;
   secrets: Secret[];
+  /** Repositories the installed tools allow now; empty before install. */
+  repos: string[];
 }
 interface Diagnostic { severity: string; message: string; node?: string }
 interface Installed {
@@ -83,6 +85,7 @@ function ExampleCard({ example: e }: { example: Example }) {
             {e.tools.map((t) => <li key={t.ref}><span className="mono">{t.ref}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge> <span className="muted">{t.description}</span></li>)}
           </ul>
         </div>
+        {e.needs_repos && e.repos.length ? <AllowedRepos example={e} /> : null}
         <form onSubmit={submit} className="fields">
           {e.needs_repos ? (
             <>
@@ -126,6 +129,37 @@ function ExampleCard({ example: e }: { example: Example }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+/** The repositories the installed GitHub tools may use, changed in place (no reinstall). */
+function AllowedRepos({ example: e }: { example: Example }) {
+  const qc = useQueryClient();
+  const [repo, setRepo] = useState('');
+  const change = useMutation({
+    mutationFn: (body: { add?: string[]; remove?: string[] }) => api(`/v1/examples/${encodeURIComponent(e.id)}/repos`, { method: 'POST', body }),
+    onSuccess: () => {
+      setRepo('');
+      void qc.invalidateQueries({ queryKey: ['examples'] });
+      void qc.invalidateQueries({ queryKey: ['tools'] });
+    },
+  });
+  const bad = repo.trim() && !REPO.test(repo.trim());
+  return (
+    <div aria-label="Allowed repositories">
+      <span className="label">Allowed repositories</span>
+      <div className="row wrap">
+        {e.repos.map((r) => (
+          <span key={r} className="chip mono">{r} {e.repos.length > 1 ? <button type="button" className="linkish" aria-label={`Remove ${r}`} onClick={() => change.mutate({ remove: [r] })}>×</button> : null}</span>
+        ))}
+      </div>
+      <form className="row wrap" onSubmit={(ev) => { ev.preventDefault(); change.mutate({ add: [repo.trim()] }); }}>
+        <input aria-label="Add a repository" className="mono" placeholder="owner/name" value={repo} spellCheck={false} onChange={(x) => setRepo(x.target.value)} />
+        <button type="submit" className="small" disabled={!repo.trim() || Boolean(bad) || change.isPending}>Add repository</button>
+        {bad ? <span className="hint warn-text">Use owner/name.</span> : <span className="hint">The GitHub tools refuse any repository not listed here. No reinstall needed.</span>}
+      </form>
+      <ErrorNote error={change.error} />
+    </div>
   );
 }
 
