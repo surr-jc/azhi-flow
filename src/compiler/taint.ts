@@ -62,6 +62,7 @@ export function analyseTaint(nodes: PlanNode[], datasets: (ref: string) => Datas
     if (n.type === 'agent') {
       const def = n.def as AgentNode;
       const reason =
+        (def.workspace && 'reads a cloned repository (its files are untrusted)') ||
         (upstream && `reads ${upstream}, whose ${untrusted[upstream]}`) ||
         n.agentTools?.find((t) => t.effect === 'read' && !t.outputTrusted)?.ref.replace(/^/, 'can call untrusted read tool ') ||
         def.datasets?.find((d) => datasets(d)?.trusted === false)?.replace(/^/, 'retrieves from untrusted dataset ') ||

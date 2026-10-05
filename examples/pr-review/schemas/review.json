@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
+    "summary": {"type": "string", "maxLength": 400},
+    "findings": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
+          "reviewer": {"type": "string"},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "title": {"type": "string", "maxLength": 120},
+          "detail": {"type": "string", "maxLength": 1000}
+        },
+        "required": ["severity", "reviewer", "path", "title", "detail"],
+        "additionalProperties": false
+      }
+    },
+    "body": {"type": "string", "minLength": 1, "maxLength": 20000}
+  },
+  "required": ["verdict", "summary", "findings", "body"],
+  "additionalProperties": false
+}

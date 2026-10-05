@@ -30,13 +30,23 @@ function repos(cfg: GithubConfig): string[] {
 }
 
 async function get(cfg: GithubConfig, token: string | undefined, path: string, timeoutMs: number): Promise<any> {
+  return request(cfg, token, 'GET', path, undefined, timeoutMs);
+}
+
+async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST', path: string, body: unknown, timeoutMs: number): Promise<any> {
   if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
   await checkEgress(url);
   let res: Response;
   try {
-    res = await fetch(url, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(timeoutMs) });
+    res = await fetch(url, {
+      method,
+      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
   } catch (err) {
+    // A POST whose response was lost may have landed: not definite, so the ledger looks it up.
     throw new SendError(`GitHub request failed: ${(err as Error).message}`, false);
   }
   const text = await res.text();
@@ -116,4 +126,68 @@ export async function incidents(cfg: GithubConfig, token: string | undefined, ti
     severity: ((issue.labels ?? []).map((l: any) => (typeof l === 'string' ? l : l.name)).find((n: string) => /^sev[1-5]$/i.test(n)) ?? 'unknown').toLowerCase(),
     opened_at: issue.created_at,
   }));
+}
+
+/** A repository named in tool arguments: owner/name, and in `repos` when the registration lists any. */
+function argRepo(cfg: GithubConfig, repo: unknown): string {
+  const r = String(repo ?? '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(r)) throw new SendError(`repo must be owner/name, got '${r}'`, true, ErrorClass.invalidInput);
+  if (cfg.repos?.length && !cfg.repos.includes(r)) throw new SendError(`repo ${r} is not in this tool's repos`, true, ErrorClass.authorization);
+  return r;
+}
+
+function argNumber(n: unknown): number {
+  const v = Number(n);
+  if (!Number.isInteger(v) || v < 1) throw new SendError(`number must be a positive integer, got '${String(n)}'`, true, ErrorClass.invalidInput);
+  return v;
+}
+
+const MAX_BODY = 20_000;
+
+/** One pull request (`github.pull-request`): metadata, refs and the changed files with line counts. */
+export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, timeoutMs);
+  const files = await pages(cfg, token, `/repos/${repo}/pulls/${number}/files`, undefined, timeoutMs);
+  return {
+    repo,
+    number,
+    title: String(pr.title ?? ''),
+    body: String(pr.body ?? '').slice(0, MAX_BODY),
+    author: String(pr.user?.login ?? ''),
+    state: String(pr.state ?? ''),
+    draft: Boolean(pr.draft),
+    url: String(pr.html_url ?? ''),
+    base_ref: String(pr.base?.ref ?? ''),
+    base_sha: String(pr.base?.sha ?? ''),
+    head_ref: String(pr.head?.ref ?? ''),
+    head_sha: String(pr.head?.sha ?? ''),
+    additions: Number(pr.additions ?? 0),
+    deletions: Number(pr.deletions ?? 0),
+    changed_files: files.map((f: any) => ({ path: String(f.filename), status: String(f.status), additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0) })),
+  };
+}
+
+const marker = (key: string) => `<!-- azhi-action:${key} -->`;
+
+/**
+ * A comment on a pull request (`github.pr-comment`, write-dedupable): the body carries the ledger
+ * action ID in a hidden marker, and a lookup finds the comment by it before any resend.
+ */
+export async function commentOnPullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown; body?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const text = String(args.body ?? '').slice(0, 60_000);
+  if (!text.trim()) throw new SendError('comment body is empty', true, ErrorClass.invalidInput);
+  const c = await request(cfg, token, 'POST', `/repos/${repo}/issues/${number}/comments`, { body: `${text}\n\n${marker(key)}` }, timeoutMs);
+  return { id: Number(c.id), url: String(c.html_url ?? '') };
+}
+
+export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const comments = await pages(cfg, token, `/repos/${repo}/issues/${number}/comments`, undefined, timeoutMs);
+  const hit = comments.find((c: any) => String(c.body ?? '').includes(marker(key)));
+  return hit ? { id: Number(hit.id), url: String(hit.html_url ?? '') } : null;
 }

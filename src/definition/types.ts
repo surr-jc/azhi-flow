@@ -58,6 +58,23 @@ export interface AgentNode extends NodeCommon {
   output_schema: string | JsonSchema;
   budget?: { max_output_tokens?: number; max_tool_calls?: number; max_cost_usd?: number };
   requires?: { enforced_restrictions?: boolean };
+  /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
+  workspace?: AgentWorkspace;
+}
+
+export interface AgentWorkspace {
+  /** `owner/name`. */
+  repo: Value;
+  /** The ref to check out, for example `refs/pull/7/head`. */
+  ref: Value;
+  /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
+  base_ref?: Value;
+  /** Literal git host base URL. Default https://github.com. */
+  host?: string;
+  /** Workspace secret holding a read-only token, sent only to `host`. */
+  credential?: string;
+  /** Shallow fetch depth; full history when absent. */
+  depth?: number;
 }
 
 export interface RetrieveNode extends NodeCommon {

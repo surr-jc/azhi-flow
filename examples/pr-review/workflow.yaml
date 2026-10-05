@@ -1,0 +1,104 @@
+# Pull request review with OpenCode agents. Each reviewer runs OpenCode in its own fresh checkout
+# of the PR (cloned on a worker into a temporary folder with a read-only token, deleted after),
+# with its own agent prompt, review command, skills, read-only tools and a repo-facts MCP server.
+# A summarizer merges the findings into one structured review. Posting the review as a PR comment
+# is optional and waits for a person to approve it.
+schema_version: "2.0"
+id: pr-review
+name: Pull request review (OpenCode)
+description: Correctness, security and tests reviewers in isolated checkouts, a summarizer, and an approval-gated PR comment.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, description: "owner/name, for example acme/payments"}
+    pr: {type: integer, title: Pull request number}
+    post: {type: boolean, title: Post the review as a PR comment (after approval)}
+  required: [repo, pr, post]
+nodes:
+  - id: pr
+    type: tool
+    description: Read the pull request and its changed files from GitHub.
+    tool: github.get-pull-request@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
+  - id: correctness
+    type: agent
+    description: Look for bugs the change introduces.
+    executor: opencode
+    profile: correctness-reviewer@1
+    workspace: &checkout
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      base_ref: {cel: "'refs/heads/' + nodes.pr.output.base_ref"}
+      credential: github-read-token
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: security
+    type: agent
+    description: Look for security problems in the change.
+    executor: opencode
+    profile: security-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: tests
+    type: agent
+    description: Check the change's tests and style.
+    executor: opencode
+    profile: tests-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: summarize
+    type: agent
+    description: Merge the findings into one review with a verdict and a comment body.
+    executor: opencode
+    profile: review-summarizer@1
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output]}"}
+    output_schema: schemas/review.json
+    timeout: 10m
+    budget: {max_tool_calls: 2}
+
+  - id: report
+    type: report
+    description: The review as a run artifact.
+    template: templates/review.md
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output}"}
+
+  - id: should_post
+    type: condition
+    description: Post only when asked to.
+    expression: "inputs.post ? 'post' : 'skip'"
+    depends_on: [summarize]
+    routes: {post: [approve_post], skip: []}
+    default: skip
+
+  - id: approve_post
+    type: approval
+    description: A person reads the review before it is posted on the pull request.
+    role: author
+    message: {cel: "'Post this ' + nodes.summarize.output.verdict + ' review on ' + inputs.repo + '#' + string(inputs.pr) + '?'"}
+    payload: {map: "{'verdict': nodes.summarize.output.verdict, 'body': nodes.summarize.output.body}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: post
+    type: tool
+    description: Post the review as a comment on the pull request.
+    depends_on: [approve_post]
+    tool: github.comment-on-pr@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, body: {ref: nodes.summarize.output.body}}
+    # Taint gate (ADR-10): the reviewers read untrusted code, so the comment may only go to the
+    # pull request under review, and only after the approval above.
+    guard: "args.repo == inputs.repo && args.number == inputs.pr"

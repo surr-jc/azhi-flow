@@ -1,0 +1,51 @@
+# Admin configuration for the PR review example: `azhi apply examples/pr-review/azhi.config.yaml`.
+# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise Server add
+#    api_url: https://<host>/api/v3 to both tools and set `host` on the workflow's workspace.
+# 2. Secrets (values never go in a package or run state):
+#    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read
+#                          the PR and to clone the repository on the worker
+#    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
+#                          approval-gated comment step
+#    anthropic-api-key     the reviewers' model key (OpenCode drives Anthropic models)
+tools:
+  - id: github.get-pull-request
+    version: 1
+    description: One pull request with its refs and changed files (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.pull-request, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        draft: {type: boolean}
+        url: {type: string}
+        base_ref: {type: string}
+        base_sha: {type: string}
+        head_ref: {type: string}
+        head_sha: {type: string}
+        additions: {type: integer}
+        deletions: {type: integer}
+        changed_files:
+          type: array
+          items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
+  - id: github.comment-on-pr
+    version: 1
+    description: Post a comment on a pull request (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-comment-token
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}}}
+secrets:
+  - github-read-token
+  - github-comment-token
+  - anthropic-api-key

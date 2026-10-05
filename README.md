@@ -39,6 +39,10 @@ Plan for the design.
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
+- Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
+  fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
+  deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from
+  its profile; an approval gates the PR comment. See [docs/pr-review.md](docs/pr-review.md).
 - Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
   decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
   timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,

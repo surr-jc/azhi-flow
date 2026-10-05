@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, flakyTests, incidents, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, findPullRequestComment, flakyTests, incidents, pullRequest, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import type { ToolSpec } from './types.js';
 
@@ -51,6 +51,21 @@ const builtin: Record<string, ToolExecutor> = {
   'github.incidents': {
     async call(spec, _args, ctx) {
       return { value: await incidents(githubConfig(spec), ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  /** The pull request review example: one PR's metadata and files, and a comment on it. */
+  'github.pull-request': {
+    async call(spec, args, ctx) {
+      return { value: await pullRequest(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.pr-comment': {
+    async call(spec, args, ctx) {
+      return { value: await commentOnPullRequest(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPullRequestComment(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
     },
   },
   'slack.post-message': {

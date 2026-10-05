@@ -2,7 +2,7 @@ import { CancelledFailure, Context } from '@temporalio/activity';
 import { ApplicationFailure } from '@temporalio/common';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -30,6 +30,9 @@ export interface ScriptWorkerOptions {
 }
 
 /** Downloads (once) and verifies every file of a package into the worker cache. */
+/** Downloads in progress, by cache directory: parallel steps of one run share one download. */
+const downloading = new Map<string, Promise<void>>();
+
 export async function preparePackage(o: ScriptWorkerOptions, packageHash: string): Promise<{ dir: string; manifest: PackageManifest }> {
   const manifest = await o.api.get<PackageManifest>(`/v1/packages/${encodeURIComponent(packageHash)}/manifest`);
   const computed = `sha256:${createHash('sha256').update(canonicalJson(manifest)).digest('hex')}`;
@@ -37,7 +40,17 @@ export async function preparePackage(o: ScriptWorkerOptions, packageHash: string
   await o.verifyPackage?.(manifest, packageHash);
   const dir = join(o.cacheDir, 'packages', packageHash.replace(/^sha256:/, ''));
   if (existsSync(join(dir, '.complete'))) return { dir, manifest };
-  const staging = `${dir}.${process.pid}.tmp`;
+  let pending = downloading.get(dir);
+  if (!pending) {
+    pending = download(o, manifest, packageHash, dir).finally(() => downloading.delete(dir));
+    downloading.set(dir, pending);
+  }
+  await pending;
+  return { dir, manifest };
+}
+
+async function download(o: ScriptWorkerOptions, manifest: PackageManifest, packageHash: string, dir: string) {
+  const staging = `${dir}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   rmSync(staging, { recursive: true, force: true });
   for (const f of manifest.files) {
     const data = await o.api.raw(`/v1/artifacts/${encodeURIComponent(`sha256:${f.sha256}`)}`);
@@ -49,9 +62,10 @@ export async function preparePackage(o: ScriptWorkerOptions, packageHash: string
   }
   writeFileSync(join(staging, '.complete'), packageHash);
   mkdirSync(dirname(dir), { recursive: true });
+  // Another worker process may have finished first; its copy is identical and may be in use.
+  if (existsSync(join(dir, '.complete'))) return void rmSync(staging, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });
   renameSync(staging, dir);
-  return { dir, manifest };
 }
 
 /** Replaces artifact handles and deferred refs in a value with their content. */

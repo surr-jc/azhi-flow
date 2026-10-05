@@ -411,7 +411,7 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
  * the system prompt, the input and retrieved excerpts as the prompt, the node's gateway tools.
  * The manifest adds one item for what the harness owns and Azhi cannot see.
  */
-export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, executor: string) {
+export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string } }, executor: string) {
   const state = await agentBegin(ctx, i);
   const t = loadTranscript(ctx, state.transcript);
   const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
@@ -424,6 +424,15 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, execut
     ...t.items,
     { kind: 'instructions' as const, source: executor, reason: 'harness-owned system prompt, built-in tool schemas and compaction; not observable', tokens: 0, content_hash: 'unobservable' },
   ];
+  const oc = executor === 'opencode' ? profile.harness?.opencode : undefined;
+  if (oc) {
+    const files = [oc.agent, oc.command, ...(oc.skills ?? []).map((d) => `${d.replace(/\/$/, '')}/SKILL.md`)].filter((f): f is string => Boolean(f));
+    const content = (await Promise.all(files.map(async (f) => `${f}\n${(await packageFile(ctx, i.workspaceId, i.packageHash, f)).toString('utf8')}`))).join('\n');
+    items.push({ kind: 'instructions', source: `package: ${files.join(', ')}`, reason: 'OpenCode agent prompt, command template and skills (a skill enters the context only when the agent loads it)', tokens: estimateTokens(content), content_hash: `sha256:${sha256(content)}` });
+  }
+  if (i.workspace) {
+    items.push({ kind: 'input', source: `workspace ${i.workspace.repo}@${i.workspace.ref}${i.workspace.baseRef ? ` (base ${i.workspace.baseRef})` : ''}`, reason: 'cloned on the worker; the files the agent reads are untrusted and not observable here', tokens: 0, content_hash: 'unobservable' });
+  }
   await ctx.pool.query(
     `INSERT INTO context_manifests(workspace_id, run_id, node_id, attempt, turn, tainted, items, total_tokens, token_source) VALUES ($1,$2,$3,1,1,$4,$5,NULL,'estimated')
      ON CONFLICT (run_id, node_id, attempt, turn) DO UPDATE SET items=EXCLUDED.items`,

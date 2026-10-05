@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "reviewer": {"type": "string"},
+    "summary": {"type": "string", "maxLength": 400},
+    "findings": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "title": {"type": "string", "maxLength": 120},
+          "detail": {"type": "string", "maxLength": 1000}
+        },
+        "required": ["severity", "path", "title", "detail"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["reviewer", "summary", "findings"],
+  "additionalProperties": false
+}

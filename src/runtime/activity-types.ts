@@ -81,7 +81,7 @@ export interface GatewayActivities {
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Harness executors: builds the same context as the model agent, for a worker to run. */
-  harnessPrepare(input: AgentBeginInput & { executor?: string }): Promise<HarnessPlan>;
+  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string } }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */

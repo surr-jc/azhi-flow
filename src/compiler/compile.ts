@@ -7,6 +7,7 @@ import { isValueExpr, type JsonSchema, type NodeDef, type ParallelNode, type Val
 import type { ToolCatalog } from '../gateway/types.js';
 import { parseDuration } from '../lib/duration.js';
 import { contentHash } from '../lib/hash.js';
+import { opencodeHarnessProblems, parseProfile, type AgentProfile } from '../agents/profile.js';
 import {
   APPROVAL_OUTPUT_SCHEMA,
   COMPILER_VERSION,
@@ -66,8 +67,9 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
   switch (n.type) {
     case 'tool':
       return { arguments: n.arguments as Value };
-    case 'script':
     case 'agent':
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref } : { input: n.input };
+    case 'script':
     case 'subworkflow':
       return { input: n.input };
     case 'retrieve':
@@ -337,7 +339,21 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         break;
       case 'agent': {
         outputSchema = loadSchema(n.output_schema, n.id, 'output_schema');
-        if (opts.pkg && opts.pkg.readText(profilePath(n.profile)) === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
+        const profileText = opts.pkg?.readText(profilePath(n.profile));
+        if (opts.pkg && profileText === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
+        if (n.workspace && n.executor !== 'opencode') err('workspace_unsupported', `a workspace needs executor: opencode (got ${n.executor ?? 'model-agent'})`, n.id, 'workspace');
+        if (opts.pkg && profileText !== undefined) {
+          let harness: AgentProfile['harness'];
+          try {
+            harness = parseProfile(profileText, profilePath(n.profile)).harness;
+          } catch {
+            // The run plan reports a profile that does not parse; here only its harness section is checked.
+          }
+          if (harness?.opencode) {
+            if (n.executor !== 'opencode') warn('harness_ignored', `profile '${n.profile}' has an OpenCode section, which ${n.executor ?? 'model-agent'} ignores`, n.id, 'profile');
+            for (const p of opencodeHarnessProblems(harness.opencode, (f) => opts.pkg!.readText(f))) err('invalid_profile', `${n.profile}: ${p}`, n.id, 'profile');
+          }
+        }
         const agentTools: NonNullable<PlanNode['agentTools']> = [];
         for (const ref of n.tools ?? []) {
           const spec = opts.catalog?.get(ref);

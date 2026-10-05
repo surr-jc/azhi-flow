@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 export interface WorkerCapabilities {
   platform: NodeJS.Platform;
   arch: string;
-  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string } };
+  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
 }
@@ -35,6 +35,8 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     if (v) python = { version: v, via };
   }
   const bun = tryRun('bun', ['--version']);
+  // Agent steps with a workspace clone with git.
+  const git = tryRun('git', ['--version'])?.replace(/^git version\s+/, '');
   const ocPath = opencodeBinary();
   const oc = ocPath ? tryRun(ocPath, ['--version']) : undefined;
   const sdk = claudeAgentSdkVersion();
@@ -50,6 +52,7 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
       ...(oc && ocPath ? { opencode: { version: oc, path: ocPath } } : {}),
       ...(sdk ? { 'claude-agent-sdk': { version: sdk } } : {}),
       ...(codex && codexPath ? { codex: { version: codex, path: codexPath } } : {}),
+      ...(git ? { git: { version: git } } : {}),
     },
     limits: { memory: process.platform === 'linux' && Boolean(tryRun('prlimit', ['--version'])), time: true },
     executors: ['script', ...(oc ? ['opencode'] : []), ...(sdk ? ['claude-agent-sdk'] : []), ...(codex ? ['codex'] : [])],

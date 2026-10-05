@@ -2,7 +2,7 @@ import { budgetStatus, describeBudget } from '../server/budgets.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
 import type { AgentNode, RetrieveNode, ScriptNode, SubworkflowNode } from '../definition/types.js';
-import { parseProfile } from '../agents/profile.js';
+import { parseProfile, type AgentProfile } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
 import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS, isHarness } from '../executors/capabilities.js';
@@ -111,6 +111,41 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     return reqs;
   };
 
+  /** An OpenCode step's workspace clone and harness setup: what runs on the worker outside the gateway. */
+  const opencodeSetup = async (def: AgentNode, nodeId: string, np: NodePlan) => {
+    const ws = def.workspace;
+    if (ws) {
+      const withGit = workers.filter((w) => w.capabilities.runtimes?.git && w.capabilities.runtimes?.opencode);
+      np.requirements.push(
+        !workers.length
+          ? { name: 'git on a worker', mark: 'unverified', detail: 'no worker online' }
+          : withGit.length
+            ? { name: 'git on a worker', mark: 'native', detail: withGit.map((w) => `${w.name}: git ${w.capabilities.runtimes!.git!.version}`).join(', ') }
+            : { name: 'git on a worker', mark: 'unsupported', detail: 'no online OpenCode worker has git' },
+      );
+      if (ws.credential) {
+        if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
+        np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+      }
+      np.coverage.push({
+        action: 'workspace clone',
+        enforcement: 'harness',
+        detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
+      });
+    }
+    let harness: AgentProfile['harness'];
+    try {
+      harness = parseProfile((await packageFile(ctx, workspaceId, version.package_hash, profilePath(def.profile))).toString('utf8'), def.profile).harness;
+    } catch {
+      return;
+    }
+    const oc = harness?.opencode;
+    if (oc?.tools?.length) np.coverage.push({ action: `OpenCode tools ${oc.tools.join(', ')}`, enforcement: 'harness', detail: 'read-only, limited to the step directory by OpenCode permission rules (external directories denied)' });
+    for (const name of Object.keys(oc?.mcp ?? {})) {
+      np.coverage.push({ action: `MCP server ${name}`, enforcement: 'unobservable', detail: 'a local process from the package, outside the gateway; its calls are not ledgered (trusted-author packages only)' });
+    }
+  };
+
   for (const n of plan.nodes) {
     const np: NodePlan = { id: n.id, type: n.type, requirements: [], coverage: [] };
     if (plan.taint.tainted[n.id]) np.tainted = plan.taint.tainted[n.id];
@@ -172,6 +207,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           detail: executor === 'model-agent' ? 'none exist' : `${c.ambientTools}: ${decl.notes.join('; ')}`,
         });
         for (const d of def.datasets ?? []) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
+        if (executor === 'opencode') await opencodeSetup(def, n.id, np);
         break;
       }
       case 'subworkflow': {

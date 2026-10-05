@@ -143,6 +143,17 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
   const runHarness = async (executor: string, node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
     try {
+      const ws = def.workspace;
+      const workspace = ws
+        ? {
+            host: ws.host ?? 'https://github.com',
+            repo: String(resolveValue(ws.repo, s) ?? ''),
+            ref: String(resolveValue(ws.ref, s) ?? ''),
+            ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
+            ...(ws.credential ? { credential: ws.credential } : {}),
+            ...(ws.depth ? { depth: ws.depth } : {}),
+          }
+        : undefined;
       const prep = await act.harnessPrepare({
         runId,
         workspaceId,
@@ -155,9 +166,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
       });
       const queue = await selectWorker(node.id, executor, 1);
-      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential]);
+      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
         workspaceId,
@@ -175,6 +187,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         outputSchema: prep.outputSchema,
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
+        profile: def.profile,
+        ...(workspace ? { workspace } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
