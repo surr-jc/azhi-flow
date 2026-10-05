@@ -403,6 +403,35 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(m.items).toContainEqual(expect.objectContaining({ kind: 'instructions', source: expect.stringContaining('harness/agents/correctness.md, harness/commands/review.md') }));
   });
 
+  it('fails clearly, with the models the sign-in offers and a saved OpenCode log, when the model is not available', async () => {
+    const def = (await h.api.get<any>(`/v1/versions/${version}`)).definition;
+    const src = (await h.api.get<any>(`/v1/versions/${version}/source`)).files;
+    const profile = parse(src.find((f: any) => f.path === 'profiles/correctness-reviewer@1.yaml').text);
+    profile.model.name = 'no-such-model';
+    const draft = await h.api.post<any>(`/v1/versions/${version}/drafts`, { definition: def, profiles: { 'profiles/correctness-reviewer@1.yaml': stringify(profile) } });
+    const key = await publisherKey(h.api, mkdtempSync(join(tmpdir(), 'azhi-keys-')));
+    await h.api.post(`/v1/versions/${draft.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, draft.version.package_hash, 'pr-review') });
+    const azhiHome = mkdtempSync(join(tmpdir(), 'azhi-home-logs-'));
+    const before = process.env.AZHI_HOME;
+    process.env.AZHI_HOME = azhiHome;
+    try {
+      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: draft.version.id, inputs: { repo: 'acme/payments', pr: 7, post: false } });
+      const d = await waitForRun(h.api, run_id, 120_000);
+      expect(d.run.state).toBe('failed');
+      const text = JSON.stringify(d);
+      expect(text).toContain("model 'no-such-model' is not available on this GitHub Copilot sign-in");
+      expect(text).toMatch(/Available: [^"]*review-model/);
+      const log = /OpenCode log: ([^)\\"]+)\)/.exec(text)?.[1];
+      expect(log).toBeDefined();
+      expect(log!.startsWith(join(azhiHome, 'logs', 'opencode'))).toBe(true);
+      expect(readFileSync(log!, 'utf8')).toContain('level=');
+      expect(readFileSync(log!, 'utf8')).not.toContain(COPILOT_TOKEN);
+    } finally {
+      if (before === undefined) delete process.env.AZHI_HOME;
+      else process.env.AZHI_HOME = before;
+    }
+  });
+
   it('skips the approval and the comment when not asked to post', async () => {
     const before = gh.comments.length;
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7, post: false } });

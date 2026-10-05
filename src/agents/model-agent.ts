@@ -449,6 +449,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     credential: profile.model.credential ?? PROVIDER_DEFAULTS[provider].credential,
     providerUrl: PROVIDER_DEFAULTS[provider].apiUrl(ctx.settings),
     provider,
+    ...(provider === 'github-copilot' && ctx.settings.copilotApiUrl ? { endpointModels: [ctx.settings.copilotModel] } : {}),
   };
 }
 

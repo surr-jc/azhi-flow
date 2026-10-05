@@ -159,6 +159,19 @@ in the browser. An upload from **Upload a workflow** is signed the same way. If 
 sign (no Ed25519 support, or a non-local `http://` address), the workflow page shows **Sign** for
 the draft, or use `azhi publish`.
 
+## When a step fails
+
+The run page and `azhi inspect <run-id>` show each step's error. For OpenCode steps:
+
+- `model 'X' is not available on this GitHub Copilot sign-in. Available: ...`: your Copilot plan
+  (or your organization's Copilot policy) does not offer that model. Pick one from the list and set
+  `AZHI_COPILOT_MODEL` before `azhi up`, or the reviewer's Model in the editor.
+- Any other OpenCode failure names the cause from OpenCode's log and ends with
+  `(OpenCode log: ~/.azhi/logs/opencode/<run>-<step>-<time>.log)`. The step's own folder is deleted
+  when the step ends, so that saved copy is the only one. `ls -t ~/.azhi/logs/opencode | head` lists
+  the newest; `grep -h err_XXXX ~/.azhi/logs/opencode/*.log` finds an error reference.
+- Azhi's own server and worker messages are in the window running `azhi up`.
+
 ## What is verified
 
 `test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 and its real
@@ -180,6 +193,8 @@ subscription, no network), a stand-in for GitHub's device flow, a local git host
 - every model call carries the Copilot sign-in as its bearer token (as OpenCode sends it to
   Copilot), the sign-in is in no request body, and a package MCP server does not see it or
   OpenCode's server password in its environment;
+- a model the sign-in does not offer fails the step with the available models listed and the
+  OpenCode log saved under `~/.azhi/logs/opencode/`;
 - Copilot sign-in through the API, `azhi copilot login` (real CLI) and the Examples page: the code
   is shown, the token is stored as a secret and never returned, and only admins can start it;
 - setup without editing files: `azhi example install` (run as the real CLI) registers the tools

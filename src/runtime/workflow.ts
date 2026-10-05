@@ -180,6 +180,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         runToken,
         credential: prep.credential,
         providerUrl: prep.providerUrl,
+        ...(prep.endpointModels ? { endpointModels: prep.endpointModels } : {}),
         model: prep.model,
         system: prep.system,
         prompt: prep.prompt,

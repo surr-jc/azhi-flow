@@ -143,6 +143,8 @@ export interface HarnessPlan {
   credential: string;
   providerUrl: string;
   provider: 'anthropic' | 'openai' | 'github-copilot';
+  /** Models a custom Copilot endpoint (AZHI_COPILOT_API_URL) serves: the server's default model. */
+  endpointModels?: string[];
 }
 
 export interface HarnessRecordInput {

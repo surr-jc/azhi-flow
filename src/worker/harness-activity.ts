@@ -4,7 +4,7 @@ import { createOpencodeClient } from '@opencode-ai/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BridgeState, BridgeTool } from '../agents/gateway-mcp.js';
@@ -42,6 +42,8 @@ export interface HarnessInput {
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
   providerUrl: string;
+  /** With a custom Copilot endpoint: the models it serves (declared to OpenCode, which cannot list them). */
+  endpointModels?: string[];
   model: string;
   system: string;
   prompt: string;
@@ -137,7 +139,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               ? {
                   // Copilot's endpoint and model list are OpenCode's own; only a stand-in or proxy URL is set here.
                   'github-copilot': input.providerUrl
-                    ? { options: { baseURL: input.providerUrl.replace(/\/$/, '') }, models: { [input.model]: { name: input.model, tool_call: true, limit: { context: 200000, output: 8192 } } } }
+                    ? { options: { baseURL: input.providerUrl.replace(/\/$/, '') }, models: Object.fromEntries((input.endpointModels ?? [input.model]).map((m) => [m, { name: m, tool_call: true, limit: { context: 200000, output: 8192 } }])) }
                     : {},
                 }
               : {
@@ -197,8 +199,42 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         };
         proc = spawn(oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
         let logs = '';
-        proc.stdout!.on('data', (b: Buffer) => (logs = (logs + b.toString()).slice(-4000)));
-        proc.stderr!.on('data', (b: Buffer) => (logs = (logs + b.toString()).slice(-4000)));
+        // The whole OpenCode log (up to 4 MB) is kept so a failed step can save it: the step folder is deleted.
+        const full: string[] = [];
+        let fullSize = 0;
+        const onLog = (b: Buffer) => {
+          const t = b.toString();
+          logs = (logs + t).slice(-4000);
+          if (fullSize < 4 * 1024 * 1024) {
+            full.push(t);
+            fullSize += t.length;
+          }
+        };
+        proc.stdout!.on('data', onLog);
+        proc.stderr!.on('data', onLog);
+        // OpenCode answers an internal failure with only a reference ("Check server logs"); the log line with
+        // that reference has the cause. The full log is saved under ~/.azhi/logs/opencode/ and named in the error.
+        const describe = (err: unknown): string => {
+          const text = JSON.stringify(err).slice(0, 500);
+          const ref = (err as { data?: { ref?: unknown } })?.data?.ref;
+          const line = typeof ref === 'string' ? full.join('').split('\n').find((l) => l.includes(`ref=${ref}`)) : undefined;
+          const cause = line ? (/error="([^"]*)"/.exec(line)?.[1] ?? line.slice(0, 400)) : undefined;
+          return `${cause ? `${cause} ` : ''}${text}${saveLog()}`;
+        };
+        let savedLog: string | undefined;
+        const saveLog = (): string => {
+          try {
+            if (!savedLog) {
+              const dir = join(process.env.AZHI_HOME ?? join(homedir(), '.azhi'), 'logs', 'opencode');
+              mkdirSync(dir, { recursive: true });
+              savedLog = join(dir, `${input.runId}-${input.nodeId}-${Date.now()}.log`);
+              writeFileSync(savedLog, full.join(''), { mode: 0o600 });
+            }
+            return ` (OpenCode log: ${savedLog})`;
+          } catch {
+            return '';
+          }
+        };
         // A failed call to the OpenCode server is reported with the step and the server's last log lines.
         const step = async <T>(name: string, f: () => Promise<T>, idempotent = false): Promise<T> => {
           try {
@@ -207,7 +243,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             if (e instanceof ApplicationFailure || e instanceof CancelledFailure) throw e;
             // OpenCode's server can drop a kept-alive connection after a long prompt; reads retry once.
             if (idempotent && /ECONNRESET|socket/i.test(String((e as { cause?: Error }).cause?.message ?? (e as Error).message))) return step(name, f, false);
-            throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode ${name}: ${(e as Error).message}${(e as { cause?: Error }).cause ? ` (${(e as { cause?: Error }).cause!.message})` : ''}; ${logs.slice(-600)}` });
+            throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode ${name}: ${(e as Error).message}${(e as { cause?: Error }).cause ? ` (${(e as { cause?: Error }).cause!.message})` : ''}; ${logs.slice(-600)}${saveLog()}` });
           }
         };
         const url = await serverUrl(proc, 30_000);
@@ -217,6 +253,17 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
         } as Parameters<typeof createOpencodeClient>[0]);
         await step('bridge', () => waitForBridge(client, [MCP_NAME, ...Object.keys(setup?.mcp ?? {})], 15_000));
+        // The model must be one OpenCode offers for this provider; for Copilot that is the list your Copilot plan enables.
+        const offered = (await step('providers', () => client.config.providers(), true)).data?.providers.find((p) => p.id === providerID);
+        if (!offered?.models[input.model]) {
+          const names = Object.keys(offered?.models ?? {}).sort();
+          const where = copilot ? 'GitHub Copilot sign-in' : `${providerID} provider`;
+          throw ApplicationFailure.create({
+            type: ErrorClass.invalidInput,
+            nonRetryable: true,
+            message: `model '${input.model}' is not available on this ${where}. ${names.length ? `Available: ${names.join(', ')}.` : 'OpenCode offers no models for it; check the sign-in.'} ${copilot ? 'Set AZHI_COPILOT_MODEL on the server or the profile\'s model name.' : 'Check the profile\'s model name.'}${saveLog()}`,
+          });
+        }
         const session = (await step('session', () => client.session.create({ body: { title: `${input.runId}/${input.nodeId}` } }))).data;
         if (!session) throw ApplicationFailure.create({ type: ErrorClass.transient, message: 'opencode did not create a session' });
         ctx.cancellationSignal.addEventListener('abort', () => void client.session.abort({ path: { id: session.id } }).catch(() => {}));
@@ -234,7 +281,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             const added = await step('input', () =>
               client.session.prompt({ path: { id: session.id }, body: { noReply: true, model: { providerID, modelID: input.model }, agent: setup.agent, parts: [{ type: 'text', text }] } }),
             );
-            if (added.error) throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode input: ${JSON.stringify(added.error).slice(0, 300)}` });
+            if (added.error) throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode input: ${describe(added.error)}` });
           }
           // When the bridge stops the node (budget, repairs, repeated failures), end the turn now.
           const watch = setInterval(() => {
@@ -258,7 +305,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           if (state.stopped) return await finish(client, session.id, { error: state.stopped }, state);
           if (state.output !== undefined) return await finish(client, session.id, { output: state.output }, state);
           if (err) {
-            const message = JSON.stringify(err).slice(0, 500);
+            const message = describe(err);
             return await finish(client, session.id, { error: { class: /auth/i.test(message) ? ErrorClass.authorization : ErrorClass.transient, message: `opencode: ${message}` } }, state);
           }
           if (++reminders > MAX_REPAIRS || Date.now() > deadline) {
