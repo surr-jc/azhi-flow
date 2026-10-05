@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '../server/alerts.js';
+import { getDataset } from '../knowledge/datasets.js';
+import { datasetAllows } from '../plan/run-plan.js';
 import { budgetStatus } from '../server/budgets.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
@@ -47,6 +49,30 @@ async function spend(ctx: AppContext, workspaceId: string, since: string) {
 }
 
 export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
+  // One dataset: its documents (current and revoked) and published revisions, for those its ACL lets read.
+  app.get('/v1/datasets/:name', async (req) => {
+    const p = user(req);
+    const d = await getDataset(ctx, p.workspaceId, (req.params as { name: string }).name);
+    if (!d) throw new AzhiError(ErrorClass.invalidInput, 'dataset not found');
+    if (!datasetAllows(d.acl, p)) throw new AzhiError(ErrorClass.authorization, `your role cannot read dataset ${d.name}`);
+    const [documents, revisions] = await Promise.all([
+      ctx.pool.query(`SELECT x.path, x.media_type, x.revoked, x.added_at, a.size FROM dataset_documents x LEFT JOIN artifacts a ON a.workspace_id=$2 AND a.hash = x.artifact WHERE x.dataset_id=$1 ORDER BY x.path`, [d.id, p.workspaceId]),
+      ctx.pool.query(
+        `SELECT r.revision, r.documents, r.chunks, r.embedder, r.published_at, COALESCE(array_agg(t.tag ORDER BY t.tag) FILTER (WHERE t.tag IS NOT NULL), '{}') AS tags
+         FROM dataset_revisions r LEFT JOIN dataset_tags t ON t.dataset_id = r.dataset_id AND t.revision = r.revision WHERE r.dataset_id=$1 GROUP BY r.dataset_id, r.revision ORDER BY r.revision DESC`,
+        [d.id],
+      ),
+    ]);
+    const last = revisions.rows[0]?.published_at as Date | undefined;
+    return {
+      name: d.name,
+      trusted: d.trusted,
+      acl: d.acl,
+      documents: documents.rows.map((x) => ({ ...x, size: x.size === null ? null : Number(x.size), unpublished: !x.revoked && (!last || x.added_at > last) })),
+      revisions: revisions.rows,
+    };
+  });
+
   app.get('/v1/overview', async (req) => {
     const p = user(req);
     const ws = p.workspaceId;

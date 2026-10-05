@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, getToken, setToken, type Alert, type Me } from './api';
+import { api, atLeast, getToken, setToken, type Alert, type Me } from './api';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
@@ -15,6 +15,8 @@ import { Secrets } from './pages/Secrets';
 import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
+import { UploadPackage } from './pages/Upload';
+import { DatasetPage } from './pages/Authoring';
 
 // The editor (and its YAML library) loads only when someone opens it.
 const WorkflowEditor = lazy(() => import('./pages/Editor').then((m) => ({ default: m.WorkflowEditor })));
@@ -127,6 +129,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/approvals') return <Approvals />;
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
+  if (path === '/ui/workflows/upload') return <UploadPackage />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
   if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
   if (path === '/ui/schedules') return <Schedules />;
@@ -134,6 +137,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/usage') return <Usage />;
   if (path === '/ui/secrets') return <Secrets />;
   if (path === '/ui/datasets') return <Datasets />;
+  if ((m = match('/ui/datasets/:name', path))) return <DatasetRoute name={m.name!} />;
   if (path === '/ui/tools') return <Tools />;
   if (path === '/ui/audit') return <Audit />;
   if (path === '/ui/health') return <Health />;
@@ -143,4 +147,9 @@ function Page({ path }: { path: string }): ReactNode {
       <p className="muted">There is no page at {path}.</p>
     </>
   );
+}
+
+function DatasetRoute({ name }: { name: string }) {
+  const me = useMe();
+  return <DatasetPage name={name} canEdit={atLeast(me.data?.role, 'author')} />;
 }

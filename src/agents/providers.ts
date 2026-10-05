@@ -53,6 +53,18 @@ export interface ModelProvider {
   complete(req: ModelRequest): Promise<ModelResponse>;
 }
 
+/** fetch, with the network cause in the error: undici's own message is only "fetch failed". */
+async function post(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+    const detail = [cause?.code, cause?.message].filter(Boolean).join(': ');
+    throw new AzhiError(ErrorClass.transient, `cannot reach ${new URL(url).host}: ${detail || (err as Error).message}`);
+  }
+}
+
 export const UNKNOWN_USAGE: Usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null, reasoning_tokens: null };
 
 /** Anthropic Messages API. The stable system prompt is marked for prefix caching. */
@@ -60,7 +72,7 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
   return {
     id: 'anthropic',
     async complete(req) {
-      const res = await fetch(`${o.apiUrl.replace(/\/$/, '')}/v1/messages`, {
+      const res = await post(`${o.apiUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': o.apiKey, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
@@ -137,7 +149,7 @@ export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProv
         for (const b of m.content) if (b.type === 'tool_result') messages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.is_error ? `ERROR: ${b.content}` : b.content });
         if (text) messages.push({ role: 'user', content: text });
       }
-      const res = await fetch(`${o.apiUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      const res = await post(`${o.apiUrl.replace(/\/$/, '')}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}` },
         body: JSON.stringify({

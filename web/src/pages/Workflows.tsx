@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api, atLeast, type RunPlan, type RunRow, type WorkflowSummary } from '../api';
+import { api, atLeast, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
+import { PublishDraft, ScheduleForm, WorkflowFiles } from './Authoring';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
@@ -9,10 +10,15 @@ import { Coverage } from './Run';
 import { WorkflowCanvas } from '../components/WorkflowCanvas';
 
 export function Workflows() {
+  const me = useMe();
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
   return (
     <>
-      <PageHead title="Workflows" sub={<>Publish new versions with <code>azhi publish</code>. Uploading from the browser comes later.</>} />
+      <PageHead
+        title="Workflows"
+        sub={<>Upload a package here as a draft, or sign and publish it with <code>azhi publish</code>.</>}
+        actions={atLeast(me.data?.role, 'author') ? <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link> : undefined}
+      />
       <ErrorNote error={q.error} />
       <Panel>
         {!q.data ? <Loading /> : (
@@ -43,6 +49,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
+  const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
   const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
   if (versions.error) return <ErrorNote error={versions.error} />;
   if (!versions.data) return <Loading />;
@@ -74,9 +81,20 @@ export function WorkflowPage({ slug }: { slug: string }) {
             <div><span>Package</span><span className="mono">{current.package_hash.slice(0, 19)}</span></div>
             <div><span>Trigger</span>{def?.trigger?.schedule ? `${def.trigger.schedule.cron} (${def.trigger.schedule.timezone})` : 'manual'}</div>
           </div>
+          {atLeast(me.data?.role, 'author') ? <PublishDraft version={current} slug={slug} /> : null}
         </Panel>
       </div>
       <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} /> : <Loading />}</Panel>
+      <details className="panel">
+        <summary>Files in this version</summary>
+        <WorkflowFiles versionId={current.id} />
+      </details>
+      {atLeast(me.data?.role, 'admin') && schedules.data && versions.data.some((v) => !v.draft) ? (
+        <details className="panel" open={schedules.data.some((s) => s.workflow === slug)}>
+          <summary>Schedule</summary>
+          <ScheduleForm key={slug} slug={slug} schema={version.data?.plan?.inputsSchema ?? def?.inputs} schedule={schedules.data.find((s) => s.workflow === slug)} />
+        </details>
+      ) : null}
       <h2 className="section">Run plan</h2>
       {plan.error ? <ErrorNote error={plan.error} /> : plan.data ? <Coverage plan={plan.data} live /> : <Loading />}
       <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>

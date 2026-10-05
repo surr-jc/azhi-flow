@@ -65,6 +65,29 @@ Common requirements: Git, Node.js 22+ and Docker with the Compose plugin. For sc
 Documented hardware, install timings and every `deploy/install.sh` option are in
 [docs/install.md](docs/install.md).
 
+### Local mode (no Docker, experimental)
+
+For one person on one machine, on Linux or native Windows (no WSL). `azhi up` runs an embedded
+PostgreSQL (PGlite), Temporal's single-binary dev server (downloaded once into `~/.azhi/bin`,
+checksum-verified), the server and a worker in one process, with all state under `~/.azhi`
+(`%USERPROFILE%\.azhi` on Windows). Needs only Git and Node.js 22+, plus Python for script nodes.
+The same commands work in bash and PowerShell:
+
+```bash
+git clone -b dev https://github.com/surr-jc/azhi-flow
+cd azhi-flow
+npm ci
+npx azhi up              # prints the web UI link; Ctrl+C or `npx azhi down` to stop
+```
+
+In another terminal, `npx azhi` commands find the local server without `azhi login`, unless
+`AZHI_URL`/`AZHI_TOKEN` or a saved login points elsewhere. If 7400 is taken, run
+`npx azhi up --port 7410` and point the other commands at it (`export AZHI_URL=http://127.0.0.1:7410`
+in bash, `$env:AZHI_URL = "http://127.0.0.1:7410"` in PowerShell). Set the model the same way
+(`AZHI_ANTHROPIC_MODEL`) before `azhi up`. Limits: a single-writer database, no second server
+process on the same data, and script memory limits only on Linux. macOS is not yet tested; see
+[docs/local-mode-plan.md](docs/local-mode-plan.md).
+
 ### Linux
 
 ```bash
