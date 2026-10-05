@@ -11,6 +11,7 @@ import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import type { PackageManifest } from '../definition/package.js';
 import { ErrorClass } from '../lib/errors.js';
 import { canonicalJson } from '../lib/hash.js';
+import { killTree } from '../lib/process.js';
 import type { ExecActivities, ScriptNodeInput } from '../runtime/activity-types.js';
 import type { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
@@ -81,7 +82,7 @@ function commandFor(o: ScriptWorkerOptions, input: ScriptNodeInput, dir: string)
         ? ['uv', 'run', '--project', dir, ...(existsSync(join(dir, 'uv.lock')) ? ['--frozen'] : []), '--python', o.pythonVersion, 'python', input.entrypoint]
         : ['uv', 'run', '--no-project', '--python', o.pythonVersion, 'python', input.entrypoint];
     }
-    return ['python3', input.entrypoint];
+    return py.via === 'py' ? ['py', '-3', input.entrypoint] : [py.via, input.entrypoint];
   }
   if (!o.capabilities.runtimes.bun) throw fail(ErrorClass.unsupportedCapability, 'this worker has no Bun runtime');
   return ['bun', 'run', input.entrypoint];
@@ -166,10 +167,10 @@ function runProcess(cmd: string[], o: { cwd: string; stdin: string; timeoutMs: n
     let settled = false;
     const kill = () => {
       try {
-        process.kill(-child.pid!, 'SIGTERM');
+        killTree(child.pid!, 'SIGTERM');
         setTimeout(() => {
           try {
-            process.kill(-child.pid!, 'SIGKILL');
+            killTree(child.pid!, 'SIGKILL');
           } catch {}
         }, 3000).unref();
       } catch {}
