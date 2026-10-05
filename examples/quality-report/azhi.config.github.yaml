@@ -1,0 +1,117 @@
+# Real data for the quality-report example: GitHub Actions and GitHub Issues instead of fixtures.
+# 1. Edit repos below (and add api_url: https://ghe.example.com/api/v3 for GitHub Enterprise Server).
+# 2. azhi secret set github-token --value <token with read access to Actions and Issues>
+# 3. azhi apply examples/quality-report/azhi.config.github.yaml   (registers new revisions of the same
+#    three tools; the workflow is unchanged). See docs/github-data.md.
+tools:
+- id: ci.list-runs
+  version: 1
+  description: CI runs on the team's repositories (GitHub Actions)
+  effect: read
+  source: github-actions
+  credential: github-token
+  transport:
+    kind: builtin
+    name: github.ci-runs
+    config:
+      repos:
+      - OWNER/REPO
+      failed_run_details: 20
+  input_schema:
+    type: object
+    properties:
+      team:
+        type: string
+      since:
+        type: string
+    required:
+    - team
+    additionalProperties: false
+  output_schema:
+    type: array
+    items:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        branch:
+          type: string
+        started_at:
+          type: string
+        finished_at:
+          type: string
+        failed_tests:
+          type: array
+          items:
+            type: string
+- id: tests.list-flaky
+  version: 1
+  description: 'Flaky test records: open issues labelled flaky-test (GitHub Issues)'
+  effect: read
+  source: github-issues
+  credential: github-token
+  transport:
+    kind: builtin
+    name: github.flaky-tests
+    config:
+      repos:
+      - OWNER/REPO
+      label: flaky-test
+      quarantine_label: quarantined
+  input_schema:
+    type: object
+    properties:
+      team:
+        type: string
+    required:
+    - team
+    additionalProperties: false
+  output_schema:
+    type: array
+    items:
+      type: object
+      properties:
+        test:
+          type: string
+        failures:
+          type: integer
+        quarantined:
+          type: boolean
+- id: incidents.list-open
+  version: 1
+  description: 'Open incidents: open issues labelled incident, severity from a sev1 to sev5 label (GitHub Issues)'
+  effect: read
+  source: github-issues
+  credential: github-token
+  transport:
+    kind: builtin
+    name: github.incidents
+    config:
+      repos:
+      - OWNER/REPO
+      label: incident
+  input_schema:
+    type: object
+    properties:
+      team:
+        type: string
+    required:
+    - team
+    additionalProperties: false
+  output_schema:
+    type: array
+    items:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        severity:
+          type: string
+        opened_at:
+          type: string
+secrets:
+- github-token

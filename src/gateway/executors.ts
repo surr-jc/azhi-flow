@@ -3,6 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
+import { ciRuns, flakyTests, incidents, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import type { ToolSpec } from './types.js';
 
@@ -26,12 +27,30 @@ export interface ToolExecutor {
   lookup?(spec: ToolSpec, args: Record<string, unknown>, key: string, since: Date, ctx: ExecContext): Promise<ExecResult | null>;
 }
 
+const githubConfig = (spec: ToolSpec): GithubConfig => ((spec.transport as { config?: GithubConfig }).config ?? {});
+
 const builtin: Record<string, ToolExecutor> = {
   /** Returns data recorded in the registration. Used for fixtures, demos and test-node. */
   fixture: {
     async call(spec) {
       const cfg = (spec.transport as { config?: { data?: unknown } }).config ?? {};
       return { value: structuredClone(cfg.data ?? null) };
+    },
+  },
+  /** Real data for the flagship: GitHub Actions runs and issues (src/gateway/tools/github.ts). */
+  'github.ci-runs': {
+    async call(spec, args, ctx) {
+      return { value: await ciRuns(githubConfig(spec), { since: typeof args.since === 'string' ? args.since : undefined }, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.flaky-tests': {
+    async call(spec, _args, ctx) {
+      return { value: await flakyTests(githubConfig(spec), ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.incidents': {
+    async call(spec, _args, ctx) {
+      return { value: await incidents(githubConfig(spec), ctx.credential, ctx.timeoutMs) };
     },
   },
   'slack.post-message': {

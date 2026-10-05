@@ -71,7 +71,7 @@ access, and once with a real Anthropic key (`ANTHROPIC_API_KEY`, `AZHI_ANTHROPIC
 
 From the plan, to be detailed after the alpha gate and design-partner feedback:
 
-1. **Real data sources for the flagship**: GitHub Actions and GitHub Issues as MCP tools (or the
+1. **Real data sources for the flagship** (built 2026-10-05, see docs/github-data.md): GitHub Actions and GitHub Issues as MCP tools (or the
    partners' systems), replacing the fixture tools.
 2. **More executors**: Claude Agent SDK and Codex adapters, each with a pinned version and a
    conformance run like OpenCode's; Streamable HTTP MCP in the gateway.
