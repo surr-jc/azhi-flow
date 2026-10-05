@@ -1,7 +1,7 @@
 import { budgetStatus, describeBudget } from '../server/budgets.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
-import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js';
+import type { AgentNode, RetrieveNode, ScriptNode, SubworkflowNode } from '../definition/types.js';
 import { parseProfile } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
 import { profilePath } from '../compiler/compile.js';
@@ -11,7 +11,7 @@ import { packageFile } from '../server/packages.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
-import type { VersionRow } from '../server/workflows.js';
+import { resolveVersion, type VersionRow } from '../server/workflows.js';
 import type { PackageSignature } from '../security/signing.js';
 
 /**
@@ -133,9 +133,14 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         break;
       }
       case 'parallel':
+      case 'loop':
         if (n.tool) np.requirements.push(toolRequirement(n, n.tool.ref));
         else np.requirements.push(...workerRequirements((n.def as unknown as { node: ScriptNode }).node.runtime));
-        np.coverage.push({ action: 'items', enforcement: 'enforced', detail: 'each item runs as its own tool call or script attempt' });
+        np.coverage.push(
+          n.type === 'loop'
+            ? { action: 'iterations', enforcement: 'enforced', detail: 'one tool call or script attempt per iteration, at most max_iterations, stopped by the exit condition' }
+            : { action: 'items', enforcement: 'enforced', detail: 'each item runs as its own tool call or script attempt' },
+        );
         break;
       case 'agent': {
         const def = n.def as AgentNode;
@@ -169,6 +174,21 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         for (const d of def.datasets ?? []) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
         break;
       }
+      case 'subworkflow': {
+        const def = n.def as SubworkflowNode;
+        const target = await resolveVersion(ctx, workspaceId, def.workflow);
+        if (!target || target.draft) {
+          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'no published version in this workspace' });
+          blockers.push({ code: 'subworkflow_missing', message: `subworkflow '${def.workflow}' has no published version`, node: n.id });
+        } else if (target.slug === version.slug) {
+          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'a workflow cannot call itself' });
+          blockers.push({ code: 'subworkflow_recursion', message: `workflow '${version.slug}' calls itself`, node: n.id });
+        } else {
+          np.requirements.push({ name: `subworkflow ${target.slug}`, mark: 'native', detail: `published version ${target.version}, resolved when the node starts` });
+        }
+        np.coverage.push({ action: 'child run', enforcement: 'enforced', detail: "its own run with its own plan, ledger and trust checks, acting as the parent's principal; its output is treated as untrusted" });
+        break;
+      }
       case 'retrieve':
         for (const d of (n.def as RetrieveNode).datasets) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
         np.coverage.push({ action: 'dataset reads', enforcement: 'enforced', detail: 'dataset ACL checked before ranking' });
@@ -199,7 +219,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   }
 
   const unique = new Map(blockers.map((b) => [`${b.code}:${b.node ?? ''}:${b.message}`, b]));
-  const needsWorkers = plan.nodes.some((n) => n.type === 'script' || (n.type === 'parallel' && !n.tool));
+  const needsWorkers = plan.nodes.some((n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool));
   const finalBlockers = [...unique.values()].filter((b) => b.code !== 'worker_trust_denied' || needsWorkers);
   return {
     workflow: version.slug,

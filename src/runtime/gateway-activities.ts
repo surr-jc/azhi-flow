@@ -8,11 +8,17 @@ import { signRunToken } from '../security/tokens.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { postApprovalToSlack } from '../server/approvals.js';
+import { createRun, loadRunInput } from '../server/runs.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
+import { resolveVersion } from '../server/workflows.js';
+import { AzhiError, ErrorClass } from '../lib/errors.js';
 import type { GatewayActivities, NotifyNodeInput, RecordRunPatch, ReportNodeInput, ToolNodeInput } from './activity-types.js';
 import { toFailure } from './activity-errors.js';
 import { citationIds, renderReport } from './report.js';
-import { TERMINAL_STATES, type NodeError } from './types.js';
+import { TERMINAL_STATES, type NodeError, type RunSnapshot } from './types.js';
+
+/** How many workflows deep a subworkflow may nest; a workflow may not appear twice in its own chain. */
+const MAX_SUBWORKFLOW_DEPTH = 4;
 
 const SLACK_TOOL = 'slack.post-message@1';
 
@@ -95,7 +101,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         JSON.stringify({ ...(data.error ? { error: data.error } : {}), ...(data.route ? { route: data.route } : {}) }),
       ]);
       // Nodes the interpreter evaluates itself (conditions, skips) get a synthetic attempt row.
-      if (status === 'skipped' || (status === 'succeeded' && data.route !== undefined)) {
+      if (status === 'skipped' || (status === 'succeeded' && (data.route !== undefined || data.attempt))) {
         await ctx.pool.query(
           `INSERT INTO node_attempts(workspace_id, run_id, node_id, attempt, state, ended_at, output) VALUES ($1,$2,$3,1,$4,now(),$5)
            ON CONFLICT (run_id, node_id, attempt) DO NOTHING`,
@@ -272,6 +278,40 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         r.error ? JSON.stringify({ ...r.error, retryable: false }) : null,
         `${r.harness.name}@${r.harness.version}`,
       ]);
+    },
+
+    async prepareChildRun(input) {
+      try {
+        const parent = (
+          await ctx.pool.query(`SELECT r.snapshot, r.created_by, w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id WHERE r.id=$1 AND r.workspace_id=$2`, [input.runId, input.workspaceId])
+        ).rows[0] as { snapshot: RunSnapshot; created_by: string | null; slug: string } | undefined;
+        if (!parent) throw new AzhiError(ErrorClass.invalidInput, `parent run ${input.runId} not found`);
+        const target = await resolveVersion(ctx, input.workspaceId, input.workflow);
+        if (!target || target.draft) throw new AzhiError(ErrorClass.invalidInput, `subworkflow '${input.workflow}' has no published version in this workspace`);
+        const chain = [...(parent.snapshot.parent?.chain ?? []), parent.slug];
+        if (chain.includes(target.slug)) throw new AzhiError(ErrorClass.invalidInput, `subworkflow '${target.slug}' would call itself (${[...chain, target.slug].join(' -> ')})`);
+        if (chain.length >= MAX_SUBWORKFLOW_DEPTH) throw new AzhiError(ErrorClass.invalidInput, `subworkflows are nested more than ${MAX_SUBWORKFLOW_DEPTH} deep (${chain.join(' -> ')})`);
+        const { runId } = await createRun(ctx, input.workspaceId, {
+          version: target,
+          inputs: input.inputs,
+          trigger: 'subworkflow',
+          // The child acts as whoever the parent run acts as, and is idempotent per parent node.
+          createdBy: parent.snapshot.principal?.userId ?? parent.created_by,
+          occurrenceId: `sub:${input.runId}:${input.nodeId}`,
+          interpreterBuild: parent.snapshot.interpreter_build,
+          test: input.mock,
+          parent: { run_id: input.runId, node_id: input.nodeId, chain },
+        });
+        return { run: await loadRunInput(ctx, input.workspaceId, runId), workflow: target.slug, version: target.version };
+      } catch (err) {
+        throw toFailure(err);
+      }
+    },
+
+    async childResult(workspaceId, runId) {
+      const run = (await ctx.pool.query(`SELECT state, error FROM runs WHERE id=$1 AND workspace_id=$2`, [runId, workspaceId])).rows[0] as { state: string; error: NodeError | null } | undefined;
+      const rows = (await ctx.pool.query(`SELECT DISTINCT ON (node_id) node_id, output FROM node_attempts WHERE run_id=$1 AND state='succeeded' ORDER BY node_id, attempt DESC`, [runId])).rows as Array<{ node_id: string; output: unknown }>;
+      return { state: run?.state ?? 'failed', ...(run?.error ? { error: run.error } : {}), nodes: Object.fromEntries(rows.map((r) => [r.node_id, r.output])) };
     },
 
     async agentFailed(runId, workspaceId, nodeId, error) {

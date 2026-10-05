@@ -170,7 +170,17 @@ export const workflowSchema = {
       },
       ['for_each', 'node'],
     ),
-    loop: node('loop', { max_iterations: { type: 'integer', minimum: 1 }, exit: { type: 'string' } }, ['max_iterations', 'exit']),
+    loop: node(
+      'loop',
+      {
+        node: { type: 'object', properties: { type: { enum: ['tool', 'script'] } }, required: ['type'] },
+        initial: { $ref: '#/$defs/value' },
+        max_iterations: { type: 'integer', minimum: 1, maximum: 1000 },
+        exit: { type: 'string' },
+        on_max: { enum: ['fail', 'continue'] },
+      },
+      ['node', 'max_iterations', 'exit'],
+    ),
     subworkflow: node('subworkflow', { workflow: { type: 'string' }, input: { $ref: '#/$defs/value' } }, ['workflow']),
     approval: node('approval', {
       role: { enum: ['owner', 'admin', 'author', 'operator'] },

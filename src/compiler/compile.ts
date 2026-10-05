@@ -15,6 +15,7 @@ import {
   NOTIFY_OUTPUT_SCHEMA,
   REPORT_OUTPUT_SCHEMA,
   RETRIEVE_OUTPUT_SCHEMA,
+  SUBWORKFLOW_OUTPUT_SCHEMA,
   type ExecutionPlan,
   type PlanNode,
 } from './plan.js';
@@ -37,9 +38,9 @@ export interface CompileResult {
   plan?: ExecutionPlan;
 }
 
-export const ALPHA_NODE_TYPES: NodeDef['type'][] = ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'approval', 'report', 'notify'];
+export const ALPHA_NODE_TYPES: NodeDef['type'][] = ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'loop', 'subworkflow', 'approval', 'report', 'notify'];
 
-const REF_ROOTS = new Set(['inputs', 'nodes', 'config', 'item', 'run']);
+const REF_ROOTS = new Set(['inputs', 'nodes', 'config', 'item', 'state', 'iteration', 'run']);
 
 interface ExprSite {
   kind: 'ref' | 'cel' | 'map';
@@ -73,6 +74,8 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
       return { query: n.query, filters: n.filters as Value };
     case 'parallel':
       return { for_each: n.for_each, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
+    case 'loop':
+      return { initial: n.initial, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'approval':
       return { message: n.message, payload: n.payload };
     case 'report':
@@ -151,17 +154,22 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   for (const n of def.nodes) {
     const refs: Array<{ site: ExprSite; segments: string[] }> = [];
     const inParallel = n.type === 'parallel';
+    const inLoop = n.type === 'loop';
     for (const [field, value] of Object.entries(nodeValues(n))) {
       for (const site of collectExprs(value, field)) {
         if (site.kind === 'ref') {
           const segments = site.text.split('.');
           const root = segments[0]!;
           if (!REF_ROOTS.has(root)) {
-            err('invalid_ref', `ref '${site.text}' must start with inputs, nodes, config, item or run`, n.id, site.path);
+            err('invalid_ref', `ref '${site.text}' must start with inputs, nodes, config, item, state, iteration or run`, n.id, site.path);
             continue;
           }
           if (root === 'item' && !(inParallel && site.path.startsWith('node.'))) {
             err('invalid_ref', `'item' is only available inside a parallel node's body`, n.id, site.path);
+            continue;
+          }
+          if ((root === 'state' || root === 'iteration') && !(inLoop && site.path.startsWith('node.'))) {
+            err('invalid_ref', `'${root}' is only available inside a loop node's body`, n.id, site.path);
             continue;
           }
           if (root === 'nodes') {
@@ -243,7 +251,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     return undefined;
   };
 
-  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || (n.type === 'parallel' && n.node.type === 'tool'))) {
+  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || n.type === 'loop') && n.node.type === 'tool'))) {
     warn('catalog_unavailable', 'tool catalog not available: tool references, arguments and projections were not checked');
   }
 
@@ -259,6 +267,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         if (!r.ok) err('ref_type', `ref '${site.text}': ${r.error}`, n.id, site.path);
         return r.ok ? r.schema : undefined;
       }
+      if ((root === 'state' || root === 'iteration') && n.type === 'loop') return root === 'iteration' ? { type: 'integer' } : undefined;
       if (root === 'item' && n.type === 'parallel') {
         const items = forEachSchema(n);
         const r = resolvePath(items, segments.slice(1));
@@ -368,6 +377,22 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         };
         break;
       }
+      case 'loop': {
+        let inner: JsonSchema | undefined;
+        if (n.node.type === 'tool') inner = checkTool(n.node.tool, n.node.arguments, n.node.project, 'node.arguments');
+        else if (n.node.type === 'script') {
+          checkScript(n.node.runtime, n.node.entrypoint, n.id);
+          inner = loadSchema(n.node.output_schema, n.id, 'node.output_schema');
+        }
+        outputSchema = {
+          type: 'object',
+          properties: { state: inner ?? {}, iterations: { type: 'array', items: inner ?? {} }, count: { type: 'integer' }, exited: { type: 'boolean' } },
+        };
+        break;
+      }
+      case 'subworkflow':
+        outputSchema = SUBWORKFLOW_OUTPUT_SCHEMA;
+        break;
       default:
         outputSchema = undefined;
     }

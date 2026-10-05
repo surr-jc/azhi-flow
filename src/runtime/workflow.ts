@@ -12,7 +12,9 @@ import {
   condition,
   defineQuery,
   defineSignal,
+  executeChild,
   isCancellation,
+  ParentClosePolicy,
   proxyActivities,
   setHandler,
   sleep,
@@ -20,7 +22,7 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { AgentNode, ApprovalNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
+import type { AgentNode, ApprovalNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
@@ -115,7 +117,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     if (extra.error) status.error = extra.error;
     await bookkeeping.recordRun(runId, workspaceId, { state, flags: status.flags, ...(extra.error ? { error: extra.error } : {}), event: { kind: extra.event ?? `run.${state}` } });
   };
-  const setNode = async (id: string, s: NodeStatus, data: { output?: unknown; error?: NodeError; route?: string } = {}) => {
+  const setNode = async (id: string, s: NodeStatus, data: { output?: unknown; error?: NodeError; route?: string; attempt?: boolean } = {}) => {
     status.nodes[id] = { status: s, ...(data.error ? { error: data.error } : {}), ...(data.route ? { route: data.route } : {}) };
     await bookkeeping.recordNode(runId, workspaceId, id, s, data);
   };
@@ -303,7 +305,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
           entrypoint: def.entrypoint,
           lockfile: def.lockfile,
           input: value,
-          outputSchema: (node.type === 'parallel' ? undefined : node.outputSchema) ?? def.output_schema,
+          outputSchema: (node.type === 'parallel' || node.type === 'loop' ? undefined : node.outputSchema) ?? def.output_schema,
           limits: { timeMs: node.timeoutMs, memoryMb: def.limits?.memory_mb },
           runToken,
           attempt,
@@ -418,6 +420,48 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         }
         return { output: { items: results, completed, failed } };
       }
+      case 'loop': {
+        const def = node.def as LoopNode;
+        let state = resolveValue(def.initial, s);
+        const iterations: unknown[] = [];
+        let exited = false;
+        for (let i = 0; i < def.max_iterations && !exited; i++) {
+          const scoped = { ...s, state: state ?? null, iteration: i };
+          const out =
+            def.node.type === 'tool'
+              ? await runTool(node, def.node as Omit<ToolNode, 'id'>, scoped, i)
+              : await runScript(node, def.node as Omit<ScriptNode, 'id'>, resolveValue((def.node as ScriptNode).input, scoped), i);
+          state = out;
+          iterations.push(out);
+          // After the iteration, `state` is its output and `iteration` the number completed.
+          exited = evaluateCel(def.exit, { ...s, state: out, iteration: i + 1 }) === true;
+        }
+        if (!exited && (def.on_max ?? 'fail') === 'fail') {
+          throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}' reached max_iterations (${def.max_iterations}) without meeting its exit condition: ${def.exit}`, nonRetryable: true });
+        }
+        return { output: { state: state ?? null, iterations, count: iterations.length, exited } };
+      }
+      case 'subworkflow': {
+        const def = node.def as SubworkflowNode;
+        const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: (resolveValue(def.input, s) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
+        // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
+        await executeChild('azhiRun', {
+          workflowId: prep.run.runId,
+          taskQueue: workflowInfo().taskQueue,
+          args: [prep.run],
+          parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
+          workflowExecutionTimeout: node.timeoutMs + 60_000,
+        });
+        const result = await gateway(node).childResult(workspaceId, prep.run.runId);
+        if (result.state !== 'succeeded') {
+          throw ApplicationFailure.create({
+            type: result.error?.class ?? 'internal',
+            message: `subworkflow '${prep.workflow}' (run ${prep.run.runId}) ended ${result.state}${result.error ? `: ${result.error.message}` : ''}`,
+            nonRetryable: true,
+          });
+        }
+        return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state: result.state, nodes: result.nodes } };
+      }
       case 'retrieve': {
         const def = node.def as RetrieveNode;
         if (def.filters && Object.keys(def.filters).length) {
@@ -460,7 +504,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     try {
       const r = await execute(node);
       outputs[node.id] = { output: r.output };
-      await setNode(node.id, 'succeeded', { output: r.output, route: r.route });
+      await setNode(node.id, 'succeeded', { output: r.output, route: r.route, attempt: node.type === 'loop' || node.type === 'subworkflow' });
     } catch (err) {
       if (isCancellation(err)) {
         status.nodes[node.id] = { status: 'cancelled' };

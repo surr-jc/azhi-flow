@@ -15,6 +15,7 @@ const INTERPRETER_SOURCES = [
   '../cel/evaluator.ts',
   '../compiler/plan.ts',
   '../definition/types.ts',
+  '../executors/capabilities.ts',
   '../lib/json.ts',
   '../lib/errors.ts',
 ];

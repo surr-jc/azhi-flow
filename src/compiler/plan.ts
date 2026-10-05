@@ -56,6 +56,18 @@ export const NOTIFY_OUTPUT_SCHEMA: JsonSchema = {
   },
 };
 
+/** A subworkflow's result: the child run, how it ended and the outputs of the nodes that succeeded. */
+export const SUBWORKFLOW_OUTPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: { type: 'string' },
+    workflow: { type: 'string' },
+    version: { type: 'integer' },
+    state: { type: 'string' },
+    nodes: { type: 'object' },
+  },
+};
+
 export const CONDITION_OUTPUT_SCHEMA: JsonSchema = { type: 'object', properties: { route: { type: 'string' } } };
 
 export const APPROVAL_OUTPUT_SCHEMA: JsonSchema = {

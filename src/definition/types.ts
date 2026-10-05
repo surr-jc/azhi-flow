@@ -84,10 +84,20 @@ export interface ParallelNode extends NodeCommon {
   join?: 'all' | 'any';
 }
 
+/**
+ * Repeats one tool or script step, one iteration after another. The body sees `state` (the
+ * previous iteration's output, `initial` for the first) and `iteration` (0-based). After each
+ * iteration `exit` (CEL, with `state` set to that iteration's output and `iteration` to the number
+ * completed) decides whether to stop. Output: `{state, iterations, count, exited}`.
+ */
 export interface LoopNode extends NodeCommon {
   type: 'loop';
+  node: Omit<ToolNode, 'id'> | Omit<ScriptNode, 'id'>;
+  initial?: Value;
   max_iterations: number;
   exit: string;
+  /** What reaching max_iterations without the exit condition does. Default: fail. */
+  on_max?: 'fail' | 'continue';
 }
 
 export interface SubworkflowNode extends NodeCommon {

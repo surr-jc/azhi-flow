@@ -1,7 +1,7 @@
 import type { HarnessInput, HarnessResult } from '../worker/harness-activity.js';
 import type { AgentBeginInput, AgentState, AgentTurnInput, AgentTurnResult } from '../agents/model-agent.js';
 /** Activity signatures shared by the interpreter workflow and the processes that implement them. */
-import type { NodeError, RunFlags, RunState } from './types.js';
+import type { NodeError, RunFlags, RunInput, RunState } from './types.js';
 
 export interface RecordRunPatch {
   state?: RunState;
@@ -69,7 +69,7 @@ export interface WorkerSelection {
 
 export interface GatewayActivities {
   recordRun(runId: string, workspaceId: string, patch: RecordRunPatch): Promise<void>;
-  recordNode(runId: string, workspaceId: string, nodeId: string, status: string, data?: { output?: unknown; error?: NodeError; route?: string }): Promise<void>;
+  recordNode(runId: string, workspaceId: string, nodeId: string, status: string, data?: { output?: unknown; error?: NodeError; route?: string; /** Keep the output as the node's attempt row (loop and subworkflow nodes, which have no attempts of their own). */ attempt?: boolean }): Promise<void>;
   toolNode(input: ToolNodeInput): Promise<{ output: unknown; observation: { source: string; observed_at: string } & Record<string, unknown>; action?: { id: string; reused: boolean } }>;
   notifyNode(input: NotifyNodeInput): Promise<{ action_id: string; delivered: boolean; receipt: unknown }>;
   reportNode(input: ReportNodeInput): Promise<unknown>;
@@ -84,6 +84,10 @@ export interface GatewayActivities {
   harnessPrepare(input: AgentBeginInput & { executor?: string }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
+  /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */
+  prepareChildRun(input: { runId: string; workspaceId: string; nodeId: string; workflow: string; inputs: Record<string, unknown>; mock?: boolean }): Promise<{ run: RunInput; workflow: string; version: number }>;
+  /** Subworkflow nodes: how the child ended and the outputs of its nodes that succeeded. */
+  childResult(workspaceId: string, runId: string): Promise<{ state: string; error?: NodeError; nodes: Record<string, unknown> }>;
   /** Records the failure of an agent node on its attempt row. */
   agentFailed(runId: string, workspaceId: string, nodeId: string, error: NodeError): Promise<void>;
   /** Hybrid retrieval over pinned dataset revisions, with citations. */

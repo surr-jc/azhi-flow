@@ -6,7 +6,7 @@ import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
-import type { RunSnapshot } from '../runtime/types.js';
+import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog } from './catalog.js';
 import type { AppContext } from './context.js';
 import type { VersionRow } from './workflows.js';
@@ -26,6 +26,8 @@ export interface CreateRunOptions {
   interpreterBuild: string;
   /** The run plan already built for this request; built here when absent (schedules). */
   plan?: RunPlanReport;
+  /** A subworkflow run: its parent, and no outbox entry (the parent's workflow starts it as a child). */
+  parent?: NonNullable<RunSnapshot['parent']>;
 }
 
 /**
@@ -83,6 +85,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     ...(datasetRevisions ? { dataset_revisions: datasetRevisions } : {}),
     ...(principal ? { principal } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
+    ...(o.parent ? { parent: o.parent } : {}),
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {
     const r = await c.query(
@@ -96,8 +99,10 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     }
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger })]);
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.planned',$3)`, [workspaceId, runId, JSON.stringify(plan)]);
-    await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
-    await c.query(`NOTIFY azhi_outbox`);
+    if (!o.parent) {
+      await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
+      await c.query(`NOTIFY azhi_outbox`);
+    }
     return { runId, created: true };
   });
 }
@@ -175,4 +180,13 @@ export function summariseUsage(rows: Array<Record<string, any>>) {
     cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
     records: rows,
   };
+}
+
+/** What the interpreter workflow starts with for a stored run. */
+export async function loadRunInput(ctx: AppContext, workspaceId: string, runId: string) {
+  const run = (
+    await ctx.pool.query(`SELECT r.id, r.inputs, r.snapshot, r.test, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [runId, workspaceId])
+  ).rows[0] as { id: string; inputs: Record<string, unknown>; snapshot: RunSnapshot; test: boolean; plan: RunInput['plan'] };
+  const input: RunInput = { runId: run.id, workspaceId, plan: run.plan, inputs: run.inputs, snapshot: run.snapshot, mockWrites: run.test };
+  return input;
 }

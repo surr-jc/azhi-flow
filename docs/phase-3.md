@@ -77,7 +77,7 @@ From the plan, to be detailed after the alpha gate and design-partner feedback:
    conformance run like OpenCode's; Streamable HTTP MCP in the gateway.
 3. **Workflows as MCP tools** (the spec's second workflow), so a developer's coding agent can call
    a published workflow.
-4. **Graph features**: loops, subworkflows, quorum joins.
+4. **Graph features** (2026-10-05: loops and subworkflows built, see docs/loops-and-subworkflows.md; quorum joins not started): loops, subworkflows, quorum joins.
 5. **Channels**: Slack commands and buttons (approvals from Slack), web chat and a visual editor.
 6. **Knowledge**: more dataset formats and document-level ACL.
 7. **Operations**: `azhi migrate`, `export`, `rerun`; the 100-case benchmark that the system

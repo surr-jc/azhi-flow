@@ -135,8 +135,9 @@ describe('compiler', () => {
     expect(codes(compileText(base.replace('0 8 * * MON', 'every monday')))).toContain('invalid_cron');
   });
 
-  it('rejects node types not available in this release', () => {
-    const r = compileText(base + '  - id: again\n    type: loop\n    max_iterations: 3\n    exit: "true"\n');
+  it('rejects node types not available in a release that does not list them', () => {
+    const loaded = loadDefinitionText(base + '  - id: again\n    type: loop\n    max_iterations: 3\n    exit: "true"\n    node: {type: script, runtime: python, entrypoint: scripts/metrics.py}\n');
+    const r = compile(loaded.definition!, { catalog, pkg, supportedNodeTypes: ['script', 'agent', 'tool'] });
     expect(codes(r)).toContain('unsupported_in_release');
   });
 

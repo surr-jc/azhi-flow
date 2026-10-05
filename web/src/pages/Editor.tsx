@@ -23,7 +23,7 @@ interface Tool { id: string; version: number; description: string; effect: strin
 interface ExecutorInfo { id: string; version: string; capabilities: Record<string, any>; notes: string[]; providers: string[] }
 
 const STEP_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const ADDABLE = ['tool', 'agent', 'script', 'retrieve', 'condition', 'approval', 'parallel', 'report', 'notify'];
+const ADDABLE = ['tool', 'agent', 'script', 'retrieve', 'condition', 'approval', 'parallel', 'loop', 'subworkflow', 'report', 'notify'];
 
 type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string };
 const COMMON: Field[] = [
@@ -69,6 +69,17 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'max_concurrency', label: 'At most at once', kind: 'number' },
     { key: 'join', label: 'Finish when', kind: 'select', options: ['', 'all', 'any'] },
   ],
+  loop: [
+    { key: 'initial', label: 'Starting state', kind: 'value', hint: 'What state is in the first iteration' },
+    { key: 'node', label: 'Step to repeat', kind: 'value', hint: 'A tool or script step; it can read state and iteration' },
+    { key: 'exit', label: 'Stop when (CEL)', kind: 'expr', hint: 'state is the latest output, iteration the number completed' },
+    { key: 'max_iterations', label: 'At most', kind: 'number' },
+    { key: 'on_max', label: 'If the limit is reached', kind: 'select', options: ['', 'fail', 'continue'] },
+  ],
+  subworkflow: [
+    { key: 'workflow', label: 'Workflow', kind: 'text', hint: 'The id of a published workflow, for example doubler or doubler@2' },
+    { key: 'input', label: 'Input', kind: 'value' },
+  ],
   approval: [
     { key: 'role', label: 'Decided by role (or higher)', kind: 'select', options: ['', 'operator', 'author', 'admin', 'owner'] },
     { key: 'message', label: 'Message', kind: 'value' },
@@ -98,6 +109,8 @@ function starter(type: string, ctx: { tools: string[]; profiles: string[]; schem
     case 'script': return { runtime: 'python', entrypoint: 'scripts/main.py' };
     case 'retrieve': return { datasets: ['docs'], query: { ref: 'inputs.query' } };
     case 'condition': return { expression: "'yes'", routes: { yes: [] } };
+    case 'loop': return { initial: {}, max_iterations: 5, exit: 'iteration >= 3', node: { type: 'script', runtime: 'python', entrypoint: 'scripts/main.py', input: { ref: 'state' } } };
+    case 'subworkflow': return { workflow: 'workflow-id', input: {} };
     case 'approval': return { role: 'operator', message: 'Approve this step?' };
     case 'parallel': return { for_each: { ref: 'inputs.items' }, node: { type: 'tool', tool: ctx.tools[0] ?? 'tool-id@1' } };
     case 'report': return { template: 'templates/report.md', format: 'markdown' };
