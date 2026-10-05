@@ -300,8 +300,8 @@ example
   .command('list')
   .description('List the examples, the tools they register and the secrets they need')
   .action(async () => {
-    const rows = await client().get<Array<{ id: string; name: string; needs_repos: boolean; secrets: Array<{ name: string; set: boolean }> }>>('/v1/examples');
-    table([['EXAMPLE', 'NAME', 'NEEDS', 'SECRETS'], ...rows.map((e) => [e.id, e.name, e.needs_repos ? '--repo' : '', e.secrets.map((x) => `${x.name}${x.set ? '' : ' (missing)'}`).join(', ')])]);
+    const rows = await client().get<Array<{ id: string; name: string; needs_repos: boolean; secrets: Array<{ name: string; set: boolean }>; settings?: Array<{ name: string }> }>>('/v1/examples');
+    table([['EXAMPLE', 'NAME', 'NEEDS', 'SECRETS'], ...rows.map((e) => [e.id, e.name, [e.needs_repos ? '--repo' : '', ...(e.settings ?? []).map((x) => `--set ${x.name}=`)].filter(Boolean).join(' '), e.secrets.map((x) => `${x.name}${x.set ? '' : ' (missing)'}`).join(', ')])]);
   });
 example
   .command('install')
@@ -310,11 +310,18 @@ example
   .option('--repo <owner/name>', 'repository its GitHub tools may use; repeatable', collect)
   .option('--api-url <url>', 'GitHub Enterprise API, for example https://ghe.example.com/api/v3 (default https://api.github.com)')
   .option('--git-url <url>', 'git host the checkouts clone from (default: the one that goes with --api-url, else https://github.com)')
-  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string; gitUrl?: string }) => {
+  .option('--set <name=value>', 'an example setting, for example jira_url=https://acme.atlassian.net; repeatable', collect)
+  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string; gitUrl?: string; set?: string[] }) => {
     const api = client();
-    const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }> }>(
+    const settings: Record<string, string> = {};
+    for (const kv of opts.set ?? []) {
+      const at = kv.indexOf('=');
+      if (at < 1) throw new Error(`--set takes name=value, got '${kv}'`);
+      settings[kv.slice(0, at).trim()] = kv.slice(at + 1).trim();
+    }
+    const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }>; settings?: Array<{ name: string; value: string | null }> }>(
       `/v1/examples/${encodeURIComponent(id)}/install`,
-      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}), ...(opts.gitUrl ? { git_url: opts.gitUrl } : {}) },
+      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}), ...(opts.gitUrl ? { git_url: opts.gitUrl } : {}), ...(opts.set?.length ? { settings } : {}) },
     );
     for (const t of r.tools) console.log(`  ${t.changed ? green('+') : dim('=')} tool ${t.ref} (revision ${t.revision})`);
     if (!r.ok || !r.version) {
@@ -327,6 +334,7 @@ example
     const key = await publisherKey(api);
     await api.post(`/v1/versions/${r.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, source.package_hash, r.version.workflow) });
     console.log(`${green('installed')} ${r.version.workflow} v${r.version.version} (signed draft ${r.version.id})`);
+    for (const x of r.settings ?? []) console.log(`  setting ${x.name}: ${x.value ? green(x.value) : yellow(`not set (--set ${x.name}=...)`)}`);
     for (const x of r.secrets ?? []) console.log(`  secret ${x.name}: ${x.set ? green('set') : yellow(`missing (azhi secret set ${x.name})`)}`);
     console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
   });

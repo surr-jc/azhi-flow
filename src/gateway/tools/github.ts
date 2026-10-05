@@ -197,3 +197,37 @@ export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: u
   const hit = comments.find((c: any) => String(c.body ?? '').includes(marker(key)));
   return hit ? { id: Number(hit.id), url: String(hit.html_url ?? '') } : null;
 }
+
+const MAX_COMMENTS = 20;
+
+/**
+ * One issue (`github.issue`), named `owner/name#123`, a github.com issue URL, or `#123` / `123`
+ * when the registration lists exactly one repository. Includes the first comments, where the
+ * details of a request often are. Pull requests are refused: this reads issues only.
+ */
+export async function issue(cfg: GithubConfig, args: { issue?: unknown }, token: string | undefined, timeoutMs: number) {
+  const ref = String(args.issue ?? '').trim();
+  const m = ref.match(/^(?:https?:\/\/[^/]+\/)?([\w.-]+\/[\w.-]+)(?:#|\/issues\/)(\d+)\/?$/) ?? ref.match(/^()#?(\d+)$/);
+  if (!m) throw new SendError(`issue must be owner/name#number, got '${ref.slice(0, 100)}'`, true, ErrorClass.invalidInput);
+  let repo = m[1]!;
+  if (!repo) {
+    if (cfg.repos?.length !== 1) throw new SendError(`name the repository: owner/name#${m[2]}`, true, ErrorClass.invalidInput);
+    repo = cfg.repos[0]!;
+  }
+  repo = argRepo(cfg, repo);
+  const number = argNumber(m[2]);
+  const it = await get(cfg, token, `/repos/${repo}/issues/${number}`, timeoutMs);
+  if (it.pull_request) throw new SendError(`${repo}#${number} is a pull request, not an issue`, true, ErrorClass.invalidInput);
+  const comments = Number(it.comments ?? 0) > 0 ? await get(cfg, token, `/repos/${repo}/issues/${number}/comments?per_page=${MAX_COMMENTS}`, timeoutMs) : [];
+  return {
+    repo,
+    number,
+    title: String(it.title ?? ''),
+    body: String(it.body ?? '').slice(0, MAX_BODY),
+    author: String(it.user?.login ?? ''),
+    state: String(it.state ?? ''),
+    labels: (it.labels ?? []).map((l: any) => String(typeof l === 'string' ? l : l.name)),
+    url: String(it.html_url ?? ''),
+    comments: (Array.isArray(comments) ? comments : []).map((c: any) => ({ author: String(c.user?.login ?? ''), body: String(c.body ?? '').slice(0, 4000) })),
+  };
+}

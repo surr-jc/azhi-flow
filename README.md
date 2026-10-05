@@ -39,6 +39,10 @@ Plan for the design.
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
+- Feature delivery (`examples/sdlc`): from a Jira ticket (through a Jira MCP server) or a GitHub
+  issue to requirements, design, two approval gates, release and retro. Set it up with
+  `azhi example install sdlc --repo OWNER/REPO --set slack_channel=... --set jira_url=...`. See
+  [docs/sdlc.md](docs/sdlc.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from

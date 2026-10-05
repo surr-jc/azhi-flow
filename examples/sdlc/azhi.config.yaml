@@ -1,14 +1,84 @@
-# Admin configuration for the SDLC example: `azhi apply examples/sdlc/azhi.config.yaml`.
-# Both tools return fixture data; register your tracker and CI (HTTP or MCP tools) for real use.
+# Admin configuration for the SDLC example. Set it up with `azhi example install sdlc` (or the
+# Examples page), which fills in the settings (here and in workflow.yaml's config) and the
+# repositories below; `azhi apply` works too once the {{...}} values are replaced by hand.
+#
+# A run starts from a Jira ticket or a GitHub issue:
+#   jira    the ticket is read through a Jira MCP server (mcp-atlassian, started with `uvx`, in
+#           read-only mode with only its jira_get_issue tool enabled). Settings: jira_url,
+#           jira_username. Secret: jira-api-token (an Atlassian API token for that user).
+#   github  the issue is read with the GitHub API from one of the repositories named at install.
+#           Secret: github-read-token (fine-grained, read-only "Issues").
+# Only the secret for the source you use has to be set. CI results are fixture data; register your
+# CI (an HTTP or MCP tool) as ci.get-pipeline@1 for real use.
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID releases and send-backs are posted to (the bot must be in it).
+    placeholder: C0123ABCD
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address.
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the API token belongs to.
+    placeholder: you@example.com
 tools:
-  - id: tracker.get-ticket
+  - id: jira.get-issue
     version: 1
-    description: A ticket from the issue tracker (fixture data)
+    description: One Jira issue, read through a Jira MCP server (mcp-atlassian, read-only)
     effect: read
-    source: tracker
-    transport: {kind: builtin, name: fixture, config: {data: {"key": "PAY-142", "title": "Retry failed card payments once after a timeout", "description": "Card payments that time out at the processor are marked failed. Retry once after 2 s when the processor returns a timeout, never for declines. Show the retry in the payment history.", "priority": "high", "reporter": "support"}}}
-    input_schema: {type: object, properties: {key: {type: string}}, required: [key], additionalProperties: false}
-    output_schema: {type: object, properties: {key: {type: string}, title: {type: string}, description: {type: string}, priority: {type: string}, reporter: {type: string}}}
+    source: jira
+    credential: jira-api-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_get_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_get_issue}
+    timeout: 120s
+    input_schema: {type: object, properties: {issue_key: {type: string, pattern: "^[A-Z][A-Z0-9_]*-[0-9]+$"}}, required: [issue_key], additionalProperties: false}
+    output_schema: {type: object}
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: ticket.normalize
+    version: 1
+    description: A Jira or GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport: {kind: builtin, name: ticket.normalize}
+    input_schema: {type: object, properties: {source: {type: string, enum: [jira, github]}, issue: {type: object}}, required: [source, issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        source: {type: string}
+        key: {type: string}
+        title: {type: string}
+        description: {type: string}
+        priority: {type: string}
+        reporter: {type: string}
+        status: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+      required: [source, key, title, description]
   - id: ci.get-pipeline
     version: 1
     description: The CI pipeline result for a branch or ticket (fixture data)
@@ -20,3 +90,5 @@ tools:
 secrets:
   - slack-bot-token
   - anthropic-api-key
+  - jira-api-token
+  - github-read-token

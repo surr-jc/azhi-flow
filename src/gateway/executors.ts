@@ -3,8 +3,9 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, findPullRequestComment, flakyTests, incidents, pullRequest, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, findPullRequestComment, flakyTests, incidents, issue, pullRequest, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
+import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
 
 export interface ExecContext {
@@ -66,6 +67,17 @@ const builtin: Record<string, ToolExecutor> = {
     async lookup(spec, args, key, _since, ctx) {
       const hit = await findPullRequestComment(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
       return hit ? { value: hit } : null;
+    },
+  },
+  /** The SDLC example's intake: one GitHub issue, and any ticket in the shape its agents read. */
+  'github.issue': {
+    async call(spec, args, ctx) {
+      return { value: await issue(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'ticket.normalize': {
+    async call(_spec, args) {
+      return { value: normalizeTicket(args) };
     },
   },
   'slack.post-message': {
@@ -138,11 +150,16 @@ const mcpStdio: ToolExecutor = {
   async call(spec, args, ctx) {
     const t = spec.transport as Extract<ToolSpec['transport'], { kind: 'mcp-stdio' }>;
     const [command, ...cmdArgs] = t.command;
+    // Install-time settings (`{{jira_url}}`) the example install fills in; refuse to start without them.
+    const unset = [...new Set([...t.command, ...Object.values(t.env ?? {})].flatMap((v) => [...v.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]!)))];
+    if (unset.length) throw new SendError(`${spec.id} is missing the setting${unset.length > 1 ? 's' : ''} ${unset.join(', ')}: install the example again with ${unset.map((u) => `--set ${u}=...`).join(' ')} (or fill it in on the Examples page)`, true, ErrorClass.invalidInput);
+    const credentialEnv = t.credential_env ?? 'AZHI_TOOL_CREDENTIAL';
+    if (!/^[A-Z][A-Z0-9_]*$/.test(credentialEnv) || ['PATH', 'HOME'].includes(credentialEnv)) throw new AzhiError(ErrorClass.invalidInput, `${spec.id}: credential_env must be an upper-case variable name other than PATH or HOME`);
     const transport = new StdioClientTransport({
       command: command!,
       args: cmdArgs,
       cwd: t.cwd,
-      env: { PATH: process.env.PATH ?? '', ...(t.env ?? {}), ...(ctx.credential ? { AZHI_TOOL_CREDENTIAL: ctx.credential } : {}) },
+      env: { PATH: process.env.PATH ?? '', ...(t.env ?? {}), ...(ctx.credential ? { [credentialEnv]: ctx.credential } : {}) },
       stderr: 'ignore',
     });
     const client = new Client({ name: 'azhi-gateway', version: '0.1.0' });

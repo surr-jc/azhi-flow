@@ -1,27 +1,53 @@
 # Feature delivery across the SDLC: one ticket from intake to release and retro.
-# Agents draft (requirements, design, change plan, review); people decide at two gates; the
-# quality gate routes on test results and the review verdict. Ticket and CI data are fixture
-# tools here; point them at your tracker and CI (or MCP tools) for real use.
+# A run starts from a Jira ticket (read through a Jira MCP server) or a GitHub issue; the intake
+# step turns either into one plain ticket. Agents draft (requirements, design, change plan,
+# review); people decide at two gates; the quality gate routes on test results and the review
+# verdict. The ticket text is untrusted: agents treat it as data, and posts may only go to the
+# configured delivery channel. CI data is a fixture tool here.
 schema_version: "2.0"
 id: sdlc
 name: Feature delivery (SDLC)
-description: Requirements, design, design review, build, code review, tests, quality gate, release approval, release and retro for one ticket.
+description: Intake from a Jira ticket or GitHub issue, then requirements, design, design review, build, code review, tests, quality gate, release approval, release and retro.
 trigger:
   manual: true
 inputs:
   type: object
   properties:
-    ticket: {type: string, title: Ticket, description: "Tracker key, for example PAY-142"}
-  required: [ticket]
+    source: {type: string, title: Source, enum: [jira, github], description: "Where the ticket lives"}
+    ticket: {type: string, title: Ticket, maxLength: 300, description: "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"}
+  required: [source, ticket]
 config:
-  channel: C-DELIVERY
+  # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
+  channel: "{{slack_channel}}"
 nodes:
+  - id: source
+    type: condition
+    description: Read the ticket from Jira or from GitHub.
+    expression: inputs.source
+    routes: {jira: [jira_issue], github: [github_issue]}
+
+  - id: jira_issue
+    type: tool
+    description: Read the Jira ticket through the Jira MCP server.
+    tool: jira.get-issue@1
+    arguments: {issue_key: {ref: inputs.ticket}}
+
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {ref: inputs.ticket}}
+
   - id: intake
     type: tool
-    description: Read the ticket from the tracker.
-    tool: tracker.get-ticket@1
-    arguments: {key: {ref: inputs.ticket}}
-    project: [key, title, description, priority, reporter]
+    description: Turn the Jira ticket or GitHub issue into one plain ticket (key, title, description, priority, reporter).
+    tool: ticket.normalize@1
+    # Joins the two sources: runs after whichever one ran.
+    merge: any
+    arguments:
+      source: {ref: inputs.source}
+      issue: {cel: "inputs.source == 'jira' ? nodes.jira_issue.output : nodes.github_issue.output"}
+    project: [source, key, title, description, priority, reporter, status, labels, url]
 
   - id: requirements
     type: agent
@@ -43,7 +69,7 @@ nodes:
     type: approval
     description: A senior engineer approves the design before any build work.
     role: author
-    message: {cel: "'Approve the design for ' + inputs.ticket + ': ' + nodes.design.output.summary + '?'"}
+    message: {cel: "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.design.output.summary + '?'"}
     payload: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output}"}
     decision_schema: {type: object, properties: {notes: {type: string}}, additionalProperties: false}
     expires_in: 72h
@@ -71,7 +97,7 @@ nodes:
     description: Read the CI pipeline result for the change.
     tool: ci.get-pipeline@1
     depends_on: [build]
-    arguments: {ref: {ref: inputs.ticket}}
+    arguments: {ref: {ref: nodes.intake.output.key}}
     project: [status, passed, failed, coverage_pct]
 
   - id: quality_gate
@@ -85,7 +111,7 @@ nodes:
     type: approval
     description: The release owner approves the release.
     role: admin
-    message: {cel: "'Release ' + inputs.ticket + ' (' + nodes.intake.output.title + ')?'"}
+    message: {cel: "'Release ' + nodes.intake.output.key + ' (' + nodes.intake.output.title + ')?'"}
     payload: {map: "{'change': nodes.build.output.summary, 'review': nodes.code_review.output, 'tests': nodes.tests.output}"}
     expires_in: 24h
     on_expiry: reject
@@ -96,7 +122,7 @@ nodes:
     depends_on: [release_approval]
     channel: slack
     destination: {ref: config.channel}
-    message: {cel: "'Released ' + inputs.ticket + ': ' + nodes.build.output.summary"}
+    message: {cel: "'Released ' + nodes.intake.output.key + ': ' + nodes.build.output.summary"}
     # Taint gate (ADR-10): the agents read the ticket text, so posts may only go to the
     # configured delivery channel.
     guard: "args.channel == config.channel"
@@ -106,7 +132,7 @@ nodes:
     description: Send the change back with the reasons.
     channel: slack
     destination: {ref: config.channel}
-    message: {cel: "inputs.ticket + ' needs more work: ' + nodes.code_review.output.summary"}
+    message: {cel: "nodes.intake.output.key + ' needs more work: ' + nodes.code_review.output.summary"}
     guard: "args.channel == config.channel"
 
   - id: retro

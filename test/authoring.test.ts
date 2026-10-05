@@ -136,7 +136,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
     const page = await open('/ui/tools');
     await page.getByRole('button', { name: 'Register a tool' }).click();
     await page.getByRole('button', { name: 'Register tool' }).click();
-    await page.getByText('Saved tracker.get-ticket@1, revision 2.').waitFor();
+    await page.getByText('Saved tracker.get-ticket@1, revision 1.').waitFor();
 
     const spec = (await h.api.get<any[]>('/v1/tools')).find((t) => t.id === 'ci.list-runs');
     await page.getByRole('row', { name: new RegExp(`ci\\.list-runs@${spec.version}`) }).getByRole('button', { name: 'Change' }).click();
