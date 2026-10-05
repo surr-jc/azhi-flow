@@ -1,8 +1,8 @@
 import { CronExpressionParser } from 'cron-parser';
-import { compile } from '../compiler/compile.js';
+import { compile, type CompileResult } from '../compiler/compile.js';
 import type { ExecutionPlan } from '../compiler/plan.js';
 import { loadDefinitionText, type Diagnostic } from '../definition/load.js';
-import { packageFromFiles, type PackageManifest } from '../definition/package.js';
+import { packageFromFiles, type PackageManifest, type PackageSource } from '../definition/package.js';
 import type { WorkflowDefinition } from '../definition/types.js';
 import { newId } from '../lib/ids.js';
 import { audit, loadCatalog } from './catalog.js';
@@ -21,6 +21,24 @@ export interface VersionRow {
   signature: unknown;
 }
 
+/** Parses, validates and compiles a package against the workspace catalog without storing it. */
+export async function checkPackage(
+  ctx: AppContext,
+  workspaceId: string,
+  workflow: string,
+  files: Map<string, Buffer>,
+): Promise<{ ok: true; pkg: PackageSource; definition: WorkflowDefinition; compiled: CompileResult & { plan: ExecutionPlan } } | { ok: false; diagnostics: Diagnostic[] }> {
+  const pkg = packageFromFiles(workflow, files);
+  const loaded = loadDefinitionText(pkg.readText(workflow) ?? '');
+  if (!loaded.definition) return { ok: false, diagnostics: loaded.diagnostics };
+  const catalog = await loadCatalog(ctx, workspaceId);
+  // Dataset trust feeds taint analysis; unknown datasets are treated as trusted until they exist.
+  const trust = new Map((await ctx.pool.query(`SELECT name, trusted FROM datasets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => [r.name as string, r.trusted as boolean]));
+  const compiled = compile(loaded.definition, { pkg, catalog, datasets: (ref) => (trust.has(ref.split('@')[0]!) ? { trusted: trust.get(ref.split('@')[0]!)! } : undefined) });
+  if (!compiled.ok) return { ok: false, diagnostics: compiled.diagnostics };
+  return { ok: true, pkg, definition: loaded.definition, compiled: compiled as CompileResult & { plan: ExecutionPlan } };
+}
+
 /**
  * Stores an uploaded package: every file goes to the artifact store by content hash, the
  * definition is compiled against the workspace catalog, and a workflow version is created
@@ -33,14 +51,10 @@ export async function uploadPackage(
   actor: string,
 ): Promise<{ ok: true; version: VersionRow; diagnostics: Diagnostic[] } | { ok: false; diagnostics: Diagnostic[] }> {
   const files = new Map(Object.entries(upload.files).map(([p, b64]) => [p, Buffer.from(b64, 'base64')]));
-  const pkg = packageFromFiles(upload.workflow, files);
-  const loaded = loadDefinitionText(pkg.readText(upload.workflow) ?? '');
-  if (!loaded.definition) return { ok: false, diagnostics: loaded.diagnostics };
-  const catalog = await loadCatalog(ctx, workspaceId);
-  // Dataset trust feeds taint analysis; unknown datasets are treated as trusted until they exist.
-  const trust = new Map((await ctx.pool.query(`SELECT name, trusted FROM datasets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => [r.name as string, r.trusted as boolean]));
-  const compiled = compile(loaded.definition, { pkg, catalog, datasets: (ref) => (trust.has(ref.split('@')[0]!) ? { trusted: trust.get(ref.split('@')[0]!)! } : undefined) });
-  if (!compiled.ok) return { ok: false, diagnostics: compiled.diagnostics };
+  const checked = await checkPackage(ctx, workspaceId, upload.workflow, files);
+  if (!checked.ok) return checked;
+  const { pkg, definition, compiled } = checked;
+  const loaded = { definition };
 
   for (const data of files.values()) {
     const a = ctx.artifacts.put(data);

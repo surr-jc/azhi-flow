@@ -1,3 +1,4 @@
+import { budgetStatus, describeBudget } from '../server/budgets.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
 import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js';
@@ -188,6 +189,14 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     nodes.push(np);
   }
   if (!trust.signer) blockers.push({ code: 'worker_trust_denied', message: `package signature: ${trust.signatureError}` });
+
+  // Spend limits (operations): a workflow with model turns may not start once a limit it falls
+  // under is used up. Workflows without agent nodes spend nothing and are not held back.
+  if (plan.nodes.some((n) => n.type === 'agent')) {
+    for (const b of await budgetStatus(ctx, workspaceId, version.workflow_id)) {
+      if (b.exceeded) blockers.push({ code: 'budget_exceeded', message: `${describeBudget(b)} of ${b.currency} ${b.limit.toFixed(2)} is used up (${b.currency} ${b.spent.toFixed(2)} spent); it resets ${b.resets_at}` });
+    }
+  }
 
   const unique = new Map(blockers.map((b) => [`${b.code}:${b.node ?? ''}:${b.message}`, b]));
   const needsWorkers = plan.nodes.some((n) => n.type === 'script' || (n.type === 'parallel' && !n.tool));

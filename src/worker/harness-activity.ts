@@ -11,6 +11,7 @@ import type { BridgeState, BridgeTool } from '../agents/gateway-mcp.js';
 import { MAX_REPAIRS } from '../agents/model-agent.js';
 import { SUBMIT_TOOL } from '../agents/providers.js';
 import { ErrorClass } from '../lib/errors.js';
+import { killTree } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
@@ -253,13 +254,13 @@ async function stopProcess(proc: ChildProcess) {
   if (proc.exitCode !== null || proc.signalCode !== null) return;
   const exited = new Promise((r) => proc.once('exit', r));
   try {
-    process.kill(-proc.pid!, 'SIGTERM');
+    killTree(proc.pid!, 'SIGTERM');
   } catch {
     return;
   }
   const t = setTimeout(() => {
     try {
-      process.kill(-proc.pid!, 'SIGKILL');
+      killTree(proc.pid!, 'SIGKILL');
     } catch {
       /* already gone */
     }

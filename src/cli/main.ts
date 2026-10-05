@@ -224,7 +224,7 @@ program
 
 program
   .command('open')
-  .description('Print a link to the run page (or the runs list) that signs this browser tab in')
+  .description('Print a link to mission control (or one run) that signs this browser tab in')
   .argument('[run-id]')
   .action((runId: string | undefined) => {
     const cfg = resolveCliConfig(program.opts());
@@ -371,13 +371,29 @@ function collectDocuments(paths: string[]): Array<{ path: string; content: strin
   return out;
 }
 
+/**
+ * A secret piped on stdin. Windows PowerShell 5.1 pipes text to programs as UTF-16 or with a
+ * byte-order mark, which would end up inside the secret (and break HTTP headers), so both are undone.
+ */
+function readSecretStdin(): string {
+  const raw = readFileSync(0);
+  const utf16 = raw[0] === 0xff && raw[1] === 0xfe ? raw.subarray(2).toString('utf16le') : raw.length > 1 && raw[1] === 0 ? raw.toString('utf16le') : undefined;
+  const text = utf16 ?? raw.toString('utf8');
+  const strip = (s: string, code: number) => s.split(String.fromCharCode(code)).join('');
+  return strip(strip(text, 0xfeff), 0).trim();
+}
+
 const secret = program.command('secret').description('Manage workspace secrets');
 secret
   .command('set')
   .argument('<name>')
   .option('--value <value>', 'secret value (default: read from stdin)')
   .action(async (name: string, opts: { value?: string }) => {
-    const value = opts.value ?? readFileSync(0, 'utf8').trim();
+    const value = opts.value ?? readSecretStdin();
+    // API keys and tokens travel in HTTP headers, which reject control and non-ASCII characters.
+    // Report where they are (never the value) so a bad paste is caught here, not mid-run.
+    const odd = [...value].flatMap((c, i) => (c.charCodeAt(0) < 0x20 || c.charCodeAt(0) > 0x7e ? [`position ${i + 1}: U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`] : []));
+    if (odd.length) console.log(yellow(`warning: the value (${value.length} characters) contains characters an API key cannot have: ${odd.slice(0, 5).join(', ')}`));
     const r = await client().put<{ version: number }>(`/v1/secrets/${name}`, { value });
     console.log(`secret ${name} set (version ${r.version})`);
   });
@@ -442,6 +458,36 @@ program
       ok = false;
     }
     process.exitCode = ok ? 0 : 1;
+  });
+
+program
+  .command('up')
+  .description('Run Azhi on this machine without Docker: embedded database, Temporal dev server, server and a worker')
+  .option('--port <port>', 'web and API port (default: $AZHI_PORT or 7400)')
+  .option('--no-worker', 'do not start an execution worker')
+  .action(async (opts: { port?: string; worker: boolean }) => {
+    const { startLocal } = await import('../local/up.js');
+    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker });
+    console.log(`\n${green('Azhi is running')} at ${h.url}`);
+    console.log(`Web UI: ${h.url.replace(/\/$/, '')}/ui#token=${encodeURIComponent(h.token)}`);
+    console.log(dim(`Data in ${(await import('../local/up.js')).localHome()}. Stop with Ctrl+C or 'azhi down'.\n`));
+    let stopping = false;
+    const shutdown = async () => {
+      if (stopping) return;
+      stopping = true;
+      await h.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  });
+
+program
+  .command('down')
+  .description("Stop Azhi started with 'azhi up'")
+  .action(async () => {
+    const { stopLocal } = await import('../local/up.js');
+    console.log((await stopLocal()) ? 'stopped' : 'Azhi is not running locally');
   });
 
 const server = program.command('server').description('Run the Azhi server');

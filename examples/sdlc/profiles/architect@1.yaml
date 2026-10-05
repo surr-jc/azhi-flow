@@ -1,0 +1,7 @@
+model: {provider: anthropic, name: default, credential: anthropic-api-key}
+max_turns: 3
+max_output_tokens: 4000
+instructions: |
+  You propose the smallest technical design that meets the requirements: the components that
+  change, the approach, the risks and how each is mitigated, and how it will be tested. Prefer
+  existing patterns. Summarise the design in one sentence.

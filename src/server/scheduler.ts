@@ -1,4 +1,6 @@
 import { CronExpressionParser } from 'cron-parser';
+import { audit } from './catalog.js';
+import { transaction } from '../db/pool.js';
 import { createRun } from './runs.js';
 import type { AppContext } from './context.js';
 import { resolveVersion } from './workflows.js';
@@ -12,10 +14,8 @@ import { resolveVersion } from './workflows.js';
  */
 export function startScheduler(ctx: AppContext, interpreterBuild: string, log: (m: string) => void = () => {}, intervalMs = 5000) {
   let stopped = false;
-  const tick = async () => {
-    const c = await ctx.pool.connect();
-    try {
-      await c.query('BEGIN');
+  const tick = () =>
+    transaction(ctx.pool, async (c) => {
       const due = (
         await c.query(
           `SELECT s.id, s.workspace_id, s.cron, s.timezone, s.inputs, s.next_occurrence_at, w.slug FROM schedules s JOIN workflows w ON w.id = s.workflow_id
@@ -35,29 +35,30 @@ export function startScheduler(ctx: AppContext, interpreterBuild: string, log: (
         const next = CronExpressionParser.parse(s.cron, { tz: s.timezone, currentDate: occurrence }).next().toDate();
         const version = await resolveVersion(ctx, s.workspace_id, `${s.slug}@latest`);
         if (version) {
-          const r = await createRun(ctx, s.workspace_id, {
-            version,
-            inputs: s.inputs,
-            trigger: 'schedule',
-            createdBy: `schedule:${s.id}`,
-            referenceTime: occurrence,
-            occurrenceId: `${s.id}@${occurrence.toISOString()}`,
-            interpreterBuild,
-          });
-          log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} -> ${r.created ? 'started' : 'already started'} ${r.runId}`);
+          try {
+            const r = await createRun(ctx, s.workspace_id, {
+              version,
+              inputs: s.inputs,
+              trigger: 'schedule',
+              createdBy: `schedule:${s.id}`,
+              referenceTime: occurrence,
+              occurrenceId: `${s.id}@${occurrence.toISOString()}`,
+              interpreterBuild,
+            });
+            log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} -> ${r.created ? 'started' : 'already started'} ${r.runId}`);
+          } catch (err) {
+            // An occurrence refused by a spend limit is skipped, not retried; the schedule moves on.
+            // Anything else rolls the tick back and is retried, as before.
+            if ((err as { details?: { blockers?: Array<{ code: string }> } }).details?.blockers?.[0]?.code !== 'budget_exceeded') throw err;
+            log(`schedule ${s.id}: occurrence ${occurrence.toISOString()} refused: ${(err as Error).message}`);
+            await audit(ctx, s.workspace_id, `schedule:${s.id}`, 'schedule.occurrence_refused', { schedule: s.id, workflow: s.slug, occurrence: occurrence.toISOString(), reason: (err as Error).message });
+          }
         } else {
           log(`schedule ${s.id}: no published version of ${s.slug}`);
         }
         await c.query(`UPDATE schedules SET next_occurrence_at=$2 WHERE id=$1`, [s.id, next]);
       }
-      await c.query('COMMIT');
-    } catch (err) {
-      await c.query('ROLLBACK').catch(() => {});
-      log(`scheduler: ${(err as Error).message}`);
-    } finally {
-      c.release();
-    }
-  };
+    }).catch((err) => log(`scheduler: ${(err as Error).message}`));
   const timer = setInterval(() => void (stopped || tick()), intervalMs);
   void tick();
   return {

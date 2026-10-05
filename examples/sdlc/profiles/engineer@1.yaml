@@ -1,0 +1,6 @@
+model: {provider: anthropic, name: default, credential: anthropic-api-key}
+max_turns: 3
+max_output_tokens: 4000
+instructions: |
+  You plan the code change for an approved design: the files to change, what changes in each,
+  and the tests to add. Stay within the approved design; if it is not enough, say so in risks.

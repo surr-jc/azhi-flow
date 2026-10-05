@@ -39,8 +39,13 @@ Plan for the design.
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
-- A read-only web run page (`azhi open <run>`): graph, timeline, ledger, policy coverage, context
-  manifest and usage, updated live over SSE.
+- Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
+  decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
+  timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,
+  approving and cancelling go through the same API and role checks as the CLI. Workflows are
+  drawn as a graph, and authors can edit them on the canvas (add, link and change steps, checked
+  live by the compiler and run plan) and save a new draft version; publishing still needs a
+  signature. See [docs/mission-control-plan.md](docs/mission-control-plan.md).
 - A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
 
 ## Install
@@ -59,6 +64,29 @@ Common requirements: Git, Node.js 22+ and Docker with the Compose plugin. For sc
 [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on each worker host.
 Documented hardware, install timings and every `deploy/install.sh` option are in
 [docs/install.md](docs/install.md).
+
+### Local mode (no Docker, experimental)
+
+For one person on one machine, on Linux or native Windows (no WSL). `azhi up` runs an embedded
+PostgreSQL (PGlite), Temporal's single-binary dev server (downloaded once into `~/.azhi/bin`,
+checksum-verified), the server and a worker in one process, with all state under `~/.azhi`
+(`%USERPROFILE%\.azhi` on Windows). Needs only Git and Node.js 22+, plus Python for script nodes.
+The same commands work in bash and PowerShell:
+
+```bash
+git clone -b dev https://github.com/surr-jc/azhi-flow
+cd azhi-flow
+npm ci
+npx azhi up              # prints the web UI link; Ctrl+C or `npx azhi down` to stop
+```
+
+In another terminal, `npx azhi` commands find the local server without `azhi login`, unless
+`AZHI_URL`/`AZHI_TOKEN` or a saved login points elsewhere. If 7400 is taken, run
+`npx azhi up --port 7410` and point the other commands at it (`export AZHI_URL=http://127.0.0.1:7410`
+in bash, `$env:AZHI_URL = "http://127.0.0.1:7410"` in PowerShell). Set the model the same way
+(`AZHI_ANTHROPIC_MODEL`) before `azhi up`. Limits: a single-writer database, no second server
+process on the same data, and script memory limits only on Linux. macOS is not yet tested; see
+[docs/local-mode-plan.md](docs/local-mode-plan.md).
 
 ### Linux
 
@@ -130,6 +158,7 @@ Requirements are the same as above.
 
 ```bash
 npm install
+npm run build:web        # the web app; rerun after pulling changes to web/
 
 # 1. PostgreSQL + Temporal
 docker compose -f deploy/docker-compose.yml up -d --wait
@@ -176,7 +205,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 
 | Command | What it does |
 |---------|--------------|
-| `azhi init [dir] [-t template]` | Create a package from a template (default: the quality report) |
+| `azhi init [dir] [-t template]` | Create a package from a template: `quality-report` (default), `ci-digest` or `sdlc` (feature delivery with design and release gates) |
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
 | `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |
@@ -194,7 +223,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi server start [--roles ...]`, `azhi server migrate` | Run the server; roles: `api,interpreter,gateway,scheduler` |
 | `azhi worker start` | Run an execution worker on this host |
 | `azhi login --url --token` | Save credentials for a remote server |
-| `azhi open [run]` | Print a link to the web run page that signs the browser tab in |
+| `azhi open [run]` | Print a link to mission control (or one run) that signs the browser tab in |
 
 ## Tests
 

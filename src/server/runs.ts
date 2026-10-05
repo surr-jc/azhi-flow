@@ -65,6 +65,11 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   // the coverage this run actually had, not whatever the workers look like later.
   const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal));
 
+  // Spend limits hold back every trigger, scheduled runs included; test runs are exempt like
+  // other plan blockers, since `azhi test-node` is how authors debug.
+  const overBudget = plan.blockers.find((b) => b.code === 'budget_exceeded');
+  if (overBudget && !o.test) throw new AzhiError(ErrorClass.unsupportedCapability, `refused: ${overBudget.message}`, { blockers: [overBudget] });
+
   const runId = newId('run');
   const snapshot: RunSnapshot = {
     reference_time: (o.referenceTime ?? new Date()).toISOString(),

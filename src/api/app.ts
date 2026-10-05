@@ -25,6 +25,8 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerEditorRoutes } from './editor.js';
+import { registerMissionRoutes } from './mission.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -73,6 +75,8 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   const notFound = (what: string) => new AzhiError(ErrorClass.invalidInput, `${what} not found`);
 
   registerWebRoutes(app);
+  registerMissionRoutes(app, ctx);
+  registerEditorRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -212,13 +216,21 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
 
   app.get('/v1/runs', async (req) => {
     const p = user(req);
-    const q = z.object({ limit: z.coerce.number().int().min(1).max(200).default(20) }).parse(req.query);
+    const q = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(20),
+        state: z.string().optional(),
+        workflow: z.string().optional(),
+        before: z.string().datetime({ offset: true }).optional(),
+      })
+      .parse(req.query);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-         WHERE r.workspace_id=$1 ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit],
+         WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+         ORDER BY r.created_at DESC LIMIT $2`,
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null],
       )
     ).rows;
   });
