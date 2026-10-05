@@ -7,6 +7,7 @@ import { byteSize } from '../lib/json.js';
 import { signRunToken } from '../security/tokens.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
+import { postApprovalToSlack } from '../server/approvals.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
 import type { GatewayActivities, NotifyNodeInput, RecordRunPatch, ReportNodeInput, ToolNodeInput } from './activity-types.js';
 import { toFailure } from './activity-errors.js';
@@ -296,6 +297,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         nodeId,
         JSON.stringify(output),
       ]);
+      await postApprovalToSlack(ctx, workspaceId, runId, nodeId, request);
     },
 
     async recordApproval(runId, workspaceId, nodeId, d) {

@@ -27,6 +27,9 @@ import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerMissionRoutes } from './mission.js';
+import { decideApproval } from '../server/approvals.js';
+import { isAuthPath, registerTeamRoutes } from './team.js';
+import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -64,7 +67,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url)) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url === SLACK_INTERACTIONS) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -77,6 +80,8 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerWebRoutes(app);
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
+  registerTeamRoutes(app, ctx);
+  registerSlackRoutes(app, ctx, temporal);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -171,18 +176,29 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/users', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
-    const b = z.object({ display_name: z.string(), email: z.string().optional(), role: z.enum(['admin', 'author', 'operator', 'viewer']) }).parse(req.body);
+    // `token: false` invites someone who will sign in with SSO (claimed by their verified email).
+    const b = z
+      .object({ display_name: z.string(), email: z.string().optional(), role: z.enum(['admin', 'author', 'operator', 'viewer']), token: z.boolean().default(true) })
+      .parse(req.body);
+    if (b.role === 'admin' && p.role !== 'owner') throw new AzhiError(ErrorClass.authorization, 'only the owner can make admins');
     const id = newId('usr');
     await ctx.pool.query(`INSERT INTO users(id, workspace_id, email, display_name, role) VALUES ($1,$2,$3,$4,$5)`, [id, p.workspaceId, b.email ?? null, b.display_name, b.role]);
-    const t = newApiToken();
-    await ctx.pool.query(`INSERT INTO api_tokens(id, workspace_id, user_id, name, token_hash) VALUES ($1,$2,$3,$4,$5)`, [newId('tok'), p.workspaceId, id, b.display_name, t.hash]);
-    await audit(ctx, p.workspaceId, p.userId, 'user.created', { user: id, role: b.role });
-    return { id, role: b.role, token: t.token };
+    const t = b.token ? newApiToken() : undefined;
+    if (t) await ctx.pool.query(`INSERT INTO api_tokens(id, workspace_id, user_id, name, token_hash) VALUES ($1,$2,$3,$4,$5)`, [newId('tok'), p.workspaceId, id, b.display_name, t.hash]);
+    await audit(ctx, p.workspaceId, p.userId, 'user.created', { user: id, role: b.role, email: b.email ?? null });
+    return { id, role: b.role, token: t?.token };
   });
 
   app.get('/v1/users', async (req) => {
     const p = user(req);
-    return (await ctx.pool.query(`SELECT id, display_name, email, role, created_at FROM users WHERE workspace_id=$1 ORDER BY created_at`, [p.workspaceId])).rows;
+    return (
+      await ctx.pool.query(
+        `SELECT u.id, u.display_name, u.email, u.role, u.created_at, u.disabled_at, u.slack_user_id, u.oidc_subject IS NOT NULL AS sso,
+           (SELECT count(*)::int FROM api_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL) AS tokens
+         FROM users u WHERE u.workspace_id=$1 ORDER BY u.created_at`,
+        [p.workspaceId],
+      )
+    ).rows;
   });
 
   // Runs
@@ -222,15 +238,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         state: z.string().optional(),
         workflow: z.string().optional(),
         before: z.string().datetime({ offset: true }).optional(),
+        since: z.string().datetime({ offset: true }).optional(),
+        // Text found in the run's inputs, or the start of its id.
+        q: z.string().trim().min(1).max(200).optional(),
       })
       .parse(req.query);
+    const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+           AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
          ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null],
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null],
       )
     ).rows;
   });
@@ -344,25 +365,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const p = user(req);
     const { id } = req.params as { id: string };
     const b = z.object({ node: z.string(), decision: z.enum(['approved', 'rejected']), data: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
-    const row = (
-      await ctx.pool.query(`SELECT r.state, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [id, p.workspaceId])
-    ).rows[0];
-    if (!row) throw notFound('run');
-    const node = (row.plan as ExecutionPlan).nodes.find((n) => n.id === b.node);
-    if (!node || node.type !== 'approval') throw new AzhiError(ErrorClass.invalidInput, `run ${id} has no approval node '${b.node}'`);
-    const def = node.def as ApprovalNode;
-    requireRole(p, (def.role ?? 'operator') as Role);
-    if (b.decision === 'approved' && def.decision_schema) {
-      const validate = ajv.compile(def.decision_schema);
-      if (!validate(b.data)) throw new AzhiError(ErrorClass.invalidInput, `decision data does not match the decision schema: ${ajv.errorsText(validate.errors)}`);
-    }
-    const decided = (await ctx.pool.query(`SELECT decision FROM approvals WHERE run_id=$1 AND node_id=$2`, [id, b.node])).rows[0];
-    if (decided) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' was already decided: ${decided.decision}`);
-    const requested = (await ctx.pool.query(`SELECT 1 FROM run_events WHERE run_id=$1 AND node_id=$2 AND kind='approval.requested'`, [id, b.node])).rowCount;
-    if (!requested || TERMINAL_STATES.includes(row.state)) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' is not waiting for a decision (run is ${row.state})`);
-    if (!temporal) throw new AzhiError(ErrorClass.transient, 'not connected to Temporal');
-    await temporal.workflow.getHandle(id).signal('approval', { node: b.node, decision: b.decision, by: p.userId, at: new Date().toISOString(), data: b.data });
-    await audit(ctx, p.workspaceId, p.userId, 'approval.submitted', { run: id, node: b.node, decision: b.decision });
+    await decideApproval(ctx, temporal, p, id, b);
     return reply.status(202).send({ ok: true });
   });
 

@@ -1,7 +1,7 @@
 # Mission control: the Azhi Flow web app
 
-Status: increments 1, 2 and 3 and the visual editor built on branch `mission-control`
-(2026-10-04/05). Suresh picked Operations as increment 2. Next: increment 4 (team and channels). Written 2026-10-04. Owner: Suresh.
+Status: increments 1 to 4 and the visual editor built on branch `mission-control`
+(2026-10-04/05). Suresh picked Operations as increment 2. Increment 4 (team and channels) built 2026-10-05. Written 2026-10-04. Owner: Suresh.
 
 ## Goal
 
@@ -33,7 +33,7 @@ Electron around `azhi up`) both show this same app.
 | Screen | Shows | Actions |
 |---|---|---|
 | **Overview** (mission control) | Runs now: running, waiting, queued. Last 24 h: succeeded, failed, delivery failed. Approvals waiting on you. Workers online. Model spend today and 7 days. Alerts. Next scheduled runs. Recent runs. | Jump to anything below |
-| **Runs** | All runs, filter by state and workflow, paged | Open a run |
+| **Runs** | All runs, filter by state, workflow, input text and date, paged | Open or cancel a run |
 | **Run** | Today's run page: graph, timeline, ledger, policy coverage, context manifest, usage, live over SSE | Cancel; approve or reject a waiting approval in place |
 | **Approvals** | Every approval waiting for a decision: workflow, run, message, payload, who may decide, expiry | Approve (with decision data from the schema) or reject |
 | **Workflows** | Each workflow: latest and published version, signed or not, schedule, last run | Open |
@@ -117,8 +117,18 @@ Monaco in the first release. Mission control follows it:
    (create, add Markdown or text documents, publish a revision with a tag, revoke a document;
    `GET /v1/datasets/:name` honours the dataset ACL); tools (register, or change one as a new
    revision; admin). All writes are the existing endpoints.
-4. **Team and channels.** Sign in with OIDC in the browser (PKCE) instead of pasting a token,
-   user and role management, Slack approval buttons (Phase 4 item 5).
+4. **Team and channels** (built 2026-10-05). Browser sign-in with OIDC: authorization code with
+   PKCE, exchanged by the server (`/v1/auth/login`, `/v1/auth/callback`; verifier, state and nonce
+   in a signed 10-minute cookie scoped to `/v1/auth`), handing the issuer's JWT to the tab in the
+   URL fragment like `azhi open`, so the server keeps no sessions. Users page (admin): invite by
+   email (claimed on first sign-in with a verified email, with the given role), change roles,
+   disable, issue and revoke API tokens, link a Slack user; nobody changes their own role, the
+   owner is never changed, and only the owner makes or changes admins (migration
+   `0004_team.sql`). Slack approval buttons: with an approvals channel set (Approvals page),
+   each waiting approval is posted once with Approve and Reject buttons; clicks arrive at
+   `/v1/slack/interactions`, are verified with the `slack-signing-secret` secret, and count only
+   for a linked, enabled user, through the same role, schema and first-decision checks as the
+   API (`src/server/approvals.ts`).
 5. **Visual editor** (React Flow). Step 1 built (2026-10-05, asked for by Suresh): the read-only
    workflow canvas (`web/src/components/WorkflowCanvas.tsx`) on the workflow and run pages, with
    live node states, approval gates, condition routes and node details, and the SDLC example
@@ -134,6 +144,10 @@ Monaco in the first release. Mission control follows it:
    block is). Publishing still needs a publisher signature (`azhi publish`); signing in the
    browser is a later decision. `GET /v1/versions/:ref/source` returns the package's text files
    (the start of the definition viewer).
+
+Smaller additions (2026-10-05): cancel a run from the runs list (operator), search runs by text
+in their inputs or the start of the run id and by date (`GET /v1/runs?q=&since=&before=`), and a
+theme switch (system, light, dark; kept in the browser).
 
 ## Out of scope for now
 

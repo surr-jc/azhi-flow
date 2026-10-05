@@ -42,7 +42,7 @@ export async function bootstrapLocal(ctx: AppContext): Promise<{ token?: string;
   return { token, tokenFile };
 }
 
-let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
+const jwksByIssuer = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 export async function authenticate(ctx: AppContext, header: string | undefined): Promise<Principal> {
   const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
@@ -56,7 +56,7 @@ export async function authenticate(ctx: AppContext, header: string | undefined):
 
   if (token.startsWith('azhi_')) {
     const r = await ctx.pool.query(
-      `SELECT t.workspace_id, u.id AS user_id, u.role FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL`,
+      `SELECT t.workspace_id, u.id AS user_id, u.role FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND u.disabled_at IS NULL`,
       [hashApiToken(token)],
     );
     const row = r.rows[0];
@@ -64,21 +64,42 @@ export async function authenticate(ctx: AppContext, header: string | undefined):
     return { kind: 'user', workspaceId: row.workspace_id, userId: row.user_id, role: row.role };
   }
 
-  if (ctx.settings.authMode !== 'oidc' || !ctx.settings.oidcIssuer) throw new AzhiError(ErrorClass.authorization, 'unrecognised token');
+  // OIDC bearer tokens are accepted whenever an issuer is configured, alongside API tokens.
+  if (!ctx.settings.oidcIssuer) throw new AzhiError(ErrorClass.authorization, 'unrecognised token');
   const issuer = ctx.settings.oidcIssuer;
+  let jwks = jwksByIssuer.get(issuer);
   if (!jwks) {
     const meta = (await (await fetch(`${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`)).json()) as { jwks_uri: string };
     jwks = createRemoteJWKSet(new URL(meta.jwks_uri));
+    jwksByIssuer.set(issuer, jwks);
   }
   const { payload } = await jwtVerify(token, jwks, { issuer, audience: ctx.settings.oidcAudience }).catch((e) => {
     throw new AzhiError(ErrorClass.authorization, `invalid OIDC token: ${(e as Error).message}`);
   });
   const workspaceId = (process.env.AZHI_OIDC_WORKSPACE ?? LOCAL_WORKSPACE) as string;
   await ctx.pool.query(`INSERT INTO workspaces(id, name) VALUES ($1,$1) ON CONFLICT DO NOTHING`, [workspaceId]);
-  const found = await ctx.pool.query(`SELECT id, role FROM users WHERE workspace_id=$1 AND oidc_issuer=$2 AND oidc_subject=$3`, [workspaceId, issuer, payload.sub]);
-  if (found.rows[0]) return { kind: 'user', workspaceId, userId: found.rows[0].id, role: found.rows[0].role };
-  // First OIDC user of a workspace becomes its owner; later users start as viewers.
-  const anyUser = await ctx.pool.query(`SELECT 1 FROM users WHERE workspace_id=$1 AND oidc_subject IS NOT NULL LIMIT 1`, [workspaceId]);
+  const found = await ctx.pool.query(`SELECT id, role, disabled_at FROM users WHERE workspace_id=$1 AND oidc_issuer=$2 AND oidc_subject=$3`, [workspaceId, issuer, payload.sub]);
+  const disabled = () => new AzhiError(ErrorClass.authorization, 'this user is disabled');
+  if (found.rows[0]) {
+    if (found.rows[0].disabled_at) throw disabled();
+    return { kind: 'user', workspaceId, userId: found.rows[0].id, role: found.rows[0].role };
+  }
+  // An invited user (created by an admin with this email) is claimed on first sign-in, with the
+  // role the admin gave; only a verified email can claim one.
+  if (typeof payload.email === 'string' && payload.email_verified === true) {
+    const invited = await ctx.pool.query(
+      `UPDATE users SET oidc_issuer=$3, oidc_subject=$4, display_name=COALESCE(display_name, $5)
+       WHERE id = (SELECT id FROM users WHERE workspace_id=$1 AND lower(email)=lower($2) AND oidc_subject IS NULL ORDER BY created_at LIMIT 1)
+       RETURNING id, role, disabled_at`,
+      [workspaceId, payload.email, issuer, payload.sub, payload.name ?? null],
+    );
+    if (invited.rows[0]) {
+      if (invited.rows[0].disabled_at) throw disabled();
+      return { kind: 'user', workspaceId, userId: invited.rows[0].id, role: invited.rows[0].role };
+    }
+  }
+  // The first user of a new workspace becomes its owner; anyone else not invited starts as a viewer.
+  const anyUser = await ctx.pool.query(`SELECT 1 FROM users WHERE workspace_id=$1 LIMIT 1`, [workspaceId]);
   const role: Role = anyUser.rowCount ? 'viewer' : 'owner';
   const id = newId('usr');
   await ctx.pool.query(`INSERT INTO users(id, workspace_id, email, display_name, oidc_issuer, oidc_subject, role) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [
