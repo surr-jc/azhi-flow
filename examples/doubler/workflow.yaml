@@ -1,0 +1,15 @@
+# Child workflow for the subworkflow demo: doubles a number. Publish it first (azhi publish examples/doubler).
+schema_version: "2.0"
+id: doubler
+name: Doubler
+inputs:
+  type: object
+  properties: {x: {type: integer}}
+  required: [x]
+nodes:
+  - id: double
+    type: script
+    runtime: python
+    entrypoint: scripts/double.py
+    input: {map: "{'x': inputs.x}"}
+    output_schema: {type: object, properties: {doubled: {type: integer}}, required: [doubled]}

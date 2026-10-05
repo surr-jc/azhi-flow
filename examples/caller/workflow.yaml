@@ -1,0 +1,19 @@
+# Subworkflow demo: runs the published `doubler` workflow as a child run, then adds one to its result.
+schema_version: "2.0"
+id: caller
+name: Caller
+inputs:
+  type: object
+  properties: {x: {type: integer}}
+  required: [x]
+nodes:
+  - id: child
+    type: subworkflow
+    workflow: doubler
+    input: {x: {ref: inputs.x}}
+  - id: plus_one
+    type: script
+    runtime: python
+    entrypoint: scripts/inc.py
+    input: {map: "{'n': nodes.child.output.nodes.double.doubled}"}
+    output_schema: {type: object, properties: {n: {type: integer}}, required: [n]}

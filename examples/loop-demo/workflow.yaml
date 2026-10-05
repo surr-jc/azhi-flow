@@ -1,0 +1,20 @@
+# Loop demo: add 1 to a counter until it reaches the target (no model, no secrets).
+schema_version: "2.0"
+id: loop-demo
+name: Loop demo
+inputs:
+  type: object
+  properties: {target: {type: integer}}
+  required: [target]
+nodes:
+  - id: count
+    type: loop
+    initial: {n: 0}
+    max_iterations: 10
+    exit: "state.n >= inputs.target"
+    node:
+      type: script
+      runtime: python
+      entrypoint: scripts/inc.py
+      input: {map: "{'n': state.n}"}
+      output_schema: {type: object, properties: {n: {type: integer}}, required: [n]}
