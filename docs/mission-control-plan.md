@@ -1,7 +1,7 @@
 # Mission control: the Azhi Flow web app
 
-Status: increments 1 and 2 built on branch `mission-control` (2026-10-04). Suresh picked
-Operations as increment 2. Next: increment 3 (authoring) unless Suresh says otherwise. Written 2026-10-04. Owner: Suresh.
+Status: increments 1, 2 and 3 and the visual editor built on branch `mission-control`
+(2026-10-04/05). Suresh picked Operations as increment 2. Next: increment 4 (team and channels). Written 2026-10-04. Owner: Suresh.
 
 ## Goal
 
@@ -41,7 +41,7 @@ Electron around `azhi up`) both show this same app.
 | **Schedules** | Cron, timezone, next occurrence, enabled, last occurrence's run | Enable or disable |
 | **Workers** | Name, online/offline, last heartbeat, task queue, capabilities, trust policy | — |
 | **Secrets** | Name, version, last changed (never values) | Set a new value (write-only) |
-| **Datasets** | Name, trusted, published revision, tags, documents | — (increment 3: upload and publish) |
+| **Datasets** | Name, trusted, published revision, tags, documents | Create; add and revoke documents; publish a revision |
 | **Tools** | Tool catalog: id, version, effect, trusted output | — |
 | **Usage** | Spend and tokens by day and by workflow, with completeness | — |
 | **Audit** | Audit log: who changed secrets, published, approved, changed schedules or trust policies | — |
@@ -109,8 +109,14 @@ Monaco in the first release. Mission control follows it:
    schedules, workers, secrets (names and set value), health. New endpoints above.
 2. **Operations** (built). Usage and cost dashboard, audit log, alerts with history and Slack
    delivery, spend limits, tools and datasets views, run again with the same inputs.
-3. **Authoring.** Upload a package, view the definition (Monaco, read-only first), publish with
-   the signature check, dataset upload and publish, schedule editing.
+3. **Authoring** (built 2026-10-05). Upload a package folder from the browser
+   (`/ui/workflows/upload`, filtered like `azhi publish`, saved as an unsigned draft with the
+   compiler's findings shown when it is refused); the files of each version (read-only viewer);
+   publish a signed draft (unsigned drafts point to `azhi publish`, since the browser holds no
+   publisher key); a workflow's schedule (cron, timezone, inputs, on/off; admin); datasets
+   (create, add Markdown or text documents, publish a revision with a tag, revoke a document;
+   `GET /v1/datasets/:name` honours the dataset ACL); tools (register, or change one as a new
+   revision; admin). All writes are the existing endpoints.
 4. **Team and channels.** Sign in with OIDC in the browser (PKCE) instead of pasting a token,
    user and role management, Slack approval buttons (Phase 4 item 5).
 5. **Visual editor** (React Flow). Step 1 built (2026-10-05, asked for by Suresh): the read-only

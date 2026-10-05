@@ -117,7 +117,7 @@ export function formValues(schema: JsonSchema | null | undefined, raw: Record<st
   return out;
 }
 
-export function SchemaFields({ schema, values, onChange }: { schema: JsonSchema | null | undefined; values: Record<string, string | boolean>; onChange: (v: Record<string, string | boolean>) => void }) {
+export function SchemaFields({ schema, values, onChange, idPrefix = 'f' }: { schema: JsonSchema | null | undefined; values: Record<string, string | boolean>; onChange: (v: Record<string, string | boolean>) => void; idPrefix?: string }) {
   const props = Object.entries(schema?.properties ?? {});
   if (!props.length) return <p className="muted">This takes no inputs.</p>;
   const set = (k: string, v: string | boolean) => onChange({ ...values, [k]: v });
@@ -126,7 +126,7 @@ export function SchemaFields({ schema, values, onChange }: { schema: JsonSchema 
       {props.map(([name, p]) => {
         const t = typeOf(p);
         const required = schema?.required?.includes(name);
-        const id = `f-${name}`;
+        const id = `${idPrefix}-${name}`;
         const label = (
           <label htmlFor={id}>
             {p.title ?? name}
