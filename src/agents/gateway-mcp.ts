@@ -5,7 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { canonicalJson, sha256 } from '../lib/hash.js';
 import { ApiClient } from '../worker/api-client.js';
-import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './model-agent.js';
+import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { SUBMIT_TOOL } from './providers.js';
 
 /**

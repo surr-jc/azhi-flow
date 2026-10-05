@@ -15,7 +15,7 @@ export interface OpencodeSetup {
   agent: string;
   command?: string;
   tools: Record<string, boolean>;
-  mcp: Record<string, { type: 'local'; command: string[]; environment: Record<string, string>; enabled: true }>;
+  mcp: Record<string, { type: 'local'; command: string[]; environment: Record<string, string>; timeout: number; enabled: true }>;
 }
 
 const BUILT_IN_AGENTS = new Set(['build', 'plan', 'general', 'explore', 'compaction', 'summary', 'title']);
@@ -91,7 +91,7 @@ export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; conf
     // OpenCode starts MCP servers with its own environment added, which holds the model sign-in (OPENCODE_AUTH_CONTENT)
     // and its server password; `env -u` takes them out before the package's server starts (Linux and macOS).
     const scrubbed = ['/usr/bin/env', ...OPENCODE_PRIVATE_ENV.flatMap((k) => ['-u', k]), ...resolved];
-    mcp[name] = { type: 'local', command: scrubbed, environment: { ...env, ...(m.environment ?? {}), ...(o.workspace ? { AZHI_WORKSPACE: o.workspace } : {}) }, enabled: true };
+    mcp[name] = { type: 'local', command: scrubbed, environment: { ...env, ...(m.environment ?? {}), ...(o.workspace ? { AZHI_WORKSPACE: o.workspace } : {}) }, timeout: 120_000, enabled: true };
     tools[`${name}_*`] = true;
   }
   return { agent, ...(command ? { command } : {}), tools, mcp };

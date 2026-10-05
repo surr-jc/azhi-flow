@@ -109,7 +109,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
       mkdirSync(home);
       mkdirSync(configDir);
       const stateFile = join(root, 'bridge-state.json');
-      const bin = fileURLToPath(new URL('../../bin/azhi.js', import.meta.url));
+      const bridgeBin = fileURLToPath(new URL('../../bin/azhi-gateway-mcp.js', import.meta.url));
       const started = Date.now();
       const hb = setInterval(() => ctx.heartbeat(), 5000);
       let proc: ChildProcess | undefined;
@@ -151,7 +151,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             mcp: {
               [MCP_NAME]: {
                 type: 'local',
-                command: [process.execPath, bin, 'gateway-mcp'],
+                command: [process.execPath, bridgeBin],
+                // OpenCode gives an MCP server 30 s to connect by default; the first start of a slow or scanned machine can need longer.
+                timeout: MCP_CONNECT_MS,
                 environment: {
                   AZHI_URL: o.api.baseUrl,
                   AZHI_RUN_TOKEN: input.runToken,
@@ -252,7 +254,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           directory: project,
           headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
         } as Parameters<typeof createOpencodeClient>[0]);
-        await step('bridge', () => waitForBridge(client, [MCP_NAME, ...Object.keys(setup?.mcp ?? {})], 15_000));
+        await step('bridge', () => waitForBridge(client, [MCP_NAME, ...Object.keys(setup?.mcp ?? {})], MCP_CONNECT_MS + 10_000));
         // The model must be one OpenCode offers for this provider; for Copilot that is the list your Copilot plan enables.
         const offered = (await step('providers', () => client.config.providers(), true)).data?.providers.find((p) => p.id === providerID);
         if (!offered?.models[input.model]) {
@@ -364,6 +366,9 @@ function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {
     });
   });
 }
+
+/** How long OpenCode may take to start the bridge and each MCP server. */
+const MCP_CONNECT_MS = 120_000;
 
 /** Waits until the gateway bridge and the profile's MCP servers are connected. */
 async function waitForBridge(client: ReturnType<typeof createOpencodeClient>, names: string[], timeoutMs: number) {

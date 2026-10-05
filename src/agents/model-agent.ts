@@ -13,6 +13,7 @@ import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
+import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
@@ -25,8 +26,7 @@ import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider,
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 (addFormats as unknown as (a: Ajv2020) => void)(ajv);
 
-export const MAX_REPAIRS = 2;
-export const MAX_REPEATED_FAILURES = 2;
+export { MAX_REPAIRS, MAX_REPEATED_FAILURES };
 
 const PLATFORM_RULES = `You are one agent node in an Azhi Flow workflow.
 - Numbers in your input come from scripts and tools and are authoritative. Quote them; never recalculate or change them.

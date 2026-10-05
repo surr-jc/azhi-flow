@@ -189,6 +189,10 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   `(OpenCode log: ~/.azhi/logs/opencode/<run>-<step>-<time>.log)`. The step's own folder is deleted
   when the step ends, so that saved copy is the only one. `ls -t ~/.azhi/logs/opencode | head` lists
   the newest; `grep -h err_XXXX ~/.azhi/logs/opencode/*.log` finds an error reference.
+- `gateway bridge did not connect to opencode: ... Operation timed out after 30000ms` (older builds):
+  OpenCode gives its MCP servers 30 seconds to start, and on a slow or virus-scanned machine the
+  first start of Azhi's bridge took longer. The bridge now loads only what it needs and is given
+  120 seconds; update (`git pull && npm ci`), restart `azhi up` and run again.
 - Azhi's own server and worker messages are in the window running `azhi up`.
 
 For a GitHub step:
