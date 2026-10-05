@@ -96,6 +96,25 @@ for the models, and two GitHub tokens:
 - `github-read-token`: fine-grained, read-only **Contents** and **Pull requests** on the repository.
 - `github-comment-token`: **Pull requests: write**, used only by the approved comment step.
 
+For a repository owned by an organization, the tokens must be made for that organization:
+
+- Fine-grained token: set **Resource owner** to the organization (not your account), then pick the
+  repository. If the organization requires approval, the token stays pending until an owner
+  approves it (Organization settings > Personal access tokens > Pending requests). If the
+  organization does not offer itself as a resource owner, it has turned fine-grained tokens off.
+- Classic token instead (when the organization allows only those): scope `repo`, then
+  **Configure SSO** > **Authorize** next to the organization if it uses SAML single sign-on.
+- With Enterprise Managed Users, create the tokens while signed in as your managed (`_shortcode`)
+  account; a personal account cannot reach the organization's repositories.
+
+Check a token before saving it: `curl -s -H "Authorization: Bearer $TOKEN" https://api.github.com/repos/OWNER/REPO`
+returns the repository's JSON, not `Not Found`.
+
+On GitHub Enterprise Server or a GHE.com subdomain, give the API address at Install (*GitHub
+Enterprise* on the Examples card, or `--api-url https://HOST/api/v3`). Install then also points the
+checkouts at that host; *Git address* (`--git-url`) sets a different clone host. A server on a
+private address also needs `AZHI_EGRESS_ALLOW=HOST` when starting Azhi.
+
 ### GitHub Copilot models
 
 The profiles say `model: {provider: github-copilot, name: default, credential: github-copilot-token}`.
@@ -120,7 +139,7 @@ Setup needs no file editing; do it from either place.
 **Web UI** (Mission Control, admin role):
 
 1. **Examples** → *Pull request review (OpenCode)*: type the repositories its GitHub tools may use
-   (`owner/name`; GitHub Enterprise: open *GitHub Enterprise Server* and give the API address),
+   (`owner/name`; GitHub Enterprise: open *GitHub Enterprise* and give the API address),
    then **Install**. This registers both GitHub tools with those repositories, saves the package as
    a draft and signs it with a publisher key made in this browser (WebCrypto Ed25519, kept
    non-extractable in IndexedDB, certified once by the workspace root).
@@ -132,7 +151,7 @@ Setup needs no file editing; do it from either place.
 
 ```
 azhi example list
-azhi example install pr-review --repo OWNER/REPO        # --repo again for more; --api-url for GHE
+azhi example install pr-review --repo OWNER/REPO        # --repo again for more; --api-url (and --git-url) for GHE
 azhi copilot login                                       # shows a code for github.com/login/device
 azhi secret set github-read-token
 azhi secret set github-comment-token

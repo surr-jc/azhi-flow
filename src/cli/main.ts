@@ -308,12 +308,13 @@ example
   .description('Register the example\'s tools, save it as a signed draft and list the secrets it needs')
   .argument('<id>', 'example id, for example pr-review')
   .option('--repo <owner/name>', 'repository its GitHub tools may use; repeatable', collect)
-  .option('--api-url <url>', 'GitHub Enterprise Server API, for example https://ghe.example.com/api/v3')
-  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string }) => {
+  .option('--api-url <url>', 'GitHub Enterprise API, for example https://ghe.example.com/api/v3 (default https://api.github.com)')
+  .option('--git-url <url>', 'git host the checkouts clone from (default: the one that goes with --api-url, else https://github.com)')
+  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string; gitUrl?: string }) => {
     const api = client();
     const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }> }>(
       `/v1/examples/${encodeURIComponent(id)}/install`,
-      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}) },
+      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}), ...(opts.gitUrl ? { git_url: opts.gitUrl } : {}) },
     );
     for (const t of r.tools) console.log(`  ${t.changed ? green('+') : dim('=')} tool ${t.ref} (revision ${t.revision})`);
     if (!r.ok || !r.version) {

@@ -1,6 +1,7 @@
 # Admin configuration for the PR review example: `azhi apply examples/pr-review/azhi.config.yaml`.
-# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise Server add
-#    api_url: https://<host>/api/v3 to both tools and set `host` on the workflow's workspace.
+# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise add
+#    api_url: https://<host>/api/v3 to both tools and set `host` on the workflow's workspace
+#    (`azhi example install pr-review --api-url ...` does both).
 # 2. Secrets (values never go in a package or run state):
 #    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read
 #                          the PR and to clone the repository on the worker

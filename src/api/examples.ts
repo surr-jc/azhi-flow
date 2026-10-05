@@ -56,6 +56,42 @@ function secretsOf(e: Example): string[] {
   return [...names].sort();
 }
 
+/**
+ * The git host that goes with a GitHub API address: https://ghe.example.com/api/v3 clones from
+ * https://ghe.example.com, and https://api.acme.ghe.com from https://acme.ghe.com.
+ */
+export function gitHostFor(apiUrl: string): string {
+  const u = new URL(apiUrl);
+  if (u.hostname === 'api.github.com') return 'https://github.com';
+  const host = u.hostname.startsWith('api.') ? u.host.slice(4) : u.host;
+  return `${u.protocol}//${host}`;
+}
+
+/**
+ * Points every checkout (`workspace:` block) in a workflow at `host`. An explicit host replaces one
+ * the workflow names; a host derived from the API address only fills in where none is named.
+ */
+export function withGitHost(yaml: string, host: string, replace: boolean): string {
+  const lines = yaml.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]!);
+    const m = /^(\s*)workspace:(\s+&[\w-]+)?\s*$/.exec(lines[i]!);
+    if (!m) continue;
+    const indent = `${m[1]}  `;
+    let j = i + 1;
+    let named = false;
+    for (; j < lines.length && (lines[j]!.startsWith(indent) || !lines[j]!.trim()); j++) {
+      if (lines[j]!.startsWith(`${indent}host:`)) {
+        named = true;
+        if (replace) lines[j] = `${indent}host: ${host}`;
+      }
+    }
+    if (!named) out.push(`${indent}host: ${host}`);
+  }
+  return out.join('\n');
+}
+
 /** The repositories the example's installed repository tools allow (all of them, in order). */
 async function installedRepos(ctx: AppContext, workspaceId: string, e: Example): Promise<string[]> {
   const all: string[] = [];
@@ -118,6 +154,8 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
         repos: z.array(z.string().regex(REPO, 'repositories are owner/name')).max(50).optional(),
         /** GitHub Enterprise Server API, for example https://ghe.example.com/api/v3. */
         api_url: z.string().url().optional(),
+        /** Git host the checkouts clone from; defaults to the one that goes with api_url, else github.com. */
+        git_url: z.string().regex(/^https?:\/\/[^/\s]+\/?$/, 'git_url is a host address such as https://ghe.example.com').optional(),
       })
       .parse(req.body ?? {});
     const tools = e.config.tools ?? [];
@@ -136,6 +174,9 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
 
     const pkg = packageFromDirectory(join(examplesDir(), id));
     const files = Object.fromEntries(pkg.manifest.files.map((f) => [f.path, pkg.read(f.path)!.toString('base64')]));
+    const gitHost = b.git_url ?? (b.api_url ? gitHostFor(b.api_url) : undefined);
+    const wfPath = pkg.manifest.workflow;
+    if (gitHost && files[wfPath]) files[wfPath] = Buffer.from(withGitHost(Buffer.from(files[wfPath], 'base64').toString('utf8'), gitHost.replace(/\/+$/, ''), Boolean(b.git_url))).toString('base64');
     const up = await uploadPackage(ctx, p.workspaceId, { workflow: pkg.manifest.workflow, files }, p.userId);
     if (!up.ok) return { ok: false, diagnostics: up.diagnostics, tools: registered };
     await audit(ctx, p.workspaceId, p.userId, 'example.installed', { example: id, version: up.version.id, tools: registered.map((t) => t.ref), repos: b.repos ?? [] });

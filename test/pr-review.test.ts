@@ -17,6 +17,7 @@ import { startFakeGithub } from '../src/testing/fake-github.js';
 import { opencodeBinary } from '../src/worker/capabilities.js';
 import { ApiClient } from '../src/worker/api-client.js';
 import { copilotAuth } from '../src/worker/harness-activity.js';
+import { gitHostFor, withGitHost } from '../src/api/examples.js';
 import { publisherKey } from '../src/cli/signing-client.js';
 import { signPackage } from '../src/security/signing.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
@@ -220,6 +221,23 @@ describe('PR review example: definition checks', () => {
     const errors = load(dir).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
     expect(errors.filter((m) => m.includes('review.md') && m.includes('may not use $ARGUMENTS'))).toHaveLength(3);
     expect(errors.filter((m) => m.includes('summarize.md') && m.includes('may not use $ARGUMENTS'))).toHaveLength(1);
+  });
+});
+
+describe('GitHub Enterprise at install', () => {
+  it('derives the git host from the API address and points every checkout at it', () => {
+    expect(gitHostFor('https://ghe.example.com/api/v3')).toBe('https://ghe.example.com');
+    expect(gitHostFor('https://api.acme.ghe.com')).toBe('https://acme.ghe.com');
+    expect(gitHostFor('https://api.github.com')).toBe('https://github.com');
+    const yaml = readFileSync(`${PKG}/workflow.yaml`, 'utf8');
+    const hosts = (y: string) => parse(y).nodes.filter((n: any) => n.workspace).map((n: any) => n.workspace.host);
+    expect(hosts(yaml)).toEqual([undefined, undefined, undefined]);
+    const set = withGitHost(yaml, 'https://ghe.example.com', false);
+    expect(hosts(set)).toEqual(['https://ghe.example.com', 'https://ghe.example.com', 'https://ghe.example.com']);
+    // A derived host keeps one the workflow names; an explicit one replaces it.
+    expect(hosts(withGitHost(set, 'https://other.example.com', false))[0]).toBe('https://ghe.example.com');
+    expect(hosts(withGitHost(set, 'https://other.example.com', true))[0]).toBe('https://other.example.com');
+    expect(withGitHost(set, 'https://other.example.com', true).match(/host:/g)).toHaveLength(1);
   });
 });
 
@@ -588,8 +606,9 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const page = await open('/ui/examples');
     const card = page.locator('section.panel', { hasText: 'pr-review' });
     await card.getByLabel('Repositories it may use').fill('acme/payments');
-    await card.getByText('GitHub Enterprise Server').click();
+    await card.getByText('GitHub Enterprise', { exact: true }).click();
     await card.getByLabel('API address').fill(gh.url);
+    await card.getByLabel('Git address').fill(git.url);
     await card.getByRole('button', { name: 'Install' }).click();
     await card.getByText(/Installed pr-review v\d+ and signed it/).waitFor({ timeout: 30_000 });
     // Repositories can be added and removed in place afterwards.

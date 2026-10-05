@@ -49,11 +49,12 @@ function ExampleCard({ example: e }: { example: Example }) {
   const qc = useQueryClient();
   const [repos, setRepos] = useState('');
   const [apiUrl, setApiUrl] = useState('');
+  const [gitUrl, setGitUrl] = useState('');
   const list = repos.split(/[\s,]+/).filter(Boolean);
   const badRepo = list.find((r) => !REPO.test(r));
   const install = useMutation({
     mutationFn: async (): Promise<Installed> => {
-      const r = await api<Installed>(`/v1/examples/${encodeURIComponent(e.id)}/install`, { method: 'POST', body: { ...(list.length ? { repos: list } : {}), ...(apiUrl.trim() ? { api_url: apiUrl.trim() } : {}) } });
+      const r = await api<Installed>(`/v1/examples/${encodeURIComponent(e.id)}/install`, { method: 'POST', body: { ...(list.length ? { repos: list } : {}), ...(apiUrl.trim() ? { api_url: apiUrl.trim() } : {}), ...(gitUrl.trim() ? { git_url: gitUrl.trim() } : {}) } });
       if (!r.ok || !r.version) return r;
       // Workers run signed packages only.
       try {
@@ -95,10 +96,16 @@ function ExampleCard({ example: e }: { example: Example }) {
                 {badRepo ? <span className="hint warn-text">{badRepo} is not owner/name.</span> : <span className="hint">Its GitHub tools refuse any other repository. Separate with commas.</span>}
               </div>
               <details>
-                <summary className="small">GitHub Enterprise Server</summary>
+                <summary className="small">GitHub Enterprise</summary>
+                <span className="hint">Leave empty for github.com, including organization repositories there.</span>
                 <div className="field">
                   <label htmlFor={`api-${e.id}`}>API address</label>
                   <input id={`api-${e.id}`} className="mono" placeholder="https://ghe.example.com/api/v3" value={apiUrl} spellCheck={false} onChange={(x) => setApiUrl(x.target.value)} />
+                </div>
+                <div className="field">
+                  <label htmlFor={`git-${e.id}`}>Git address</label>
+                  <input id={`git-${e.id}`} className="mono" placeholder="https://ghe.example.com" value={gitUrl} spellCheck={false} onChange={(x) => setGitUrl(x.target.value)} />
+                  <span className="hint">Where the review clones from. Empty: the host of the API address.</span>
                 </div>
               </details>
             </>
