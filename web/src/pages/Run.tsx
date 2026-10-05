@@ -7,6 +7,7 @@ import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Json, Loading, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
+import { WorkflowCanvas } from '../components/WorkflowCanvas';
 
 interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
 
@@ -60,7 +61,7 @@ export function RunPage({ id }: { id: string }) {
       </div>
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
       {waiting.map((a) => <ApprovalCard key={a.node_id} approval={a} compact />)}
-      <Panel title="Graph">{version.data?.plan?.nodes ? <Graph nodes={version.data.plan.nodes} detail={d} /> : <p className="muted">Loading the workflow…</p>}</Panel>
+      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} detail={d} plan={d.plan} /> : <p className="muted">Loading the workflow…</p>}</Panel>
       <div className="tabs" role="tablist">
         {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
       </div>
@@ -147,52 +148,6 @@ function usageLine(u: any) {
   if (!u.turns) return 'no model turns';
   const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.currency} ${u.cost.amount.toFixed(4)} estimated`;
   return `${u.completeness_pct}% complete · ${cost}`;
-}
-
-function nodeStates(d: any) {
-  const s: Record<string, { state: string; attempts: number }> = {};
-  for (const a of d.attempts) s[a.node_id] = { state: a.state, attempts: (s[a.node_id]?.attempts ?? 0) + 1 };
-  for (const a of d.approvals) if (a.decision === null && s[a.node_id]?.state !== 'succeeded') s[a.node_id] = { state: 'waiting', attempts: s[a.node_id]?.attempts ?? 0 };
-  return s;
-}
-
-export function Graph({ nodes, detail }: { nodes: Array<{ id: string; type: string; deps: string[] }>; detail?: any }) {
-  const depth: Record<string, number> = {};
-  for (const n of nodes) depth[n.id] = n.deps.length ? Math.max(...n.deps.map((x) => depth[x] ?? 0)) + 1 : 0;
-  const cols: Record<number, number> = {};
-  const pos: Record<string, { x: number; y: number }> = {};
-  const W = 150, H = 46, GX = 50, GY = 18;
-  for (const n of nodes) {
-    const c = depth[n.id]!;
-    const row = (cols[c] = (cols[c] ?? 0) + 1) - 1;
-    pos[n.id] = { x: 10 + c * (W + GX), y: 10 + row * (H + GY) };
-  }
-  const width = 20 + (Math.max(...Object.values(depth)) + 1) * (W + GX) - GX;
-  const height = 20 + Math.max(...Object.values(cols)) * (H + GY) - GY;
-  const states = detail ? nodeStates(detail) : {};
-  return (
-    <div className="graph">
-      <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} role="img" aria-label="workflow graph">
-        {nodes.flatMap((n) => n.deps.map((dep) => {
-          const a = pos[dep]!, b = pos[n.id]!;
-          const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
-          return <path key={`${dep}-${n.id}`} className="edge" d={`M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2},${y2}`} />;
-        }))}
-        {nodes.map((n) => {
-          const st = detail ? (states[n.id]?.state ?? 'pending') : 'idle';
-          const tries = states[n.id]?.attempts ?? 0;
-          return (
-            <g key={n.id} className={`node st-${st}`} transform={`translate(${pos[n.id]!.x},${pos[n.id]!.y})`}>
-              <title>{`${n.id} (${n.type})${detail ? `: ${st}` : ''}${tries > 1 ? `, ${tries} attempts` : ''}`}</title>
-              <rect width={W} height={H} rx={6} />
-              <text x={10} y={19}>{n.id.length > 20 ? n.id.slice(0, 19) + '…' : n.id}</text>
-              <text x={10} y={35} className="sub">{detail ? `${n.type} · ${st}${tries > 1 ? ` ×${tries}` : ''}` : n.type}</text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
-  );
 }
 
 function summarise(ev: RunEvent) {

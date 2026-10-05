@@ -1,0 +1,22 @@
+# Admin configuration for the SDLC example: `azhi apply examples/sdlc/azhi.config.yaml`.
+# Both tools return fixture data; register your tracker and CI (HTTP or MCP tools) for real use.
+tools:
+  - id: tracker.get-ticket
+    version: 1
+    description: A ticket from the issue tracker (fixture data)
+    effect: read
+    source: tracker
+    transport: {kind: builtin, name: fixture, config: {data: {"key": "PAY-142", "title": "Retry failed card payments once after a timeout", "description": "Card payments that time out at the processor are marked failed. Retry once after 2 s when the processor returns a timeout, never for declines. Show the retry in the payment history.", "priority": "high", "reporter": "support"}}}
+    input_schema: {type: object, properties: {key: {type: string}}, required: [key], additionalProperties: false}
+    output_schema: {type: object, properties: {key: {type: string}, title: {type: string}, description: {type: string}, priority: {type: string}, reporter: {type: string}}}
+  - id: ci.get-pipeline
+    version: 1
+    description: The CI pipeline result for a branch or ticket (fixture data)
+    effect: read
+    source: ci
+    transport: {kind: builtin, name: fixture, config: {data: {"status": "passed", "passed": 412, "failed": 0, "coverage_pct": 87.5}}}
+    input_schema: {type: object, properties: {ref: {type: string}}, required: [ref], additionalProperties: false}
+    output_schema: {type: object, properties: {status: {type: string}, passed: {type: integer}, failed: {type: integer}, coverage_pct: {type: number}}}
+secrets:
+  - slack-bot-token
+  - anthropic-api-key

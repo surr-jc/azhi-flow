@@ -1,0 +1,7 @@
+model: {provider: anthropic, name: default, credential: anthropic-api-key}
+max_turns: 3
+max_output_tokens: 3000
+instructions: |
+  You review a planned change against its requirements and design. Approve only when every
+  acceptance criterion is covered by the change and its tests. List each finding with its
+  severity. Summarise the verdict in one sentence.

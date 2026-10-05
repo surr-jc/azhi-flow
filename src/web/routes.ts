@@ -25,7 +25,7 @@ const NOT_BUILT = Buffer.from(`<!doctype html><meta charset="utf-8"><title>Azhi 
 <p>Run <code>npm run build:web</code> in the Azhi Flow folder, then reload this page. The Docker image builds it for you.</p>`);
 
 export function isWebPath(url: string): boolean {
-  return url === '/ui' || url.startsWith('/ui/') || url.startsWith('/ui?');
+  return url === '/ui' || url.startsWith('/ui/') || url.startsWith('/ui?') || url === '/favicon.ico';
 }
 
 export function registerWebRoutes(app: FastifyInstance) {
@@ -33,6 +33,8 @@ export function registerWebRoutes(app: FastifyInstance) {
   let page: Buffer | undefined;
   const index = () => (page ??= existsSync(`${DIST}index.html`) ? readFileSync(`${DIST}index.html`) : undefined);
   const html = (_req: unknown, reply: FastifyReply) => reply.headers({ ...SECURITY_HEADERS, 'cache-control': 'no-cache' }).type('text/html; charset=utf-8').send(index() ?? NOT_BUILT);
+  // Browsers ask for /favicon.ico on their own; answer it rather than with an auth error.
+  app.get('/favicon.ico', (_req, reply) => reply.status(204).send());
   app.get('/ui', html);
   app.get('/ui/*', html);
   app.get('/ui/assets/:file', async (req, reply) => {

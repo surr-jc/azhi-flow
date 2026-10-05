@@ -113,7 +113,11 @@ Monaco in the first release. Mission control follows it:
    the signature check, dataset upload and publish, schedule editing.
 4. **Team and channels.** Sign in with OIDC in the browser (PKCE) instead of pasting a token,
    user and role management, Slack approval buttons (Phase 4 item 5).
-5. **Visual editor** (React Flow), after the YAML round trip is proven.
+5. **Visual editor** (React Flow). Step 1 built (2026-10-05, asked for by Suresh): the read-only
+   workflow canvas (`web/src/components/WorkflowCanvas.tsx`) on the workflow and run pages, with
+   live node states, approval gates, condition routes and node details, and the SDLC example
+   (`examples/sdlc`) to show it. Step 2: editing on the canvas (add and connect nodes, check
+   against the compiler and run plan, save back to YAML as a new draft version).
 
 ## Out of scope for now
 

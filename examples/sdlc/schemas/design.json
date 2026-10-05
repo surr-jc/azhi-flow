@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "components": {"type": "array", "items": {"type": "string"}},
+    "approach": {"type": "string"},
+    "risks": {"type": "array", "items": {"type": "object", "properties": {"risk": {"type": "string"}, "mitigation": {"type": "string"}}, "required": ["risk", "mitigation"], "additionalProperties": false}},
+    "test_plan": {"type": "string"}
+  },
+  "required": ["summary", "components", "approach", "risks", "test_plan"],
+  "additionalProperties": false
+}

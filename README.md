@@ -180,7 +180,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 
 | Command | What it does |
 |---------|--------------|
-| `azhi init [dir] [-t template]` | Create a package from a template (default: the quality report) |
+| `azhi init [dir] [-t template]` | Create a package from a template: `quality-report` (default), `ci-digest` or `sdlc` (feature delivery with design and release gates) |
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
 | `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |

@@ -54,13 +54,14 @@ describe.skipIf(!up)('mission control', () => {
     expect((await fetch(`${h.server.url}/v1/runs`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/v1/overview`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/ui/assets/..%2F..%2Froutes.ts`)).status).toBe(404);
+    expect((await fetch(`${h.server.url}/favicon.ico`)).status).toBe(204);
   });
 
   it('follows a live run and approves it from the browser', async () => {
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { team: 'payments' } });
     const page = await open(`/ui/runs/${run_id}`);
     await page.getByText('waiting for approval on approve').waitFor({ timeout: 30_000 });
-    expect(await page.locator('svg .node.st-waiting').count()).toBe(1);
+    expect(await page.locator('.wf-card.st-waiting').count()).toBe(1);
     await page.getByText('Post 4 runs to C-QUALITY?').waitFor();
 
     await page.getByLabel('note').fill('looks right');
@@ -68,7 +69,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByText('Decision sent').waitFor();
     await waitForRun(h.api, run_id);
     await page.getByText('finished').waitFor({ timeout: 30_000 });
-    expect(await page.locator('svg .node.st-succeeded').count()).toBe(3);
+    expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
     const d = await h.api.get<any>(`/v1/runs/${run_id}`);
     expect(d.approvals[0]).toMatchObject({ decision: 'approved', data: { note: 'looks right' } });
 

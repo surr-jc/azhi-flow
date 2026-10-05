@@ -5,7 +5,8 @@ import { useMe } from '../App';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
 import { RunTable } from './Overview';
-import { Coverage, Graph } from './Run';
+import { Coverage } from './Run';
+import { WorkflowCanvas } from '../components/WorkflowCanvas';
 
 export function Workflows() {
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
@@ -71,7 +72,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
           </div>
         </Panel>
       </div>
-      <Panel title="Graph">{version.data?.plan?.nodes ? <Graph nodes={version.data.plan.nodes} /> : <Loading />}</Panel>
+      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} /> : <Loading />}</Panel>
       <h2 className="section">Run plan</h2>
       {plan.error ? <ErrorNote error={plan.error} /> : plan.data ? <Coverage plan={plan.data} live /> : <Loading />}
       <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>

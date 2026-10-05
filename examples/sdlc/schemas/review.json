@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "approved": {"type": "boolean"},
+    "summary": {"type": "string", "maxLength": 300},
+    "findings": {"type": "array", "items": {"type": "object", "properties": {"severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "text": {"type": "string"}}, "required": ["severity", "text"], "additionalProperties": false}}
+  },
+  "required": ["approved", "summary", "findings"],
+  "additionalProperties": false
+}

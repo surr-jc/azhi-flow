@@ -135,3 +135,39 @@ svg .node.st-skipped rect, svg .node.st-pending rect { stroke-dasharray: 4 3; }
 .meter span.bad { background: var(--bad); }
 .limit-form { margin-top: 12px; }
 .limit-form input { width: 140px; }
+
+/* workflow canvas (React Flow) */
+.wf-canvas { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
+.wf .react-flow { --xy-background-color: var(--bg); --xy-edge-stroke: var(--idle); --xy-edge-stroke-selected: var(--run); --xy-controls-button-background-color: var(--panel); --xy-controls-button-color: var(--ink); --xy-controls-button-border-color: var(--line); --xy-controls-button-background-color-hover: var(--idle-bg); --xy-minimap-background-color: var(--panel); --xy-background-pattern-color: var(--line); --xy-edge-label-background-color: var(--panel); --xy-edge-label-color: var(--ink); }
+.wf-card { width: 210px; height: 78px; background: var(--panel); border: 1.5px solid var(--line); border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--ink); display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.react-flow__node.selected .wf-card, .react-flow__node:focus-visible .wf-card { outline: 2px solid var(--run); outline-offset: 2px; }
+.wf-head { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 13px; }
+.wf-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-glyph { width: 20px; height: 20px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 11px; background: var(--idle-bg); color: var(--muted); flex: none; }
+.wf-sub, .wf-desc { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-desc { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; max-height: 2.7em; }
+.wf-state .badge { font-size: 11px; }
+.t-agent .wf-glyph { background: var(--run-bg); color: var(--run); }
+.t-approval { border-color: var(--warn); border-style: dashed; }
+.t-approval .wf-glyph { background: var(--warn-bg); color: var(--warn); }
+.t-condition .wf-glyph { background: var(--idle-bg); color: var(--ink); }
+.t-notify .wf-glyph { background: var(--ok-bg); color: var(--ok); }
+.wf-card.st-succeeded { border-color: var(--ok); border-style: solid; }
+.wf-card.st-failed { border-color: var(--bad); border-style: solid; border-width: 2px; }
+.wf-card.st-running { border-color: var(--run); border-style: solid; border-width: 2px; box-shadow: 0 0 0 3px var(--run-bg); }
+.wf-card.st-waiting { border-color: var(--warn); border-style: solid; border-width: 2px; box-shadow: 0 0 0 3px var(--warn-bg); }
+.wf-card.st-skipped, .wf-card.st-pending { opacity: 0.6; border-style: dashed; }
+.react-flow__edge.e-done .react-flow__edge-path { stroke: var(--ok); }
+.react-flow__edge.e-active .react-flow__edge-path { stroke: var(--run); stroke-width: 2; }
+.react-flow__edge.e-skipped .react-flow__edge-path { stroke-dasharray: 4 4; opacity: 0.5; }
+.e-label { font-size: 11px; font-weight: 600; }
+.react-flow__handle { width: 6px; height: 6px; background: var(--idle); border: 0; }
+.wf-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 8px 0; }
+.wf-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.sw { display: inline-block; width: 14px; height: 10px; border-radius: 3px; border: 1.5px solid var(--line); background: var(--panel); }
+.sw.st-succeeded { border-color: var(--ok); } .sw.st-running { border-color: var(--run); background: var(--run-bg); } .sw.st-waiting { border-color: var(--warn); background: var(--warn-bg); }
+.sw.st-failed { border-color: var(--bad); } .sw.st-skipped, .sw.st-pending { border-style: dashed; opacity: 0.6; }
+.sw.t-agent { background: var(--run-bg); border-color: var(--run); } .sw.t-approval { border-color: var(--warn); border-style: dashed; } .sw.t-condition { background: var(--idle-bg); } .sw.t-notify { background: var(--ok-bg); border-color: var(--ok); }
+.wf-details { margin-top: 8px; }
+.wf-plan { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 13px; }
+h3.small { margin: 8px 0 4px; }
