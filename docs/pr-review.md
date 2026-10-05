@@ -99,7 +99,7 @@ for the models, and two GitHub tokens:
 ### GitHub Copilot models
 
 The profiles say `model: {provider: github-copilot, name: default, credential: github-copilot-token}`.
-`default` is the server's `AZHI_COPILOT_MODEL` (`claude-sonnet-5.5` unless set); put any model your
+`default` is the server's `AZHI_COPILOT_MODEL` (`claude-sonnet-5` unless set); put any model your
 Copilot plan offers in `name` instead (Workflows → Edit → reviewer step → Model). Each model call
 counts against your Copilot plan's requests.
 
