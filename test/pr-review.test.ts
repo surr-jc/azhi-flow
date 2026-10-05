@@ -252,6 +252,8 @@ describe('GitHub Copilot sign-in for OpenCode', () => {
     expect(copilotAuth(' gho_x\n')).toEqual(want);
     expect(copilotAuth(JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: 'gho_x', access: 'gho_x', expires: 0 }, openai: {} }))).toEqual(want);
     expect(copilotAuth(JSON.stringify({ refresh: 'gho_x', enterpriseUrl: 'acme.ghe.com' }))).toEqual({ ...want, enterpriseUrl: 'acme.ghe.com' });
+    // OpenCode's own entry reaches it whole, under either provider name.
+    expect(copilotAuth(JSON.stringify({ 'github-copilot-enterprise': { type: 'oauth', refresh: 'gho_x', access: 'gho_y', expires: 5, accountId: 'a1' } }))).toEqual({ type: 'oauth', refresh: 'gho_x', access: 'gho_y', expires: 5, accountId: 'a1' });
     expect(() => copilotAuth('{"openai": {"type": "api", "key": "sk"}}')).toThrow(/no github-copilot sign-in/);
   });
 });
@@ -288,7 +290,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
       { token: [READ_TOKEN, COMMENT_TOKEN] },
     );
     // A stand-in for GitHub Copilot's API (OpenAI-style, as OpenCode's Copilot provider speaks it) and GitHub's device flow.
-    fake = await startFakeOpenAI({ script });
+    fake = await startFakeOpenAI({ script, models: [MODEL] });
     device = await startFakeDeviceFlow(COPILOT_TOKEN);
     h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotGithubUrl: device.url } });
     for (const t of parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools) {
@@ -531,26 +533,42 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await expect(new ApiClient(h.server.url, u.token).post('/v1/copilot/login', {})).rejects.toThrow(/admin/);
   });
 
-  it('checks the saved Copilot sign-in with GitHub and says what is wrong', async () => {
+  it('checks the saved Copilot sign-in the way OpenCode uses it, and says what is wrong', async () => {
     expect(await h.api.post<any>('/v1/copilot/check', { secret: 'no-such-secret' })).toMatchObject({ ok: false, message: expect.stringContaining('No sign-in is saved') });
     const good = await h.api.post<any>('/v1/copilot/check', {});
     expect(good).toMatchObject({ ok: true, plan: 'copilot_business_seat' });
+    expect(good.message).toContain('both worked');
+    expect(good.steps.map((x: any) => x.status)).toEqual([200, 200, 200]);
     await h.api.put('/v1/secrets/copilot-bad', { value: 'gho_revoked' });
-    await h.api.put('/v1/secrets/copilot-noseat', { value: 'no-seat' });
-    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-bad' })).message).toMatch(/rejects the stored token \(401\).*Sign in again/);
-    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-noseat' })).message).toMatch(/no Copilot access \(404\).*Copilot seat.*OAuth apps/);
     // The pasted auth.json form is checked by its token.
     await h.api.put('/v1/secrets/copilot-json', { value: JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: COPILOT_TOKEN, access: COPILOT_TOKEN, expires: 0 } }) });
-    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-json' })).ok).toBe(true);
     const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
     const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
-    const c = spawn(process.execPath, ['bin/azhi.js', 'copilot', 'check', '--secret', 'copilot-bad'], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token } });
-    let out = '';
-    c.stdout.on('data', (d) => (out += d));
-    c.stderr.on('data', (d) => (out += d));
-    const code = await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1)));
-    expect(out).toContain('rejects the stored token');
-    expect(code).toBe(1);
+    try {
+      fake.requireBearer(COPILOT_TOKEN);
+      expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-json' })).ok).toBe(true);
+      const bad = await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-bad' });
+      expect(bad.ok).toBe(false);
+      expect(bad.message).toMatch(/Copilot rejects this sign-in \(401 on the model list: Unauthorized\)/);
+      expect(bad.message).toContain('azhi copilot import');
+      expect(JSON.stringify(bad)).not.toContain('gho_revoked');
+      // Models listed but chat refused: named separately.
+      fake.requireBearer(COPILOT_TOKEN, true);
+      const noChat = await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-bad' });
+      expect(noChat.message).toMatch(/lists models for this sign-in but refuses to chat \(401/);
+      fake.requireBearer(COPILOT_TOKEN);
+      const c = spawn(process.execPath, ['bin/azhi.js', 'copilot', 'check', '--secret', 'copilot-bad'], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token } });
+      let out = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.stderr.on('data', (d) => (out += d));
+      const code = await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1)));
+      expect(out).toContain('Copilot rejects this sign-in');
+      expect(out).toContain('401');
+      expect(out).not.toContain('gho_revoked');
+      expect(code).toBe(1);
+    } finally {
+      fake.requireBearer(undefined);
+    }
   });
 
   it('signs in through a company GitHub Enterprise address, and reuses the sign-in OpenCode already has', async () => {
@@ -584,7 +602,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     };
     const cli = await run(['copilot', 'import', '--secret', 'copilot-imp2'], { XDG_DATA_HOME: data });
     expect(cli.out).toContain(`imported OpenCode's GitHub Copilot sign-in for ${device.url}`);
-    expect(cli.out).toContain('GitHub accepts this sign-in');
+    expect(cli.out).toContain('Copilot accepts this sign-in');
     expect(cli.out).not.toContain(COPILOT_TOKEN);
     expect(cli.code).toBe(0);
     const missing = await run(['copilot', 'import'], { XDG_DATA_HOME: join(data, 'none') });

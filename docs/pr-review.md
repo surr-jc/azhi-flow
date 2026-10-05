@@ -195,13 +195,14 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   again), or whether the GitHub account has no Copilot seat or its organization restricts OAuth
   apps (an owner approves the "opencode" app, then sign in again). Sign in with the account that has
   Copilot; do not paste a token by hand.
-- `azhi copilot check` says GitHub gives the token no Copilot access (403/404) although you signed in:
-  if your company signs in to GitHub at its own address (a name like `octo.ghe.com`), Copilot lives
-  there, not on github.com. Sign in with `azhi copilot login --enterprise-url octo.ghe.com` (or the
-  address field under *Company GitHub address* on the Examples card), or reuse the sign-in OpenCode
-  already has: `azhi copilot import` reads `~/.local/share/opencode/auth.json` (its github-copilot
-  entry, with the enterprise address) without printing it; the web UI takes the pasted file. The
-  address is kept with the token, so OpenCode talks to that host's Copilot.
+- `azhi copilot check` fails although your own OpenCode works with Copilot: the check makes the same
+  requests OpenCode does with the saved sign-in (the model list, then a one-token chat with the
+  configured model) and prints each answer, so it shows the difference. The simplest fix is to reuse
+  your OpenCode's own sign-in: `azhi copilot import` reads `~/.local/share/opencode/auth.json` (its
+  github-copilot entry, kept whole, with the enterprise address if it has one) without printing it;
+  the web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
+  `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
+  whenever your OpenCode signs in again.
 - `gateway bridge did not connect to opencode: ... Operation timed out after 30000ms` (older builds):
   OpenCode gives its MCP servers 30 seconds to start, and on a slow or virus-scanned machine the
   first start of Azhi's bridge took longer. The bridge now loads only what it needs and is given

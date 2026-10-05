@@ -18,13 +18,23 @@ export interface FakeOpenAIRequest {
   body: Record<string, any>;
 }
 
-export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number }; bearer?: string }) {
+export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number }; bearer?: string; models?: string[] }) {
   const requests: FakeOpenAIRequest[] = [];
   let bearer = o.bearer;
+  let chatOnly = false;
   const server = createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
+      if (req.method === 'GET' && (req.url ?? '').split('?')[0]!.endsWith('/models')) {
+        // The model list a sign-in is checked with.
+        if (bearer && !chatOnly && req.headers.authorization !== `Bearer ${bearer}`) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          return void res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return void res.end(JSON.stringify({ data: (o.models ?? []).map((id) => ({ id })) }));
+      }
       const b = raw ? JSON.parse(raw) : {};
       const messages = (b.messages ?? []) as Array<Record<string, any>>;
       const r: FakeOpenAIRequest = {
@@ -83,7 +93,10 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
-    requireBearer: (v?: string) => (bearer = v),
+    requireBearer: (v?: string, onlyChat = false) => {
+      bearer = v;
+      chatOnly = onlyChat;
+    },
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }

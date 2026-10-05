@@ -72,13 +72,13 @@ export interface HarnessResult {
  * OpenCode's GitHub Copilot sign-in from the stored secret: the GitHub OAuth token from the Copilot
  * device flow, or OpenCode's own auth.json (or its github-copilot entry) pasted as is.
  */
-export function copilotAuth(value: string): { type: 'oauth'; refresh: string; access: string; expires: number; enterpriseUrl?: string } {
+export function copilotAuth(value: string): { type: 'oauth'; refresh: string; access: string; expires: number; enterpriseUrl?: string } & Record<string, unknown> {
   const v = value.trim();
   if (v.startsWith('{')) {
     try {
       const j = JSON.parse(v);
-      const e = j['github-copilot'] ?? j;
-      if (typeof e?.refresh === 'string' && e.refresh) return { type: 'oauth', refresh: e.refresh, access: e.access ?? e.refresh, expires: 0, ...(e.enterpriseUrl ? { enterpriseUrl: String(e.enterpriseUrl) } : {}) };
+      const e = j['github-copilot'] ?? j['github-copilot-enterprise'] ?? j;
+      if (typeof e?.refresh === 'string' && e.refresh) return { ...e, type: 'oauth', refresh: e.refresh, access: e.access ?? e.refresh, expires: typeof e.expires === 'number' ? e.expires : 0, ...(e.enterpriseUrl ? { enterpriseUrl: String(e.enterpriseUrl) } : {}) };
     } catch {
       // not JSON: a token
     }

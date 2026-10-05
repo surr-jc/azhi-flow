@@ -381,8 +381,9 @@ copilot
       process.exitCode = 1;
       return;
     }
-    const r = await client().post<{ secret: string; version: number; enterprise?: string; check: { ok: boolean; message: string } }>('/v1/copilot/import', { secret: opts.secret, auth: readFileSync(file, 'utf8'), ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
+    const r = await client().post<{ secret: string; version: number; enterprise?: string; check: { ok: boolean; message: string; steps?: Array<{ name: string; status: number | string; detail: string }> } }>('/v1/copilot/import', { secret: opts.secret, auth: readFileSync(file, 'utf8'), ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
     console.log(`${green('imported')} OpenCode's GitHub Copilot sign-in${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
+    for (const st of r.check.steps ?? []) console.log(`  ${dim(String(st.status).padEnd(5))} ${st.name}: ${st.detail}`);
     console.log(r.check.ok ? green(r.check.message) : red(r.check.message));
     if (!r.check.ok) process.exitCode = 1;
   });
@@ -392,7 +393,8 @@ copilot
   .description('Ask GitHub whether the saved Copilot sign-in works')
   .option('--secret <name>', 'secret holding it', 'github-copilot-token')
   .action(async (opts: { secret: string }) => {
-    const r = await client().post<{ ok: boolean; message: string }>('/v1/copilot/check', { secret: opts.secret });
+    const r = await client().post<{ ok: boolean; message: string; steps?: Array<{ name: string; status: number | string; detail: string }> }>('/v1/copilot/check', { secret: opts.secret });
+    for (const st of r.steps ?? []) console.log(`  ${dim(String(st.status).padEnd(5))} ${st.name}: ${st.detail}`);
     console.log(r.ok ? green(r.message) : red(r.message));
     if (!r.ok) process.exitCode = 1;
   });

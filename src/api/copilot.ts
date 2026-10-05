@@ -67,40 +67,103 @@ export function enterpriseHost(v: string): string {
 }
 const hostUrl = (host: string) => (host.startsWith('http://') ? host : `https://${host}`);
 
-/** What the secret holds: a bare token (github.com), or OpenCode's github-copilot entry (token and enterprise host). */
-function signIn(value: string): { token: string; enterprise?: string } {
+/**
+ * The Copilot sign-in in what the secret holds: a bare token (github.com), or OpenCode's own entry
+ * (auth.json, or its github-copilot entry), kept whole so OpenCode gets what its own login wrote.
+ */
+function entryOf(value: string): { entry?: Record<string, unknown>; token: string; enterprise?: string } {
   const v = value.trim();
   if (!v.startsWith('{')) return { token: v };
+  let j: any;
   try {
-    const j = JSON.parse(v);
-    const e = j['github-copilot'] ?? j['github-copilot-enterprise'] ?? j;
-    if (typeof e?.refresh === 'string' && e.refresh) return { token: e.refresh, ...(e.enterpriseUrl ? { enterprise: String(e.enterpriseUrl) } : {}) };
+    j = JSON.parse(v);
   } catch {
-    // fall through
+    throw new AzhiError(ErrorClass.invalidInput, 'that looks like JSON but does not parse');
   }
-  throw new AzhiError(ErrorClass.invalidInput, 'that is JSON, but has no github-copilot sign-in (a refresh token) in it');
+  const entry = j['github-copilot'] ?? j['github-copilot-enterprise'] ?? j;
+  if (entry && typeof entry.refresh === 'string' && entry.refresh) return { entry, token: entry.refresh, ...(entry.enterpriseUrl ? { enterprise: String(entry.enterpriseUrl) } : {}) };
+  const names = Object.keys(j).filter((k) => typeof j[k] === 'object');
+  throw new AzhiError(ErrorClass.invalidInput, `that JSON has no github-copilot sign-in (a refresh token) in it${names.length ? `; it holds: ${names.join(', ')}` : ''}`);
+}
+const signIn = entryOf;
+
+export interface CopilotCheck {
+  ok: boolean;
+  message: string;
+  plan?: string;
+  steps: Array<{ name: string; status: number | string; detail: string }>;
 }
 
-/** The stored token as Copilot sees it (the same request Copilot's editor plugins make to start a session). */
-export async function checkCopilotToken(ctx: AppContext, token: string, enterprise?: string): Promise<{ ok: boolean; message: string; plan?: string; chat?: boolean }> {
-  const r = await fetch(`${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/v2/token`, {
-    headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' },
-  }).catch((e) => {
-    throw new AzhiError(ErrorClass.transient, `could not reach GitHub to check the sign-in: ${(e as Error).message}`);
+/** The Copilot API as OpenCode reaches it: the stand-in URL in tests, copilot-api.<host> on Enterprise, else api.githubcopilot.com. */
+function copilotApi(ctx: AppContext, enterprise?: string): string {
+  if (ctx.settings.copilotApiUrl) return ctx.settings.copilotApiUrl.replace(/\/$/, '');
+  return enterprise ? `https://copilot-api.${enterprise.replace(/^https?:\/\//, '')}` : 'https://api.githubcopilot.com';
+}
+
+async function call(url: string, init: RequestInit): Promise<{ status: number | string; text: string; requestId?: string }> {
+  try {
+    const r = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
+    return { status: r.status, text: (await r.text()).slice(0, 2000), requestId: r.headers.get('x-copilot-service-request-id') ?? undefined };
+  } catch (e) {
+    return { status: 'unreachable', text: (e as Error).message };
+  }
+}
+
+const brief = (r: { text: string; requestId?: string }) => {
+  let m = r.text.trim();
+  try {
+    const j = JSON.parse(m);
+    m = String(j?.error?.message ?? j?.message ?? m);
+  } catch {
+    // plain text
+  }
+  return `${m.replace(/\s+/g, ' ').slice(0, 200)}${r.requestId ? ` (request ${r.requestId})` : ''}`;
+};
+
+/**
+ * Does Copilot accept the saved sign-in? The same two requests OpenCode makes with it: the model list,
+ * then a one-token chat with the configured model, both as `Authorization: Bearer <token>`. GitHub's
+ * token-exchange endpoint is asked too, for the plan name only; some tokens OpenCode uses successfully
+ * are refused there, so its answer never decides.
+ */
+export async function checkCopilotToken(ctx: AppContext, token: string, enterprise?: string): Promise<CopilotCheck> {
+  const api = copilotApi(ctx, enterprise);
+  const headers = { authorization: `Bearer ${token}`, 'user-agent': 'opencode/1.18.34' };
+  const model = ctx.settings.copilotModel;
+  const steps: CopilotCheck['steps'] = [];
+  const models = await call(`${api}/models`, { headers: { ...headers, 'x-github-api-version': '2026-06-01' } });
+  let ids: string[] = [];
+  try {
+    ids = ((JSON.parse(models.text).data ?? []) as Array<{ id?: string }>).map((m) => String(m.id));
+  } catch {
+    // not JSON
+  }
+  steps.push({ name: `GET ${api}/models`, status: models.status, detail: models.status === 200 ? `${ids.length} models${ids.includes(model) ? `, including ${model}` : `; ${model} is not among them`}` : brief(models) });
+  const chat = await call(`${api}/chat/completions`, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json', 'x-initiator': 'user', 'openai-intent': 'conversation-edits' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with: ok' }], max_tokens: 5, stream: false }),
   });
-  if (r.ok) {
-    const j = (await r.json().catch(() => ({}))) as { sku?: string; chat_enabled?: boolean };
-    if (j.chat_enabled === false) return { ok: false, plan: j.sku, chat: false, message: 'Signed in, but Copilot Chat is turned off for this account (an organization policy). Ask your Copilot administrator to enable Copilot Chat, or use another account.' };
-    return { ok: true, plan: j.sku, chat: true, message: `GitHub accepts this sign-in and gives it Copilot access${j.sku ? ` (plan: ${j.sku})` : ''}.` };
+  steps.push({ name: `POST ${api}/chat/completions (${model})`, status: chat.status, detail: typeof chat.status === 'number' && chat.status < 300 ? 'answered' : brief(chat) });
+  const exch = await call(`${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/v2/token`, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' } });
+  let plan: string | undefined;
+  if (exch.status === 200) {
+    try {
+      plan = JSON.parse(exch.text).sku;
+    } catch {
+      // no plan
+    }
   }
-  if (r.status === 401) return { ok: false, message: 'GitHub rejects the stored token (401): it is revoked, expired or not a GitHub sign-in. Sign in again (azhi copilot login, or Sign in with GitHub Copilot on the Examples page); do not paste a token by hand.' };
-  if (r.status === 403 || r.status === 404) {
-    return {
-      ok: false,
-      message: `${enterprise ? `${enterprise} accepts` : 'GitHub accepts'} the token but gives it no Copilot access (${r.status}). ${enterprise ? '' : 'If your company signs in to GitHub through its own enterprise address (a name like octo.ghe.com), sign in with that: azhi copilot login --enterprise-url octo.ghe.com, or reuse the sign-in OpenCode already has: azhi copilot import. Otherwise, '}${enterprise ? 'Either' : 'either'} the GitHub account you signed in with has no Copilot seat (check its settings/copilot page while signed in as it), or its organization restricts OAuth apps or requires SSO: ask an organization owner to approve the "opencode" OAuth app (Organization settings > Third-party Access) and sign in again.`,
-    };
-  }
-  return { ok: false, message: `GitHub answered HTTP ${r.status} to the Copilot check; try again.` };
+  steps.push({ name: 'GitHub token exchange (plan name only)', status: exch.status, detail: exch.status === 200 ? (plan ?? 'ok') : 'not used by Azhi or OpenCode' });
+
+  const auth = (s: number | string) => s === 401 || s === 403;
+  const where = enterprise ? enterprise : 'github.com';
+  const fix = `Sign in again with the GitHub account that has your Copilot seat (azhi copilot login${enterprise ? ` --enterprise-url ${enterprise}` : ' [--enterprise-url octo.ghe.com if your company signs in to its own GitHub address]'}), or reuse the sign-in your OpenCode has (azhi copilot import).`;
+  if (models.status === 'unreachable' || chat.status === 'unreachable') return { ok: false, plan, steps, message: `Could not reach the Copilot API (${models.status === 'unreachable' ? models.text : chat.text}). Check the network or proxy (HTTPS_PROXY) of the machine running Azhi.` };
+  if (auth(models.status)) return { ok: false, plan, steps, message: `Copilot rejects this sign-in (${models.status} on the model list: ${brief(models)}). OpenCode would get the same answer with it. It is not a Copilot sign-in for ${where}, or it is revoked. ${fix}` };
+  if (auth(chat.status)) return { ok: false, plan, steps, message: `Copilot lists models for this sign-in but refuses to chat (${chat.status}: ${brief(chat)}). Usually the account has no Copilot seat or the organization has switched ${model} off; compare with the models your own OpenCode offers, set AZHI_COPILOT_MODEL to one of them, or ${fix.charAt(0).toLowerCase()}${fix.slice(1)}` };
+  if (typeof chat.status === 'number' && chat.status >= 300) return { ok: true, plan, steps, message: `Copilot accepts this sign-in, but the test chat with ${model} answered ${chat.status}: ${brief(chat)}. If the run fails the same way, pick another model (AZHI_COPILOT_MODEL).` };
+  return { ok: true, plan, steps, message: `Copilot accepts this sign-in: the model list and a test chat with ${model} both worked${plan ? ` (plan: ${plan})` : ''}.` };
 }
 
 export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -126,7 +189,7 @@ export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
     const b = z.object({ secret: z.string().regex(SECRET).default('github-copilot-token'), auth: z.string().min(2).max(20_000), enterprise_url: z.string().max(200).optional() }).parse(req.body ?? {});
     const si = signIn(b.auth);
     const enterprise = b.enterprise_url?.trim() ? enterpriseHost(b.enterprise_url) : si.enterprise ? enterpriseHost(si.enterprise) : undefined;
-    const value = enterprise ? JSON.stringify({ type: 'oauth', refresh: si.token, access: si.token, expires: 0, enterpriseUrl: enterprise }) : si.token;
+    const value = si.entry ? JSON.stringify({ ...si.entry, type: 'oauth', ...(enterprise ? { enterpriseUrl: enterprise } : {}) }) : enterprise ? JSON.stringify({ type: 'oauth', refresh: si.token, access: si.token, expires: 0, enterpriseUrl: enterprise }) : si.token;
     const version = await setSecret(ctx, p.workspaceId, b.secret, value, p.userId);
     await audit(ctx, p.workspaceId, p.userId, 'copilot.imported', { secret: b.secret, version, ...(enterprise ? { enterprise } : {}) });
     return { secret: b.secret, version, ...(enterprise ? { enterprise } : {}), check: await checkCopilotToken(ctx, si.token, enterprise).catch((e) => ({ ok: false, message: (e as Error).message })) };
