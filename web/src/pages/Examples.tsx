@@ -12,6 +12,7 @@ import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
  * its package is saved as a draft and signed in this browser, and its secrets are set below.
  */
 interface Secret { name: string; set: boolean }
+interface Setting { name: string; title?: string; description?: string; placeholder?: string; value: string | null }
 interface Example {
   id: string;
   name: string;
@@ -21,6 +22,7 @@ interface Example {
   secrets: Secret[];
   /** Repositories the installed tools allow now; empty before install. */
   repos: string[];
+  settings?: Setting[];
 }
 interface Diagnostic { severity: string; message: string; node?: string }
 interface Installed {
@@ -29,6 +31,7 @@ interface Installed {
   version?: { id: string; workflow: string; version: number };
   tools: Array<{ ref: string; revision: number; changed: boolean }>;
   secrets?: Secret[];
+  settings?: Setting[];
   signError?: string;
 }
 
@@ -50,11 +53,14 @@ function ExampleCard({ example: e }: { example: Example }) {
   const [repos, setRepos] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [gitUrl, setGitUrl] = useState('');
+  // Blank fields keep what an earlier install filled in.
+  const [settings, setSettings] = useState<Record<string, string>>({});
+  const filled = Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
   const list = repos.split(/[\s,]+/).filter(Boolean);
   const badRepo = list.find((r) => !REPO.test(r));
   const install = useMutation({
     mutationFn: async (): Promise<Installed> => {
-      const r = await api<Installed>(`/v1/examples/${encodeURIComponent(e.id)}/install`, { method: 'POST', body: { ...(list.length ? { repos: list } : {}), ...(apiUrl.trim() ? { api_url: apiUrl.trim() } : {}), ...(gitUrl.trim() ? { git_url: gitUrl.trim() } : {}) } });
+      const r = await api<Installed>(`/v1/examples/${encodeURIComponent(e.id)}/install`, { method: 'POST', body: { ...(list.length ? { repos: list } : {}), ...(apiUrl.trim() ? { api_url: apiUrl.trim() } : {}), ...(gitUrl.trim() ? { git_url: gitUrl.trim() } : {}), ...(Object.keys(filled).length ? { settings: filled } : {}) } });
       if (!r.ok || !r.version) return r;
       // Workers run signed packages only.
       try {
@@ -66,6 +72,7 @@ function ExampleCard({ example: e }: { example: Example }) {
     },
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['tools'] });
+      void qc.invalidateQueries({ queryKey: ['examples'] });
       void qc.invalidateQueries({ queryKey: ['workflows'] });
       if (r.version) void qc.invalidateQueries({ queryKey: ['versions', r.version.workflow] });
     },
@@ -110,6 +117,13 @@ function ExampleCard({ example: e }: { example: Example }) {
               </details>
             </>
           ) : null}
+          {(r?.settings ?? e.settings ?? []).map((st) => (
+            <div className="field" key={st.name}>
+              <label htmlFor={`setting-${e.id}-${st.name}`}>{st.title ?? st.name} {st.value ? <Badge tone="ok">set</Badge> : <Badge tone="warn">not set</Badge>}</label>
+              <input id={`setting-${e.id}-${st.name}`} className="mono" spellCheck={false} placeholder={st.value ?? st.placeholder ?? ''} value={settings[st.name] ?? ''} onChange={(x) => setSettings({ ...settings, [st.name]: x.target.value })} />
+              <span className="hint">{st.description ?? ''}{st.value ? ' Leave blank to keep the current value.' : ''}</span>
+            </div>
+          ))}
           <div className="row">
             <button type="submit" className="primary" disabled={install.isPending || (e.needs_repos && (!list.length || Boolean(badRepo)))}>
               {install.isPending ? 'Installing…' : r?.ok ? 'Install again' : 'Install'}

@@ -26,6 +26,12 @@ interface NodeCommon {
   type: NodeType;
   description?: string;
   depends_on?: string[];
+  /**
+   * `any`: the node joins alternative branches (for example the routes of one condition). It runs
+   * when its upstream nodes have settled and at least one succeeded; skipped upstream nodes do not
+   * skip it. Expressions must only read outputs of nodes that ran (guard them with the condition).
+   */
+  merge?: 'any';
   timeout?: string;
   retry?: { max_attempts?: number };
 }

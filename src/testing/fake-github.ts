@@ -7,7 +7,7 @@ import http from 'node:http';
  */
 export interface FakeGithubData {
   runs: Array<{ id: number; conclusion: string; head_branch: string; run_started_at: string; updated_at: string; jobs?: Array<{ name: string; conclusion: string }> }>;
-  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean }>;
+  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean; body?: string; user?: string; repo?: string }>;
   pulls?: Array<{
     number: number;
     title: string;
@@ -27,9 +27,10 @@ export interface FakeComment {
 }
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string } = {}) {
+/** `comments`: comments that already exist (on issues or pull requests). */
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }> } = {}) {
   const requests: string[] = [];
-  const comments: FakeComment[] = [];
+  const comments: Array<FakeComment & { user?: string }> = [...(opts.comments ?? [])];
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -60,6 +61,14 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const found = data.issues.filter((i) => !label || i.labels.includes(label));
       return send(200, slice(found).map((i) => ({ number: i.number, title: i.title, comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), ...(i.pull_request ? { pull_request: {} } : {}) })));
     }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
+    if (m && req.method === 'GET') {
+      const [repo, number] = [m[1]!, Number(m[2])];
+      const i = data.issues.find((x) => x.number === number && (!x.repo || x.repo === repo));
+      if (!i) return send(404, { message: 'Not Found' });
+      const count = comments.filter((c) => c.repo === repo && c.number === number).length;
+      return send(200, { number, title: i.title, body: i.body ?? null, state: 'open', user: { login: i.user ?? 'octocat' }, comments: count, labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${repo}/issues/${number}`, ...(i.pull_request ? { pull_request: {} } : {}) });
+    }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/files)?$/);
     if (m) {
       const pr = data.pulls?.find((p) => p.number === Number(m![2]));
@@ -76,7 +85,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
         comments.push(c);
         return send(201, { id: c.id, body: c.body, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-${c.id}` });
       }
-      return send(200, slice(comments.filter((c) => c.repo === repo && c.number === number)).map((c) => ({ id: c.id, body: c.body, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-${c.id}` })));
+      return send(200, slice(comments.filter((c) => c.repo === repo && c.number === number)).map((c) => ({ id: c.id, body: c.body, user: { login: c.user ?? 'octocat' }, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-${c.id}` })));
     }
     send(404, { message: 'Not Found' });
   });

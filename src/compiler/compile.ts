@@ -134,6 +134,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   const dataDeps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set<string>()]));
   for (const n of def.nodes) {
     for (const d of n.depends_on ?? []) if (!byId.has(d)) err('unknown_dependency', `depends_on '${d}' is not a node`, n.id);
+    if (n.merge && n.type === 'condition') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
   }
   const routeOf = new Map<string, { condition: string; route: string }>();
   for (const n of def.nodes) {

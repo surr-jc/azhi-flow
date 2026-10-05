@@ -3,7 +3,15 @@ import type { EffectClass, JsonSchema } from '../definition/types.js';
 export type ToolTransport =
   | { kind: 'builtin'; name: string; config?: Record<string, unknown> }
   | { kind: 'http'; method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; url: string; headers?: Record<string, string>; query?: string[] }
-  | { kind: 'mcp-stdio'; command: string[]; tool: string; env?: Record<string, string>; cwd?: string };
+  | {
+      kind: 'mcp-stdio';
+      command: string[];
+      tool: string;
+      env?: Record<string, string>;
+      cwd?: string;
+      /** Environment variable the credential is passed in (default AZHI_TOOL_CREDENTIAL), for servers that read their own, such as JIRA_API_TOKEN. */
+      credential_env?: string;
+    };
 
 /** A registered tool revision (spec section 9, "Registration"). */
 export interface ToolSpec {

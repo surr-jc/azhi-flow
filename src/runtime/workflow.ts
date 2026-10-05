@@ -511,7 +511,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       if (cond?.status === 'skipped' || cond?.route !== node.route.route) return true;
     }
     // A rejected approval skips everything downstream of it.
-    return node.deps.some((d) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed' || rejected.has(d));
+    const blocked = (d: string) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed' || rejected.has(d);
+    // A merge node joins alternative branches: it runs when any upstream node got through.
+    if (node.def.merge === 'any') return node.deps.length > 0 && node.deps.every(blocked);
+    return node.deps.some(blocked);
   };
 
   const runNode = async (node: PlanNode) => {

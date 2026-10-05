@@ -11,6 +11,11 @@ export interface AdminConfig {
   tools?: ToolSpec[];
   schedules?: Array<{ id: string; workflow: string; cron?: string; timezone?: string; inputs?: Record<string, unknown>; enabled?: boolean }>;
   secrets?: string[];
+  /**
+   * Values the example install asks for (`azhi example install --set name=value`, or the Examples
+   * page), filled into the tools wherever `{{name}}` appears, for example a Jira site address.
+   */
+  settings?: Array<{ name: string; title?: string; description?: string; placeholder?: string }>;
 }
 
 export function loadAdminConfig(path: string): AdminConfig {

@@ -10,6 +10,7 @@ const common = {
   type: { type: 'string' },
   description: { type: 'string' },
   depends_on: { type: 'array', items: id, uniqueItems: true },
+  merge: { enum: ['any'] },
   timeout: duration,
   retry: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1, maximum: 10 } }, additionalProperties: false },
 };
