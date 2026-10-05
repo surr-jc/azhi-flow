@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
+import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
@@ -48,7 +48,15 @@ function SignIn({ onDone }: { onDone: () => void }) {
       onDone();
     } catch (err) {
       setToken(null);
-      setError((err as Error).message);
+      // A refused token is a 401/403; anything else is the server (or no server) answering.
+      const status = err instanceof ApiError ? err.status : 0;
+      setError(
+        status === 401 || status === 403
+          ? `That token was not accepted: ${(err as Error).message}`
+          : status
+            ? `The server could not check the token (HTTP ${status}): ${(err as Error).message}. Look at the window where Azhi is running for the error.`
+            : `Could not reach the Azhi server at ${location.host}. Check that it is running on this address and port.`,
+      );
     }
   };
   return (
@@ -66,7 +74,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
         <input type="password" placeholder="API token" autoComplete="off" aria-label="API token" value={value} onChange={(e) => setValue(e.target.value)} />
         <button type="submit" className="primary">Open</button>
       </form>
-      {error ? <div className="error">That token was not accepted: {error}</div> : null}
+      {error ? <div className="error" role="alert">{error}</div> : null}
     </main>
   );
 }
