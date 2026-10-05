@@ -198,9 +198,10 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
 - `azhi copilot check` fails although your own OpenCode works with Copilot: the check makes the same
   requests OpenCode does with the saved sign-in (the model list, then a one-token chat with the
   configured model) and prints each answer, so it shows the difference. The simplest fix is to reuse
-  your OpenCode's own sign-in: `azhi copilot import` reads `~/.local/share/opencode/auth.json` (its
-  github-copilot entry, kept whole, with the enterprise address if it has one) without printing it;
-  the web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
+  your OpenCode's own sign-in: `azhi copilot import` tries every Copilot sign-in on the machine (each
+  github-copilot entry in `~/.local/share/opencode/auth.json`, kept whole with its enterprise address,
+  then `GITHUB_TOKEN`/`GH_TOKEN`, then `gh auth token`), prints which work, and saves the first that
+  Copilot accepts (nothing if none does); no token is printed. The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
   `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
   whenever your OpenCode signs in again.
 - `gateway bridge did not connect to opencode: ... Operation timed out after 30000ms` (older builds):

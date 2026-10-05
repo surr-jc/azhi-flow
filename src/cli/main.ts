@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -370,22 +371,48 @@ copilot
 
 copilot
   .command('import')
-  .description('Reuse the GitHub Copilot sign-in OpenCode already has (its auth.json); nothing is printed')
+  .description('Reuse a GitHub Copilot sign-in this machine already has (OpenCode\'s auth.json, GITHUB_TOKEN, the gh tool): tries each and keeps the one Copilot accepts; nothing is printed')
   .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
   .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
-  .option('--enterprise-url <host>', 'GitHub Enterprise address, when the file does not name it')
+  .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
   .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
+    const candidates: Array<{ name: string; auth: string }> = [];
     const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
-    if (!existsSync(file)) {
-      console.error(red(`${file} not found. Sign in with OpenCode first (opencode auth login), or use: azhi copilot login`));
+    if (existsSync(file)) {
+      try {
+        const j = JSON.parse(readFileSync(file, 'utf8'));
+        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) candidates.push({ name: `OpenCode auth.json: ${k}${j[k]?.enterpriseUrl ? ` (${j[k].enterpriseUrl})` : ''}`, auth: JSON.stringify({ [k]: j[k] }) });
+      } catch {
+        console.error(dim(`${file} is not JSON; skipped`));
+      }
+    } else {
+      console.error(dim(`no OpenCode sign-in file at ${file}`));
+    }
+    for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
+    try {
+      const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();
+      if (t) candidates.push({ name: 'the gh tool (gh auth token)', auth: t });
+    } catch {
+      // gh not installed or not signed in
+    }
+    if (!candidates.length) {
+      console.error(red('No sign-in found: no github-copilot entry in the OpenCode file, no GITHUB_TOKEN, and gh is not signed in. Use: azhi copilot login'));
       process.exitCode = 1;
       return;
     }
-    const r = await client().post<{ secret: string; version: number; enterprise?: string; check: { ok: boolean; message: string; steps?: Array<{ name: string; status: number | string; detail: string }> } }>('/v1/copilot/import', { secret: opts.secret, auth: readFileSync(file, 'utf8'), ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
-    console.log(`${green('imported')} OpenCode's GitHub Copilot sign-in${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
-    for (const st of r.check.steps ?? []) console.log(`  ${dim(String(st.status).padEnd(5))} ${st.name}: ${st.detail}`);
-    console.log(r.check.ok ? green(r.check.message) : red(r.check.message));
-    if (!r.check.ok) process.exitCode = 1;
+    const r = await client().post<{ secret: string; version?: number; from: string | null; enterprise?: string; tried: Array<{ name: string; ok: boolean; message: string }>; check?: { message: string } }>('/v1/copilot/import', {
+      secret: opts.secret,
+      candidates,
+      ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}),
+    });
+    for (const t of r.tried) console.log(`  ${t.ok ? green('works ') : red('failed')} ${t.name}${t.ok ? '' : `: ${t.message}`}`);
+    if (!r.from) {
+      console.error(red('None of them is accepted by GitHub Copilot, so nothing was saved. Send the lines above, or sign in with: azhi copilot login'));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${green('imported')} ${r.from}${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
+    console.log(green(r.check!.message));
   });
 
 copilot

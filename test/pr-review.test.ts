@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parse, stringify } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { compile } from '../src/compiler/compile.js';
@@ -600,14 +600,38 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
       c.stderr.on('data', (d) => (out += d));
       return { code: await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1))), out };
     };
-    const cli = await run(['copilot', 'import', '--secret', 'copilot-imp2'], { XDG_DATA_HOME: data });
-    expect(cli.out).toContain(`imported OpenCode's GitHub Copilot sign-in for ${device.url}`);
+    const bare = { PATH: dirname(process.execPath), GITHUB_TOKEN: '', GH_TOKEN: '', COPILOT_GITHUB_TOKEN: '' };
+    const cli = await run(['copilot', 'import', '--secret', 'copilot-imp2'], { XDG_DATA_HOME: data, ...bare });
+    expect(cli.out).toContain(`imported OpenCode auth.json: github-copilot (${device.url}) for ${device.url}`);
     expect(cli.out).toContain('Copilot accepts this sign-in');
     expect(cli.out).not.toContain(COPILOT_TOKEN);
     expect(cli.code).toBe(0);
-    const missing = await run(['copilot', 'import'], { XDG_DATA_HOME: join(data, 'none') });
-    expect(missing.out).toContain('not found');
+    const missing = await run(['copilot', 'import'], { XDG_DATA_HOME: join(data, 'none'), ...bare });
+    expect(missing.out).toContain('No sign-in found');
     expect(missing.code).toBe(1);
+
+    // Several sign-ins on the machine: the dead one in OpenCode's file is skipped, the working one in the environment is kept.
+    const stale = mkdtempSync(join(tmpdir(), 'azhi-oc-stale-'));
+    mkdirSync(join(stale, 'opencode'), { recursive: true });
+    writeFileSync(join(stale, 'opencode', 'auth.json'), JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: 'gho_dead', access: 'gho_dead', expires: 0 } }));
+    try {
+      fake.requireBearer(COPILOT_TOKEN);
+      const many = await run(['copilot', 'import', '--secret', 'copilot-imp3'], { XDG_DATA_HOME: stale, ...bare, GITHUB_TOKEN: COPILOT_TOKEN });
+      expect(many.out).toMatch(/failed OpenCode auth\.json: github-copilot: Copilot rejects this sign-in/);
+      expect(many.out).toContain('works  environment variable GITHUB_TOKEN');
+      expect(many.out).toContain('imported environment variable GITHUB_TOKEN');
+      expect(many.out).not.toContain('gho_dead');
+      expect(many.out).not.toContain(COPILOT_TOKEN);
+      expect(many.code).toBe(0);
+      // None works: nothing is saved over what is there.
+      const before = (await h.api.get<any[]>('/v1/secrets')).find((x) => x.name === 'copilot-imp3').version;
+      const none = await run(['copilot', 'import', '--secret', 'copilot-imp3'], { XDG_DATA_HOME: stale, ...bare });
+      expect(none.out).toContain('None of them is accepted');
+      expect(none.code).toBe(1);
+      expect((await h.api.get<any[]>('/v1/secrets')).find((x) => x.name === 'copilot-imp3').version).toBe(before);
+    } finally {
+      fake.requireBearer(undefined);
+    }
   });
 
   it('signs in to GitHub Copilot with `azhi copilot login`', async () => {

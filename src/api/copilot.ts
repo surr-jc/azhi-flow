@@ -186,13 +186,48 @@ export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/v1/copilot/import', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
-    const b = z.object({ secret: z.string().regex(SECRET).default('github-copilot-token'), auth: z.string().min(2).max(20_000), enterprise_url: z.string().max(200).optional() }).parse(req.body ?? {});
-    const si = signIn(b.auth);
-    const enterprise = b.enterprise_url?.trim() ? enterpriseHost(b.enterprise_url) : si.enterprise ? enterpriseHost(si.enterprise) : undefined;
-    const value = si.entry ? JSON.stringify({ ...si.entry, type: 'oauth', ...(enterprise ? { enterpriseUrl: enterprise } : {}) }) : enterprise ? JSON.stringify({ type: 'oauth', refresh: si.token, access: si.token, expires: 0, enterpriseUrl: enterprise }) : si.token;
-    const version = await setSecret(ctx, p.workspaceId, b.secret, value, p.userId);
-    await audit(ctx, p.workspaceId, p.userId, 'copilot.imported', { secret: b.secret, version, ...(enterprise ? { enterprise } : {}) });
-    return { secret: b.secret, version, ...(enterprise ? { enterprise } : {}), check: await checkCopilotToken(ctx, si.token, enterprise).catch((e) => ({ ok: false, message: (e as Error).message })) };
+    const b = z
+      .object({
+        secret: z.string().regex(SECRET).default('github-copilot-token'),
+        auth: z.string().min(2).max(20_000).optional(),
+        /** Several sign-ins to try (from OpenCode's file, the environment, the gh tool); the first that Copilot accepts is stored. */
+        candidates: z.array(z.object({ name: z.string().max(80), auth: z.string().min(2).max(20_000) })).min(1).max(8).optional(),
+        enterprise_url: z.string().max(200).optional(),
+      })
+      .parse(req.body ?? {});
+    if (!b.auth && !b.candidates) throw new AzhiError(ErrorClass.invalidInput, 'give auth (a sign-in) or candidates (several to try)');
+    const store = async (auth: string) => {
+      const si = signIn(auth);
+      const enterprise = b.enterprise_url?.trim() ? enterpriseHost(b.enterprise_url) : si.enterprise ? enterpriseHost(si.enterprise) : undefined;
+      const value = si.entry ? JSON.stringify({ ...si.entry, type: 'oauth', ...(enterprise ? { enterpriseUrl: enterprise } : {}) }) : enterprise ? JSON.stringify({ type: 'oauth', refresh: si.token, access: si.token, expires: 0, enterpriseUrl: enterprise }) : si.token;
+      return { si, enterprise, value };
+    };
+    const save = async (value: string, enterprise: string | undefined, via?: string) => {
+      const version = await setSecret(ctx, p.workspaceId, b.secret, value, p.userId);
+      await audit(ctx, p.workspaceId, p.userId, 'copilot.imported', { secret: b.secret, version, ...(enterprise ? { enterprise } : {}), ...(via ? { via } : {}) });
+      return version;
+    };
+    if (b.auth) {
+      const { si, enterprise, value } = await store(b.auth);
+      const version = await save(value, enterprise);
+      return { secret: b.secret, version, ...(enterprise ? { enterprise } : {}), check: await checkCopilotToken(ctx, si.token, enterprise).catch((e) => ({ ok: false, message: (e as Error).message })) };
+    }
+    // Try each; store the first Copilot accepts, and nothing when none does (a working sign-in is never replaced by a dead one).
+    const tried: Array<{ name: string; ok: boolean; message: string }> = [];
+    for (const c of b.candidates!) {
+      try {
+        const { si, enterprise, value } = await store(c.auth);
+        const check = await checkCopilotToken(ctx, si.token, enterprise);
+        tried.push({ name: c.name, ok: check.ok, message: check.message });
+        if (check.ok) {
+          const version = await save(value, enterprise, c.name);
+          return { secret: b.secret, version, from: c.name, ...(enterprise ? { enterprise } : {}), check, tried };
+        }
+      } catch (e) {
+        tried.push({ name: c.name, ok: false, message: (e as Error).message });
+      }
+    }
+    return { secret: b.secret, from: null, tried };
   });
 
   app.post('/v1/copilot/login', async (req) => {
