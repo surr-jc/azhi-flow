@@ -4,13 +4,20 @@
   --ok-bg: #dcfce7; --bad-bg: #fee2e2; --warn-bg: #fef3c7; --run-bg: #dbeafe; --idle-bg: #f5f5f4;
   color-scheme: light;
 }
+/* Dark follows the system unless the theme switch chose light or dark (html[data-theme]). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0c0a09; --panel: #1c1917; --ink: #f5f5f4; --muted: #a8a29e; --line: #292524; --side: #141210;
     --ok: #4ade80; --bad: #f87171; --warn: #fbbf24; --run: #60a5fa; --idle: #78716c;
     --ok-bg: #14532d; --bad-bg: #7f1d1d; --warn-bg: #78350f; --run-bg: #1e3a8a; --idle-bg: #292524;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0a09; --panel: #1c1917; --ink: #f5f5f4; --muted: #a8a29e; --line: #292524; --side: #141210;
+  --ok: #4ade80; --bad: #f87171; --warn: #fbbf24; --run: #60a5fa; --idle: #78716c;
+  --ok-bg: #14532d; --bad-bg: #7f1d1d; --warn-bg: #78350f; --run-bg: #1e3a8a; --idle-bg: #292524;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -216,3 +223,5 @@ a.button.primary { background: var(--run); border-color: var(--run); color: #fff
 .token-once { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .token-once code { padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
 .slack-id { width: 120px; }
+.inputs-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-switch { padding: 3px 6px; font-size: 12px; }

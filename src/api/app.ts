@@ -238,15 +238,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         state: z.string().optional(),
         workflow: z.string().optional(),
         before: z.string().datetime({ offset: true }).optional(),
+        since: z.string().datetime({ offset: true }).optional(),
+        // Text found in the run's inputs, or the start of its id.
+        q: z.string().trim().min(1).max(200).optional(),
       })
       .parse(req.query);
+    const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+           AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
          ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null],
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null],
       )
     ).rows;
   });

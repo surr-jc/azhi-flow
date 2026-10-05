@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, atLeast, getToken, setToken, type Alert, type Me } from './api';
+import { api, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
@@ -107,6 +107,7 @@ function Shell() {
         <button className="menu-btn" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button>
         <Link to="/ui" className="brand">Azhi Flow</Link>
         <span className="top-right">
+          <ThemeSwitch />
           {critical ? <Link to="/ui/alerts" className="badge bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
           {role ? <span className="muted small">{role}</span> : null}
           <button className="link small" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>Sign out</button>
@@ -163,4 +164,15 @@ function Page({ path }: { path: string }): ReactNode {
 function DatasetRoute({ name }: { name: string }) {
   const me = useMe();
   return <DatasetPage name={name} canEdit={atLeast(me.data?.role, 'author')} />;
+}
+
+function ThemeSwitch() {
+  const [theme, setTheme] = useState<Theme>(getTheme());
+  return (
+    <select className="theme-switch" aria-label="Theme" value={theme} onChange={(e) => { const t = e.target.value as Theme; applyTheme(t); setTheme(t); }}>
+      <option value="system">System theme</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  );
 }

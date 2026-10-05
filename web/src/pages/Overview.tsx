@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { api, type Alert, type Overview as OverviewData, type RunRow } from '../api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, TERMINAL, type Alert, type Overview as OverviewData, type RunRow } from '../api';
 import { Link } from '../router';
 import { ago, Badge, ErrorNote, Loading, money, PageHead, Panel, RunLink, Stat, StateBadge, Table, when } from '../ui';
 
@@ -72,9 +72,16 @@ export function AlertList({ alerts }: { alerts: Alert[] }) {
   );
 }
 
-export function RunTable({ runs, empty = 'No runs yet.' }: { runs: RunRow[]; empty?: string }) {
+export function RunTable({ runs, empty = 'No runs yet.', cancel, inputs }: { runs: RunRow[]; empty?: string; cancel?: boolean; inputs?: boolean }) {
+  const qc = useQueryClient();
+  const stop = useMutation({
+    mutationFn: (id: string) => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['runs'] }),
+  });
   return (
-    <Table head={['Run', 'Workflow', 'State', 'Trigger', 'Started', 'Took']} empty={empty}>
+    <>
+    <ErrorNote error={stop.error} />
+    <Table head={['Run', 'Workflow', 'State', ...(inputs ? ['Inputs'] : []), 'Trigger', 'Started', 'Took', ...(cancel ? [''] : [])]} empty={empty}>
       {runs.map((r) => (
         <tr key={r.id}>
           <td><RunLink id={r.id} /></td>
@@ -84,12 +91,21 @@ export function RunTable({ runs, empty = 'No runs yet.' }: { runs: RunRow[]; emp
             {r.test ? <> <Badge tone="idle">test</Badge></> : null}
             {r.flags?.waiting_reason ? <span className="muted small"> {r.flags.waiting_reason.reason.replace('_', ' ')}</span> : null}
           </td>
+          {inputs ? <td className="mono small inputs-cell">{JSON.stringify(r.inputs ?? {})}</td> : null}
           <td>{r.trigger}</td>
           <td title={when(r.created_at)}>{ago(r.created_at)}</td>
           <td>{r.ended_at ? duration(r.created_at, r.ended_at) : '—'}</td>
+          {cancel ? (
+            <td>
+              {!TERMINAL.includes(r.state) && r.state !== 'cancelling' ? (
+                <button type="button" className="small danger" aria-label={`Cancel ${r.id}`} disabled={stop.isPending && stop.variables === r.id} onClick={() => confirm(`Cancel ${r.id}?`) && stop.mutate(r.id)}>Cancel</button>
+              ) : null}
+            </td>
+          ) : null}
         </tr>
       ))}
     </Table>
+    </>
   );
 }
 

@@ -33,7 +33,7 @@ Electron around `azhi up`) both show this same app.
 | Screen | Shows | Actions |
 |---|---|---|
 | **Overview** (mission control) | Runs now: running, waiting, queued. Last 24 h: succeeded, failed, delivery failed. Approvals waiting on you. Workers online. Model spend today and 7 days. Alerts. Next scheduled runs. Recent runs. | Jump to anything below |
-| **Runs** | All runs, filter by state and workflow, paged | Open a run |
+| **Runs** | All runs, filter by state, workflow, input text and date, paged | Open or cancel a run |
 | **Run** | Today's run page: graph, timeline, ledger, policy coverage, context manifest, usage, live over SSE | Cancel; approve or reject a waiting approval in place |
 | **Approvals** | Every approval waiting for a decision: workflow, run, message, payload, who may decide, expiry | Approve (with decision data from the schema) or reject |
 | **Workflows** | Each workflow: latest and published version, signed or not, schedule, last run | Open |
@@ -144,6 +144,10 @@ Monaco in the first release. Mission control follows it:
    block is). Publishing still needs a publisher signature (`azhi publish`); signing in the
    browser is a later decision. `GET /v1/versions/:ref/source` returns the package's text files
    (the start of the definition viewer).
+
+Smaller additions (2026-10-05): cancel a run from the runs list (operator), search runs by text
+in their inputs or the start of the run id and by date (`GET /v1/runs?q=&since=&before=`), and a
+theme switch (system, light, dark; kept in the browser).
 
 ## Out of scope for now
 

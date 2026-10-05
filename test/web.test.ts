@@ -169,6 +169,40 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('searches runs by input and date, cancels one from the list, and switches the theme', async () => {
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { team: 'needle-team' } });
+    expect((await h.api.get<any[]>('/v1/runs?q=needle')).map((r) => r.id)).toEqual([run_id]);
+    expect((await h.api.get<any[]>(`/v1/runs?q=${run_id.slice(0, 12)}`)).map((r) => r.id)).toContain(run_id);
+    expect(await h.api.get<any[]>('/v1/runs?q=100%25')).toEqual([]);
+    expect(await h.api.get<any[]>(`/v1/runs?since=${encodeURIComponent(new Date(Date.now() + 86_400_000).toISOString())}`)).toEqual([]);
+
+    const page = await open('/ui/runs');
+    await page.getByLabel('Search runs').fill('needle');
+    await page.getByLabel('Search runs').press('Enter');
+    await page.waitForURL(/q=needle/);
+    await page.getByRole('cell', { name: /needle-team/ }).waitFor();
+    expect(await page.locator('tbody tr').count()).toBe(1);
+    const today = new Date().toLocaleDateString('en-CA');
+    await page.getByLabel('From').fill(today);
+    await page.getByRole('cell', { name: /needle-team/ }).waitFor();
+    await page.getByLabel('To').fill('2020-01-01');
+    await page.getByText('No runs match.').waitFor();
+    await page.getByRole('button', { name: 'Clear' }).click();
+
+    page.on('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: `Cancel ${run_id}` }).click();
+    expect((await waitForRun(h.api, run_id)).run.state).toBe('cancelled');
+
+    await page.getByLabel('Theme').selectOption('dark');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(12, 10, 9)');
+    await page.reload();
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+    await page.getByLabel('Theme').selectOption('system');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBeUndefined();
+    await page.close();
+  });
+
   it('asks for a token when none is held, and raised no page errors', async () => {
     const page = await browser.newPage();
     await page.goto(`${h.server.url}/ui/runs`);
