@@ -366,6 +366,16 @@ copilot
     }
   });
 
+copilot
+  .command('check')
+  .description('Ask GitHub whether the saved Copilot sign-in works')
+  .option('--secret <name>', 'secret holding it', 'github-copilot-token')
+  .action(async (opts: { secret: string }) => {
+    const r = await client().post<{ ok: boolean; message: string }>('/v1/copilot/check', { secret: opts.secret });
+    console.log(r.ok ? green(r.message) : red(r.message));
+    if (!r.ok) process.exitCode = 1;
+  });
+
 example
   .command('repos')
   .description('Show, add or remove the repositories an installed example\'s GitHub tools may use')

@@ -162,6 +162,11 @@ async function startFakeDeviceFlow(token: string) {
       const b = raw ? JSON.parse(raw) : {};
       calls.push(`${req.url} ${b.client_id}`);
       res.setHeader('content-type', 'application/json');
+      if (req.url === '/api/v3/copilot_internal/v2/token') {
+        const ok = req.headers.authorization === `token ${token}`;
+        res.statusCode = ok ? 200 : req.headers.authorization === 'token no-seat' ? 404 : 401;
+        return res.end(JSON.stringify(ok ? { sku: 'copilot_business_seat', chat_enabled: true } : { message: 'x' }));
+      }
       if (req.url === '/login/device/code') return res.end(JSON.stringify({ device_code: 'dev_1', user_code: 'WXYZ-1234', verification_uri: 'https://github.com/login/device', interval: 1, expires_in: 600 }));
       if (req.url === '/login/oauth/access_token') return res.end(JSON.stringify(approved && b.device_code === 'dev_1' ? { access_token: token, token_type: 'bearer', scope: 'read:user' } : { error: 'authorization_pending' }));
       res.statusCode = 404;
@@ -450,6 +455,27 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     }
   });
 
+  it('names the sign-in when Copilot refuses it (Unauthorized), and points to the check', async () => {
+    fake.requireBearer('a-different-sign-in');
+    const azhiHome = mkdtempSync(join(tmpdir(), 'azhi-home-logs-'));
+    const before = process.env.AZHI_HOME;
+    process.env.AZHI_HOME = azhiHome;
+    try {
+      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7, post: false } });
+      const d = await waitForRun(h.api, run_id, 120_000);
+      expect(d.run.state).toBe('failed');
+      const text = JSON.stringify(d);
+      expect(text).toContain('GitHub Copilot refused the saved sign-in (secret github-copilot-token)');
+      expect(text).toContain('azhi copilot check');
+      expect(text).toContain('azhi copilot login');
+      expect(text).not.toContain(COPILOT_TOKEN);
+    } finally {
+      fake.requireBearer(undefined);
+      if (before === undefined) delete process.env.AZHI_HOME;
+      else process.env.AZHI_HOME = before;
+    }
+  });
+
   it('skips the approval and the comment when not asked to post', async () => {
     const before = gh.comments.length;
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7, post: false } });
@@ -503,6 +529,28 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect((await h.api.post<any>(`/v1/copilot/login/${l.id}`, {})).status).toBe('expired');
     const u = await h.api.post<{ token: string }>('/v1/users', { display_name: 'author2', role: 'author' });
     await expect(new ApiClient(h.server.url, u.token).post('/v1/copilot/login', {})).rejects.toThrow(/admin/);
+  });
+
+  it('checks the saved Copilot sign-in with GitHub and says what is wrong', async () => {
+    expect(await h.api.post<any>('/v1/copilot/check', { secret: 'no-such-secret' })).toMatchObject({ ok: false, message: expect.stringContaining('No sign-in is saved') });
+    const good = await h.api.post<any>('/v1/copilot/check', {});
+    expect(good).toMatchObject({ ok: true, plan: 'copilot_business_seat' });
+    await h.api.put('/v1/secrets/copilot-bad', { value: 'gho_revoked' });
+    await h.api.put('/v1/secrets/copilot-noseat', { value: 'no-seat' });
+    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-bad' })).message).toMatch(/rejects the stored token \(401\).*Sign in again/);
+    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-noseat' })).message).toMatch(/no Copilot access \(404\).*Copilot seat.*OAuth apps/);
+    // The pasted auth.json form is checked by its token.
+    await h.api.put('/v1/secrets/copilot-json', { value: JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: COPILOT_TOKEN, access: COPILOT_TOKEN, expires: 0 } }) });
+    expect((await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-json' })).ok).toBe(true);
+    const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
+    const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
+    const c = spawn(process.execPath, ['bin/azhi.js', 'copilot', 'check', '--secret', 'copilot-bad'], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token } });
+    let out = '';
+    c.stdout.on('data', (d) => (out += d));
+    c.stderr.on('data', (d) => (out += d));
+    const code = await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1)));
+    expect(out).toContain('rejects the stored token');
+    expect(code).toBe(1);
   });
 
   it('signs in to GitHub Copilot with `azhi copilot login`', async () => {

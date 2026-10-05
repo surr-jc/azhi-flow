@@ -221,7 +221,10 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           const ref = (err as { data?: { ref?: unknown } })?.data?.ref;
           const line = typeof ref === 'string' ? full.join('').split('\n').find((l) => l.includes(`ref=${ref}`)) : undefined;
           const cause = line ? (/error="([^"]*)"/.exec(line)?.[1] ?? line.slice(0, 400)) : undefined;
-          return `${cause ? `${cause} ` : ''}${text}${saveLog()}`;
+          const refused = copilot && /Unauthorized|\b401\b/i.test(`${cause ?? ''} ${text} ${logs}`)
+            ? ` GitHub Copilot refused the saved sign-in (secret ${input.credential}). Run \`azhi copilot check\` to see why, then sign in again with \`azhi copilot login\` (or Sign in with GitHub Copilot on the Examples page) and start a new run.`
+            : '';
+          return `${cause ? `${cause} ` : ''}${text}${refused}${saveLog()}`;
         };
         let savedLog: string | undefined;
         const saveLog = (): string => {

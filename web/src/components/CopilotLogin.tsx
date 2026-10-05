@@ -15,6 +15,7 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
   const [started, setStarted] = useState<Started>();
   const [state, setState] = useState<'idle' | 'starting' | 'waiting' | 'done'>('idle');
   const [error, setError] = useState<unknown>();
+  const [check, setCheck] = useState<{ ok: boolean; message: string }>();
   const done = useRef(onDone);
   done.current = onDone;
 
@@ -67,6 +68,15 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
     }
   };
 
+  const verify = async () => {
+    setError(undefined);
+    try {
+      setCheck(await api<{ ok: boolean; message: string }>('/v1/copilot/check', { method: 'POST', body: { secret } }));
+    } catch (e) {
+      setError(e);
+    }
+  };
+
   return (
     <div className="copilot-login">
       {state === 'waiting' && started ? (
@@ -79,6 +89,10 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
       ) : (
         <button type="button" className="small" disabled={state === 'starting'} onClick={() => void start()}>Sign in with GitHub Copilot</button>
       )}
+      {state !== 'waiting' ? (
+        <button type="button" className="small" onClick={() => void verify()}>Check sign-in</button>
+      ) : null}
+      {check ? <p className={check.ok ? 'ok-note' : 'warn-text'} role="status">{check.message}</p> : null}
       <ErrorNote error={error} />
     </div>
   );

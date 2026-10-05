@@ -189,6 +189,12 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   `(OpenCode log: ~/.azhi/logs/opencode/<run>-<step>-<time>.log)`. The step's own folder is deleted
   when the step ends, so that saved copy is the only one. `ls -t ~/.azhi/logs/opencode | head` lists
   the newest; `grep -h err_XXXX ~/.azhi/logs/opencode/*.log` finds an error reference.
+- `GitHub Copilot refused the saved sign-in` (or `AI_APICallError: Unauthorized` in the OpenCode log):
+  Copilot does not accept the saved `github-copilot-token`. Run `azhi copilot check` (or **Check
+  sign-in** on the Examples page): it asks GitHub and says whether the token is revoked (sign in
+  again), or whether the GitHub account has no Copilot seat or its organization restricts OAuth
+  apps (an owner approves the "opencode" app, then sign in again). Sign in with the account that has
+  Copilot; do not paste a token by hand.
 - `gateway bridge did not connect to opencode: ... Operation timed out after 30000ms` (older builds):
   OpenCode gives its MCP servers 30 seconds to start, and on a slow or virus-scanned machine the
   first start of Azhi's bridge took longer. The bridge now loads only what it needs and is given

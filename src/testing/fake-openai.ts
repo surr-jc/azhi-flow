@@ -18,8 +18,9 @@ export interface FakeOpenAIRequest {
   body: Record<string, any>;
 }
 
-export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number } }) {
+export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number }; bearer?: string }) {
   const requests: FakeOpenAIRequest[] = [];
+  let bearer = o.bearer;
   const server = createServer((req, res) => {
     let raw = '';
     req.on('data', (c) => (raw += c));
@@ -36,6 +37,11 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
         body: b,
       };
       requests.push(r);
+      // As Copilot answers a sign-in it does not accept.
+      if (bearer && req.headers.authorization !== `Bearer ${bearer}`) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        return void res.end(JSON.stringify({ error: { message: 'Unauthorized', type: 'authentication_error' } }));
+      }
       const script = typeof o.script === 'function' ? o.script(r) : o.script;
       const turn = messages.filter((m) => m.role === 'assistant').length;
       const step = script[Math.min(turn, script.length - 1)] ?? { text: '' };
@@ -77,6 +83,7 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
+    requireBearer: (v?: string) => (bearer = v),
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }

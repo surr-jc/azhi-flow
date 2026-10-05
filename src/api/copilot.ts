@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
-import { setSecret } from '../server/secrets.js';
+import { resolveSecret, setSecret } from '../server/secrets.js';
 import { requireRole } from './auth.js';
 
 /**
@@ -45,11 +45,48 @@ async function github(ctx: AppContext, path: string, body: Record<string, string
   return (await r.json()) as Record<string, any>;
 }
 
+/** GitHub's REST API for the sign-in's host: api.github.com, or <host>/api/v3 on GitHub Enterprise. */
+function apiBase(githubUrl: string): string {
+  const u = new URL(githubUrl);
+  return u.hostname === 'github.com' ? 'https://api.github.com' : `${githubUrl.replace(/\/$/, '')}/api/v3`;
+}
+
+/** The stored token as Copilot sees it (the same request Copilot's editor plugins make to start a session). */
+export async function checkCopilotToken(ctx: AppContext, token: string): Promise<{ ok: boolean; message: string; plan?: string; chat?: boolean }> {
+  const r = await fetch(`${apiBase(ctx.settings.copilotGithubUrl)}/copilot_internal/v2/token`, {
+    headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' },
+  }).catch((e) => {
+    throw new AzhiError(ErrorClass.transient, `could not reach GitHub to check the sign-in: ${(e as Error).message}`);
+  });
+  if (r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { sku?: string; chat_enabled?: boolean };
+    if (j.chat_enabled === false) return { ok: false, plan: j.sku, chat: false, message: 'Signed in, but Copilot Chat is turned off for this account (an organization policy). Ask your Copilot administrator to enable Copilot Chat, or use another account.' };
+    return { ok: true, plan: j.sku, chat: true, message: `GitHub accepts this sign-in and gives it Copilot access${j.sku ? ` (plan: ${j.sku})` : ''}.` };
+  }
+  if (r.status === 401) return { ok: false, message: 'GitHub rejects the stored token (401): it is revoked, expired or not a GitHub sign-in. Sign in again (azhi copilot login, or Sign in with GitHub Copilot on the Examples page); do not paste a token by hand.' };
+  if (r.status === 403 || r.status === 404) {
+    return {
+      ok: false,
+      message: `GitHub accepts the token but gives it no Copilot access (${r.status}). Either the GitHub account you signed in with has no Copilot seat (check github.com/settings/copilot while signed in as it), or its organization restricts OAuth apps or requires SSO: ask an organization owner to approve the "opencode" OAuth app (Organization settings > Third-party Access) and sign in again.`,
+    };
+  }
+  return { ok: false, message: `GitHub answered HTTP ${r.status} to the Copilot check; try again.` };
+}
+
 export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
   const pending = new Map<string, Pending>();
   const sweep = () => {
     for (const [id, p] of pending) if (p.expiresAt < Date.now()) pending.delete(id);
   };
+
+  app.post('/v1/copilot/check', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ secret: z.string().regex(SECRET).default('github-copilot-token') }).parse(req.body ?? {});
+    const s = await resolveSecret(ctx, p.workspaceId, b.secret);
+    if (!s) return { ok: false, message: `No sign-in is saved yet (secret ${b.secret}). Sign in with GitHub Copilot first.` };
+    return checkCopilotToken(ctx, s.value.trim().startsWith('{') ? (JSON.parse(s.value)['github-copilot']?.refresh ?? JSON.parse(s.value).refresh ?? s.value) : s.value.trim());
+  });
 
   app.post('/v1/copilot/login', async (req) => {
     const p = user(req);
