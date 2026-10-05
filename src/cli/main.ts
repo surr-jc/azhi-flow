@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compile } from '../compiler/compile.js';
@@ -344,9 +345,10 @@ copilot
   .command('login')
   .description('Sign in to GitHub Copilot and store the sign-in as a workspace secret (never shown)')
   .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
-  .action(async (opts: { secret: string }) => {
+  .option('--enterprise-url <host>', 'your company\'s GitHub Enterprise address, for example octo.ghe.com (default github.com)')
+  .action(async (opts: { secret: string; enterpriseUrl?: string }) => {
     const api = client();
-    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/copilot/login', { secret: opts.secret });
+    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/copilot/login', { secret: opts.secret, ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
     console.log(`Open ${bold(l.verification_uri)} and enter the code ${bold(l.user_code)}`);
     console.log(dim(`waiting for GitHub (the code expires in ${Math.round(l.expires_in / 60)} minutes)...`));
     let interval = l.interval;
@@ -364,6 +366,25 @@ copilot
       }
       interval = r.interval ?? interval;
     }
+  });
+
+copilot
+  .command('import')
+  .description('Reuse the GitHub Copilot sign-in OpenCode already has (its auth.json); nothing is printed')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--enterprise-url <host>', 'GitHub Enterprise address, when the file does not name it')
+  .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
+    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
+    if (!existsSync(file)) {
+      console.error(red(`${file} not found. Sign in with OpenCode first (opencode auth login), or use: azhi copilot login`));
+      process.exitCode = 1;
+      return;
+    }
+    const r = await client().post<{ secret: string; version: number; enterprise?: string; check: { ok: boolean; message: string } }>('/v1/copilot/import', { secret: opts.secret, auth: readFileSync(file, 'utf8'), ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
+    console.log(`${green('imported')} OpenCode's GitHub Copilot sign-in${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
+    console.log(r.check.ok ? green(r.check.message) : red(r.check.message));
+    if (!r.check.ok) process.exitCode = 1;
   });
 
 copilot

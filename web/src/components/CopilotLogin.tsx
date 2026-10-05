@@ -15,6 +15,8 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
   const [started, setStarted] = useState<Started>();
   const [state, setState] = useState<'idle' | 'starting' | 'waiting' | 'done'>('idle');
   const [error, setError] = useState<unknown>();
+  const [enterprise, setEnterprise] = useState('');
+  const [pasted, setPasted] = useState('');
   const [check, setCheck] = useState<{ ok: boolean; message: string }>();
   const done = useRef(onDone);
   done.current = onDone;
@@ -60,7 +62,7 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
     setError(undefined);
     setState('starting');
     try {
-      setStarted(await api<Started>('/v1/copilot/login', { method: 'POST', body: { secret } }));
+      setStarted(await api<Started>('/v1/copilot/login', { method: 'POST', body: { secret, ...(enterprise.trim() ? { enterprise_url: enterprise.trim() } : {}) } }));
       setState('waiting');
     } catch (e) {
       setState('idle');
@@ -72,6 +74,21 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
     setError(undefined);
     try {
       setCheck(await api<{ ok: boolean; message: string }>('/v1/copilot/check', { method: 'POST', body: { secret } }));
+    } catch (e) {
+      setError(e);
+    }
+  };
+
+  const importAuth = async () => {
+    setError(undefined);
+    try {
+      const r = await api<{ check: { ok: boolean; message: string } }>('/v1/copilot/import', { method: 'POST', body: { secret, auth: pasted } });
+      setPasted('');
+      setCheck(r.check);
+      setState('done');
+      void qc.invalidateQueries({ queryKey: ['secrets'] });
+      void qc.invalidateQueries({ queryKey: ['examples'] });
+      done.current?.();
     } catch (e) {
       setError(e);
     }
@@ -90,7 +107,22 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
         <button type="button" className="small" disabled={state === 'starting'} onClick={() => void start()}>Sign in with GitHub Copilot</button>
       )}
       {state !== 'waiting' ? (
-        <button type="button" className="small" onClick={() => void verify()}>Check sign-in</button>
+        <>
+          <button type="button" className="small" onClick={() => void verify()}>Check sign-in</button>
+          <details>
+            <summary className="small">Company GitHub address, or reuse OpenCode's sign-in</summary>
+            <div className="field">
+              <label htmlFor={`ent-${secret}`}>GitHub Enterprise address</label>
+              <input id={`ent-${secret}`} className="mono" placeholder="octo.ghe.com (empty for github.com)" value={enterprise} spellCheck={false} onChange={(x) => setEnterprise(x.target.value)} />
+              <span className="hint">Used by Sign in with GitHub Copilot above, when your company signs in to its own GitHub address.</span>
+            </div>
+            <div className="field">
+              <label htmlFor={`oc-${secret}`}>OpenCode's auth.json</label>
+              <textarea id={`oc-${secret}`} className="mono" rows={3} placeholder="Paste the contents of ~/.local/share/opencode/auth.json" value={pasted} spellCheck={false} onChange={(x) => setPasted(x.target.value)} />
+              <button type="button" className="small" disabled={!pasted.trim()} onClick={() => void importAuth()}>Use this sign-in</button>
+            </div>
+          </details>
+        </>
       ) : null}
       {check ? <p className={check.ok ? 'ok-note' : 'warn-text'} role="status">{check.message}</p> : null}
       <ErrorNote error={error} />

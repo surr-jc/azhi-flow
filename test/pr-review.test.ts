@@ -553,6 +553,45 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(code).toBe(1);
   });
 
+  it('signs in through a company GitHub Enterprise address, and reuses the sign-in OpenCode already has', async () => {
+    device.approve(true);
+    // An Enterprise host is kept with the token, so OpenCode uses that host's Copilot; the check asks that host.
+    const l = await h.api.post<any>('/v1/copilot/login', { secret: 'copilot-ent', enterprise_url: device.url });
+    expect(l.enterprise).toBe(device.url);
+    await new Promise((r) => setTimeout(r, 1100));
+    expect((await h.api.post<any>(`/v1/copilot/login/${l.id}`, {})).status).toBe('done');
+    expect(await h.api.post<any>('/v1/copilot/check', { secret: 'copilot-ent' })).toMatchObject({ ok: true, enterprise: device.url });
+    await expect(h.api.post('/v1/copilot/login', { enterprise_url: 'not a host' })).rejects.toThrow(/not a GitHub Enterprise host/);
+    await expect(h.api.post('/v1/copilot/login', { enterprise_url: 'http://evil.example.com' })).rejects.toThrow(/https/);
+    // OpenCode's auth.json (the whole file or its entry), pasted or read by `azhi copilot import`.
+    const authJson = JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: COPILOT_TOKEN, access: COPILOT_TOKEN, expires: 0, enterpriseUrl: device.url }, openai: { type: 'api', key: 'sk-other' } });
+    const imp = await h.api.post<any>('/v1/copilot/import', { secret: 'copilot-imp', auth: authJson });
+    expect(imp).toMatchObject({ secret: 'copilot-imp', enterprise: device.url, check: { ok: true } });
+    expect(JSON.stringify(imp)).not.toContain(COPILOT_TOKEN);
+    expect(JSON.stringify(imp)).not.toContain('sk-other');
+    await expect(h.api.post('/v1/copilot/import', { auth: '{"openai":{"type":"api"}}' })).rejects.toThrow(/no github-copilot sign-in/);
+    const data = mkdtempSync(join(tmpdir(), 'azhi-oc-data-'));
+    mkdirSync(join(data, 'opencode'), { recursive: true });
+    writeFileSync(join(data, 'opencode', 'auth.json'), authJson);
+    const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
+    const token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
+    const run = async (args: string[], env: Record<string, string> = {}) => {
+      const c = spawn(process.execPath, ['bin/azhi.js', ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, AZHI_URL: h.server.url, AZHI_TOKEN: token, ...env } });
+      let out = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.stderr.on('data', (d) => (out += d));
+      return { code: await new Promise<number>((r) => c.on('exit', (x) => r(x ?? 1))), out };
+    };
+    const cli = await run(['copilot', 'import', '--secret', 'copilot-imp2'], { XDG_DATA_HOME: data });
+    expect(cli.out).toContain(`imported OpenCode's GitHub Copilot sign-in for ${device.url}`);
+    expect(cli.out).toContain('GitHub accepts this sign-in');
+    expect(cli.out).not.toContain(COPILOT_TOKEN);
+    expect(cli.code).toBe(0);
+    const missing = await run(['copilot', 'import'], { XDG_DATA_HOME: join(data, 'none') });
+    expect(missing.out).toContain('not found');
+    expect(missing.code).toBe(1);
+  });
+
   it('signs in to GitHub Copilot with `azhi copilot login`', async () => {
     device.approve(true);
     const home = mkdtempSync(join(tmpdir(), 'azhi-home-'));
