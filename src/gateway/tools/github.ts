@@ -54,7 +54,14 @@ async function request(cfg: GithubConfig, token: string | undefined, method: 'GE
     const limited = res.status === 429 || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0');
     const definite = res.status >= 400 && res.status < 500 && res.status !== 408 && !limited;
     const cls = res.status === 401 || (res.status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
-    throw new SendError(`GitHub HTTP ${res.status}: ${text.slice(0, 200)}`, definite, cls);
+    const sso = res.headers.get('x-github-sso');
+    const hint =
+      res.status === 404
+        ? ` (GitHub answers 404 when the pull request or repository does not exist, and also when this token cannot see the repository: check the number, then that the token's resource owner is the organization and that it is approved and SSO-authorized. Test it with: curl -H "Authorization: Bearer $TOKEN" ${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}/repos/OWNER/REPO)`
+        : res.status === 403 && sso
+          ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
+          : '';
+    throw new SendError(`GitHub HTTP ${res.status}: ${text.slice(0, 200)}${hint}`, definite, cls);
   }
   try {
     return JSON.parse(text);
