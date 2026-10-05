@@ -42,8 +42,10 @@ Plan for the design.
 - Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
   decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
   timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,
-  approving and cancelling go through the same API and role checks as the CLI.
-  See [docs/mission-control-plan.md](docs/mission-control-plan.md).
+  approving and cancelling go through the same API and role checks as the CLI. Workflows are
+  drawn as a graph, and authors can edit them on the canvas (add, link and change steps, checked
+  live by the compiler and run plan) and save a new draft version; publishing still needs a
+  signature. See [docs/mission-control-plan.md](docs/mission-control-plan.md).
 - A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
 
 ## Install

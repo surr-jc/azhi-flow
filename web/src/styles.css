@@ -25,7 +25,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 
 /* shell */
 .shell { display: grid; grid-template-columns: 200px 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
-.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+.topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
 .brand { font-weight: 650; color: var(--ink); letter-spacing: -0.01em; }
 .brand.big { font-size: 20px; margin-bottom: 24px; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
@@ -171,3 +171,30 @@ svg .node.st-skipped rect, svg .node.st-pending rect { stroke-dasharray: 4 3; }
 .wf-details { margin-top: 8px; }
 .wf-plan { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 13px; }
 h3.small { margin: 8px 0 4px; }
+
+/* workflow editor */
+a.button { display: inline-block; font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+a.button:hover { border-color: var(--idle); text-decoration: none; }
+button.linkish { background: none; border: 0; padding: 0; color: var(--run); font: inherit; cursor: pointer; }
+.row.wrap { flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--idle-bg); font-size: 12px; }
+.code { margin: 8px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow: auto; max-height: 480px; }
+.ed-palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.ed-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.ed-side .panel { max-height: 760px; overflow: auto; }
+.ed-side .form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.ed-side .form > label, .ed-deps { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+.ed-side .form > label > span, .ed-deps > span.muted { font-weight: 400; }
+.ed-deps .label { font-weight: 500; }
+.ed-side textarea { resize: vertical; }
+.ed-check { margin-top: 8px; font-size: 13px; }
+.ed-check p { margin: 0 0 6px; }
+.ed-diags { margin: 0; padding-left: 18px; }
+.ed-diags li.error { border: 0; background: none; padding: 0; margin: 2px 0; color: var(--bad); }
+.ed-diags li.warning, .ed-diags li.info { color: var(--warn); }
+.wf-edgebar { display: flex; gap: 10px; align-items: center; font-size: 12px; min-height: 26px; margin-bottom: 6px; flex-wrap: wrap; }
+.wf-card.has-problem { border-color: var(--bad); border-width: 2px; }
+.wf-problem { margin-left: auto; background: var(--bad); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 16px; }
+.wf .react-flow__handle.connectable { width: 10px; height: 10px; background: var(--run); border-color: var(--panel); }
+.wf .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2.5; }
+@media (max-width: 1100px) { .ed-grid { grid-template-columns: 1fr; } }

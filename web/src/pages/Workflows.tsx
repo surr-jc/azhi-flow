@@ -38,7 +38,8 @@ interface VersionRow { id: string; version: number; draft: boolean; package_hash
 export function WorkflowPage({ slug }: { slug: string }) {
   const me = useMe();
   const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<VersionRow[]>(`/v1/workflows/${encodeURIComponent(slug)}/versions`) });
-  const [picked, setPicked] = useState<string>();
+  const { search } = useRoute();
+  const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
@@ -53,9 +54,12 @@ export function WorkflowPage({ slug }: { slug: string }) {
         title={def?.name ?? slug}
         sub={def?.description ?? (def?.name && def.name !== slug ? <span className="mono">{slug}</span> : undefined)}
         actions={
-          <select aria-label="Version" value={current.id} onChange={(e) => setPicked(e.target.value)}>
-            {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
-          </select>
+          <div className="row">
+            <select aria-label="Version" value={current.id} onChange={(e) => setPicked(e.target.value)}>
+              {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
+            </select>
+            {atLeast(me.data?.role, 'author') ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="button">Edit</Link> : null}
+          </div>
         }
       />
       <div className="grid-2">

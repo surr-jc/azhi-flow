@@ -7,7 +7,9 @@ import { Badge, Json, StateBadge } from '../ui';
 /**
  * The workflow canvas (React Flow): a workflow's nodes laid out left to right in dependency
  * order, with approval gates and condition routes drawn as such. Given run details it shows each
- * node's live state. Read-only: nodes can be moved to look at the graph, but nothing is saved.
+ * node's live state. Read-only unless `edit` is given: then steps are connected by dragging from
+ * one card's right handle to another's left (the target then runs after the source), and a
+ * selected edge is removed with Delete. The editor owns the definition; the canvas only reports.
  */
 export interface PlanNode {
   id: string;
@@ -26,7 +28,7 @@ export interface NodeRunState {
   route?: string;
 }
 
-const TYPE: Record<string, { glyph: string; label: string }> = {
+export const TYPE: Record<string, { glyph: string; label: string }> = {
   tool: { glyph: '⚙', label: 'Tool' },
   script: { glyph: '{ }', label: 'Script' },
   agent: { glyph: '✦', label: 'Agent' },
@@ -84,7 +86,16 @@ const GY = 26;
 function layout(nodes: PlanNode[], shown: Map<string, string[]>) {
   const depth: Record<string, number> = {};
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const d = (id: string): number => (depth[id] ??= Math.max(-1, ...(byId.get(id)?.deps ?? []).map(d)) + 1);
+  // A cycle (only possible mid-edit; the compiler rejects it) is cut where it is found.
+  const visiting = new Set<string>();
+  const d = (id: string): number => {
+    if (depth[id] !== undefined) return depth[id];
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const v = Math.max(-1, ...(byId.get(id)?.deps ?? []).filter((x) => byId.has(x)).map(d)) + 1;
+    visiting.delete(id);
+    return (depth[id] = v);
+  };
   nodes.forEach((n) => d(n.id));
   const layers: string[][] = [];
   for (const n of nodes) (layers[depth[n.id]!] ??= []).push(n.id);
@@ -108,19 +119,29 @@ function layout(nodes: PlanNode[], shown: Map<string, string[]>) {
   return pos;
 }
 
-type CardData = { node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean };
+type CardData = { node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number };
+
+export interface CanvasEdit {
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  onConnect: (source: string, target: string) => void;
+  onDisconnect: (source: string, target: string) => void;
+  /** Error count per step, from the compiler. */
+  problems: Record<string, number>;
+}
 
 function Card({ data }: NodeProps<Node<CardData>>) {
-  const { node, run, live } = data;
+  const { node, run, live, editing, problems } = data;
   const t = TYPE[node.type] ?? { glyph: '•', label: node.type };
   const state = live ? (run?.state ?? 'pending') : undefined;
   const sub = node.type === 'agent' ? node.def?.profile : node.type === 'tool' ? node.def?.tool : node.type === 'approval' ? `role ${node.def?.role ?? 'operator'}` : node.type === 'condition' ? Object.keys(node.def?.routes ?? {}).join(' / ') : node.type === 'notify' ? node.def?.channel : node.type === 'script' ? node.def?.runtime : undefined;
   return (
-    <div className={`wf-card t-${node.type} ${state ? `st-${state}` : ''}`} title={node.def?.description ?? `${node.id} (${t.label})`}>
-      <Handle type="target" position={Position.Left} isConnectable={false} />
+    <div className={`wf-card t-${node.type} ${state ? `st-${state}` : ''} ${problems ? 'has-problem' : ''}`} title={node.def?.description ?? `${node.id} (${t.label})`}>
+      <Handle type="target" position={Position.Left} isConnectable={Boolean(editing)} />
       <div className="wf-head">
         <span className="wf-glyph" aria-hidden="true">{t.glyph}</span>
         <span className="wf-id">{node.id}</span>
+        {problems ? <span className="wf-problem" title={`${problems} problem(s)`}>{problems}</span> : null}
       </div>
       <div className="wf-sub">
         <span>{t.label}{sub ? ` · ${sub}` : ''}</span>
@@ -134,25 +155,29 @@ function Card({ data }: NodeProps<Node<CardData>>) {
       ) : node.def?.description ? (
         <div className="wf-desc">{node.def.description}</div>
       ) : null}
-      <Handle type="source" position={Position.Right} isConnectable={false} />
+      <Handle type="source" position={Position.Right} isConnectable={Boolean(editing)} />
     </div>
   );
 }
 
 const nodeTypes = { card: Card };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed }: { nodes: PlanNode[]; detail?: any; plan?: RunPlan | null; height?: number }) {
-  const [selected, setSelected] = useState<string | null>(null);
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit }: { nodes: PlanNode[]; detail?: any; plan?: RunPlan | null; height?: number; edit?: CanvasEdit }) {
+  const [ownSelected, setOwnSelected] = useState<string | null>(null);
+  const selected = edit ? edit.selected : ownSelected;
+  const setSelected = (f: (s: string | null) => string | null) => (edit ? edit.onSelect(f(edit.selected)) : setOwnSelected(f));
+  const [edgeSel, setEdgeSel] = useState<string | null>(null);
   const live = Boolean(detail);
   const states = useMemo(() => (detail ? nodeStates(detail) : {}), [detail]);
-  const shown = useMemo(() => reduce(planNodes), [planNodes]);
+  // While editing every direct dependency is drawn, so each one can be seen and removed.
+  const shown = useMemo(() => (edit ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduce(planNodes)), [planNodes, Boolean(edit)]);
   const pos = useMemo(() => layout(planNodes, shown), [planNodes, shown]);
 
   const nodes: Node<CardData>[] = planNodes.map((n) => ({
     id: n.id,
     type: 'card',
     position: pos[n.id]!,
-    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id },
+    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id] },
     selected: selected === n.id,
     width: W,
     height: H,
@@ -168,6 +193,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed }
       const cls = !live ? '' : target === 'running' || target === 'waiting' ? 'e-active' : source === 'succeeded' && target && target !== 'skipped' ? 'e-done' : target === 'skipped' || taken === false ? 'e-skipped' : '';
       return {
         id: `${dep}->${n.id}`,
+        selected: edgeSel === `${dep}->${n.id}`,
         source: dep,
         target: n.id,
         type: 'smoothstep',
@@ -189,6 +215,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed }
     const f = flow.current;
     const el = box.current;
     if (!f || !el) return;
+    if (!planNodes.length) return;
     const xs = Object.values(pos).map((p) => p.x);
     const ys = Object.values(pos).map((p) => p.y);
     const gw = Math.max(...xs) + W;
@@ -208,12 +235,40 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
 
+  // While editing, a step that is selected (or just added) off screen is brought into view.
+  useEffect(() => {
+    const f = flow.current;
+    const el = box.current;
+    const at = edit?.selected ? pos[edit.selected] : undefined;
+    if (!f || !el || !at) return;
+    const { x, y, zoom } = f.getViewport();
+    const sx = at.x * zoom + x;
+    const sy = at.y * zoom + y;
+    if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth && sy + H * zoom <= el.clientHeight) return;
+    void f.setCenter(at.x + W / 2, at.y + H / 2, { zoom, duration: 200 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit?.selected, pos]);
+
   // Tall enough for the graph's widest layer at a readable zoom, and no taller.
-  const height = fixed ?? Math.round(Math.min(560, Math.max(260, (Math.max(...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
+  const height = fixed ?? Math.round(Math.min(560, Math.max(260, (Math.max(0, ...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
 
   const sel = planNodes.find((n) => n.id === selected);
   return (
     <div className="wf">
+      {edit ? (
+        <div className="wf-edgebar" aria-live="polite">
+          {edgeSel ? (
+            <>
+              <span>Link <b>{edgeSel.replace('->', ' → ')}</b></span>
+              <button type="button" className="small" onClick={() => {
+                const [a, b] = edgeSel.split('->') as [string, string];
+                setEdgeSel(null);
+                edit.onDisconnect(a, b);
+              }}>Remove link</button>
+            </>
+          ) : <span className="muted">Drag from a step's right edge to another step to make it run after. Select a link to remove it.</span>}
+        </div>
+      ) : null}
       <div className="wf-canvas" style={{ height }} ref={box}>
         <ReactFlow
           onInit={(f) => {
@@ -226,20 +281,34 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed }
           nodeTypes={nodeTypes}
           minZoom={0.2}
           maxZoom={1.6}
-          nodesConnectable={false}
-          edgesFocusable={false}
-          deleteKeyCode={null}
+          nodesConnectable={Boolean(edit)}
+          edgesFocusable={Boolean(edit)}
+          deleteKeyCode={edit ? ['Delete', 'Backspace'] : null}
+          onConnect={(c) => edit && c.source && c.target && c.source !== c.target && edit.onConnect(c.source, c.target)}
+          onEdgesDelete={(es) => {
+            setEdgeSel(null);
+            es.forEach((e) => edit?.onDisconnect(e.source, e.target));
+          }}
+          onNodesDelete={() => undefined}
+          onBeforeDelete={async ({ edges }) => ({ nodes: [], edges })}
           proOptions={{ hideAttribution: true }}
-          onNodeClick={(_e, n) => setSelected((s) => (s === n.id ? null : n.id))}
-          onPaneClick={() => setSelected(null)}
+          onNodeClick={(_e, n) => {
+            setEdgeSel(null);
+            setSelected((s) => (s === n.id && !edit ? null : n.id));
+          }}
+          onEdgeClick={(_e, e) => edit && setEdgeSel(e.id)}
+          onPaneClick={() => {
+            setEdgeSel(null);
+            setSelected(() => null);
+          }}
           aria-label="Workflow graph"
         >
           <Background gap={20} size={1} />
           <Controls showInteractive={false} position="top-right" orientation="horizontal" />
         </ReactFlow>
       </div>
-      <Legend live={live} />
-      {sel ? <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(null)} /> : <p className="muted small">Select a node to see its details.</p>}
+      {edit ? null : <Legend live={live} />}
+      {edit ? null : sel ? <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} /> : <p className="muted small">Select a node to see its details.</p>}
     </div>
   );
 }

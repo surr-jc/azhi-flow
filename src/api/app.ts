@@ -25,6 +25,7 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerEditorRoutes } from './editor.js';
 import { registerMissionRoutes } from './mission.js';
 
 declare module 'fastify' {
@@ -75,6 +76,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
 
   registerWebRoutes(app);
   registerMissionRoutes(app, ctx);
+  registerEditorRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);

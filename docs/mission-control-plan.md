@@ -116,8 +116,18 @@ Monaco in the first release. Mission control follows it:
 5. **Visual editor** (React Flow). Step 1 built (2026-10-05, asked for by Suresh): the read-only
    workflow canvas (`web/src/components/WorkflowCanvas.tsx`) on the workflow and run pages, with
    live node states, approval gates, condition routes and node details, and the SDLC example
-   (`examples/sdlc`) to show it. Step 2: editing on the canvas (add and connect nodes, check
-   against the compiler and run plan, save back to YAML as a new draft version).
+   (`examples/sdlc`) to show it. Step 2 built (2026-10-05): the workflow editor
+   (`web/src/pages/Editor.tsx`, `/ui/workflows/:slug/edit`). Steps are added from a palette,
+   linked by dragging between cards (or the "Runs after" list), changed in a side form (structured
+   values as YAML), renamed with every reference, and removed. Each change is checked by the
+   server (`POST /v1/versions/:ref/check`: compiler diagnostics on the cards, and the run plan the
+   edit would have). "Save draft" (`POST /v1/versions/:ref/drafts`, author) writes the definition
+   back as the package's workflow file next to its other files, unchanged, through the normal
+   package upload, so it is audited and becomes a new unsigned draft of the same workflow; the
+   workflow id cannot change. YAML comments inside the file are not kept (the opening comment
+   block is). Publishing still needs a publisher signature (`azhi publish`); signing in the
+   browser is a later decision. `GET /v1/versions/:ref/source` returns the package's text files
+   (the start of the definition viewer).
 
 ## Out of scope for now
 

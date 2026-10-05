@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, getToken, setToken, type Alert, type Me } from './api';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -15,6 +15,9 @@ import { Secrets } from './pages/Secrets';
 import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
+
+// The editor (and its YAML library) loads only when someone opens it.
+const WorkflowEditor = lazy(() => import('./pages/Editor').then((m) => ({ default: m.WorkflowEditor })));
 
 export function App() {
   const [signedIn, setSignedIn] = useState(Boolean(getToken()));
@@ -88,7 +91,7 @@ function Shell() {
   const role = me.data?.role;
   return (
     <div className={`shell ${menu ? 'menu-open' : ''}`}>
-      <header className="top">
+      <header className="topbar">
         <button className="menu-btn" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button>
         <Link to="/ui" className="brand">Azhi Flow</Link>
         <span className="top-right">
@@ -125,6 +128,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
+  if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
   if (path === '/ui/schedules') return <Schedules />;
   if (path === '/ui/workers') return <Workers />;
   if (path === '/ui/usage') return <Usage />;

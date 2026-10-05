@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
@@ -209,7 +209,7 @@ function Ledger({ detail: d }: { detail: any }) {
 const MARK: Record<string, string> = { native: 'ok', bridged: 'warn', unverified: 'warn', unsupported: 'bad' };
 const ENF: Record<string, string> = { enforced: 'ok', harness: 'warn', unobservable: 'bad' };
 
-export function Coverage({ plan: p, live }: { plan: RunPlan | null; live?: boolean }) {
+export function Coverage({ plan: p, live, note }: { plan: RunPlan | null; live?: boolean; note?: ReactNode }) {
   if (!p) return <p className="muted">This run was created before run plans were recorded with runs.</p>;
   const controls = p.nodes.flatMap((n) => (n.coverage ?? []).map((c, i) => (
     <tr key={`${n.id}-c${i}`}><td>{n.id}</td><td>{c.action}</td><td><Badge tone={ENF[c.enforcement]}>{c.enforcement}</Badge></td><td className="muted">{c.detail}</td></tr>
@@ -228,7 +228,7 @@ export function Coverage({ plan: p, live }: { plan: RunPlan | null; live?: boole
       {tainted.length ? <p className="muted">Tainted nodes (they saw untrusted content, so their writes need a gate): {tainted.map((n) => `${n.id} (${n.tainted})`).join(', ')}</p> : null}
       <Panel title="Controls on each action"><Table head={['Node', 'Action', 'Enforcement', 'How']} empty="No controlled actions.">{controls}</Table></Panel>
       <Panel title="Requirements"><Table head={['Node', 'Requirement', 'Mark', 'Detail']} empty="No requirements.">{reqs}</Table></Panel>
-      {live ? <p className="muted">This is the plan as it stands now, for you, with the workers online now.</p> : <p className="muted">This is the plan as it stood when the run was created.</p>}
+      {note ? <p className="muted">{note}</p> : live ? <p className="muted">This is the plan as it stands now, for you, with the workers online now.</p> : <p className="muted">This is the plan as it stood when the run was created.</p>}
     </>
   );
 }
