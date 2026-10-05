@@ -571,6 +571,13 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(added.out).toContain('allowed acme/payments, acme/other');
     expect(added.code).toBe(0);
     expect((await azhi(['example', 'repos', 'pr-review'])).out.trim().split('\n')).toEqual(['acme/payments', 'acme/other']);
+    // A new run of the version saved before the change uses the new list (the local git host has
+    // no acme/other repository, so it now gets as far as the clone).
+    const again = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/other', pr: 7, post: false } });
+    const d2 = await waitForRun(h.api, again.run_id, 60_000);
+    expect(JSON.stringify(d2)).not.toContain('is not one of the repositories');
+    expect(d2.run.snapshot.tool_revisions['github.get-pull-request@1']).toBe(2);
+    expect(JSON.stringify(d2)).toContain("repository 'http://127.0.0.1");
     const ex = (await h.api.get<any[]>('/v1/examples')).find((x) => x.id === 'pr-review');
     expect(ex.repos).toEqual(['acme/payments', 'acme/other']);
     for (const ref of ['github.get-pull-request@1', 'github.comment-on-pr@1']) {

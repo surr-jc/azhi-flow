@@ -7,7 +7,9 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
-import { loadCatalog } from './catalog.js';
+import { loadCatalog, loadToolRevision } from './catalog.js';
+import type { ToolSpec } from '../gateway/types.js';
+import { contentHash } from '../lib/hash.js';
 import type { AppContext } from './context.js';
 import type { VersionRow } from './workflows.js';
 
@@ -35,6 +37,11 @@ export interface CreateRunOptions {
  * Temporal workflow, so a crash between the two never loses a run or starts one twice.
  * A schedule occurrence ID makes creation idempotent.
  */
+function sameExceptRepos(a: ToolSpec, b: ToolSpec): boolean {
+  const strip = ({ revision: _r, ...t }: ToolSpec) => ({ ...t, transport: { ...t.transport, config: { ...((t.transport as { config?: object }).config ?? {}), repos: null } } });
+  return contentHash(strip(a)) === contentHash(strip(b));
+}
+
 export async function createRun(ctx: AppContext, workspaceId: string, o: CreateRunOptions): Promise<{ runId: string; created: boolean }> {
   const schema = o.version.plan.inputsSchema;
   if (schema) {
@@ -46,6 +53,15 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   for (const n of o.version.plan.nodes) if (n.tool) toolRevisions[n.tool.ref] = n.tool.revision ?? catalog.revisions.get(n.tool.ref) ?? 0;
   for (const n of o.version.plan.nodes) for (const t of n.agentTools ?? []) toolRevisions[t.ref] ??= t.revision ?? catalog.revisions.get(t.ref) ?? 0;
   toolRevisions['slack.post-message@1'] ??= 0;
+  // A version pins the tool revisions it was compiled against, except for the repository list:
+  // a later revision that changes only `transport.config.repos` (azhi example repos, Allowed
+  // repositories) applies to new runs of versions saved before it.
+  for (const [ref, pinned] of Object.entries(toolRevisions)) {
+    const latest = catalog.get(ref);
+    if (!latest?.revision || latest.revision <= pinned) continue;
+    const old = await loadToolRevision(ctx, workspaceId, ref, pinned);
+    if (old && sameExceptRepos(old, latest)) toolRevisions[ref] = latest.revision;
+  }
 
   if (o.testNode) {
     const target = o.version.plan.nodes.find((n) => n.id === o.testNode!.node);
