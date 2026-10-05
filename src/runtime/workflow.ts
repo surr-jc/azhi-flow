@@ -25,6 +25,7 @@ import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
 import { resolveValue, type ValueScope } from './values.js';
+import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
 export const approvalSignal = defineSignal<[ApprovalSignal]>('approval');
@@ -138,7 +139,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     });
 
   /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
-  const runHarness = async (node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
+  const runHarness = async (executor: string, node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
     try {
       const prep = await act.harnessPrepare({
         runId,
@@ -146,19 +147,22 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         nodeId: node.id,
         packageHash: snapshot.package_hash,
         profile: def.profile,
+        executor,
         outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
         tools: tools as never,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
       });
-      const queue = await selectWorker(node.id, 'opencode', 1);
+      const queue = await selectWorker(node.id, executor, 1);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential]);
       const r = await exec(node, queue).runHarness({
         runId,
         workspaceId,
         nodeId: node.id,
         packageHash: snapshot.package_hash,
+        executor: executor as HarnessExecutor,
+        provider: prep.provider,
         runToken,
         credential: prep.credential,
         providerUrl: prep.providerUrl,
@@ -172,8 +176,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
-      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor: 'opencode', tainted: plan.taint.tainted[node.id], result: { ...r, ...(error ? { error } : {}) } });
-      // OpenCode reports usage per message but not for its own side calls, so totals are partial.
+      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor, tainted: plan.taint.tainted[node.id], result: { ...r, ...(error ? { error } : {}) } });
+      // Harnesses make side calls of their own (titles, compaction) that they may not report, so totals are partial.
       if (!status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
       if (error) throw ApplicationFailure.create({ type: error.class, message: error.message, nonRetryable: true });
       return r.output;
@@ -185,12 +189,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
 
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
     const executor = def.executor ?? 'model-agent';
-    if (executor !== 'model-agent' && executor !== 'opencode') {
+    if (executor !== 'model-agent' && !isHarness(executor)) {
       throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${executor}' is not available on this interpreter build`, nonRetryable: true });
     }
     const act = agentOn(gatewayQueue, node);
     const tools = (node.agentTools ?? []).map((t) => ({ ref: t.ref, effect: t.effect, safeForTainted: t.safeForTainted, revision: snapshot.tool_revisions[t.ref] ?? t.revision }));
-    if (executor === 'opencode') return runHarness(node, def, s, act, tools);
+    if (isHarness(executor)) return runHarness(executor, node, def, s, act, tools);
     const deadline = Date.now() + node.timeoutMs;
     try {
       let state = await act.agentBegin({

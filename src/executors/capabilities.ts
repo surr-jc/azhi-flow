@@ -17,6 +17,8 @@ export interface ExecutorCapabilities {
 export interface ExecutorDeclaration {
   id: string;
   version: string;
+  /** Model providers the adapter can drive. */
+  providers: Array<'anthropic' | 'openai'>;
   capabilities: ExecutorCapabilities;
   notes: string[];
 }
@@ -25,6 +27,7 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
   'model-agent': {
     id: 'model-agent',
     version: '0.1.0',
+    providers: ['anthropic', 'openai'],
     capabilities: {
       streaming: false,
       resume: 'checkpoint-only',
@@ -42,6 +45,7 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
   opencode: {
     id: 'opencode',
     version: '1.18.34',
+    providers: ['anthropic'],
     capabilities: {
       streaming: true,
       resume: 'native',
@@ -56,4 +60,51 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
     },
     notes: ['Built-in tools restricted by deny-all permission rules; OpenCode still lists them', 'Runs with an isolated HOME so host skills and config do not leak in'],
   },
+  // Claude Agent SDK 0.3.289: the SDK drives the Claude Code runtime. Verified in test/claude-agent-sdk.test.ts
+  // against a scripted Anthropic endpoint; not yet against a live model.
+  'claude-agent-sdk': {
+    id: 'claude-agent-sdk',
+    version: '0.3.289',
+    providers: ['anthropic'],
+    capabilities: {
+      streaming: true,
+      resume: 'native',
+      cancellation: 'best-effort',
+      gatewayTools: 'bridged',
+      ambientTools: 'restrictable',
+      structuredOutput: 'validated',
+      usage: 'reported',
+      platforms: ['linux', 'macos', 'windows'],
+      unverified: ['resume'],
+      compacts: true,
+    },
+    notes: ['Built-in tools are switched off (no tools) and only the gateway bridge is allowed, in dontAsk mode', 'Runs with an isolated HOME, no settings files, no persisted skills or plugins'],
+  },
+  // EXPERIMENTAL. Codex CLI 0.160.0 (installed separately: AZHI_CODEX_BIN or `codex` on PATH), advertised by
+  // a worker only with AZHI_EXPERIMENTAL_CODEX=1. Codex defers MCP tools behind its own tool_search step, so
+  // whether a live model finds the gateway bridge is unverified; the scripted conformance suite cannot
+  // exercise it (see test/harness-executors.test.ts).
+  codex: {
+    id: 'codex',
+    version: '0.160.0',
+    providers: ['openai'],
+    capabilities: {
+      streaming: true,
+      resume: 'checkpoint-only',
+      cancellation: 'best-effort',
+      gatewayTools: 'bridged',
+      ambientTools: 'uncontrolled',
+      structuredOutput: 'validated',
+      usage: 'partial',
+      platforms: ['linux', 'macos', 'windows'],
+      unverified: ['gatewayTools', 'ambientTools', 'usage', 'structuredOutput', 'cancellation', 'resume'],
+      compacts: true,
+    },
+    notes: ['Experimental and unverified against a live model', 'Codex\'s shell tool cannot be removed, only sandboxed read-only with approvals off, so a node can refuse it with requires.enforced_restrictions', 'Runs with an isolated CODEX_HOME and web search off'],
+  },
 };
+
+/** Executors that run on a worker as a separate harness process, bridged to the gateway over MCP. */
+export const HARNESS_EXECUTORS = ['opencode', 'claude-agent-sdk', 'codex'] as const;
+export type HarnessExecutor = (typeof HARNESS_EXECUTORS)[number];
+export const isHarness = (e: string): e is HarnessExecutor => (HARNESS_EXECUTORS as readonly string[]).includes(e);

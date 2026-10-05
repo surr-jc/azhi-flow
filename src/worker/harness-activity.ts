@@ -14,6 +14,8 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
+import { runClaudeAgentSdk } from './harness-claude.js';
+import { runCodex } from './harness-codex.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 
 /**
@@ -31,6 +33,9 @@ export interface HarnessInput {
   workspaceId: string;
   nodeId: string;
   packageHash: string;
+  /** Which harness runs the node; OpenCode when absent (older histories). */
+  executor?: 'opencode' | 'claude-agent-sdk' | 'codex';
+  provider?: 'anthropic' | 'openai';
   runToken: string;
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
@@ -52,12 +57,14 @@ export interface HarnessResult {
   tool_calls: number;
   repairs: number;
   duration_ms: number;
-  harness: { name: 'opencode'; version: string };
+  harness: { name: 'opencode' | 'claude-agent-sdk' | 'codex'; version: string };
 }
 
 export function harnessActivities(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }) {
   return {
     async runHarness(input: HarnessInput): Promise<HarnessResult> {
+      if (input.executor === 'claude-agent-sdk') return runClaudeAgentSdk(o, input);
+      if (input.executor === 'codex') return runCodex(o, input);
       const oc = o.capabilities.runtimes.opencode;
       if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: 'this worker has no OpenCode', nonRetryable: true });
       // Same trust check as scripts: the package's profile is what the harness runs.

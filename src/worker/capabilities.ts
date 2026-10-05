@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export interface WorkerCapabilities {
   platform: NodeJS.Platform;
   arch: string;
-  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string } };
+  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
 }
@@ -37,12 +37,22 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
   const bun = tryRun('bun', ['--version']);
   const ocPath = opencodeBinary();
   const oc = ocPath ? tryRun(ocPath, ['--version']) : undefined;
+  const sdk = claudeAgentSdkVersion();
+  // Experimental: see the codex entry in src/executors/capabilities.ts. Off unless asked for.
+  const codexPath = process.env.AZHI_EXPERIMENTAL_CODEX === '1' ? codexBinary() : undefined;
+  const codex = codexPath ? tryRun(codexPath, ['--version'])?.replace(/^codex(-cli)?\s+/i, '') : undefined;
   return {
     platform: process.platform,
     arch: process.arch,
-    runtimes: { ...(python ? { python } : {}), ...(bun ? { bun: { version: bun } } : {}), ...(oc && ocPath ? { opencode: { version: oc, path: ocPath } } : {}) },
+    runtimes: {
+      ...(python ? { python } : {}),
+      ...(bun ? { bun: { version: bun } } : {}),
+      ...(oc && ocPath ? { opencode: { version: oc, path: ocPath } } : {}),
+      ...(sdk ? { 'claude-agent-sdk': { version: sdk } } : {}),
+      ...(codex && codexPath ? { codex: { version: codex, path: codexPath } } : {}),
+    },
     limits: { memory: process.platform === 'linux' && Boolean(tryRun('prlimit', ['--version'])), time: true },
-    executors: ['script', ...(oc ? ['opencode'] : [])],
+    executors: ['script', ...(oc ? ['opencode'] : []), ...(sdk ? ['claude-agent-sdk'] : []), ...(codex ? ['codex'] : [])],
   };
 }
 
@@ -53,4 +63,30 @@ export function opencodeBinary(): string | undefined {
   const pinned = fileURLToPath(new URL(`../../node_modules/.bin/opencode${win ? '.cmd' : ''}`, import.meta.url));
   if (existsSync(pinned)) return pinned;
   return tryRun(win ? 'where' : 'which', ['opencode'])?.split(/\r?\n/)[0] || undefined;
+}
+
+/**
+ * The installed Claude Agent SDK, when it and its native runtime for this platform are present
+ * (it is an optional dependency). `AZHI_CLAUDE_CODE_BIN` points at another Claude Code binary.
+ */
+export function claudeAgentSdkVersion(): string | undefined {
+  try {
+    const modules = (name: string) => fileURLToPath(new URL(`../../node_modules/${name}`, import.meta.url));
+    const version = (JSON.parse(readFileSync(modules('@anthropic-ai/claude-agent-sdk/package.json'), 'utf8')) as { version: string }).version;
+    if (process.env.AZHI_CLAUDE_CODE_BIN) return existsSync(process.env.AZHI_CLAUDE_CODE_BIN) ? version : undefined;
+    const os = process.platform;
+    const native = [`${os}-${process.arch}`, `${os}-${process.arch}-musl`].some((n) => existsSync(modules(`@anthropic-ai/claude-agent-sdk-${n}`)));
+    return native ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** AZHI_CODEX_BIN, the pinned copy in node_modules, or `codex` on PATH. */
+export function codexBinary(): string | undefined {
+  if (process.env.AZHI_CODEX_BIN) return process.env.AZHI_CODEX_BIN;
+  const win = process.platform === 'win32';
+  const pinned = fileURLToPath(new URL(`../../node_modules/.bin/codex${win ? '.cmd' : ''}`, import.meta.url));
+  if (existsSync(pinned)) return pinned;
+  return tryRun(win ? 'where' : 'which', ['codex'])?.split(/\r?\n/)[0] || undefined;
 }

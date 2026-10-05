@@ -73,7 +73,7 @@ export function registerEditorRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/executors', async (req) => {
     user(req);
     return {
-      executors: Object.values(EXECUTORS).map((e) => ({ id: e.id, version: e.version, capabilities: e.capabilities, notes: e.notes, providers: e.id === 'opencode' ? ['anthropic'] : ['anthropic', 'openai'] })),
+      executors: Object.values(EXECUTORS).map((e) => ({ id: e.id, version: e.version, capabilities: e.capabilities, notes: e.notes, providers: e.providers })),
       providers: ['anthropic', 'openai'],
     };
   });

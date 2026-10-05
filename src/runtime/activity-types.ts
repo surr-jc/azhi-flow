@@ -81,7 +81,7 @@ export interface GatewayActivities {
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Harness executors: builds the same context as the model agent, for a worker to run. */
-  harnessPrepare(input: AgentBeginInput): Promise<HarnessPlan>;
+  harnessPrepare(input: AgentBeginInput & { executor?: string }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Records the failure of an agent node on its attempt row. */
@@ -116,7 +116,7 @@ export interface ApprovalSignal extends ApprovalDecision {
 
 export interface ExecActivities {
   runScript(input: ScriptNodeInput): Promise<unknown>;
-  /** Harness executors (OpenCode) run on workers. */
+  /** Harness executors (OpenCode, Claude Agent SDK, Codex) run on workers. */
   runHarness(input: HarnessInput): Promise<HarnessResult>;
 }
 
@@ -138,6 +138,7 @@ export interface HarnessPlan {
   model: string;
   credential: string;
   providerUrl: string;
+  provider: 'anthropic' | 'openai';
 }
 
 export interface HarnessRecordInput {

@@ -11,6 +11,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
+import { EXECUTORS } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
@@ -414,8 +415,11 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, execut
   const state = await agentBegin(ctx, i);
   const t = loadTranscript(ctx, state.transcript);
   const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
-  // The adapter configures OpenCode's Anthropic provider only; the run plan marks other providers unsupported.
-  if (profile.model.provider !== 'anthropic') throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs an anthropic profile, not ${profile.model.provider}`);
+  // The run plan marks providers an adapter cannot drive as unsupported; this is the same check at run time.
+  const provider = profile.model.provider;
+  if (provider === 'scripted' || !EXECUTORS[executor]?.providers.includes(provider)) {
+    throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs a ${EXECUTORS[executor]?.providers.join(' or ') ?? 'supported'} profile, not ${provider}`);
+  }
   const items = [
     ...t.items,
     { kind: 'instructions' as const, source: executor, reason: 'harness-owned system prompt, built-in tool schemas and compaction; not observable', tokens: 0, content_hash: 'unobservable' },
@@ -432,8 +436,9 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, execut
     tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
     outputSchema: t.outputSchema,
     model: t.model,
-    credential: profile.model.credential ?? 'anthropic-api-key',
-    providerUrl: ctx.settings.anthropicApiUrl,
+    credential: profile.model.credential ?? PROVIDER_DEFAULTS[provider].credential,
+    providerUrl: PROVIDER_DEFAULTS[provider].apiUrl(ctx.settings),
+    provider,
   };
 }
 

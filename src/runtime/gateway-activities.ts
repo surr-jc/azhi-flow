@@ -222,7 +222,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         [input.workspaceId, input.runId, input.nodeId],
       );
       try {
-        return await harnessPrepare(ctx, await withChunks(input), 'opencode');
+        return await harnessPrepare(ctx, await withChunks(input), input.executor ?? 'opencode');
       } catch (err) {
         throw toFailure(err);
       }
@@ -234,7 +234,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       const cost = estimateCost(r.usage, profile.pricing);
       await ctx.pool.query(
         `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision)
-         VALUES ($1,$2,$3,1,1,$4,'anthropic',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (run_id, node_id, attempt, turn) DO NOTHING`,
+         VALUES ($1,$2,$3,1,1,$4,$15,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (run_id, node_id, attempt, turn) DO NOTHING`,
         [
           input.workspaceId,
           input.runId,
@@ -250,6 +250,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           cost === null ? null : profile.pricing!.currency,
           cost === null ? 'unavailable' : 'estimated',
           cost === null ? null : profile.pricing!.revision,
+          profile.model.provider,
         ],
       );
       await ctx.pool.query(`UPDATE context_manifests SET tainted=$4, total_tokens=$5, token_source=$6 WHERE run_id=$1 AND node_id=$2 AND attempt=$3`, [

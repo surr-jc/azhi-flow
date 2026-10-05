@@ -5,7 +5,7 @@ import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js
 import { parseProfile } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
 import { profilePath } from '../compiler/compile.js';
-import { EXECUTORS } from '../executors/capabilities.js';
+import { EXECUTORS, isHarness } from '../executors/capabilities.js';
 import { resolveDatasetRef } from '../knowledge/datasets.js';
 import { packageFile } from '../server/packages.js';
 import { loadCatalog } from '../server/catalog.js';
@@ -153,8 +153,8 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           { name: 'usage reporting', mark: mark('usage', c.usage !== 'unavailable'), detail: c.usage },
           { name: 'cancellation', mark: mark('cancellation', c.cancellation !== 'none'), detail: c.cancellation },
         );
-        if (executor === 'model-agent' || executor === 'opencode') np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor)));
-        if (executor === 'opencode') np.requirements.push(...workerRequirements('opencode'));
+        if (executor === 'model-agent' || isHarness(executor)) np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor)));
+        if (isHarness(executor)) np.requirements.push(...workerRequirements(executor));
         if (def.tools?.length) np.requirements.push({ name: 'gateway tools', mark: mark('gatewayTools', c.gatewayTools !== 'none', c.gatewayTools === 'bridged'), detail: c.gatewayTools });
         for (const t of def.tools ?? []) np.requirements.push(toolRequirement(n, t));
         if (def.requires?.enforced_restrictions && c.ambientTools === 'uncontrolled') {
@@ -263,8 +263,8 @@ async function modelRequirements(
     const explicit = profile.model.name && profile.model.name !== 'default';
     const model = explicit ? profile.model.name : d.model(ctx.settings);
     reqs.push(
-      executor === 'opencode' && provider !== 'anthropic'
-        ? { name: 'model binding', mark: 'unsupported', detail: `the OpenCode adapter supports anthropic profiles only, not ${provider}` }
+      isHarness(executor) && !EXECUTORS[executor]!.providers.includes(provider)
+        ? { name: 'model binding', mark: 'unsupported', detail: `the ${executor} adapter supports ${EXECUTORS[executor]!.providers.join(' or ')} profiles only, not ${provider}` }
         : model
           ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${explicit ? '' : ' (server default)'}` }
           : { name: 'model binding', mark: 'unsupported', detail: `the profile uses the default ${provider} model and ${d.modelEnv} is not set` },
