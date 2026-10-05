@@ -15,6 +15,8 @@ export interface FakeSlackMessage {
  */
 export async function startFakeSlack(port = 0, opts: { token?: string; postDelayMs?: number; host?: string } = {}) {
   const messages: FakeSlackMessage[] = [];
+  // Bodies posted to interaction response URLs (`<url>/response/<id>`).
+  const responses: Array<Record<string, unknown>> = [];
   const state = { postDelayMs: opts.postDelayMs ?? 0 };
   let seq = 0;
   const server = http.createServer(async (req, res) => {
@@ -48,6 +50,10 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
         .map((m) => ({ type: 'message', ts: m.ts, text: m.text, ...(includeMeta && m.metadata ? { metadata: m.metadata } : {}) }));
       return send({ ok: true, messages: found, has_more: false });
     }
+    if (method.startsWith('response/')) {
+      responses.push(params);
+      return send({ ok: true });
+    }
     if (method === 'auth.test') return send({ ok: true, team: 'fake', user: 'azhi-bot' });
     res.statusCode = 404;
     send({ ok: false, error: 'unknown_method' });
@@ -57,6 +63,7 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
   return {
     url: `http://127.0.0.1:${address.port}/api`,
     messages,
+    responses,
     state,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };

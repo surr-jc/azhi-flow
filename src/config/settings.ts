@@ -15,6 +15,10 @@ export function settings() {
     authMode: (process.env.AZHI_AUTH_MODE ?? 'local') as 'local' | 'oidc',
     oidcIssuer: process.env.AZHI_OIDC_ISSUER || undefined,
     oidcAudience: process.env.AZHI_OIDC_AUDIENCE || undefined,
+    /** Browser sign-in (mission control): the client registered with the issuer, redirecting to <publicUrl>/v1/auth/callback. */
+    oidcClientId: process.env.AZHI_OIDC_CLIENT_ID || undefined,
+    oidcClientSecret: process.env.AZHI_OIDC_CLIENT_SECRET || undefined,
+    oidcScopes: process.env.AZHI_OIDC_SCOPES || 'openid email profile',
     host: process.env.AZHI_HOST ?? '127.0.0.1',
     port,
     publicUrl: process.env.AZHI_PUBLIC_URL ?? `http://127.0.0.1:${port}`,

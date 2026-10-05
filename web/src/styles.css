@@ -212,3 +212,7 @@ label.button:focus-within { outline: 2px solid var(--run); outline-offset: 1px; 
 textarea.full { width: 100%; }
 details.panel > summary { font-weight: 600; }
 @media (max-width: 800px) { .files { grid-template-columns: 1fr; } }
+a.button.primary { background: var(--run); border-color: var(--run); color: #fff; }
+.token-once { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.token-once code { padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.slack-id { width: 120px; }

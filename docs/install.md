@@ -43,6 +43,7 @@ Options, all environment variables:
 | `AZHI_SKIP_BUILD` | unset | `1` uses an `azhi-flow/server` image that is already loaded |
 | `AZHI_ANTHROPIC_MODEL`, `AZHI_OPENAI_MODEL` | unset | model for Anthropic or OpenAI agent profiles that say `name: default` |
 | `AZHI_AUTH_MODE`, `AZHI_OIDC_ISSUER`, `AZHI_OIDC_AUDIENCE` | `local` | switch to OIDC for a team |
+| `AZHI_OIDC_CLIENT_ID`, `AZHI_OIDC_CLIENT_SECRET`, `AZHI_OIDC_SCOPES` | unset, unset, `openid email profile` | browser sign-in to mission control; register `<AZHI_PUBLIC_URL>/v1/auth/callback` as the redirect URI. With an issuer set, OIDC tokens are accepted in `local` mode too (alongside the owner token), and new users start as viewers unless invited by email on the Users page |
 | `AZHI_COMPOSE_PROJECT` | `azhi` | run a second, isolated stack on one host |
 
 Existing installs from before commit "Docker image includes examples/" crash on start (`ENOENT ... /app/examples`); update the repo and re-run `deploy/install.sh` to rebuild the image.
