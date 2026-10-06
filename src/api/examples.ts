@@ -20,7 +20,7 @@ import { requireRole } from './auth.js';
  * the person names, for tools that read or write repositories), its package is saved as a draft
  * version, and the secrets it needs are listed with whether each is set. Nothing is edited by hand.
  */
-const examplesDir = () => process.env.AZHI_EXAMPLES_DIR ?? fileURLToPath(new URL('../../examples', import.meta.url));
+export const examplesDir = () => process.env.AZHI_EXAMPLES_DIR ?? fileURLToPath(new URL('../../examples', import.meta.url));
 const ID = /^[a-z0-9][a-z0-9-]*$/;
 const REPO = /^[\w.-]+\/[\w.-]+$/;
 

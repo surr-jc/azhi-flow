@@ -31,6 +31,9 @@ export function settings() {
     /** Model for OpenAI profiles that say `name: default`. */
     openaiModel: process.env.AZHI_OPENAI_MODEL || undefined,
     openaiApiUrl: process.env.AZHI_OPENAI_API_URL ?? 'https://api.openai.com',
+    /** The workflow builder chat: which provider it uses when both are set up, and an optional model override. */
+    builderProvider: (process.env.AZHI_BUILDER_PROVIDER || undefined) as 'anthropic' | 'openai' | undefined,
+    builderModel: process.env.AZHI_BUILDER_MODEL || undefined,
     /** GitHub Copilot model (through OpenCode) for profiles that say `name: default`. */
     copilotModel: process.env.AZHI_COPILOT_MODEL || 'gpt-5.6-luna',
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */

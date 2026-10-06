@@ -17,6 +17,7 @@ import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
 import { UploadPackage } from './pages/Upload';
+import { WorkflowBuilder } from './pages/Builder';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
 
@@ -164,6 +165,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
+  if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
   if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
   if (path === '/ui/examples') return <Examples />;
