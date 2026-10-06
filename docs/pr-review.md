@@ -1,18 +1,19 @@
 # Pull request review with OpenCode agents
 
-`examples/pr-review` reviews one GitHub pull request with three OpenCode reviewers and a
+`examples/pr-review` reviews one GitHub pull request with four OpenCode reviewers and a
 summarizer, and can post the review as a PR comment after a person approves it.
 
 ```
 pr (GitHub PR + files) ─┬─ correctness ─┐
-                        ├─ security ────┼─ summarize ─ report
-                        └─ tests ───────┘      └─ should_post ─ approve_post ─ post (PR comment)
+                        ├─ security ────┤
+                        ├─ tests ───────┼─ summarize ─ report
+                        └─ quality ─────┘      └─ should_post ─ approve_post ─ post (PR comment)
 ```
 
 | Node | What it does |
 |---|---|
 | `pr` | `github.get-pull-request@1`: title, body, author, base and head refs and SHAs, changed files with line counts |
-| `correctness`, `security`, `tests` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
+| `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`) |
 | `report` | The review as a run artifact (`templates/review.md`) |
 | `should_post` → `approve_post` → `post` | Only when the run input `post` is true: a person approves the exact body, then `github.comment-on-pr@1` posts it. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
@@ -81,10 +82,23 @@ For each step the worker:
    `AGENTS.md`, `CLAUDE.md` and `.claude/skills` are ignored.
 6. Deletes the whole root when the step ends, whether it succeeded, failed or was cancelled.
 
-The three reviewers clone separately, so they can run in parallel on different workers. Agents
+The four reviewers clone separately, so they can run in parallel on different workers. Agents
 with a workspace are tainted ("reads a cloned repository"), so any write downstream needs an
 approval, a CEL guard or a safe-for-tainted tool. The context manifest records the checkout and
 the package files OpenCode loaded; what the agent read in the checkout is not observable.
+
+### The code quality reviewer and its skill
+
+`quality` loads the `thermo-nuclear-code-quality-review` skill from Cursor's plugins repository
+(`harness/skills/thermo-nuclear-code-quality-review/`): a strict maintainability review (abstraction
+quality, files growing past 1000 lines, spaghetti branching). `SKILL.md` is copied unmodified; its
+MIT `LICENSE` and a `SOURCE.md` (source URL, fetch date, SHA-256) sit next to it. It is guidance
+only: it asks for no commands or network, and the reviewer has the same read-only tools as the
+others. The reviewer's own prompt (`harness/agents/quality.md`) caps its findings at `major`
+(`blocker` only for a defect that also breaks behaviour), so style never blocks on its own. To drop
+it, remove the `quality` step and its entry in `summarize`'s input in the editor; to tune it, edit
+that agent prompt, not `SKILL.md`. To update the skill, replace `SKILL.md` from the source, read it
+again, and update `SOURCE.md`.
 
 ## Run it
 

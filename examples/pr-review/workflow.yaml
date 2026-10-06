@@ -60,12 +60,23 @@ nodes:
     timeout: 15m
     budget: {max_tool_calls: 10}
 
+  - id: quality
+    type: agent
+    description: Check the change's code quality and maintainability (thermo-nuclear-code-quality-review skill).
+    executor: opencode
+    profile: quality-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
   - id: summarize
     type: agent
     description: Merge the findings into one review with a verdict and a comment body.
     executor: opencode
     profile: review-summarizer@1
-    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output]}"}
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
     output_schema: schemas/review.json
     timeout: 10m
     budget: {max_tool_calls: 2}

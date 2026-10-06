@@ -82,6 +82,7 @@ function makeRepo(root: string, secretFile: string) {
 const FINDINGS = {
   correctness: { reviewer: 'correctness', summary: 'charge() builds code with a template string.', findings: [{ severity: 'major', path: 'src/payments.js', line: 3, title: 'Amount is interpolated into evaluated code', detail: 'A non-numeric amount changes the evaluated expression.' }] },
   security: { reviewer: 'security', summary: 'eval on input.', findings: [{ severity: 'blocker', path: 'src/payments.js', line: 3, title: 'eval of caller input', detail: 'Call processor.charge(amount) directly.' }] },
+  quality: { reviewer: 'quality', summary: 'charge() mixes string-built code into a plain call.', findings: [{ severity: 'major', path: 'src/payments.js', line: 3, title: 'The direct call became an eval branch', detail: 'Keep the direct call; delete the eval path instead of guarding it.' }] },
   tests: { reviewer: 'tests', summary: 'No tests for the new note argument.', findings: [{ severity: 'minor', path: 'src/payments.js', line: 1, title: 'note is untested', detail: 'Add a test that passes a note.' }] },
 };
 const REVIEW = {
@@ -100,6 +101,7 @@ function agentOf(r: FakeRequest): keyof typeof FINDINGS | 'summarizer' | undefin
   if (r.system.includes('You are the correctness reviewer')) return 'correctness';
   if (r.system.includes('You are the security reviewer')) return 'security';
   if (r.system.includes('You are the tests and style reviewer')) return 'tests';
+  if (r.system.includes('You are the code quality reviewer')) return 'quality';
   if (r.system.includes('You write the final review')) return 'summarizer';
   return undefined;
 }
@@ -123,6 +125,7 @@ function script(r: FakeRequest): FakeStep[] {
   }
   if (who === 'security') return [{ tool: 'skill', input: { name: 'security-checklist' } }, { tool: 'file-diff', input: { path: 'src/payments.js' } }, { tool: 'submit_output', input: FINDINGS.security }, { text: 'done' }];
   if (who === 'tests') return [{ tool: 'skill', input: { name: 'test-review' } }, { tool: 'submit_output', input: FINDINGS.tests }, { text: 'done' }];
+  if (who === 'quality') return [{ tool: 'skill', input: { name: 'thermo-nuclear-code-quality-review' } }, { tool: 'file-diff', input: { path: 'src/payments.js' } }, { tool: 'submit_output', input: FINDINGS.quality }, { text: 'done' }];
   if (who === 'summarizer') return [{ tool: 'skill', input: { name: 'review-format' } }, { tool: 'submit_output', input: REVIEW }, { text: 'done' }];
   return [{ text: 'PR review' }];
 }
@@ -210,7 +213,7 @@ describe('PR review example: definition checks', () => {
   it('compiles, with the reviewers tainted by their checkout and the comment gated', () => {
     const r = load(PKG);
     expect(r.ok).toBe(true);
-    for (const id of ['correctness', 'security', 'tests']) expect(r.plan!.taint.tainted[id]).toBe('reads a cloned repository (its files are untrusted)');
+    for (const id of ['correctness', 'security', 'tests', 'quality']) expect(r.plan!.taint.tainted[id]).toBe('reads a cloned repository (its files are untrusted)');
     expect(r.plan!.taint.paths).toContainEqual(expect.objectContaining({ write: 'post', gate: 'guard' }));
   });
 
@@ -239,7 +242,7 @@ describe('PR review example: definition checks', () => {
     writeFileSync(join(dir, 'harness/commands/review.md'), 'Review $ARGUMENTS\n');
     writeFileSync(join(dir, 'harness/commands/summarize.md'), 'Summarize !`git log`\n');
     const errors = load(dir).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
-    expect(errors.filter((m) => m.includes('review.md') && m.includes('may not use $ARGUMENTS'))).toHaveLength(3);
+    expect(errors.filter((m) => m.includes('review.md') && m.includes('may not use $ARGUMENTS'))).toHaveLength(4);
     expect(errors.filter((m) => m.includes('summarize.md') && m.includes('may not use $ARGUMENTS'))).toHaveLength(1);
   });
 });
@@ -251,9 +254,9 @@ describe('GitHub Enterprise at install', () => {
     expect(gitHostFor('https://api.github.com')).toBe('https://github.com');
     const yaml = readFileSync(`${PKG}/workflow.yaml`, 'utf8');
     const hosts = (y: string) => parse(y).nodes.filter((n: any) => n.workspace).map((n: any) => n.workspace.host);
-    expect(hosts(yaml)).toEqual([undefined, undefined, undefined]);
+    expect(hosts(yaml)).toEqual([undefined, undefined, undefined, undefined]);
     const set = withGitHost(yaml, 'https://ghe.example.com', false);
-    expect(hosts(set)).toEqual(['https://ghe.example.com', 'https://ghe.example.com', 'https://ghe.example.com']);
+    expect(hosts(set)).toEqual(Array(4).fill('https://ghe.example.com'));
     // A derived host keeps one the workflow names; an explicit one replaces it.
     expect(hosts(withGitHost(set, 'https://other.example.com', false))[0]).toBe('https://ghe.example.com');
     expect(hosts(withGitHost(set, 'https://other.example.com', true))[0]).toBe('https://other.example.com');
@@ -364,7 +367,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     // The structured review and the reviewers' findings.
     const out = (id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.output;
     expect(out('summarize')).toEqual(REVIEW);
-    for (const id of ['correctness', 'security', 'tests'] as const) expect(out(id)).toEqual(FINDINGS[id]);
+    for (const id of ['correctness', 'security', 'tests', 'quality'] as const) expect(out(id)).toEqual(FINDINGS[id]);
     expect(gh.comments).toHaveLength(1);
     expect(gh.comments[0]).toMatchObject({ repo: 'acme/payments', number: 7 });
     expect(gh.comments[0]!.body).toContain(REVIEW.body);
@@ -387,6 +390,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect([...c[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'probe_env', 'read', 'repo-facts_changed-files', 'repo-facts_file-diff', 'skill']);
     expect([...reqs('summarizer')[0]!.tools].sort()).toEqual(['azhi_submit_output', 'skill']);
     expect(toolResults(reqs('security')[1]!)).toContain('Input reaches `eval`');
+    // The code quality reviewer gets Cursor's skill (unmodified) and the same read-only tools, and its findings reach the summarizer.
+    const q = reqs('quality');
+    expect(toolResults(q[1]!)).toContain('Thermo-Nuclear Code Quality Review');
+    expect(toolResults(q[1]!)).toContain('code judo');
+    expect([...q[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'read', 'repo-facts_changed-files', 'repo-facts_file-diff', 'skill']);
+    expect(JSON.stringify(reqs('summarizer')[0]!.messages)).toContain('The direct call became an eval branch');
 
     // The checkout is the PR head; repo-facts diffs it against the base branch.
     expect(toolResults(c[2]!)).toMatch(/M\\+tsrc\/payments\.js/);
@@ -442,7 +451,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const cp = d.usage.copilot;
     const tokens = (k: string) => d.usage.records.reduce((n: number, r: any) => n + (r[k] ?? 0), 0);
     const want = (tokens('input_tokens') * 2 + tokens('cache_read_tokens') * 0.2 + tokens('cache_write_tokens') * 2.5 + tokens('output_tokens') * 10) / 1_000_000 / 0.01;
-    expect(d.usage.records.filter((r: any) => r.provider === 'github-copilot')).toHaveLength(4);
+    expect(d.usage.records.filter((r: any) => r.provider === 'github-copilot')).toHaveLength(5);
     expect(cp.credits).toBeGreaterThan(0);
     expect(cp.credits).toBeCloseTo(want, 2);
     expect(cp).toMatchObject({ currency: 'USD', credit_usd: 0.01, unpriced_models: [], models: [{ model: MODEL }] });
