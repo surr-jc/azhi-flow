@@ -385,7 +385,8 @@ function ModelPicker({ providers, provider, model, serverDefault, onChange }: {
   const other = typing || (Boolean(current) && !listed && models.length > 0) || (!models.length && !list.isLoading);
   const [custom, setCustom] = useState('');
   useEffect(() => setCustom(current && !listed ? current : ''), [current, listed]);
-  const label = (m: { id: string; label: string }) => `${m.label}${m.label !== m.id ? ` (${m.id})` : ''}${m.id === recommended?.id ? ' · Recommended' : ''}`;
+  // The model's name, as the provider's own picker shows it; the id is the option's tooltip.
+  const label = (m: { id: string; label: string }) => `${m.label}${m.id === recommended?.id ? ' · Recommended' : ''}`;
   const pickedReason = current === recommended?.id ? recommended?.reason : undefined;
   return (
     <div className="model-picker" aria-label="Model for the builder" role="group">
@@ -414,7 +415,7 @@ function ModelPicker({ providers, provider, model, serverDefault, onChange }: {
           }}
         >
           {list.isLoading ? <option value={current ?? ''}>Loading models…</option> : null}
-          {models.map((m) => <option key={m.id} value={m.id}>{label(m)}</option>)}
+          {models.map((m) => <option key={m.id} value={m.id} title={m.id}>{label(m)}</option>)}
           <option value={OTHER}>Other model id…</option>
         </select>
       </label>

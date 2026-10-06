@@ -155,7 +155,9 @@ describe.skipIf(!up)('workflow builder chat through OpenCode (GitHub Copilot)', 
       expect(status.providers.find((p: any) => p.id === 'opencode')).toMatchObject({ ready: true, label: 'OpenCode (GitHub Copilot)', model: 'claude-opus-4.7' });
       const models = await h.api.get<any>('/v1/builder/models?provider=opencode');
       expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-4.7' } });
-      expect(models.models.map((m: any) => m.id)).toEqual(['claude-opus-4.7', 'gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-haiku-4.5']);
+      // Admin-blocked (policy disabled), not-for-the-picker, dated and non-chat models are left out; Responses-only ones stay.
+      expect(models.models.map((m: any) => m.id)).toEqual(['claude-opus-4.7', 'gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-haiku-4.5', 'gemini-3.7-flash', 'gpt-5.5']);
+      expect(models.models.find((m: any) => m.id === 'gpt-5.5')).toMatchObject({ label: 'GPT-5.5', endpoint: 'responses' });
       // Labels are the names; the picker adds the id once.
       expect(models.models[0].label).toBe('Claude Opus 4.7');
 
@@ -176,6 +178,20 @@ describe.skipIf(!up)('workflow builder chat through OpenCode (GitHub Copilot)', 
       expect(second.event.kind).toBe('proposal');
       expect(second.event.proposal.blockers.filter((x: any) => !/worker/i.test(x.message))).toEqual([]);
       expect(await h.api.post<any>('/v1/builder/save', { files: second.event.proposal.files })).toMatchObject({ ok: true });
+
+      // A model Copilot serves only on the Responses API is called there, tool calls and results as items.
+      fake.requests.length = 0;
+      const viaResponses = await h.api.post<any>('/v1/builder/chat', { provider: 'opencode', model: 'gpt-5.5', messages: [], text: 'Summarise our standup notes' });
+      expect(viaResponses).toMatchObject({ model: 'gpt-5.5', event: { kind: 'questions', intro: 'A few questions first.' } });
+      expect(fake.requests.map((r) => r.url)).toEqual(['/responses', '/responses']);
+      const [ra, rb] = fake.requests;
+      expect(ra!.body).toMatchObject({ model: 'gpt-5.5', store: false, max_output_tokens: expect.any(Number) });
+      expect(ra!.system).toContain('Azhi Flow workflow builder');
+      expect(ra!.tools).toEqual(expect.arrayContaining(['workspace_overview', 'ask_user', 'propose_workflow']));
+      expect(ra!.headers['x-initiator']).toBe('user');
+      expect(rb!.headers['x-initiator']).toBe('agent');
+      expect(rb!.messages.map((i: any) => i.type ?? i.role)).toEqual(['user', 'function_call', 'function_call_output']);
+      expect(viaResponses.usage).toMatchObject({ input_tokens: 200, output_tokens: 40 });
     } finally {
       await h.stop();
       await fake.close();

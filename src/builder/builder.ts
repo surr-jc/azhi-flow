@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parse } from 'yaml';
-import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
+import { anthropicProvider, openaiProvider, responsesProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
 import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import { examplesDir } from '../api/examples.js';
 import type { Diagnostic } from '../definition/load.js';
@@ -13,7 +13,7 @@ import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
-import { defaultBuilderModel } from './models.js';
+import { copilotEndpoint, defaultBuilderModel } from './models.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -119,31 +119,31 @@ async function providerFor(ctx: AppContext, workspaceId: string, wanted?: Builde
   const secret = await resolveSecret(ctx, workspaceId, credential);
   if (!secret) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' is not set`);
   const done = { ...info, model: chosen };
-  if (info.id === 'opencode') return { provider: copilotProvider(ctx, secret.value), info: done };
+  if (info.id === 'opencode') return { provider: copilotProvider(ctx, secret.value, await copilotEndpoint(ctx, workspaceId, chosen)), info: done };
   const d = PROVIDER_DEFAULTS[info.id];
   const make = info.id === 'openai' ? openaiProvider : anthropicProvider;
   return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info: done };
 }
 
 /**
- * GitHub Copilot's chat API with the sign-in OpenCode uses, called as OpenCode calls it: the sign-in's
- * token as the bearer, OpenCode's user agent, and x-initiator `user` only for a person's own message
- * (OpenCode marks tool rounds `agent`, which Copilot does not count as a new request).
+ * GitHub Copilot with the sign-in OpenCode uses, called as OpenCode calls it: the sign-in's token as
+ * the bearer, OpenCode's user agent, and x-initiator `user` only for a person's own message
+ * (OpenCode marks tool rounds `agent`, which Copilot does not count as a new request). Models
+ * Copilot serves only on the Responses API (its GPT-5 and Codex models) are called there.
  */
-function copilotProvider(ctx: AppContext, signIn: string): ModelProvider {
+function copilotProvider(ctx: AppContext, signIn: string, endpoint: 'chat' | 'responses'): ModelProvider {
   const si = copilotSignIn(signIn);
-  return openaiProvider({
+  const common = {
     id: 'copilot',
     apiUrl: copilotApi(ctx, si.enterprise),
     apiKey: si.token,
-    path: '/chat/completions',
-    maxTokensParam: 'max_tokens',
-    headers: (req) => {
+    headers: (req: { messages: Message[] }) => {
       const last = req.messages.at(-1);
       const fromPerson = last?.role === 'user' && last.content.some((b) => b.type === 'text');
       return { 'user-agent': OPENCODE_USER_AGENT, 'openai-intent': 'conversation-edits', 'x-initiator': fromPerson ? 'user' : 'agent' };
     },
-  });
+  };
+  return endpoint === 'responses' ? responsesProvider({ ...common, path: '/responses' }) : openaiProvider({ ...common, path: '/chat/completions', maxTokensParam: 'max_tokens' });
 }
 
 const TOOLS: ModelTool[] = [

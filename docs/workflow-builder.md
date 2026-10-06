@@ -46,20 +46,21 @@ from **Sign in with GitHub Copilot** under Governance › Secrets, or `azhi copi
 way OpenCode does (the sign-in as the bearer token, OpenCode's user agent, `copilot-api.<host>`
 for a GitHub Enterprise sign-in), because the builder needs its own tools and its own stop when it
 asks you a question. The model list is what your Copilot plan offers that sign-in, as
-Copilot's own model picker shows it: from Copilot's `GET /models` (at your plan's own address,
-such as api.enterprise.githubcopilot.com, when GitHub gives one), only models marked for the
-picker, enabled by your organization's policy (not switched off, and not waiting for an opt-in),
-chat models that take tool calls, one per model family (dated variants such as
-gpt-4o-2024-11-20 are left out). When the list cannot be read, the models Azhi has Copilot prices
-for are shown.
+VS Code's Copilot model picker shows it: from Copilot's `GET /models` (at your plan's own address,
+such as api.enterprise.githubcopilot.com, when GitHub gives one and accepts the sign-in there),
+only models marked for the picker and not switched off by your organization (VS Code's "Contact
+your admin"), chat models that take tool calls, one per model family (dated variants such as
+gpt-4o-2024-11-20 are left out). Copilot serves some models, such as its GPT-5 and Codex models,
+only on the Responses API; the builder calls those there, the way OpenCode does. When the list
+cannot be read, the models Azhi has Copilot prices for are shown.
 
 Limits:
 
 - Builder turns use your Copilot allowance (AI Credits), like any other Copilot chat. A message
   you send counts as a request; the builder's own lookup rounds are marked as agent rounds, as
   OpenCode marks them.
-- Copilot has to give the model tool calls on its chat API; a model that only answers on another
-  endpoint is left out of the list. Typing one under "Other model id…" fails with Copilot's error.
+- A model typed under "Other model id…" that is not in your plan's list is called on the Chat
+  Completions API; if Copilot serves it only elsewhere, the turn fails with Copilot's error.
 - Drafts made this way use `provider: github-copilot` profiles on agent nodes with
   `executor: opencode`, which run only on Linux or macOS workers. The compiler checks them as usual,
   and an OpenCode command template may not contain `$ARGUMENTS`, `$1`-style placeholders or
