@@ -6,6 +6,9 @@ Every run shows what the agent saw, what it was allowed to do, what it actually 
 and says plainly where it cannot know. See Product Specification v2.0 and the Azhi Flow Implementation
 Plan for the design.
 
+What Azhi is, the problems it solves, cost and token optimization, and how it compares with
+OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/positioning.md).
+
 ## Status
 
 | Phase | State |
