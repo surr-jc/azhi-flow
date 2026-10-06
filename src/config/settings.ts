@@ -32,7 +32,7 @@ export function settings() {
     openaiModel: process.env.AZHI_OPENAI_MODEL || undefined,
     openaiApiUrl: process.env.AZHI_OPENAI_API_URL ?? 'https://api.openai.com',
     /** GitHub Copilot model (through OpenCode) for profiles that say `name: default`. */
-    copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5',
+    copilotModel: process.env.AZHI_COPILOT_MODEL || 'gpt-5.6-luna',
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
     /**
