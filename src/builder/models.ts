@@ -1,0 +1,134 @@
+import { PROVIDER_DEFAULTS } from '../agents/providers.js';
+import type { AppContext } from '../server/context.js';
+import { resolveSecret } from '../server/secrets.js';
+
+/**
+ * The models the workflow builder can use, per provider: the provider's own model list read with
+ * the workspace key (Anthropic and OpenAI both have GET /v1/models), or a built-in list when that
+ * call fails. One model per provider is recommended for workflow building; the person may pick any
+ * other, or type an id the list does not show.
+ */
+export interface BuilderModel {
+  id: string;
+  label: string;
+}
+
+export interface BuilderModels {
+  provider: string;
+  models: BuilderModel[];
+  recommended?: { id: string; reason: string };
+  /** `live`: read from the provider just now (or in the last few minutes); `built-in`: the fallback list. */
+  source: 'live' | 'built-in';
+  /** Why the live list was not used. */
+  note?: string;
+}
+
+/** Anthropic's current models, newest first; used when the Models API cannot be reached. */
+const ANTHROPIC_BUILT_IN: BuilderModel[] = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
+  { id: 'claude-opus-5', label: 'Claude Opus 5' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+];
+const ANTHROPIC_RECOMMENDED = {
+  id: 'claude-opus-5-5',
+  reason: 'Strongest everyday model for long, structured drafts and for fixing what the compiler reports, at a lower price than Fable.',
+};
+
+/** OpenAI ids that are not chat models the builder can drive. */
+const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|whisper|image|dall-e|embedding|moderation|search|instruct|davinci|babbage|codex|computer-use|sora)/i;
+const OPENAI_CHAT = /^(gpt-|o\d|chatgpt-)/i;
+
+const cache = new Map<string, { at: number; value: BuilderModels }>();
+const TTL_MS = 10 * 60 * 1000;
+
+async function getJson(url: string, headers: Record<string, string>): Promise<any> {
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Orders OpenAI ids so the larger, newer general models come first: gpt-5.2 before gpt-5.1-mini. */
+function openaiRank(id: string): number[] {
+  const m = /^gpt-(\d+)(?:\.(\d+))?/.exec(id);
+  const small = /(mini|nano)/.test(id) ? 1 : 0;
+  const dated = /\d{4}-\d{2}-\d{2}|preview/.test(id) ? 1 : 0;
+  return m ? [0, -Number(m[1]), -Number(m[2] ?? 0), small, dated] : [1, 0, 0, small, dated];
+}
+const byRank = (a: string, b: string) => {
+  const ra = openaiRank(a);
+  const rb = openaiRank(b);
+  for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i]! - rb[i]!;
+  return a.localeCompare(b);
+};
+
+async function anthropicModels(ctx: AppContext, key: string): Promise<BuilderModel[]> {
+  const base = PROVIDER_DEFAULTS.anthropic.apiUrl(ctx.settings).replace(/\/$/, '');
+  const out: BuilderModel[] = [];
+  let after: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const body = await getJson(`${base}/v1/models?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { 'x-api-key': key, 'anthropic-version': '2023-06-01' });
+    for (const m of body.data ?? []) if (typeof m?.id === 'string') out.push({ id: m.id, label: String(m.display_name ?? m.id) });
+    if (!body.has_more || !body.last_id) break;
+    after = body.last_id;
+  }
+  return out;
+}
+
+async function openaiModels(ctx: AppContext, key: string): Promise<BuilderModel[]> {
+  const base = PROVIDER_DEFAULTS.openai.apiUrl(ctx.settings).replace(/\/$/, '');
+  const body = await getJson(`${base}/v1/models`, { authorization: `Bearer ${key}` });
+  const ids = (body.data ?? []).map((m: { id?: unknown }) => m?.id).filter((id: unknown): id is string => typeof id === 'string' && OPENAI_CHAT.test(id) && !OPENAI_NOT_CHAT.test(id));
+  return [...new Set<string>(ids)].sort(byRank).map((id) => ({ id, label: id }));
+}
+
+/** Puts the recommended model first and keeps the configured one in the list even if the provider did not report it. */
+function finish(provider: string, models: BuilderModel[], recommended: BuilderModels['recommended'], source: BuilderModels['source'], extra: Array<string | undefined>, note?: string): BuilderModels {
+  const list = [...models];
+  for (const id of extra) if (id && !list.some((m) => m.id === id)) list.push({ id, label: id });
+  if (recommended) {
+    const i = list.findIndex((m) => m.id === recommended.id);
+    if (i > 0) list.unshift(...list.splice(i, 1));
+  }
+  return { provider, models: list, recommended, source, ...(note ? { note } : {}) };
+}
+
+export async function builderModels(ctx: AppContext, workspaceId: string, provider: 'anthropic' | 'openai', refresh = false): Promise<BuilderModels> {
+  const key = `${workspaceId}:${provider}`;
+  const hit = cache.get(key);
+  if (hit && !refresh && Date.now() - hit.at < TTL_MS) return hit.value;
+  const s = ctx.settings;
+  const configured = PROVIDER_DEFAULTS[provider].model(s);
+  const builderModel = s.builderModel && (!s.builderProvider || s.builderProvider === provider) ? s.builderModel : undefined;
+  const secret = await resolveSecret(ctx, workspaceId, PROVIDER_DEFAULTS[provider].credential);
+  let value: BuilderModels;
+  if (provider === 'anthropic') {
+    let live: BuilderModel[] | undefined;
+    let note: string | undefined;
+    if (secret) live = await anthropicModels(ctx, secret.value).catch((e) => ((note = `could not read Anthropic's model list (${(e as Error).message}); showing the built-in list`), undefined));
+    const models = live?.length ? live : ANTHROPIC_BUILT_IN;
+    const rec = models.some((m) => m.id === ANTHROPIC_RECOMMENDED.id) ? ANTHROPIC_RECOMMENDED : models[0] ? { id: models[0].id, reason: 'The newest model this key can use.' } : undefined;
+    value = finish('anthropic', models, rec, live?.length ? 'live' : 'built-in', [builderModel, configured], note);
+  } else {
+    let live: BuilderModel[] | undefined;
+    let note: string | undefined;
+    if (secret) live = await openaiModels(ctx, secret.value).catch((e) => ((note = `could not read OpenAI's model list (${(e as Error).message})`), undefined));
+    const models = live?.length ? live : [];
+    // The newest full-size GPT model this key can use: strongest at tool calls and long structured output.
+    const best = configured && (!live?.length || live.some((m) => m.id === configured)) ? configured : models.find((m) => /^gpt-\d/.test(m.id) && !/(mini|nano)/.test(m.id))?.id ?? models[0]?.id;
+    const rec = best ? { id: best, reason: best === configured ? 'The model this server already uses for OpenAI steps (AZHI_OPENAI_MODEL).' : 'The newest full-size GPT model this key can use; strongest at tool calls and long structured output.' } : undefined;
+    value = finish('openai', models, rec, live?.length ? 'live' : 'built-in', [builderModel, configured], note ?? (!live?.length && !configured ? 'type a model id, or set AZHI_OPENAI_MODEL on the server' : undefined));
+  }
+  if (value.source === 'live') cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** The model the builder uses when the browser does not name one. */
+export async function defaultBuilderModel(ctx: AppContext, workspaceId: string, provider: 'anthropic' | 'openai'): Promise<string | undefined> {
+  const s = ctx.settings;
+  if (s.builderModel && (!s.builderProvider || s.builderProvider === provider)) return s.builderModel;
+  if (provider === 'anthropic') return ANTHROPIC_RECOMMENDED.id;
+  return PROVIDER_DEFAULTS.openai.model(s) ?? (await builderModels(ctx, workspaceId, provider)).recommended?.id;
+}

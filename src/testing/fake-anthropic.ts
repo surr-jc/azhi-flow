@@ -18,12 +18,17 @@ export interface FakeRequest {
   messages: unknown[];
 }
 
-export async function startFakeAnthropic(o: { script: FakeStep[] | ((req: FakeRequest) => FakeStep[]); delayMs?: number; usage?: { input: number; output: number } }) {
+export async function startFakeAnthropic(o: { script: FakeStep[] | ((req: FakeRequest) => FakeStep[]); delayMs?: number; usage?: { input: number; output: number }; models?: string[] }) {
   const requests: FakeRequest[] = [];
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', async () => {
+      if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ data: (o.models ?? ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5']).map((id) => ({ type: 'model', id, display_name: id })), has_more: false }));
+        return;
+      }
       const b = body ? JSON.parse(body) : {};
       const r: FakeRequest = {
         model: b.model,

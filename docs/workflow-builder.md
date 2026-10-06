@@ -25,16 +25,23 @@ The conversation stays in your browser tab; the server keeps no transcript. Each
 audit log (`builder.turn`, with provider, model and token counts) and each save as
 `builder.saved`. Builder calls are not part of any run, so run budgets do not apply to them.
 
-## Model provider
+## Provider and model
 
-The builder uses the workspace's own key: `anthropic-api-key` or `openai-api-key` (Governance ›
-Secrets). When both are set you can choose in the page.
+Above the chat, pick the provider and the model. Every provider Azhi knows is listed; one that
+cannot be used here is shown disabled with the reason (no key yet, or GitHub Copilot, whose
+models run only inside OpenCode steps). The model list is the provider's own, read with the
+workspace key (`GET /v1/models` at Anthropic and OpenAI; chat models only for OpenAI), with a
+built-in list for Anthropic when that call fails. One model is marked **Recommended** with the
+reason; you can pick any other, or choose "Other model id…" and type one. The choice is
+remembered in this browser.
+
+Recommended: Claude Opus 5.5 for Anthropic; for OpenAI, `AZHI_OPENAI_MODEL` when set, else the
+newest full-size GPT model your key lists.
 
 | Setting | Effect |
 |---|---|
 | `AZHI_BUILDER_PROVIDER` | `anthropic` or `openai`: the default when both keys are set |
-| `AZHI_BUILDER_MODEL` | Model for the builder (for `AZHI_BUILDER_PROVIDER`, or for either when that is unset) |
-| `AZHI_ANTHROPIC_MODEL` / `AZHI_OPENAI_MODEL` | Used when `AZHI_BUILDER_MODEL` is unset; Anthropic falls back to `claude-sonnet-5-5` |
+| `AZHI_BUILDER_MODEL` | The model used when the browser has not picked one |
 
 ## The skill
 
@@ -46,8 +53,9 @@ builder behaves; it is read when the server starts.
 
 ## API
 
-- `GET /v1/builder`: providers, whether each is ready, and the model.
-- `POST /v1/builder/chat` `{messages, text, provider?}`: runs one turn; returns the new transcript
+- `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
+- `GET /v1/builder/models?provider=anthropic|openai`: the model list, the recommended model and why.
+- `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
   and an event (`questions`, `proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.

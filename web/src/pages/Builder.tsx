@@ -29,11 +29,31 @@ interface Proposal {
   blockers: Array<{ code: string; message: string; node?: string }>;
   new_version_of?: string;
 }
-interface ProviderInfo { id: 'anthropic' | 'openai'; ready: boolean; model?: string; reason?: string }
+interface ProviderInfo { id: 'anthropic' | 'openai' | 'github-copilot'; label: string; ready: boolean; model?: string; reason?: string }
+interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
+interface Choice { provider?: string; model?: string }
 interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal }; provider: string; model: string }
 interface Saved { messages: Message[]; proposals: Record<string, Proposal>; shown?: string }
 
 const KEY = 'azhi-builder';
+const CHOICE_KEY = 'azhi-builder-model';
+const OTHER = '__other__';
+
+/** The provider and model last picked in this browser. */
+function loadChoice(): Choice {
+  try {
+    return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') ?? {};
+  } catch {
+    return {};
+  }
+}
+function storeChoice(c: Choice) {
+  try {
+    localStorage.setItem(CHOICE_KEY, JSON.stringify(c));
+  } catch {
+    /* remembered for this page only */
+  }
+}
 const STARTERS = [
   'Every Monday, post a summary of last week’s failing CI runs to our team Slack channel.',
   'When I give it a GitHub issue, draft requirements and a design, and ask me to approve before anything is posted.',
@@ -66,15 +86,21 @@ function store(s: Saved) {
 export function WorkflowBuilder() {
   const status = useQuery({ queryKey: ['builder'], queryFn: () => api<{ providers: ProviderInfo[]; default?: string }>('/v1/builder') });
   const [state, setState] = useState<Saved>(load);
-  const [provider, setProvider] = useState<string>();
+  const [choice, setChoiceState] = useState<Choice>(loadChoice);
+  const setChoice = (c: Choice) => {
+    setChoiceState(c);
+    storeChoice(c);
+  };
   const [draft, setDraft] = useState('');
   const log = useRef<HTMLDivElement>(null);
   useEffect(() => store(state), [state]);
 
   const ready = status.data?.providers.filter((p) => p.ready) ?? [];
-  const using = provider ?? status.data?.default;
+  // A remembered provider that is no longer set up falls back to the server's default.
+  const using = ready.some((p) => p.id === choice.provider) ? choice.provider : status.data?.default;
+  const model = choice.provider === using ? choice.model : undefined;
   const send = useMutation({
-    mutationFn: (text: string) => api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using } }),
+    mutationFn: (text: string) => api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model } }),
     onSuccess: (r) => {
       setState((s) => {
         const proposals = { ...s.proposals };
@@ -130,19 +156,23 @@ export function WorkflowBuilder() {
         sub="Describe what you need. The builder asks a few questions, drafts a workflow from this workspace’s tools, datasets and examples, and checks it with the compiler. Publishing still needs your signature."
         actions={
           <>
-            {ready.length > 1 ? (
-              <select aria-label="Model provider" value={using} onChange={(e) => setProvider(e.target.value)}>
-                {ready.map((p) => <option key={p.id} value={p.id}>{p.id === 'anthropic' ? 'Anthropic' : 'OpenAI'} · {p.model}</option>)}
-              </select>
-            ) : ready[0] ? <span className="muted small">{ready[0].id === 'anthropic' ? 'Anthropic' : 'OpenAI'} · {ready[0].model}</span> : null}
             {state.messages.length ? <button type="button" onClick={reset}>Start over</button> : null}
           </>
         }
       />
+      {status.data.providers.length ? (
+        <ModelPicker
+          providers={status.data.providers}
+          provider={using}
+          model={model}
+          serverDefault={status.data.providers.find((p) => p.id === using)?.model}
+          onChange={setChoice}
+        />
+      ) : null}
       {!ready.length ? (
         <Panel>
           <p>The builder uses this workspace’s model provider, and none is set up yet.</p>
-          <ul>{status.data.providers.map((p) => <li key={p.id}>{p.id === 'anthropic' ? 'Anthropic' : 'OpenAI'}: {p.reason}</li>)}</ul>
+          <ul>{status.data.providers.map((p) => <li key={p.id}>{p.label}: {p.reason}</li>)}</ul>
           <p><Link to="/ui/secrets" className="button">Open secrets</Link></p>
         </Panel>
       ) : (
@@ -325,5 +355,81 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       <ErrorNote error={save.error} />
       {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.errors?.join('; ')}</div> : null}
     </section>
+  );
+}
+
+/**
+ * Provider and model for the builder: every provider Azhi knows (those not usable here are shown
+ * disabled, with why), the provider's own model list with one recommended for building
+ * workflows, and "Other" for an id the list does not show. The choice is remembered.
+ */
+function ModelPicker({ providers, provider, model, serverDefault, onChange }: {
+  providers: ProviderInfo[];
+  provider?: string;
+  model?: string;
+  serverDefault?: string;
+  onChange: (c: Choice) => void;
+}) {
+  const list = useQuery({
+    queryKey: ['builder-models', provider],
+    queryFn: () => api<ModelList>(`/v1/builder/models?provider=${encodeURIComponent(provider!)}`),
+    enabled: Boolean(provider),
+    staleTime: 5 * 60_000,
+  });
+  const models = list.data?.models ?? [];
+  const recommended = list.data?.recommended;
+  // No pick yet: the recommended model, else what the server would use.
+  const current = model ?? recommended?.id ?? serverDefault;
+  const listed = models.some((m) => m.id === current);
+  const [typing, setTyping] = useState(false);
+  const other = typing || (Boolean(current) && !listed && models.length > 0) || (!models.length && !list.isLoading);
+  const [custom, setCustom] = useState('');
+  useEffect(() => setCustom(current && !listed ? current : ''), [current, listed]);
+  const label = (m: { id: string; label: string }) => `${m.label}${m.label !== m.id ? ` (${m.id})` : ''}${m.id === recommended?.id ? ' · Recommended' : ''}`;
+  const pickedReason = current === recommended?.id ? recommended?.reason : undefined;
+  return (
+    <div className="model-picker" aria-label="Model for the builder" role="group">
+      <label>
+        <span className="muted small">Provider</span>
+        <select aria-label="Provider" value={provider ?? ''} onChange={(e) => { setTyping(false); onChange({ provider: e.target.value }); }}>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id} disabled={!p.ready} title={p.reason}>
+              {p.label}{p.ready ? '' : ' (not available)'}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span className="muted small">Model</span>
+        <select
+          aria-label="Model"
+          value={other ? OTHER : (current ?? '')}
+          disabled={!provider || list.isLoading}
+          onChange={(e) => {
+            if (e.target.value === OTHER) setTyping(true);
+            else {
+              setTyping(false);
+              onChange({ provider, model: e.target.value });
+            }
+          }}
+        >
+          {list.isLoading ? <option value={current ?? ''}>Loading models…</option> : null}
+          {models.map((m) => <option key={m.id} value={m.id}>{label(m)}</option>)}
+          <option value={OTHER}>Other model id…</option>
+        </select>
+      </label>
+      {other ? (
+        <form className="row" onSubmit={(e) => { e.preventDefault(); if (custom.trim()) { onChange({ provider, model: custom.trim() }); setTyping(false); } }}>
+          <input type="text" aria-label="Model id" placeholder="model id, for example gpt-5" value={custom} onChange={(e) => setCustom(e.target.value)} />
+          <button type="submit" disabled={!custom.trim()}>Use</button>
+        </form>
+      ) : null}
+      <div className="model-note muted small">
+        {pickedReason ? <>Recommended for building workflows: {pickedReason}</> : recommended ? <>Recommended: {recommended.id}. {recommended.reason}</> : null}
+        {list.data?.note ? <> {list.data.note}.</> : list.data?.source === 'built-in' ? ' Showing the built-in list.' : null}
+        {providers.filter((p) => !p.ready).map((p) => <span key={p.id} className="block">{p.label} is not available: {p.reason}.</span>)}
+      </div>
+      <ErrorNote error={list.error} />
+    </div>
   );
 }
