@@ -336,7 +336,7 @@ async function modelRequirements(
   if (def.budget?.max_cost_usd !== undefined) {
     reqs.push(
       profile.model.provider === 'github-copilot'
-        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'Copilot cost is estimated from premium requests after the step ends, so this cap is not enforced while it runs' }
+        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'Copilot cost is counted in AI credits from the tokens reported when the step ends, so this cap is not enforced while it runs' }
         : profile.pricing
         ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'native', detail: `estimated from pricing ${profile.pricing.revision}` }
         : { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'the profile declares no pricing, so cost is unavailable and this cap cannot be enforced' },

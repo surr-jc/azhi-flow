@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { COPILOT_OVERAGE_USD, parseMultipliers } from '../agents/copilot-pricing.js';
+import { COPILOT_CREDIT_USD, parseRates } from '../agents/copilot-pricing.js';
 
 /** Server and worker settings, from the environment. */
 export function settings() {
@@ -36,13 +36,14 @@ export function settings() {
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
     /**
-     * Copilot bills premium requests, not tokens. Estimated cost = premium requests x this price
-     * (USD; GitHub's published overage rate unless set). Requests inside the plan's allowance cost
-     * nothing extra, so the figure is what the run would cost past the allowance.
+     * Copilot bills GitHub AI Credits for tokens at per-model rates (src/agents/copilot-pricing.ts).
+     * USD per credit: 0.01 unless your contract says otherwise.
      */
-    copilotPremiumRequestUsd: positive(process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD) ?? COPILOT_OVERAGE_USD,
-    /** Premium request multipliers by model, `model=multiplier` pairs; they extend and override GitHub's table. */
-    copilotMultipliers: parseMultipliers(process.env.AZHI_COPILOT_MULTIPLIERS),
+    copilotCreditUsd: positive(process.env.AZHI_COPILOT_CREDIT_USD) ?? COPILOT_CREDIT_USD,
+    /** Per-model rates, `model=input/cached/cache_write/output` USD per million tokens; extend and override GitHub's table. */
+    copilotRates: parseRates(process.env.AZHI_COPILOT_RATES),
+    /** The organization's monthly AI Credit pool, to show how much is left and what falls past it. */
+    copilotCreditPool: positive(process.env.AZHI_COPILOT_CREDIT_POOL),
     /** Where the Copilot sign-in's device flow runs. */
     copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */

@@ -62,8 +62,6 @@ export interface HarnessResult {
   error?: { class: string; message: string };
   usage: { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null };
   model_calls: number;
-  /** Prompts Azhi sent that make the model answer (the first turn and any reminders); Copilot bills one premium request each. */
-  prompts?: number;
   tool_calls: number;
   repairs: number;
   duration_ms: number;
@@ -278,7 +276,6 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         const readState = (): BridgeState => JSON.parse(readFileSync(stateFile, 'utf8'));
         let text = input.prompt;
         let reminders = 0;
-        let prompts = 0;
         const deadline = started + input.timeoutMs;
         for (;;) {
           if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled');
@@ -299,7 +296,6 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               /* state file mid-write */
             }
           }, 300);
-          prompts++;
           const r = await step('prompt', () =>
             setup?.command && reminders === 0
               ? client.session.command({ path: { id: session.id }, body: { command: setup.command, arguments: '', agent: setup.agent, model: `${providerID}/${input.model}` } })
@@ -338,7 +334,6 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               reasoning_tokens: sum((t) => t.reasoning),
             },
             model_calls: assistant.length,
-            prompts,
             tool_calls: state.toolCalls,
             repairs: state.repairs,
             duration_ms: Date.now() - started,

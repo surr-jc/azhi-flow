@@ -251,13 +251,19 @@ function Context({ detail: d }: { detail: any }) {
   );
 }
 
-/** Copilot bills premium requests (prompts x model multiplier), so its cost is shown in those terms. */
-function CopilotUsage({ p }: { p: any }) {
-  const price = p.per_premium_request === null ? 'the configured price per premium request' : `${p.currency} ${p.per_premium_request} per premium request`;
+/** Copilot bills GitHub AI Credits (tokens at per-model rates) out of a monthly pool, so its cost is shown in credits. */
+function CopilotUsage({ c }: { c: any }) {
+  const pool = c.pool;
   return (
     <p>
-      GitHub Copilot: {p.total} premium request(s) ({p.models.map((m: any) => `${m.model} ${m.premium_requests} at ${m.multiplier}x${m.assumed ? ', multiplier assumed' : ''}`).join('; ')}). Estimated {p.currency} {p.cost.toFixed(4)} at {price}.{' '}
-      <span className="muted">This is an estimate: Copilot counts one premium request per prompt times the model's multiplier, and requests inside your plan's monthly allowance cost nothing extra.</span>
+      GitHub Copilot: {num(c.credits)} AI credits{c.models.length ? ` (${c.models.map((m: any) => `${m.model} ${num(m.credits)}`).join('; ')})` : ''}, worth {c.currency} {c.cost.toFixed(4)} at {c.currency} {c.credit_usd} per credit.{' '}
+      {c.unpriced_models.length ? `No Copilot rate is set for ${c.unpriced_models.join(', ')}, so those steps have no cost; set AZHI_COPILOT_RATES. ` : ''}
+      {pool
+        ? pool.past_pool > 0
+          ? `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run, so ${num(pool.past_pool)} credits (${c.currency} ${pool.past_pool_cost.toFixed(4)}) fell past the pool and are charged as additional usage, or blocked if your organization does not allow it. `
+          : `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run and ${num(pool.left_after)} are left, so this run is covered by the pool (no extra charge). `
+        : 'Set AZHI_COPILOT_CREDIT_POOL to your monthly credit pool to see what is left and what is charged as additional usage. '}
+      <span className="muted">Estimated from the tokens OpenCode reports. Azhi counts only its own runs, not IDE or chat use drawing on the same pool.</span>
     </p>
   );
 }
@@ -270,17 +276,17 @@ function UsageTab({ usage: u }: { usage: any }) {
         {u.turns} turn(s). Usage is known for {u.completeness_pct}% of them. Tokens: {num(u.input_tokens)} in, {num(u.output_tokens)} out.{' '}
         {u.cost.amount === null
           ? 'Cost is unavailable: at least one turn has no declared pricing or no token counts.'
-          : u.premium_requests
+          : u.copilot
             ? `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)}.`
             : `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (pricing ${u.cost.pricing_revision}).`}
       </p>
-      {u.premium_requests ? <CopilotUsage p={u.premium_requests} /> : null}
+      {u.copilot ? <CopilotUsage c={u.copilot} /> : null}
       <Panel>
         <Table head={['Node', 'Turn', 'Executor', 'Model', 'In', 'Out', 'Cache read', 'Reasoning', 'Cost']}>
           {u.records.map((x: any, i: number) => (
             <tr key={i}>
               <td>{x.node_id}</td><td>{x.attempt}.{x.turn}</td><td>{x.executor}</td><td>{x.model ?? '—'}</td><td>{num(x.input_tokens)}</td><td>{num(x.output_tokens)}</td><td>{num(x.cache_read_tokens)}</td><td>{num(x.reasoning_tokens)}</td>
-              <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label}${x.premium_requests !== null && x.premium_requests !== undefined ? `, ${x.premium_requests} premium req` : ''})`}</td>
+              <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label}${x.credits !== null && x.credits !== undefined ? `, ${num(x.credits)} credits` : ''})`}</td>
             </tr>
           ))}
         </Table>

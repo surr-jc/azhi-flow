@@ -1,89 +1,91 @@
 import { describe, expect, it } from 'vitest';
-import { COPILOT_OVERAGE_USD, copilotCost, copilotPricing, parseMultipliers } from '../src/agents/copilot-pricing.js';
+import { COPILOT_CREDIT_USD, copilotCredits, copilotRate, parseRates, poolPosition } from '../src/agents/copilot-pricing.js';
 import type { AgentProfile } from '../src/agents/profile.js';
 import { settings } from '../src/config/settings.js';
 import { harnessCost } from '../src/runtime/gateway-activities.js';
 import { summariseUsage } from '../src/server/runs.js';
 
-/** Copilot is billed by premium requests (prompts x model multiplier), not tokens; these use made-up models. */
-const S = { copilotPremiumRequestUsd: COPILOT_OVERAGE_USD, copilotMultipliers: parseMultipliers('dummy-cheap=0.33, Dummy-Big=10\ndummy-free=0') };
-const usage = { input_tokens: 50_000, output_tokens: 1_200, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
+/** Copilot bills GitHub AI Credits: tokens at per-model rates, 1 credit = USD 0.01. These use made-up models. */
+const S = { copilotCreditUsd: COPILOT_CREDIT_USD, copilotRates: parseRates('dummy-big=10/1/12.5/50, Dummy-Plain=2/8'), copilotCreditPool: undefined };
+const usage = { input_tokens: 100_000, output_tokens: 2_000, cache_read_tokens: 400_000, cache_write_tokens: 10_000, reasoning_tokens: 0 };
 const copilot = (pricing?: AgentProfile['pricing']): AgentProfile => ({ model: { provider: 'github-copilot', name: 'default' }, instructions: 'x', ...(pricing ? { pricing } : {}) });
 
-describe('GitHub Copilot premium request pricing', () => {
-  it('reads multipliers from settings text, ignoring malformed pairs', () => {
-    expect(parseMultipliers('a=1, b = 0.25\nc=x, =3, d')).toEqual({ a: 1, b: 0.25 });
-    expect(parseMultipliers(undefined)).toEqual({});
+describe('GitHub Copilot AI credit pricing', () => {
+  it('reads per-model rates from settings text, ignoring malformed entries', () => {
+    expect(parseRates('a=1/0.1/1.25/5, b = 2/8\nc=5//30, d=x/1, e=1/2/3/4/5, =1/2')).toEqual({
+      a: { input: 1, cached: 0.1, cache_write: 1.25, output: 5 },
+      b: { input: 2, output: 8 },
+      c: { input: 5, output: 30 },
+    });
+    expect(parseRates(undefined)).toEqual({});
   });
 
-  it('prices a model by settings, then GitHub\'s table, then an assumed 1', () => {
-    expect(copilotPricing('dummy-big', undefined, S)).toMatchObject({ multiplier: 10, per_premium_request: 0.04, currency: 'USD', assumed: false });
-    expect(copilotPricing('gpt-4.1', undefined, S)).toMatchObject({ multiplier: 0, assumed: false });
-    expect(copilotPricing('github-copilot/claude-sonnet-4.5', undefined, S)).toMatchObject({ multiplier: 1, assumed: false });
-    expect(copilotPricing('dummy-unknown', undefined, S)).toMatchObject({ multiplier: 1, assumed: true });
-    // A setting overrides GitHub's table.
-    expect(copilotPricing('gpt-4.1', undefined, { ...S, copilotMultipliers: { 'gpt-4.1': 2 } }).multiplier).toBe(2);
+  it('takes the rate from the profile, then settings, then GitHub\'s table', () => {
+    expect(copilotRate('dummy-big', undefined, S)).toEqual({ input: 10, cached: 1, cache_write: 12.5, output: 50 });
+    expect(copilotRate('github-copilot/claude-sonnet-5', undefined, S)).toEqual({ input: 2, cached: 0.2, cache_write: 2.5, output: 10 });
+    expect(copilotRate('dummy-unknown', undefined, S)).toBeUndefined();
+    expect(copilotRate('claude-sonnet-5', undefined, { ...S, copilotRates: { 'claude-sonnet-5': { input: 1, output: 1 } } })).toEqual({ input: 1, output: 1 });
+    expect(copilotRate('dummy-unknown', { input_per_mtok: 4, output_per_mtok: 20, cache_read_per_mtok: 0.4 }, S)).toEqual({ input: 4, output: 20, cached: 0.4 });
   });
 
-  it('lets the profile set the multiplier and the price per premium request', () => {
-    const p = copilotPricing('dummy-big', { multiplier: 3, per_premium_request: 0.05, revision: 'contract-2026' }, S);
-    expect(p).toMatchObject({ multiplier: 3, per_premium_request: 0.05, revision: 'contract-2026', assumed: false });
-    expect(copilotCost(4, p)).toEqual({ premium_requests: 12, cost: 0.6 });
+  it('counts credits from input, cached, cache-write and output tokens', () => {
+    // (100k x 10 + 2k x 50 + 400k x 1 + 10k x 12.5) / 1M = USD 1.625 = 162.5 credits.
+    expect(copilotCredits(usage, copilotRate('dummy-big', undefined, S)!, 0.01)).toEqual({ credits: 162.5, cost: 1.625 });
+    // Without cache rates, cached tokens cost the input rate.
+    expect(copilotCredits(usage, copilotRate('dummy-plain', undefined, S)!, 0.01)).toEqual({ credits: 103.6, cost: 1.036 });
+    // A contract price per credit changes the money, not the credits.
+    expect(copilotCredits(usage, copilotRate('dummy-big', undefined, S)!, 0.008)).toEqual({ credits: 162.5, cost: 1.3 });
+    expect(copilotCredits({ ...usage, input_tokens: null }, { input: 1, output: 1 }, 0.01)).toBeNull();
   });
 
-  it('counts one premium request per prompt times the multiplier, whatever the tokens', () => {
-    const big = harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage, prompts: 2 })!;
-    expect(big).toMatchObject({ premium_requests: 20, multiplier: 10, cost: 0.8, currency: 'USD' });
-    expect(big.revision).toBe('copilot-premium-requests-2025-11 at 0.04 USD/request');
-    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-cheap', { usage, prompts: 3 })).toMatchObject({ premium_requests: 0.99, cost: 0.0396 });
-    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-free', { usage, prompts: 5 })).toMatchObject({ premium_requests: 0, cost: 0 });
-    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-unknown', { usage, prompts: 1 })!.revision).toContain('multiplier assumed 1');
-    // Older results without a prompt count stay unavailable rather than guessed.
-    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage })).toBeNull();
-  });
-
-  it('still prices token-billed providers by their declared token prices', () => {
+  it('prices a Copilot step in credits, and leaves a model without a rate unavailable', () => {
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage })).toEqual({ cost: 1.625, currency: 'USD', credits: 162.5, revision: 'copilot-ai-credits-2026-06 at 0.01 USD/credit' });
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-unknown', { usage })).toBeNull();
     const p: AgentProfile = { model: { provider: 'anthropic', name: 'm' }, instructions: 'x', pricing: { currency: 'USD', input_per_mtok: 3, output_per_mtok: 15, revision: 'r1' } };
-    expect(harnessCost({ settings: S as any }, p, 'm', { usage, prompts: 1 })).toMatchObject({ cost: expect.closeTo(0.168, 6), premium_requests: null, revision: 'r1' });
-    expect(harnessCost({ settings: S as any }, { ...p, pricing: undefined }, 'm', { usage, prompts: 1 })).toBeNull();
+    expect(harnessCost({ settings: S as any }, p, 'm', { usage })).toMatchObject({ credits: null, revision: 'r1' });
   });
 
-  it('reads the price and multipliers from the environment', () => {
-    const saved = { p: process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD, m: process.env.AZHI_COPILOT_MULTIPLIERS };
+  it('places a run in the monthly pool', () => {
+    expect(poolPosition(undefined, 10, 5)).toBeNull();
+    expect(poolPosition(10_000, 9_000, 500)).toEqual({ monthly: 10_000, used_before: 9_000, left_after: 500, past_pool: 0 });
+    expect(poolPosition(10_000, 9_800, 500)).toEqual({ monthly: 10_000, used_before: 9_800, left_after: 0, past_pool: 300 });
+    expect(poolPosition(10_000, 12_000, 500)).toEqual({ monthly: 10_000, used_before: 12_000, left_after: 0, past_pool: 500 });
+  });
+
+  it('reads the credit price, rates and pool from the environment', () => {
+    const keys = ['AZHI_COPILOT_CREDIT_USD', 'AZHI_COPILOT_RATES', 'AZHI_COPILOT_CREDIT_POOL'] as const;
+    const saved = keys.map((k) => process.env[k]);
     try {
-      delete process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD;
-      delete process.env.AZHI_COPILOT_MULTIPLIERS;
-      expect(settings().copilotPremiumRequestUsd).toBe(0.04);
-      process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD = '0';
-      process.env.AZHI_COPILOT_MULTIPLIERS = 'dummy-x=1.5';
-      expect(settings()).toMatchObject({ copilotPremiumRequestUsd: 0, copilotMultipliers: { 'dummy-x': 1.5 } });
-      process.env.AZHI_COPILOT_PREMIUM_REQUEST_USD = 'lots';
-      expect(settings().copilotPremiumRequestUsd).toBe(0.04);
+      for (const k of keys) delete process.env[k];
+      expect(settings()).toMatchObject({ copilotCreditUsd: 0.01, copilotRates: {}, copilotCreditPool: undefined });
+      process.env.AZHI_COPILOT_CREDIT_USD = '0.009';
+      process.env.AZHI_COPILOT_RATES = 'dummy-x=1/2';
+      process.env.AZHI_COPILOT_CREDIT_POOL = '12000';
+      expect(settings()).toMatchObject({ copilotCreditUsd: 0.009, copilotRates: { 'dummy-x': { input: 1, output: 2 } }, copilotCreditPool: 12000 });
     } finally {
-      for (const [k, v] of [['AZHI_COPILOT_PREMIUM_REQUEST_USD', saved.p], ['AZHI_COPILOT_MULTIPLIERS', saved.m]] as const) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
+      keys.forEach((k, i) => (saved[i] === undefined ? delete process.env[k] : (process.env[k] = saved[i])));
     }
   });
 
-  it('summarises a run\'s premium requests per model next to its tokens', () => {
-    const row = (node: string, model: string, premium: number, mult: number, cost: number, rev = 'copilot-premium-requests-2025-11 at 0.04 USD/request') => ({
-      node_id: node, attempt: 1, turn: 1, model, input_tokens: 50_000, output_tokens: 1_000, cost, currency: 'USD', cost_label: 'estimated', pricing_revision: rev, premium_requests: premium, premium_multiplier: mult,
+  it('summarises a run\'s credits per model, the pool, and models without a rate', () => {
+    const row = (model: string, credits: number | null) => ({
+      node_id: 'n', attempt: 1, turn: 1, provider: 'github-copilot', model, input_tokens: 1, output_tokens: 1, credits, cost: credits === null ? null : credits * 0.01, currency: credits === null ? null : 'USD', cost_label: credits === null ? 'unavailable' : 'estimated',
     });
-    const u = summariseUsage([row('a', 'dummy-big', 10, 10, 0.4), row('b', 'dummy-big', 20, 10, 0.8), row('c', 'dummy-new', 1, 1, 0.04, 'copilot-premium-requests-2025-11 (multiplier assumed 1) at 0.04 USD/request')]);
-    expect(u.input_tokens).toBe(150_000);
-    expect(u.cost.amount).toBeCloseTo(1.24, 6);
-    expect(u.premium_requests).toEqual({
-      total: 31,
-      cost: 1.24,
+    const s = { copilotCreditUsd: 0.01, copilotCreditPool: 10_000 };
+    const u = summariseUsage([row('dummy-big', 300), row('dummy-big', 200), row('dummy-plain', 100)], 9_800, s);
+    expect(u.cost.amount).toBeCloseTo(6, 6);
+    expect(u.copilot).toEqual({
+      credits: 600,
+      cost: 6,
       currency: 'USD',
-      per_premium_request: 0.04,
-      models: [
-        { model: 'dummy-big', multiplier: 10, premium_requests: 30, cost: 1.2, currency: 'USD', assumed: false },
-        { model: 'dummy-new', multiplier: 1, premium_requests: 1, cost: 0.04, currency: 'USD', assumed: true },
-      ],
+      credit_usd: 0.01,
+      models: [{ model: 'dummy-big', credits: 500, cost: 5 }, { model: 'dummy-plain', credits: 100, cost: 1 }],
+      unpriced_models: [],
+      pool: { monthly: 10_000, used_before: 9_800, left_after: 0, past_pool: 400, past_pool_cost: 4 },
     });
-    expect(summariseUsage([{ ...row('a', 'm', 0, 0, 0), premium_requests: null }]).premium_requests).toBeNull();
+    const partly = summariseUsage([row('dummy-big', 300), row('dummy-unknown', null)], 0, { copilotCreditUsd: 0.01, copilotCreditPool: undefined });
+    expect(partly.cost.amount).toBeNull();
+    expect(partly.copilot).toMatchObject({ credits: 300, unpriced_models: ['dummy-unknown'], pool: null });
+    expect(summariseUsage([{ ...row('m', 1), provider: 'anthropic', credits: null }], 0, s).copilot).toBeNull();
   });
 });

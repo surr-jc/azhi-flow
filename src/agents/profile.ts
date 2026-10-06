@@ -20,10 +20,9 @@ export interface AgentProfile {
   max_output_tokens?: number;
   max_turns?: number;
   /**
-   * Prices for estimated cost. Without them cost is labelled unavailable, never guessed. Token
-   * prices for anthropic and openai; for github-copilot, which bills premium requests, only
-   * `per_premium_request` and `multiplier` count (both optional: the server's settings and
-   * GitHub's published numbers fill in, see copilot-pricing.ts).
+   * Prices for estimated cost (USD per million tokens). Without them cost is labelled unavailable,
+   * never guessed. For github-copilot they are optional: the server's AZHI_COPILOT_RATES and
+   * GitHub's published rates fill in, and cost is counted in AI Credits (see copilot-pricing.ts).
    */
   pricing?: {
     currency?: string;
@@ -31,8 +30,6 @@ export interface AgentProfile {
     output_per_mtok?: number;
     cache_read_per_mtok?: number;
     cache_write_per_mtok?: number;
-    per_premium_request?: number;
-    multiplier?: number;
     revision?: string;
   };
   /** The scripted provider's turns, for fixtures and tests. */

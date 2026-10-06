@@ -1,4 +1,6 @@
 import type { AgentNode, RetrieveNode } from '../definition/types.js';
+import { poolPosition, round } from '../agents/copilot-pricing.js';
+import { settings, type Settings } from '../config/settings.js';
 import { pinDatasets } from '../knowledge/datasets.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type pg from 'pg';
@@ -151,7 +153,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     ctx.pool.query(`SELECT node_id, data, at FROM run_events WHERE run_id=$1 AND kind='approval.requested' ORDER BY seq`, [runId]),
     ctx.pool.query(`SELECT node_id, decision, decided_by, data, decided_at FROM approvals WHERE run_id=$1`, [runId]),
     ctx.pool.query(
-      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision, premium_requests::float8 AS premium_requests, premium_multiplier::float8 AS premium_multiplier
+      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision, credits::float8 AS credits, seq, at
        FROM usage_records WHERE run_id=$1 ORDER BY seq`,
       [runId],
     ),
@@ -165,7 +167,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
       const d = decisions.rows.find((x) => x.node_id === r.node_id);
       return { node_id: r.node_id, requested_at: r.at, request: r.data, ...(d ? { decision: d.decision, decided_by: d.decided_by, decided_at: d.decided_at, data: d.data } : { decision: null }) };
     }),
-    usage: summariseUsage(usage.rows),
+    usage: summariseUsage(usage.rows, await creditsBefore(ctx, workspaceId, usage.rows), ctx.settings),
     context_manifests: manifests.rows,
     attempts: attempts.rows,
     actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
@@ -184,7 +186,7 @@ export async function runEvents(ctx: AppContext, workspaceId: string, runId: str
 }
 
 /** Usage completeness (spec section 11): the share of turns whose token usage is known. */
-export function summariseUsage(rows: Array<Record<string, any>>) {
+export function summariseUsage(rows: Array<Record<string, any>>, before = 0, s: Pick<Settings, 'copilotCreditPool' | 'copilotCreditUsd'> = settings()) {
   const known = rows.filter((r) => r.input_tokens !== null && r.output_tokens !== null);
   const sum = (k: string) => (known.length ? known.reduce((n, r) => n + (r[k] ?? 0), 0) : null);
   const costs = rows.filter((r) => r.cost_label !== 'unavailable');
@@ -194,7 +196,7 @@ export function summariseUsage(rows: Array<Record<string, any>>) {
     input_tokens: sum('input_tokens'),
     output_tokens: sum('output_tokens'),
     cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
-    premium_requests: premiumRequests(rows),
+    copilot: copilotUsage(rows, before, s),
     records: rows,
   };
 }
@@ -209,22 +211,50 @@ export async function loadRunInput(ctx: AppContext, workspaceId: string, runId: 
 }
 
 
-/** GitHub Copilot turns, per model: premium requests (prompts x multiplier) and their estimated cost. Null without Copilot turns. */
-function premiumRequests(rows: Array<Record<string, any>>) {
-  const copilot = rows.filter((r) => r.premium_requests !== null && r.premium_requests !== undefined);
+/**
+ * AI Credits this workspace's Copilot steps used this month (UTC, as GitHub's pool resets) before
+ * the run's first Copilot step: where the run started in the monthly pool.
+ */
+async function creditsBefore(ctx: AppContext, workspaceId: string, rows: Array<Record<string, any>>) {
+  const first = rows.find((r) => r.credits !== null && r.credits !== undefined);
+  if (!first) return 0;
+  const r = await ctx.pool.query(
+    `SELECT COALESCE(SUM(credits), 0)::float8 AS used FROM usage_records
+     WHERE workspace_id=$1 AND credits IS NOT NULL AND seq < $2 AND at >= date_trunc('month', $3::timestamptz, 'UTC')`,
+    [workspaceId, first.seq, first.at],
+  );
+  return r.rows[0].used as number;
+}
+
+/**
+ * GitHub Copilot turns in AI Credits, per model, with where the run sits in the monthly pool when
+ * its size is set. Null without Copilot turns.
+ */
+function copilotUsage(rows: Array<Record<string, any>>, before: number, s: Pick<Settings, 'copilotCreditPool' | 'copilotCreditUsd'>) {
+  const copilot = rows.filter((r) => r.provider === 'github-copilot');
   if (!copilot.length) return null;
-  const models = new Map<string, { model: string; multiplier: number; premium_requests: number; cost: number; currency: string; assumed: boolean }>();
+  const models = new Map<string, { model: string; credits: number; cost: number }>();
+  const unpriced = new Set<string>();
   for (const r of copilot) {
-    const key = `${r.model}|${r.premium_multiplier}`;
-    const m = models.get(key) ?? { model: r.model, multiplier: r.premium_multiplier, premium_requests: 0, cost: 0, currency: r.currency, assumed: /assumed/.test(r.pricing_revision ?? '') };
-    m.premium_requests += r.premium_requests;
+    if (r.credits === null || r.credits === undefined) {
+      unpriced.add(r.model ?? 'unknown');
+      continue;
+    }
+    const m = models.get(r.model) ?? { model: r.model, credits: 0, cost: 0 };
+    m.credits += r.credits;
     m.cost += r.cost ?? 0;
-    models.set(key, m);
+    models.set(r.model, m);
   }
-  const list = [...models.values()].map((m) => ({ ...m, premium_requests: Math.round(m.premium_requests * 1000) / 1000, cost: Math.round(m.cost * 1e6) / 1e6 }));
-  const total = list.reduce((n, m) => n + m.premium_requests, 0);
-  const cost = list.reduce((n, m) => n + m.cost, 0);
-  // The price is the same for every Copilot turn unless profiles override it; report it only then.
-  const prices = new Set(copilot.filter((r) => r.premium_requests > 0).map((r) => Math.round((r.cost / r.premium_requests) * 1e6) / 1e6));
-  return { total: Math.round(total * 1000) / 1000, cost: Math.round(cost * 1e6) / 1e6, currency: copilot[0]!.currency, per_premium_request: prices.size === 1 ? [...prices][0]! : null, models: list };
+  const list = [...models.values()].map((m) => ({ model: m.model, credits: round(m.credits, 3), cost: round(m.cost, 6) }));
+  const credits = round(list.reduce((n, m) => n + m.credits, 0), 3);
+  const pool = poolPosition(s.copilotCreditPool, before, credits);
+  return {
+    credits,
+    cost: round(list.reduce((n, m) => n + m.cost, 0), 6),
+    currency: 'USD',
+    credit_usd: s.copilotCreditUsd,
+    models: list,
+    unpriced_models: [...unpriced],
+    pool: pool && { ...pool, past_pool_cost: round(pool.past_pool * s.copilotCreditUsd, 6) },
+  };
 }

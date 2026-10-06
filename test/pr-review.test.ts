@@ -292,7 +292,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     // A stand-in for GitHub Copilot's API (OpenAI-style, as OpenCode's Copilot provider speaks it) and GitHub's device flow.
     fake = await startFakeOpenAI({ script, models: [MODEL] });
     device = await startFakeDeviceFlow(COPILOT_TOKEN);
-    h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotGithubUrl: device.url } });
+    h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotGithubUrl: device.url, copilotRates: { [MODEL]: { input: 2, cached: 0.2, cache_write: 2.5, output: 10 } }, copilotCreditPool: 10_000 } });
     for (const t of parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools) {
       t.transport.config = { repos: ['acme/payments'], api_url: gh.url };
       await h.api.post('/v1/tools', t);
@@ -422,17 +422,19 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     for (const r of fetches.filter((r) => r.headers.authorization)) expect(r.headers.authorization).toBe(`Basic ${Buffer.from(`x-access-token:${READ_TOKEN}`).toString('base64')}`);
     for (const r of git.requests) expect(r.headers['x-host-leak']).toBeUndefined();
 
-    // Copilot is priced by premium requests: one per prompt Azhi sent (each reviewer and the summarizer
-    // answer in one), times the model's multiplier (assumed 1 for this made-up model), at GitHub's overage rate.
-    expect(d.usage.premium_requests).toEqual({
-      total: 4,
-      cost: 0.16,
-      currency: 'USD',
-      per_premium_request: 0.04,
-      models: [{ model: MODEL, multiplier: 1, premium_requests: 4, cost: 0.16, currency: 'USD', assumed: true }],
-    });
-    expect(d.usage.cost.amount).toBeCloseTo(0.16, 6);
-    expect(d.usage.input_tokens).toBeGreaterThan(0);
+    // Copilot is billed in AI Credits: tokens at the model's rate (set for this made-up model), 1 credit = USD 0.01,
+    // drawn from the monthly pool.
+    const cp = d.usage.copilot;
+    const tokens = (k: string) => d.usage.records.reduce((n: number, r: any) => n + (r[k] ?? 0), 0);
+    const want = (tokens('input_tokens') * 2 + tokens('cache_read_tokens') * 0.2 + tokens('cache_write_tokens') * 2.5 + tokens('output_tokens') * 10) / 1_000_000 / 0.01;
+    expect(d.usage.records.filter((r: any) => r.provider === 'github-copilot')).toHaveLength(4);
+    expect(cp.credits).toBeGreaterThan(0);
+    expect(cp.credits).toBeCloseTo(want, 2);
+    expect(cp).toMatchObject({ currency: 'USD', credit_usd: 0.01, unpriced_models: [], models: [{ model: MODEL }] });
+    expect(cp.cost).toBeCloseTo(cp.credits * 0.01, 4);
+    expect(d.usage.cost.amount).toBeCloseTo(cp.cost, 4);
+    expect(cp.pool).toMatchObject({ monthly: 10_000, past_pool: 0 });
+    expect(cp.pool.left_after).toBeCloseTo(10_000 - cp.pool.used_before - cp.credits, 2);
 
     // The context manifest records the checkout and the package files OpenCode loaded.
     const m = d.context_manifests.find((x: any) => x.node_id === 'correctness');

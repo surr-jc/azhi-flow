@@ -1,6 +1,6 @@
 import { Context } from '@temporalio/activity';
 import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
-import { copilotCost, copilotPricing } from '../agents/copilot-pricing.js';
+import { COPILOT_PRICING_REVISION, copilotCredits, copilotRate } from '../agents/copilot-pricing.js';
 import type { AgentProfile } from '../agents/profile.js';
 import type { HarnessResult } from '../worker/harness-activity.js';
 import { retrieve } from '../knowledge/datasets.js';
@@ -244,8 +244,8 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       const priced = harnessCost(ctx, profile, model, r);
       const cost = priced?.cost ?? null;
       await ctx.pool.query(
-        `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision, premium_requests, premium_multiplier)
-         VALUES ($1,$2,$3,1,1,$4,$15,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$16,$17) ON CONFLICT (run_id, node_id, attempt, turn) DO NOTHING`,
+        `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision, credits)
+         VALUES ($1,$2,$3,1,1,$4,$15,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$16) ON CONFLICT (run_id, node_id, attempt, turn) DO NOTHING`,
         [
           input.workspaceId,
           input.runId,
@@ -262,8 +262,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           cost === null ? 'unavailable' : 'estimated',
           priced?.revision ?? null,
           profile.model.provider,
-          priced?.premium_requests ?? null,
-          priced?.multiplier ?? null,
+          priced?.credits ?? null,
         ],
       );
       await ctx.pool.query(`UPDATE context_manifests SET tainted=$4, total_tokens=$5, token_source=$6 WHERE run_id=$1 AND node_id=$2 AND attempt=$3`, [
@@ -389,16 +388,16 @@ async function withChunksFor(ctx: AppContext, input: AgentBeginInput): Promise<A
 }
 
 /**
- * A harness step's estimated cost. Copilot steps are priced by premium requests (one per prompt
- * Azhi sent, times the model's multiplier); other providers by the profile's token prices.
+ * A harness step's estimated cost. Copilot steps are counted in AI Credits (tokens at the model's
+ * Copilot rate); other providers by the profile's token prices.
  */
-export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentProfile, model: string | null, r: Pick<HarnessResult, 'usage' | 'prompts'>) {
+export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentProfile, model: string | null, r: Pick<HarnessResult, 'usage'>) {
   if (profile.model.provider === 'github-copilot') {
-    if (r.prompts === undefined || !model) return null;
-    const p = copilotPricing(model, profile.pricing, ctx.settings);
-    const c = copilotCost(r.prompts, p);
-    return { cost: c.cost, currency: p.currency, premium_requests: c.premium_requests, multiplier: p.multiplier, revision: `${p.revision}${p.assumed ? ' (multiplier assumed 1)' : ''} at ${p.per_premium_request} ${p.currency}/request` };
+    const rate = model ? copilotRate(model, profile.pricing, ctx.settings) : undefined;
+    const c = rate ? copilotCredits(r.usage, rate, ctx.settings.copilotCreditUsd) : null;
+    if (!c) return null;
+    return { cost: c.cost, currency: 'USD', credits: c.credits, revision: `${profile.pricing?.revision ?? COPILOT_PRICING_REVISION} at ${ctx.settings.copilotCreditUsd} USD/credit` };
   }
   const cost = estimateCost(r.usage, profile.pricing);
-  return cost === null ? null : { cost, currency: profile.pricing!.currency ?? 'USD', premium_requests: null, multiplier: null, revision: profile.pricing!.revision ?? 'unversioned' };
+  return cost === null ? null : { cost, currency: profile.pricing!.currency ?? 'USD', credits: null, revision: profile.pricing!.revision ?? 'unversioned' };
 }
