@@ -1,4 +1,4 @@
-import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { Background, Controls, Handle, MarkerType, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
@@ -119,7 +119,7 @@ function layout(nodes: PlanNode[], shown: Map<string, string[]>) {
   return pos;
 }
 
-type CardData = { node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number };
+type CardData = { node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number; toolbar?: ReactNode };
 
 export interface CanvasEdit {
   selected: string | null;
@@ -131,7 +131,7 @@ export interface CanvasEdit {
 }
 
 function Card({ data }: NodeProps<Node<CardData>>) {
-  const { node, run, live, editing, problems } = data;
+  const { node, run, live, editing, problems, toolbar } = data;
   const t = TYPE[node.type] ?? { glyph: '•', label: node.type };
   const state = live ? (run?.state ?? 'pending') : undefined;
   const sub = node.type === 'agent' ? node.def?.profile : node.type === 'tool' ? node.def?.tool : node.type === 'approval' ? `role ${node.def?.role ?? 'operator'}` : node.type === 'condition' ? Object.keys(node.def?.routes ?? {}).join(' / ') : node.type === 'notify' ? node.def?.channel : node.type === 'script' ? node.def?.runtime : undefined;
@@ -156,19 +156,36 @@ function Card({ data }: NodeProps<Node<CardData>>) {
         <div className="wf-desc">{node.def.description}</div>
       ) : null}
       <Handle type="source" position={Position.Right} isConnectable={Boolean(editing)} />
+      {toolbar ? <NodeToolbar isVisible position={Position.Bottom} offset={14} className="wf-toolbar">{toolbar}</NodeToolbar> : null}
     </div>
   );
 }
 
 const nodeTypes = { card: Card };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit }: { nodes: PlanNode[]; detail?: any; plan?: RunPlan | null; height?: number; edit?: CanvasEdit }) {
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, states: override, toolbar, controls = 'top-right', inset, children }: {
+  nodes: PlanNode[];
+  detail?: any;
+  plan?: RunPlan | null;
+  height?: number | string;
+  edit?: CanvasEdit;
+  /** Node states to show instead of the run's current ones (a replay). */
+  states?: Record<string, NodeRunState>;
+  /** Content pinned under one step, such as the decision on a waiting approval. */
+  toolbar?: { node: string; content: ReactNode };
+  controls?: 'top-right' | 'top-left';
+  /** Pixels taken by panels floating over the canvas, kept clear when the graph is framed. */
+  inset?: { right: number; bottom: number };
+  /** Panels floating over the canvas. */
+  children?: ReactNode;
+}) {
   const [ownSelected, setOwnSelected] = useState<string | null>(null);
   const selected = edit ? edit.selected : ownSelected;
   const setSelected = (f: (s: string | null) => string | null) => (edit ? edit.onSelect(f(edit.selected)) : setOwnSelected(f));
   const [edgeSel, setEdgeSel] = useState<string | null>(null);
   const live = Boolean(detail);
-  const states = useMemo(() => (detail ? nodeStates(detail) : {}), [detail]);
+  const current = useMemo(() => (detail ? nodeStates(detail) : {}), [detail]);
+  const states = override ?? current;
   // While editing every direct dependency is drawn, so each one can be seen and removed.
   const shown = useMemo(() => (edit ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduce(planNodes)), [planNodes, Boolean(edit)]);
   const pos = useMemo(() => layout(planNodes, shown), [planNodes, shown]);
@@ -177,7 +194,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     id: n.id,
     type: 'card',
     position: pos[n.id]!,
-    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id] },
+    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], toolbar: toolbar?.node === n.id ? toolbar.content : undefined },
     selected: selected === n.id,
     width: W,
     height: H,
@@ -220,12 +237,16 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     const ys = Object.values(pos).map((p) => p.y);
     const gw = Math.max(...xs) + W;
     const gh = Math.max(...ys) + H;
-    const fit = Math.min((el.clientWidth - 48) / gw, (el.clientHeight - 48) / gh, 1.1);
-    if (fit >= 0.72) return void f.fitView({ padding: 0.12, maxZoom: 1.1 });
+    // Panels floating over the canvas take room the graph should not sit under (the right one
+    // folds away on narrow canvases), and a pinned panel under a step needs room below it.
+    const right = inset && el.clientWidth > 860 ? inset.right : 0;
+    const bottom = (inset?.bottom ?? 0) + (toolbar ? 200 : 0);
+    const fit = Math.min((el.clientWidth - right - 48) / gw, (el.clientHeight - bottom - 48) / gh, 1.1);
+    if (fit >= 0.72) return void f.fitView({ padding: right || bottom ? { top: '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
     const zoom = Math.max(0.72, Math.min(0.9, (el.clientHeight - 48) / gh));
     const at = focus ? pos[focus]! : { x: 0, y: gh / 2 - H / 2 };
-    const x = focus ? el.clientWidth / 2 - (at.x + W / 2) * zoom : 24;
-    void f.setViewport({ x: Math.min(24, x), y: el.clientHeight / 2 - (at.y + H / 2) * zoom, zoom });
+    const x = focus ? (el.clientWidth - right) / 2 - (at.x + W / 2) * zoom : 24;
+    void f.setViewport({ x: Math.min(24, x), y: (el.clientHeight - bottom) / 2 - (at.y + H / 2) * zoom, zoom });
   };
   const framedOn = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -250,7 +271,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   }, [edit?.selected, pos]);
 
   // Tall enough for the graph's widest layer at a readable zoom, and no taller.
-  const height = fixed ?? Math.round(Math.min(560, Math.max(260, (Math.max(0, ...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
+  const height: number | string = fixed ?? Math.round(Math.min(560, Math.max(260, (Math.max(0, ...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
 
   const sel = planNodes.find((n) => n.id === selected);
   return (
@@ -304,8 +325,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
           aria-label="Workflow graph"
         >
           <Background gap={20} size={1} />
-          <Controls showInteractive={false} position="top-right" orientation="horizontal" />
+          <Controls showInteractive={false} position={controls} orientation="horizontal" />
         </ReactFlow>
+        {children}
       </div>
       {edit ? null : <Legend live={live} />}
       {edit ? null : sel ? <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} /> : <p className="muted small">Select a node to see its details.</p>}

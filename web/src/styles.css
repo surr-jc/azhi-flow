@@ -323,3 +323,42 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .evidence button.card { text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
 .evidence button.card:hover { border-color: var(--accent); }
 .evidence .card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+/* ---- Atlas run page: the canvas is the page, evidence floats over it ------------------------- */
+.wf-canvas { position: relative; }
+.atlas { margin-bottom: 20px; }
+.atlas .wf-canvas { border-radius: 10px; }
+.atlas .wf .react-flow { --xy-background-pattern-color: color-mix(in srgb, var(--muted) 35%, transparent); }
+.atlas-drawer { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-width: 0; }
+.atlas-drawer.floating { position: absolute; top: 12px; right: 12px; width: 322px; max-height: calc(100% - 96px); z-index: 6; box-shadow: 0 8px 28px -10px rgba(19, 33, 59, 0.28), var(--shadow); }
+.atlas-drawer.stacked { display: none; margin-top: 12px; }
+@media (max-width: 900px) {
+  .atlas-drawer.floating { display: none; }
+  .atlas-drawer.stacked { display: flex; }
+}
+.atlas-tabs { display: flex; gap: 2px; padding: 8px; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
+.atlas-tabs button { border: 0; background: transparent; color: var(--muted); padding: 5px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.atlas-tabs button span { font-weight: 500; opacity: 0.8; }
+.atlas-tabs button:hover { color: var(--ink); background: var(--idle-bg); }
+.atlas-tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.atlas-panel { padding: 4px 14px 12px; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.atlas-panel > * { align-self: stretch; }
+.atlas-panel > button.link { align-self: flex-start; }
+.atlas-panel .step { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; padding: 8px 0; }
+.atlas-panel .kv-list { padding-top: 8px; }
+.wf-toolbar { z-index: 7; }
+.atlas-pop { background: var(--panel); border: 1px solid var(--attention); border-top-width: 4px; border-radius: 10px; padding: 12px 14px; width: 310px; max-width: calc(100vw - 48px); display: flex; flex-direction: column; gap: 6px; box-shadow: 0 10px 30px -10px rgba(19, 33, 59, 0.35), var(--shadow); color: var(--ink); font-size: 13.5px; cursor: default; }
+.atlas-pop b { font-size: 14.5px; overflow-wrap: anywhere; }
+.atlas-pop .row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.atlas-pop::before { content: ''; position: absolute; top: -9px; left: calc(50% - 6px); border: 6px solid transparent; border-bottom-color: var(--attention); }
+.atlas-replay { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 6; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; box-shadow: var(--shadow); font-size: 13px; }
+.atlas-replay > button:first-child { flex: none; min-width: 74px; }
+.atlas-track { position: relative; flex: 1 1 240px; min-width: 160px; height: 28px; display: flex; align-items: center; }
+.atlas-track input[type="range"] { position: relative; width: 100%; margin: 0; z-index: 1; accent-color: var(--accent); background: transparent; }
+.atlas-ticks { position: absolute; inset: 0 8px; pointer-events: none; }
+.atlas-ticks i { position: absolute; top: 2px; width: 2px; height: 6px; margin-left: -1px; border-radius: 1px; background: var(--idle); }
+.atlas-ticks i.warn { background: var(--attention); height: 9px; top: 0; }
+.atlas-ticks i.bad { background: var(--bad); height: 9px; top: 0; }
+.atlas-at { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+@media (max-width: 640px) { .atlas-at { flex-basis: 100%; max-width: none; } }
+.atlas-decisions { margin-bottom: 20px; }
