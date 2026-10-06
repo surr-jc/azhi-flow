@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, atLeast, type Approval } from '../api';
 import { useMe } from '../App';
 import { Link } from '../router';
-import { ago, Badge, ErrorNote, formValues, Json, Loading, PageHead, Panel, RunLink, SchemaFields, when } from '../ui';
+import { ago, ErrorNote, formValues, Json, Loading, PageHead, Panel, RunLink, SchemaFields, when } from '../ui';
 
 export function Approvals() {
   const me = useMe();
@@ -18,69 +18,147 @@ export function Approvals() {
   );
 }
 
-export function ApprovalCard({ approval: a, compact }: { approval: Approval; compact?: boolean }) {
+const ROLE_WHO: Record<string, string> = { viewer: 'Anyone', author: 'Authors and above', operator: 'Operators and above', admin: 'Admins and owners', owner: 'Owners' };
+export const whoCanDecide = (role: string) => ROLE_WHO[role] ?? `${role} and above`;
+
+/** The approval's question in words: its message, or which step is asking. */
+export function approvalQuestion(a: Approval): string {
+  const m = a.request.message;
+  if (typeof m === 'string' && m.trim()) return m;
+  if (m !== undefined && m !== null) return JSON.stringify(m);
+  return `Approve ${a.node_id} in ${a.workflow}?`;
+}
+
+/** Approve or reject one waiting approval, refreshing everything that shows it. */
+export function useDecide(a: Approval) {
   const qc = useQueryClient();
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
-  const [formError, setFormError] = useState<string>();
-  const decide = useMutation({
-    mutationFn: (decision: 'approved' | 'rejected') => {
-      const data = decision === 'approved' ? formValues(a.decision_schema, values) : {};
-      return api(`/v1/runs/${encodeURIComponent(a.run_id)}/approvals`, { method: 'POST', body: { node: a.node_id, decision, data } });
-    },
+  return useMutation({
+    mutationFn: ({ decision, data }: { decision: 'approved' | 'rejected'; data?: Record<string, unknown> }) =>
+      api(`/v1/runs/${encodeURIComponent(a.run_id)}/approvals`, { method: 'POST', body: { node: a.node_id, decision, data: data ?? {} } }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['approvals'] });
       void qc.invalidateQueries({ queryKey: ['run', a.run_id] });
       void qc.invalidateQueries({ queryKey: ['overview'] });
+      void qc.invalidateQueries({ queryKey: ['runs'] });
     },
   });
+}
+
+/** True when the approver must fill in a form, so a one-click approve is not enough. */
+export const needsForm = (a: Approval) => Boolean(a.decision_schema?.properties && Object.keys(a.decision_schema.properties).length);
+
+export function ApprovalCard({ approval: a, compact }: { approval: Approval; compact?: boolean }) {
+  const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const [formError, setFormError] = useState<string>();
+  const decide = useDecide(a);
   const go = (d: 'approved' | 'rejected') => {
     setFormError(undefined);
+    let data: Record<string, unknown> = {};
     try {
-      if (d === 'approved') formValues(a.decision_schema, values);
+      if (d === 'approved') data = formValues(a.decision_schema, values);
     } catch (e) {
       return setFormError((e as Error).message);
     }
-    decide.mutate(d);
+    decide.mutate({ decision: d, data });
   };
-  const message = typeof a.request.message === 'string' ? a.request.message : a.request.message === undefined ? null : JSON.stringify(a.request.message);
+  const payload = a.request.payload;
+  const expiry = a.expires_at ? `Expires ${ago(a.expires_at)} (${when(a.expires_at)}), then ${a.request.on_expiry === 'fail' ? 'the run fails' : 'it counts as rejected'}` : null;
   return (
-    <Panel
-      title={
-        <>
-          {compact ? `Approval: ${a.node_id}` : <><Link to={`/ui/workflows/${encodeURIComponent(a.workflow)}`}>{a.workflow}</Link> · {a.node_id}</>}
-          {a.test ? <> <Badge tone="idle">test run</Badge></> : null}
-        </>
-      }
-      action={!compact ? <RunLink id={a.run_id} /> : undefined}
-    >
-      {message ? <p className="approval-message">{message}</p> : null}
-      {a.request.payload !== undefined && a.request.payload !== null ? (
-        <details open>
-          <summary>What will happen if approved</summary>
-          <Json value={a.request.payload} />
-        </details>
-      ) : null}
-      <p className="muted small">
-        Requested {ago(a.requested_at)} · needs role {a.role} or higher
-        {a.expires_at ? <> · expires {ago(a.expires_at)} ({when(a.expires_at)}), then {a.request.on_expiry === 'fail' ? 'the run fails' : 'it counts as rejected'}</> : null}
-      </p>
-      {decide.isSuccess ? (
-        <p className="ok-note">Decision sent. The run continues from here.</p>
-      ) : a.can_decide ? (
-        <>
-          {a.decision_schema?.properties && Object.keys(a.decision_schema.properties).length ? <SchemaFields schema={a.decision_schema} values={values} onChange={setValues} /> : null}
-          <div className="row">
-            <button className="primary" disabled={decide.isPending} onClick={() => go('approved')}>Approve</button>
-            <button className="danger" disabled={decide.isPending} onClick={() => go('rejected')}>Reject</button>
+    <section className="decision" aria-label={`Approval ${a.node_id}`}>
+      <header>
+        <span>{a.can_decide ? 'Your decision' : 'Waiting for a decision'}{a.test ? ' · test run' : ''}</span>
+        {expiry ? <span>{expiry}</span> : null}
+      </header>
+      <div className="body">
+        {!compact ? (
+          <div className="crumbs">
+            <Link to={`/ui/workflows/${encodeURIComponent(a.workflow)}`}>{a.workflow}</Link> · step {a.node_id} · requested {ago(a.requested_at)} · <RunLink id={a.run_id} />
           </div>
-        </>
-      ) : (
-        <p className="muted">Your role cannot decide this one.</p>
-      )}
-      {formError ? <div className="error">{formError}</div> : null}
-      <ErrorNote error={decide.error} />
-    </Panel>
+        ) : null}
+        <div className="question">{approvalQuestion(a)}</div>
+        {payload !== undefined && payload !== null ? (
+          <>
+            <Facts value={payload} />
+            <details>
+              <summary className="small">Show the full payload</summary>
+              <Json value={payload} />
+            </details>
+          </>
+        ) : (
+          <p className="muted small">The workflow shows the approver no details for this step.</p>
+        )}
+        <p className="who">
+          {whoCanDecide(a.role)} can decide.{compact ? ` Requested ${ago(a.requested_at)}.` : ''}
+        </p>
+        {decide.isSuccess ? (
+          <p className="ok-note" role="status">Decision recorded. The run continues from here.</p>
+        ) : a.can_decide ? (
+          <>
+            {needsForm(a) ? <SchemaFields schema={a.decision_schema} values={values} onChange={setValues} idPrefix={`d-${a.node_id}`} /> : null}
+            <div className="row">
+              <button className="primary" disabled={decide.isPending} onClick={() => go('approved')}>Approve</button>
+              <button className="danger" disabled={decide.isPending} onClick={() => go('rejected')}>Reject</button>
+            </div>
+          </>
+        ) : (
+          <p className="muted">Your role cannot decide this one.</p>
+        )}
+        {formError ? <div className="error">{formError}</div> : null}
+        <ErrorNote error={decide.error} />
+      </div>
+    </section>
   );
+}
+
+const label = (k: string) => {
+  const t = k.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+const isScalar = (v: unknown) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+const scalar = (v: unknown) => (v === null ? '—' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
+
+/** A readable summary of an approval payload; anything too deep falls back to JSON. */
+function Facts({ value }: { value: unknown }) {
+  if (isScalar(value)) return <p>{scalar(value)}</p>;
+  if (Array.isArray(value)) return <FactValue value={value} />;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return null;
+  return (
+    <div className="table-wrap">
+      <table className="facts">
+        <tbody>
+          {entries.map(([k, v]) => (
+            <tr key={k}><th scope="row">{label(k)}</th><td><FactValue value={v} /></td></tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FactValue({ value }: { value: unknown }) {
+  if (isScalar(value)) return <>{scalar(value)}</>;
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="muted">none</span>;
+    if (value.every(isScalar)) return <>{value.map(scalar).join(', ')}</>;
+    const rows = value as Array<Record<string, unknown>>;
+    const cols = [...new Set(rows.flatMap((r) => (r && typeof r === 'object' && !Array.isArray(r) ? Object.keys(r) : [])))];
+    const flat = rows.every((r) => r && typeof r === 'object' && !Array.isArray(r) && Object.values(r).every(isScalar));
+    if (flat && cols.length && cols.length <= 6 && rows.length <= 50) {
+      return (
+        <div className="table-wrap">
+          <table>
+            <thead><tr>{cols.map((c) => <th key={c}>{label(c)}</th>)}</tr></thead>
+            <tbody>{rows.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c}>{scalar(r[c] ?? null)}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+    }
+    return <span className="muted">{value.length} items, see the full payload</span>;
+  }
+  const o = value as Record<string, unknown>;
+  if (Object.values(o).every(isScalar)) return <>{Object.entries(o).map(([k, v]) => `${label(k)}: ${scalar(v)}`).join(' · ')}</>;
+  return <span className="muted">see the full payload</span>;
 }
 
 interface ApprovalSettings { slack_channel: string | null; slack_token_set: boolean; signing_secret_set: boolean; interactivity_url: string }

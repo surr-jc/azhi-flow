@@ -4,10 +4,10 @@ import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
-import { Badge, ErrorNote, Json, Loading, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
-import { WorkflowCanvas } from '../components/WorkflowCanvas';
+import { nodeStates, TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
 interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
 
@@ -36,43 +36,184 @@ export function RunPage({ id }: { id: string }) {
   const flags = Object.entries(r.flags ?? {}).filter(([, v]) => v) as Array<[string, any]>;
   const operator = atLeast(me.data?.role, 'operator');
   const waiting = (approvals.data ?? []).filter((a) => a.run_id === id);
+  const show = (k: string) => {
+    setTab(k);
+    requestAnimationFrame(() => document.getElementById('run-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
   return (
     <>
+      <div className="crumbs">
+        <Link to="/ui/runs">Runs</Link> › <Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
+        <span className="live">· {live}</span>
+      </div>
       <PageHead
-        title={<><Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link>@{r.workflow_version}</>}
-        sub={<><span className="mono">{r.id}</span> <StateBadge state={r.state} /> {r.test ? <Badge tone="idle">test run</Badge> : null} <span className="live">{live}</span></>}
+        title={<>{r.workflow} <span className="muted" style={{ fontWeight: 400 }}>v{r.workflow_version}</span></>}
+        sub={<><StateBadge state={r.state} />{r.test ? <> <Badge tone="idle">test run</Badge></> : null} {runSentence(r)}</>}
         actions={
           operator ? (
             <>
-              {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={() => confirm('Cancel this run?') && cancel.mutate()}>Cancel run</button> : null}
+              {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={() => confirm('Cancel this run? Steps that have not started will not run.') && cancel.mutate()}>Cancel run</button> : null}
               {!open && !d.run.snapshot?.test_node ? <button disabled={rerun.isPending} onClick={() => rerun.mutate()} title="Start a new run of the same version with the same inputs">Run again</button> : null}
             </>
           ) : null
         }
       />
       <ErrorNote error={cancel.error ?? rerun.error} />
-      {flags.length ? <div className="flags">{flags.map(([k, v]) => <Badge key={k} tone="warn">{k === 'waiting_reason' ? `waiting for ${v.reason.replace('_', ' ')}${v.node ? ` on ${v.node}` : ''}` : k.replaceAll('_', ' ')}</Badge>)}</div> : null}
-      <div className="meta">
-        <div><span>Trigger</span>{r.trigger}</div>
-        <div><span>Created</span>{when(r.created_at)}</div>
-        <div><span>Ended</span>{when(r.ended_at)}{r.ended_at ? ` (${duration(r.created_at, r.ended_at)})` : ''}</div>
-        <div><span>Usage</span>{usageLine(d.usage)}</div>
-        <div><span>Package</span><span className="mono">{String(r.snapshot?.package_hash ?? '').slice(0, 19)}</span></div>
-      </div>
+      {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
-      {waiting.map((a) => <ApprovalCard key={a.node_id} approval={a} compact />)}
-      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} detail={d} plan={d.plan} /> : <p className="muted">Loading the workflow…</p>}</Panel>
-      <div className="tabs" role="tablist">
-        {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
-      </div>
-      <div className="tab" role="tabpanel">
-        {tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+      <div className="run-layout">
+        <div style={{ minWidth: 0 }}>
+          {waiting.map((a) => <ApprovalCard key={a.node_id} approval={a} compact />)}
+          <section className="panel receipt" aria-labelledby="what-happened">
+            <header className="panel-head"><h2 id="what-happened">What happened</h2><span className="muted small">Started {when(r.created_at)} by {r.trigger}</span></header>
+            {version.data?.plan?.nodes ? <Steps nodes={version.data.plan.nodes} detail={d} /> : <Loading />}
+          </section>
+          <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} detail={d} plan={d.plan} /> : <p className="muted">Loading the workflow…</p>}</Panel>
+          <div id="run-detail" style={{ scrollMarginTop: 112 }}>
+            <div className="tabs" role="tablist">
+              {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
+            </div>
+            <div className="tab" role="tabpanel">
+              {tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+            </div>
+          </div>
+        </div>
+        <Evidence detail={d} show={show} />
       </div>
     </>
   );
 }
 
-const TABS: Record<string, string> = { timeline: 'Timeline', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
+function runSentence(r: any): string {
+  const by = r.trigger === 'schedule' ? 'by its schedule' : r.trigger === 'test' ? 'as a test' : `from ${r.trigger}`;
+  const why = r.flags?.waiting_reason;
+  switch (r.state) {
+    case 'waiting':
+      return why?.reason === 'approval' ? `Waiting for a person to decide at step ${why.node}. Started ${ago(r.created_at)} ${by}.` : `Waiting for ${String(why?.reason ?? 'something').replaceAll('_', ' ')}${why?.node ? ` on ${why.node}` : ''}. Started ${ago(r.created_at)} ${by}.`;
+    case 'queued':
+      return `Queued ${ago(r.created_at)} ${by}.`;
+    case 'running':
+      return `Running for ${duration(r.created_at, new Date().toISOString())}. Started ${by}.`;
+    case 'succeeded':
+      return `Finished in ${duration(r.created_at, r.ended_at)}. Started ${ago(r.created_at)} ${by}.`;
+    case 'cancelling':
+      return 'Cancelling: steps already running are being stopped.';
+    case 'cancelled':
+      return `Cancelled after ${duration(r.created_at, r.ended_at ?? r.created_at)}.`;
+    default:
+      return `Stopped (${r.state.replaceAll('_', ' ')}) after ${duration(r.created_at, r.ended_at ?? r.created_at)}.`;
+  }
+}
+
+const STEP_ICON: Record<string, [string, string, string]> = {
+  succeeded: ['ok', '✓', 'Done'], failed: ['bad', '✕', 'Failed'], waiting: ['warn', '■', 'Waiting'], running: ['run', '●', 'Running'],
+  skipped: ['', '–', 'Skipped'], pending: ['', '○', 'Not started'], cancelled: ['', '–', 'Cancelled'],
+};
+
+const short = (v: unknown, n = 140) => {
+  const t = typeof v === 'string' ? v : JSON.stringify(v);
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
+};
+
+/** A step's output in a few words: short text as is, otherwise its size or its field names. */
+function outputSummary(v: unknown): string {
+  if (typeof v === 'string') return short(v);
+  if (typeof v === 'number' || typeof v === 'boolean') return `Returned ${String(v)}`;
+  if (Array.isArray(v)) return `Returned ${v.length} item${v.length === 1 ? '' : 's'}`;
+  const o = v as Record<string, unknown>;
+  const inner = o.output;
+  if (Array.isArray(inner)) return `Returned ${inner.length} item${inner.length === 1 ? '' : 's'}`;
+  if (inner !== undefined && inner !== null && typeof inner !== 'object') return `Returned ${short(String(inner), 100)}`;
+  const keys = Object.keys(o);
+  return keys.length ? `Returned ${keys.slice(0, 4).join(', ')}${keys.length > 4 ? ` and ${keys.length - 4} more` : ''}` : 'Done';
+}
+
+/** Each step in plan order, with what it did, when, and what its model calls cost. */
+function Steps({ nodes, detail: d }: { nodes: PlanNode[]; detail: any }) {
+  const states = nodeStates(d);
+  return (
+    <div className="receipt">
+      {nodes.map((n) => {
+        const st = states[n.id];
+        const state = st?.state ?? 'pending';
+        const [tone, glyph, word] = STEP_ICON[state] ?? ['', '○', state];
+        const attempts = (d.attempts as any[]).filter((a) => a.node_id === n.id);
+        const last = attempts[attempts.length - 1];
+        const at = last?.ended_at ?? last?.started_at;
+        const cost = (d.usage?.records ?? []).filter((x: any) => x.node_id === n.id && typeof x.cost === 'number').reduce((t: number, x: any) => t + x.cost, 0);
+        const approval = (d.approvals as any[]).find((a) => a.node_id === n.id && a.decision);
+        const err = st?.error as any;
+        const what = err
+          ? short(err.message ?? err)
+          : approval
+            ? `${approval.decision === 'approved' ? 'Approved' : 'Rejected'} by ${approval.decided_by}${approval.decided_at ? ` ${ago(approval.decided_at)}` : ''}`
+            : st?.route
+              ? `Chose ${st.route}`
+              : state === 'succeeded' && st?.output !== undefined && st?.output !== null
+                ? outputSummary(st.output)
+                : state === 'waiting' && n.type === 'approval'
+                  ? 'Waiting for a person'
+                  : word;
+        return (
+          <div className="step" key={n.id}>
+            <span className={`ic ${tone}`} aria-hidden="true">{glyph}</span>
+            <div style={{ minWidth: 0 }}>
+              <div className="name">{n.id} <span className="muted small">{TYPE[n.type]?.label ?? n.type}{st && st.attempts > 1 ? ` · ${st.attempts} attempts` : ''}</span></div>
+              <div className={`what ${err ? 'bad' : ''}`}><span className="visually-hidden">{word}: </span>{what}</div>
+            </div>
+            <span className="when">{at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}{cost ? <><br />{money(cost)}</> : null}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The run's trust features, summarised: each card opens its full tab below. */
+function Evidence({ detail: d, show }: { detail: any; show: (tab: string) => void }) {
+  const p: RunPlan | null = d.plan;
+  const controls = p ? p.nodes.flatMap((n) => n.coverage ?? []) : [];
+  const enforced = controls.filter((c) => c.enforcement === 'enforced').length;
+  const gaps = p ? p.nodes.flatMap((n) => n.requirements ?? []).filter((q) => q.mark === 'unsupported').length : 0;
+  const items = (d.context_manifests as any[]).reduce((t, m) => t + (m.items?.length ?? 0), 0);
+  const tainted = (d.context_manifests as any[]).filter((m) => m.tainted).length;
+  const u = d.usage;
+  return (
+    <aside className="evidence" aria-label="Evidence">
+      <button type="button" className="card" onClick={() => show('coverage')}>
+        <h3>Run plan</h3>
+        {p ? <Badge tone={`s ${p.ok ? 'ok' : 'bad'}`}>{p.ok ? 'No blockers' : `${p.blockers.length} blocker${p.blockers.length === 1 ? '' : 's'}`}</Badge> : <p>Not recorded for this run.</p>}
+        {p ? <p>{p.signer?.verified ? `Signed by ${p.signer.publisher}.` : 'Signature not verified.'} Checked before the run started.</p> : null}
+      </button>
+      <button type="button" className="card" onClick={() => show('coverage')}>
+        <h3>Policy coverage</h3>
+        <span className="big">{controls.length ? `${enforced} of ${controls.length}` : 'None'}</span>
+        <p>{controls.length ? 'controls are enforced by Azhi itself.' : 'No step makes a controlled action.'}{gaps ? ` ${gaps} requirement${gaps === 1 ? ' is' : 's are'} not supported.` : ''}</p>
+      </button>
+      <button type="button" className="card" onClick={() => show('ledger')}>
+        <h3>Action ledger</h3>
+        <span className="big">{d.actions.length} {d.actions.length === 1 ? 'write' : 'writes'}</span>
+        {d.actions.length ? (
+          <div className="kv-list">
+            {(d.actions as any[]).slice(-4).map((a) => <div key={a.id}><span>{a.tool}</span><Badge tone={`s ${a.state === 'confirmed' ? 'ok' : a.state === 'failed' ? 'bad' : a.state === 'outcome_unknown' ? 'warn' : 'run'}`}>{a.state.replaceAll('_', ' ')}</Badge></div>)}
+          </div>
+        ) : <p>No external writes.</p>}
+      </button>
+      <button type="button" className="card" onClick={() => show('context')}>
+        <h3>Context manifest</h3>
+        <span className="big">{items} {items === 1 ? 'source' : 'sources'}</span>
+        <p>{d.context_manifests.length ? `Across ${d.context_manifests.length} model call${d.context_manifests.length === 1 ? '' : 's'}.` : 'No model calls.'}{tainted ? ` ${tainted} saw untrusted content.` : ''}</p>
+      </button>
+      <button type="button" className="card" onClick={() => show('usage')}>
+        <h3>Model cost</h3>
+        <span className="big">{u.turns ? (u.cost.amount === null ? 'Unknown' : money(u.cost.amount, u.cost.currency)) : money(0)}</span>
+        <p>{u.turns ? `${num(u.turns)} model call${u.turns === 1 ? '' : 's'}, usage known for ${u.completeness_pct}%.` : 'No model calls.'}</p>
+      </button>
+    </aside>
+  );
+}
+
+const TABS: Record<string, string> = { timeline: 'Event log', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
 
 /** Follows the SSE stream, resuming from the last event ID after a disconnect. */
 function useRunEvents(id: string, onEvent: () => void) {
@@ -142,12 +283,6 @@ function useRunEvents(id: string, onEvent: () => void) {
     };
   }, [id]);
   return { events, live };
-}
-
-function usageLine(u: any) {
-  if (!u.turns) return 'no model turns';
-  const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.currency} ${u.cost.amount.toFixed(4)} estimated`;
-  return `${u.completeness_pct}% complete · ${cost}`;
 }
 
 function summarise(ev: RunEvent) {

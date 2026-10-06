@@ -96,7 +96,7 @@ export async function computeAlerts(ctx: AppContext, workspaceId: string, princi
   const soon = Date.now() + 60 * 60 * 1000;
   for (const a of approvals) {
     if (a.expires_at && new Date(a.expires_at).getTime() < soon) {
-      alerts.push({ key: `approval:${a.run_id}:${a.node_id}`, level: 'warning', kind: 'approval.expiring', message: `Approval ${a.node_id} on ${a.workflow} expires within the hour`, run_id: a.run_id, workflow: a.workflow, at: a.expires_at });
+      alerts.push({ key: `approval:${a.run_id}:${a.node_id}`, level: 'warning', kind: 'approval.expiring', message: `${a.workflow} is waiting on approval step ${a.node_id}, which expires within the hour`, run_id: a.run_id, workflow: a.workflow, at: a.expires_at });
     }
   }
   for (const b of budgets) {

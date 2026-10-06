@@ -16,8 +16,10 @@ export function ago(t: string | null | undefined): string {
 
 export function money(amount: number | null | undefined, currency = 'USD', complete = true) {
   if (amount === null || amount === undefined) return 'unknown';
-  const v = amount === 0 || amount >= 1 ? amount.toFixed(2) : amount.toFixed(4);
-  return `${complete ? '' : '≥ '}${currency === 'USD' ? '$' : `${currency} `}${v}`;
+  const sign = currency === 'USD' ? '$' : `${currency} `;
+  // Money always shows 2 decimals; a non-zero amount under a cent says so instead of rounding to zero.
+  if (amount > 0 && amount < 0.01) return `${complete ? '' : '≥ '}< ${sign}0.01`;
+  return `${complete ? '' : '≥ '}${sign}${amount.toFixed(2)}`;
 }
 
 export const Badge = ({ children, tone }: { children: ReactNode; tone?: string }) => <span className={`badge ${tone ?? ''}`}>{children}</span>;
@@ -25,7 +27,8 @@ export const Badge = ({ children, tone }: { children: ReactNode; tone?: string }
 const STATE_TONE: Record<string, string> = {
   succeeded: 'ok', failed: 'bad', delivery_failed: 'bad', expired: 'bad', waiting: 'warn', cancelling: 'warn', cancelled: 'idle', running: 'run', queued: 'run',
 };
-export const StateBadge = ({ state }: { state: string }) => <Badge tone={`${STATE_TONE[state] ?? 'idle'} s-${state}`}>{state.replace('_', ' ')}</Badge>;
+export const StateBadge = ({ state }: { state: string }) => <Badge tone={`s ${STATE_TONE[state] ?? 'idle'} s-${state}`}>{state.replaceAll('_', ' ')}</Badge>;
+export const stateTone = (state: string) => STATE_TONE[state] ?? 'idle';
 
 export function Table({ head, children, empty }: { head: ReactNode[]; children: ReactNode[]; empty?: string }) {
   if (!children.length && empty) return <p className="muted">{empty}</p>;
