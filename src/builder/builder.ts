@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parse } from 'yaml';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
+import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import { examplesDir } from '../api/examples.js';
 import type { Diagnostic } from '../definition/load.js';
 import { EXECUTORS } from '../executors/capabilities.js';
@@ -25,10 +26,10 @@ import { checkPackage, getVersion, type VersionRow } from '../server/workflows.j
  *
  * The browser keeps the transcript (provider-neutral blocks) and sends it with each message.
  */
-export type BuilderProviderId = 'anthropic' | 'openai';
+export type BuilderProviderId = 'anthropic' | 'openai' | 'opencode';
 
 export interface BuilderProviderInfo {
-  id: BuilderProviderId | 'github-copilot';
+  id: BuilderProviderId;
   label: string;
   ready: boolean;
   /** The model used when none is picked. */
@@ -74,7 +75,10 @@ const RESULT_CHARS = 24_000;
 const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
-const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', 'github-copilot': 'GitHub Copilot' } as const;
+const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)' } as const;
+/** The secret each builder provider needs; OpenCode uses the GitHub Copilot sign-in OpenCode steps use. */
+const CREDENTIAL = { anthropic: PROVIDER_DEFAULTS.anthropic.credential, openai: PROVIDER_DEFAULTS.openai.credential, opencode: PROVIDER_DEFAULTS['github-copilot'].credential } as const;
+const MODEL_ENV = { anthropic: PROVIDER_DEFAULTS.anthropic.modelEnv, openai: PROVIDER_DEFAULTS.openai.modelEnv, opencode: PROVIDER_DEFAULTS['github-copilot'].modelEnv } as const;
 
 async function hasSecret(ctx: AppContext, workspaceId: string, name: string): Promise<boolean> {
   return (await ctx.pool.query(`SELECT 1 FROM secrets WHERE workspace_id=$1 AND name=$2 LIMIT 1`, [workspaceId, name])).rows.length > 0;
@@ -82,17 +86,19 @@ async function hasSecret(ctx: AppContext, workspaceId: string, name: string): Pr
 
 /**
  * Every model provider Azhi knows, whether the builder can use it here, and its default model.
- * GitHub Copilot is listed but never ready: its models are reached only through OpenCode steps.
+ * OpenCode means GitHub Copilot's models with the Copilot sign-in OpenCode steps use, called the
+ * way OpenCode calls them.
  */
 export async function builderProviders(ctx: AppContext, workspaceId: string): Promise<{ providers: BuilderProviderInfo[]; default?: BuilderProviderId }> {
   const s = ctx.settings;
   const out: BuilderProviderInfo[] = [];
-  for (const id of ['anthropic', 'openai'] as const) {
-    const d = PROVIDER_DEFAULTS[id];
-    if (!(await hasSecret(ctx, workspaceId, d.credential))) out.push({ id, label: LABELS[id], ready: false, reason: `the workspace secret ${d.credential} is not set` });
-    else out.push({ id, label: LABELS[id], ready: true, model: await defaultBuilderModel(ctx, workspaceId, id) });
+  for (const id of ['anthropic', 'openai', 'opencode'] as const) {
+    const credential = CREDENTIAL[id];
+    if (!(await hasSecret(ctx, workspaceId, credential))) {
+      const reason = id === 'opencode' ? `sign in to GitHub Copilot first (Governance › Secrets › Sign in with GitHub Copilot); the workspace secret ${credential} is not set` : `the workspace secret ${credential} is not set`;
+      out.push({ id, label: LABELS[id], ready: false, reason });
+    } else out.push({ id, label: LABELS[id], ready: true, model: await defaultBuilderModel(ctx, workspaceId, id) });
   }
-  out.push({ id: 'github-copilot', label: LABELS['github-copilot'], ready: false, reason: 'Copilot models run only inside OpenCode workflow steps, so the builder cannot call them' });
   const ready = out.filter((p) => p.ready);
   const preferred = ready.find((p) => p.id === s.builderProvider) ?? ready[0];
   return { providers: out, default: preferred?.id as BuilderProviderId | undefined };
@@ -104,16 +110,40 @@ async function providerFor(ctx: AppContext, workspaceId: string, wanted?: Builde
   const info = providers.find((p) => p.id === id);
   if (!info || !info.ready) {
     const why = info?.reason ?? 'no model provider is set up';
-    throw new AzhiError(ErrorClass.unsupportedCapability, `the workflow builder needs an Anthropic or OpenAI key: ${why}. Add one under Governance › Secrets.`);
+    throw new AzhiError(ErrorClass.unsupportedCapability, `the workflow builder needs an Anthropic or OpenAI key, or a GitHub Copilot sign-in for OpenCode: ${why}. Add one under Governance › Secrets.`);
   }
   if (model !== undefined && !MODEL_ID.test(model)) throw new AzhiError(ErrorClass.invalidInput, `'${model}' is not a model id`);
   const chosen = model ?? info.model;
-  if (!chosen) throw new AzhiError(ErrorClass.invalidInput, `pick a ${info.label} model, or set ${PROVIDER_DEFAULTS[info.id as BuilderProviderId].modelEnv} on the server`);
-  const d = PROVIDER_DEFAULTS[info.id as BuilderProviderId];
-  const secret = await resolveSecret(ctx, workspaceId, d.credential);
-  if (!secret) throw new AzhiError(ErrorClass.authorization, `credential '${d.credential}' is not set`);
+  if (!chosen) throw new AzhiError(ErrorClass.invalidInput, `pick a ${info.label} model, or set ${MODEL_ENV[info.id]} on the server`);
+  const credential = CREDENTIAL[info.id];
+  const secret = await resolveSecret(ctx, workspaceId, credential);
+  if (!secret) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' is not set`);
+  const done = { ...info, model: chosen };
+  if (info.id === 'opencode') return { provider: copilotProvider(ctx, secret.value), info: done };
+  const d = PROVIDER_DEFAULTS[info.id];
   const make = info.id === 'openai' ? openaiProvider : anthropicProvider;
-  return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info: { ...info, id: info.id as BuilderProviderId, model: chosen } };
+  return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info: done };
+}
+
+/**
+ * GitHub Copilot's chat API with the sign-in OpenCode uses, called as OpenCode calls it: the sign-in's
+ * token as the bearer, OpenCode's user agent, and x-initiator `user` only for a person's own message
+ * (OpenCode marks tool rounds `agent`, which Copilot does not count as a new request).
+ */
+function copilotProvider(ctx: AppContext, signIn: string): ModelProvider {
+  const si = copilotSignIn(signIn);
+  return openaiProvider({
+    id: 'copilot',
+    apiUrl: copilotApi(ctx, si.enterprise),
+    apiKey: si.token,
+    path: '/chat/completions',
+    maxTokensParam: 'max_tokens',
+    headers: (req) => {
+      const last = req.messages.at(-1);
+      const fromPerson = last?.role === 'user' && last.content.some((b) => b.type === 'text');
+      return { 'user-agent': OPENCODE_USER_AGENT, 'openai-intent': 'conversation-edits', 'x-initiator': fromPerson ? 'user' : 'agent' };
+    },
+  });
 }
 
 const TOOLS: ModelTool[] = [
@@ -247,7 +277,7 @@ async function overview(ctx: AppContext, workspaceId: string, provider: BuilderP
     )
   ).rows;
   return {
-    model_provider_for_profiles: { provider: provider.id, credential: PROVIDER_DEFAULTS[provider.id].credential },
+    model_provider_for_profiles: profileProvider(provider.id),
     tools: tools.map((t) => ({ ref: toolRef(t), description: t.description, effect: t.effect, output_trusted: t.output_trusted === true, safe_for_tainted: t.safe_for_tainted === true, credential: t.credential })),
     datasets,
     workflows,
@@ -348,8 +378,15 @@ export async function checkProposal(
   };
 }
 
+/** What profiles drafted in this session use: the builder's own provider (OpenCode's is github-copilot, on executor opencode). */
+function profileProvider(id: BuilderProviderId) {
+  return id === 'opencode' ? { provider: 'github-copilot', credential: CREDENTIAL.opencode, executor: 'opencode' } : { provider: id, credential: CREDENTIAL[id] };
+}
+
 function system(info: BuilderProviderInfo): string {
-  return `${SKILL}\n\n## This session\n\nToday is ${new Date().toISOString().slice(0, 10)}. You run on ${info.id} (${info.model}). Agent profiles you write should use provider ${info.id} with credential ${PROVIDER_DEFAULTS[info.id].credential} unless the person asks otherwise.`;
+  const p = profileProvider(info.id);
+  const use = `provider ${p.provider} with credential ${p.credential}${'executor' in p ? ', on agent nodes with executor: opencode,' : ''}`;
+  return `${SKILL}\n\n## This session\n\nToday is ${new Date().toISOString().slice(0, 10)}. You run on ${info.label} (${info.model}). Agent profiles you write should use ${use} unless the person asks otherwise.`;
 }
 
 const addUsage = (a: Usage, b: Usage): Usage => ({

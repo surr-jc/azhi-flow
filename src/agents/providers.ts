@@ -133,9 +133,23 @@ function httpError(provider: string, status: number, message: string): AzhiError
  * calls map to `tool_use` blocks and tool results to `tool` messages. Cached and reasoning tokens
  * are recorded when the response reports them and are null otherwise.
  */
-export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProvider {
+export interface OpenAIOptions {
+  apiUrl: string;
+  apiKey: string;
+  /** The provider name in errors; default openai. */
+  id?: string;
+  /** The completions path under apiUrl; default /v1/chat/completions. */
+  path?: string;
+  /** Extra headers per request (Copilot wants OpenCode's). */
+  headers?: (req: ModelRequest) => Record<string, string>;
+  /** Copilot takes max_tokens; OpenAI itself wants max_completion_tokens. */
+  maxTokensParam?: 'max_tokens' | 'max_completion_tokens';
+}
+
+export function openaiProvider(o: OpenAIOptions): ModelProvider {
+  const id = o.id ?? 'openai';
   return {
-    id: 'openai',
+    id,
     async complete(req) {
       const messages: unknown[] = [{ role: 'system', content: req.system }];
       for (const m of req.messages) {
@@ -152,12 +166,12 @@ export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProv
         for (const b of m.content) if (b.type === 'tool_result') messages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.is_error ? `ERROR: ${b.content}` : b.content });
         if (text) messages.push({ role: 'user', content: text });
       }
-      const res = await post(`${o.apiUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      const res = await post(`${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/chat/completions'}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}` },
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}`, ...o.headers?.(req) },
         body: JSON.stringify({
           model: req.model,
-          max_completion_tokens: req.maxTokens,
+          [o.maxTokensParam ?? 'max_completion_tokens']: req.maxTokens,
           messages,
           ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
           ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
@@ -169,14 +183,16 @@ export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProv
       try {
         body = JSON.parse(raw);
       } catch {
-        throw new AzhiError(ErrorClass.transient, `openai returned HTTP ${res.status} with a non-JSON body`);
+        throw new AzhiError(ErrorClass.transient, `${id} returned HTTP ${res.status} with a non-JSON body`);
       }
-      if (!res.ok) throw httpError('openai', res.status, body?.error?.message ?? raw.slice(0, 200));
-      const choice = body.choices?.[0];
-      if (!choice) throw new AzhiError(ErrorClass.transient, 'openai returned no choices');
+      if (!res.ok) throw httpError(id, res.status, body?.error?.message ?? raw.slice(0, 200));
+      // Copilot's Claude models can split one answer over several choices (text in one, tool calls in another).
+      const choices = (body.choices ?? []) as any[];
+      const choice = choices[0];
+      if (!choice) throw new AzhiError(ErrorClass.transient, `${id} returned no choices`);
       const content: Block[] = [];
-      if (typeof choice.message?.content === 'string' && choice.message.content) content.push({ type: 'text', text: choice.message.content });
-      for (const c of choice.message?.tool_calls ?? []) {
+      for (const ch of choices) if (typeof ch.message?.content === 'string' && ch.message.content) content.push({ type: 'text', text: ch.message.content });
+      for (const c of choices.flatMap((ch) => ch.message?.tool_calls ?? [])) {
         let input: Record<string, unknown>;
         try {
           input = JSON.parse(c.function?.arguments || '{}');
@@ -190,7 +206,7 @@ export function openaiProvider(o: { apiUrl: string; apiKey: string }): ModelProv
       const num = (v: unknown) => (typeof v === 'number' ? v : null);
       return {
         content,
-        stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : choice.finish_reason === 'length' ? 'max_tokens' : 'end',
+        stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : choices.some((ch) => ch.finish_reason === 'length') ? 'max_tokens' : 'end',
         usage: {
           input_tokens: num(u.prompt_tokens),
           output_tokens: num(u.completion_tokens),
