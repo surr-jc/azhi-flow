@@ -60,13 +60,13 @@ describe.skipIf(!up)('mission control', () => {
   it('follows a live run and approves it from the browser', async () => {
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { team: 'payments' } });
     const page = await open(`/ui/runs/${run_id}`);
-    await page.getByText('waiting for approval on approve').waitFor({ timeout: 30_000 });
+    await page.getByText('Waiting for a person to decide at step approve').waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-waiting').count()).toBe(1);
     await page.getByText('Post 4 runs to C-QUALITY?').waitFor();
 
     await page.getByLabel('note').fill('looks right');
     await page.getByRole('button', { name: 'Approve' }).click();
-    await page.getByText('Decision sent').waitFor();
+    await page.getByText('Decision recorded').waitFor();
     await waitForRun(h.api, run_id);
     await page.getByText('finished').waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
@@ -106,8 +106,8 @@ describe.skipIf(!up)('mission control', () => {
 
   it('shows the overview and starts a test run from the workflow page', async () => {
     const page = await open('/ui');
-    await page.getByRole('heading', { name: 'Mission control' }).waitFor();
-    await page.getByText('Succeeded (24 h)').waitFor();
+    await page.getByRole('heading', { name: 'Waiting for a decision' }).waitFor();
+    await page.getByRole('heading', { name: 'Last 24 hours' }).waitFor();
     await page.getByRole('link', { name: 'Workflows', exact: true }).click();
     await page.getByRole('link', { name: 'approval-check' }).click();
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
@@ -159,7 +159,8 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('cell', { name: 'Whole workspace' }).waitFor();
     expect(await h.api.get<any[]>('/v1/budgets')).toEqual([expect.objectContaining({ workflow: null, period: 'month', limit: 25, exceeded: false })]);
 
-    await page.getByRole('link', { name: 'Alerts', exact: true }).click();
+    await page.getByRole('link', { name: 'Runs', exact: true }).click();
+    await page.getByRole('link', { name: /^Alerts/ }).click();
     await page.getByLabel('Channel ID').fill('C-ALERTS');
     await page.getByRole('button', { name: 'Save' }).click();
     await page.getByText('Saved.').waitFor();
@@ -195,7 +196,7 @@ describe.skipIf(!up)('mission control', () => {
 
     await page.getByLabel('Theme').selectOption('dark');
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
-    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(12, 10, 9)');
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(14, 20, 27)');
     await page.reload();
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
     await page.getByLabel('Theme').selectOption('system');

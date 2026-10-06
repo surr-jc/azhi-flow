@@ -80,23 +80,21 @@ function SignIn({ onDone }: { onDone: () => void }) {
   );
 }
 
-const NAV: Array<[string, string, string?]> = [
-  ['/ui', 'Overview'],
-  ['/ui/runs', 'Runs'],
-  ['/ui/approvals', 'Approvals', 'approvals'],
-  ['/ui/alerts', 'Alerts', 'alerts'],
-  ['/ui/workflows', 'Workflows'],
-  ['/ui/examples', 'Examples', 'admin'],
-  ['/ui/schedules', 'Schedules'],
-  ['/ui/workers', 'Workers'],
-  ['/ui/usage', 'Usage and limits'],
-  ['/ui/secrets', 'Secrets', 'admin'],
-  ['/ui/users', 'Users', 'admin'],
-  ['/ui/datasets', 'Datasets'],
-  ['/ui/tools', 'Tools'],
-  ['/ui/audit', 'Audit log', 'admin'],
-  ['/ui/health', 'Health'],
+type NavItem = { to: string; label: string; need?: 'admin'; count?: 'approvals' | 'alerts' };
+type Section = { label: string; to: string; items: NavItem[]; count?: 'approvals' };
+
+// Pages grouped by what a person is doing: deciding today, watching runs, building workflows,
+// governing spend and access, and keeping the system running.
+const SECTIONS: Section[] = [
+  { label: 'Today', to: '/ui', count: 'approvals', items: [] },
+  { label: 'Runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
+  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/examples', label: 'Examples', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }] },
+  { label: 'Governance', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
+  { label: 'System', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
+
+const isAt = (to: string, path: string) => (to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/'));
+const sectionOf = (path: string) => (path === '/ui' ? SECTIONS[0] : SECTIONS.find((s) => s.items.some((i) => isAt(i.to, path))));
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/v1/me'), staleTime: 60_000 });
@@ -107,34 +105,49 @@ function Shell() {
   const me = useMe();
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<unknown[]>('/v1/approvals'), refetchInterval: 5_000 });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api<Alert[]>('/v1/alerts'), refetchInterval: 15_000 });
-  const [menu, setMenu] = useState(false);
-  useEffect(() => setMenu(false), [path]);
   const critical = alerts.data?.filter((a) => a.level === 'critical').length ?? 0;
   const role = me.data?.role;
+  const allowed = (need?: 'admin') => need !== 'admin' || ['admin', 'owner'].includes(role ?? '');
+  const counts = { approvals: approvals.data?.length ?? 0, alerts: critical };
+  const current = sectionOf(path);
+  const items = current?.items.filter((i) => allowed(i.need)) ?? [];
   return (
-    <div className={`shell ${menu ? 'menu-open' : ''}`}>
+    <div className="shell">
       <header className="topbar">
-        <button className="menu-btn" aria-label="Menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button>
         <Link to="/ui" className="brand">Azhi Flow</Link>
+        <nav className="sections" aria-label="Main">
+          {SECTIONS.map((s) => {
+            const active = s === current;
+            const count = s.count ? counts[s.count] : 0;
+            return (
+              <Link key={s.label} to={s.to} className={active ? 'active' : ''} aria-current={active && s.to === path ? 'page' : undefined}>
+                {s.label}
+                {count ? <span className="count">{count}</span> : null}
+              </Link>
+            );
+          })}
+        </nav>
         <span className="top-right">
           <ThemeSwitch />
-          {critical ? <Link to="/ui/alerts" className="badge bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
-          {role ? <span className="muted small">{role}</span> : null}
+          {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
+          {role ? <span className="muted small role">{role}</span> : null}
           <button className="link small" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>Sign out</button>
         </span>
       </header>
-      <nav className="side" aria-label="Main">
-        {NAV.filter(([, , need]) => need !== 'admin' || ['admin', 'owner'].includes(role ?? '')).map(([to, label, extra]) => {
-          const active = to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/');
-          const count = extra === 'approvals' ? approvals.data?.length : extra === 'alerts' ? critical : undefined;
-          return (
-            <Link key={to} to={to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
-              {label}
-              {count ? <span className="count">{count}</span> : null}
-            </Link>
-          );
-        })}
-      </nav>
+      {current && items.length > 1 ? (
+        <nav className="subnav" aria-label={current.label}>
+          {items.map((i) => {
+            const active = isAt(i.to, path);
+            const count = i.count ? counts[i.count] : 0;
+            return (
+              <Link key={i.to} to={i.to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
+                {i.label}
+                {count ? <span className="count">{count}</span> : null}
+              </Link>
+            );
+          })}
+        </nav>
+      ) : null}
       <main className="content">
         <Page path={path} />
       </main>
