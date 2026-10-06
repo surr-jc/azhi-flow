@@ -264,7 +264,22 @@ function CopilotUsage({ c }: { c: any }) {
           : `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run and ${num(pool.left_after)} are left, so this run is covered by the pool (no extra charge). `
         : 'Set AZHI_COPILOT_CREDIT_POOL to your monthly credit pool to see what is left and what is charged as additional usage. '}
       <span className="muted">Estimated from the tokens OpenCode reports. Azhi counts only its own runs, not IDE or chat use drawing on the same pool.</span>
+      <CopilotQuotaLine />
     </p>
+  );
+}
+
+/** The signed-in user's own Copilot allowance now (what VS Code shows), from GitHub. */
+function CopilotQuotaLine() {
+  const { data: q } = useQuery({ queryKey: ['copilot-quota'], queryFn: () => api<any>('/v1/copilot/quota'), retry: false, staleTime: 60_000 });
+  const metered = (q?.quotas ?? []).filter((x: any) => !x.unlimited);
+  if (!q?.ok || !metered.length) return null;
+  return (
+    <>
+      <br />
+      Your Copilot allowance now (from GitHub): {metered.map((x: any) => `${x.name.replace(/_/g, ' ')} ${num(x.used)} used of ${num(x.entitlement)}${x.percent_remaining !== null ? `, ${Math.round(x.percent_remaining)}% left` : ''}`).join('; ')}
+      {q.reset_date ? `, resets ${String(q.reset_date).slice(0, 10)}` : ''}.
+    </>
   );
 }
 

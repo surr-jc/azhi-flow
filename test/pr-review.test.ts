@@ -167,6 +167,21 @@ async function startFakeDeviceFlow(token: string) {
         res.statusCode = ok ? 200 : req.headers.authorization === 'token no-seat' ? 404 : 401;
         return res.end(JSON.stringify(ok ? { sku: 'copilot_business_seat', chat_enabled: true } : { message: 'x' }));
       }
+      // The user's own allowance, as VS Code reads it (an internal endpoint; this shape is what VS Code extensions parse).
+      if (req.url === '/api/v3/copilot_internal/user') {
+        if (req.headers.authorization !== `token ${token}`) return (res.statusCode = 401), res.end(JSON.stringify({ message: 'Bad credentials' }));
+        return res.end(
+          JSON.stringify({
+            copilot_plan: 'enterprise',
+            quota_reset_date_utc: '2026-11-01T00:00:00.000Z',
+            quota_snapshots: {
+              chat: { entitlement: 0, remaining: 0, percent_remaining: 100, unlimited: true },
+              completions: { entitlement: 0, remaining: 0, percent_remaining: 100, unlimited: true },
+              premium_interactions: { entitlement: 12000, remaining: 9000.5, percent_remaining: 75.004, unlimited: false, overage_permitted: true, overage_count: 0 },
+            },
+          }),
+        );
+      }
       if (req.url === '/login/device/code') return res.end(JSON.stringify({ device_code: 'dev_1', user_code: 'WXYZ-1234', verification_uri: 'https://github.com/login/device', interval: 1, expires_in: 600 }));
       if (req.url === '/login/oauth/access_token') return res.end(JSON.stringify(approved && b.device_code === 'dev_1' ? { access_token: token, token_type: 'bearer', scope: 'read:user' } : { error: 'authorization_pending' }));
       res.statusCode = 404;
@@ -545,6 +560,22 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect((await h.api.post<any>(`/v1/copilot/login/${l.id}`, {})).status).toBe('expired');
     const u = await h.api.post<{ token: string }>('/v1/users', { display_name: 'author2', role: 'author' });
     await expect(new ApiClient(h.server.url, u.token).post('/v1/copilot/login', {})).rejects.toThrow(/admin/);
+  });
+
+  it('reads your own Copilot allowance with the sign-in, as VS Code does, without admin rights', async () => {
+    const q = await h.api.get<any>('/v1/copilot/quota');
+    expect(q).toMatchObject({ ok: true, plan: 'enterprise', reset_date: '2026-11-01T00:00:00.000Z' });
+    expect(q.quotas.find((x: any) => x.name === 'premium_interactions')).toEqual({ name: 'premium_interactions', entitlement: 12000, remaining: 9000.5, used: 2999.5, percent_remaining: 75.004, unlimited: false, overage_permitted: true, overage_count: 0 });
+    expect(q.quotas.find((x: any) => x.name === 'chat').unlimited).toBe(true);
+    expect(q.message).toBe('premium_interactions: 2999.5 used of 12000, 9000.5 left (75% left)');
+    expect(q.shape.quota_snapshots.premium_interactions.entitlement).toBe(12000);
+    expect(q.shape.copilot_plan).toBe('string');
+    expect(JSON.stringify(q)).not.toContain(COPILOT_TOKEN);
+    await h.api.put('/v1/secrets/copilot-quota-bad', { value: 'gho_revoked' });
+    expect(await h.api.get<any>('/v1/copilot/quota?secret=copilot-quota-bad')).toMatchObject({ ok: false, message: expect.stringContaining('401: Bad credentials') });
+    expect((await h.api.get<any>('/v1/copilot/quota?secret=no-such')).message).toContain('No sign-in is saved');
+    const viewer = await h.api.post<{ token: string }>('/v1/users', { display_name: 'viewer-q', role: 'viewer' });
+    await expect(new ApiClient(h.server.url, viewer.token).get('/v1/copilot/quota')).rejects.toThrow(/operator/);
   });
 
   it('checks the saved Copilot sign-in the way OpenCode uses it, and says what is wrong', async () => {

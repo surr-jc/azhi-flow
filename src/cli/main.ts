@@ -461,6 +461,27 @@ copilot
     if (!r.ok) process.exitCode = 1;
   });
 
+copilot
+  .command('quota')
+  .description('Show your own Copilot allowance (AI credits used and left), as VS Code shows it')
+  .option('--secret <name>', 'secret holding the sign-in', 'github-copilot-token')
+  .option('--shape', 'also print the field names GitHub sends (no token, no text values)')
+  .action(async (opts: { secret: string; shape?: boolean }) => {
+    const r = await client().get<{ ok: boolean; message: string; plan?: string; reset_date?: string; quotas: Array<{ name: string; entitlement: number | null; remaining: number | null; used: number | null; percent_remaining: number | null; unlimited: boolean; overage_permitted: boolean | null; overage_count: number | null }>; shape?: unknown }>(`/v1/copilot/quota?secret=${encodeURIComponent(opts.secret)}`);
+    if (!r.ok) {
+      console.error(red(r.message));
+      process.exitCode = 1;
+      return;
+    }
+    if (r.plan) console.log(`plan ${r.plan}${r.reset_date ? `, resets ${r.reset_date}` : ''}`);
+    for (const q of r.quotas) {
+      if (q.unlimited) console.log(`  ${q.name.padEnd(22)} unlimited`);
+      else console.log(`  ${q.name.padEnd(22)} ${q.used ?? '?'} used of ${q.entitlement ?? '?'}, ${q.remaining ?? '?'} left${q.percent_remaining !== null ? ` (${Math.round(q.percent_remaining)}%)` : ''}${q.overage_count ? `, ${q.overage_count} over` : ''}${q.overage_permitted === false ? ', no overage allowed' : ''}`);
+    }
+    if (!r.quotas.length) console.log(dim(r.message));
+    if (opts.shape) console.log(JSON.stringify(r.shape, null, 2));
+  });
+
 example
   .command('repos')
   .description('Show, add or remove the repositories an installed example\'s GitHub tools may use')

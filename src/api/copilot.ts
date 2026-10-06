@@ -168,6 +168,68 @@ export async function checkCopilotToken(ctx: AppContext, token: string, enterpri
   return { ok: true, plan, steps, message: `Copilot accepts this sign-in: the model list and a test chat with ${model} both worked${plan ? ` (plan: ${plan})` : ''}.` };
 }
 
+export interface CopilotQuota {
+  ok: boolean;
+  message: string;
+  plan?: string;
+  reset_date?: string;
+  quotas: Array<{ name: string; entitlement: number | null; remaining: number | null; used: number | null; percent_remaining: number | null; unlimited: boolean; overage_permitted: boolean | null; overage_count: number | null }>;
+  /** The answer's field names and value types (never values that are not numbers or booleans), to see what GitHub sends. */
+  shape?: unknown;
+}
+
+const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+
+/** Field names and types of a JSON answer; numbers and booleans kept, strings replaced by their type. */
+function shapeOf(v: unknown, depth = 0): unknown {
+  if (depth > 4) return '...';
+  if (Array.isArray(v)) return v.length ? [shapeOf(v[0], depth + 1)] : [];
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).slice(0, 40).map(([k, x]) => [k, shapeOf(x, depth + 1)]));
+  return typeof v === 'number' || typeof v === 'boolean' || v === null ? v : typeof v;
+}
+
+/**
+ * The signed-in user's own Copilot allowance: what VS Code and OpenChamber show. GitHub answers it at
+ * copilot_internal/user for the user's Copilot sign-in, no admin rights needed. It is an internal,
+ * undocumented endpoint, so every field is read loosely and the answer's shape is returned too.
+ */
+export async function copilotQuota(ctx: AppContext, token: string, enterprise?: string): Promise<CopilotQuota> {
+  const url = `${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/user`;
+  const r = await call(url, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow', 'x-github-api-version': '2025-04-01' } });
+  if (r.status !== 200) return { ok: false, quotas: [], message: r.status === 'unreachable' ? `Could not reach GitHub (${r.text}).` : `GitHub did not give the Copilot allowance for this sign-in (${r.status}: ${brief(r)}).` };
+  let j: Record<string, any>;
+  try {
+    j = JSON.parse(r.text);
+  } catch {
+    return { ok: false, quotas: [], message: 'GitHub answered with something that is not JSON.' };
+  }
+  const snaps = (j.quota_snapshots ?? j.quotas ?? {}) as Record<string, Record<string, unknown>>;
+  const quotas = Object.entries(snaps)
+    .filter(([, q]) => q && typeof q === 'object')
+    .map(([name, q]) => {
+      const entitlement = n(q.entitlement ?? q.limit ?? q.total);
+      const remaining = n(q.remaining ?? q.quota_remaining);
+      const used = n(q.credits_used ?? q.used ?? q.consumed) ?? (entitlement !== null && remaining !== null ? Math.max(0, entitlement - remaining) : null);
+      return {
+        name,
+        entitlement,
+        remaining,
+        used,
+        percent_remaining: n(q.percent_remaining),
+        unlimited: q.unlimited === true,
+        overage_permitted: typeof q.overage_permitted === 'boolean' ? q.overage_permitted : null,
+        overage_count: n(q.overage_count ?? q.overage),
+      };
+    });
+  const plan = typeof j.copilot_plan === 'string' ? j.copilot_plan : typeof j.access_type_sku === 'string' ? j.access_type_sku : undefined;
+  const reset = j.quota_reset_date_utc ?? j.quota_reset_date ?? j.limited_user_reset_date;
+  const metered = quotas.filter((q) => !q.unlimited);
+  const text = metered.length
+    ? metered.map((q) => `${q.name}: ${q.used ?? '?'} used of ${q.entitlement ?? '?'}${q.remaining !== null ? `, ${q.remaining} left` : ''}${q.percent_remaining !== null ? ` (${Math.round(q.percent_remaining)}% left)` : ''}`).join('; ')
+    : 'GitHub reports no metered allowance for this sign-in.';
+  return { ok: true, plan, reset_date: typeof reset === 'string' ? reset : undefined, quotas, message: text, shape: shapeOf(j) };
+}
+
 export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
   const pending = new Map<string, Pending>();
   const sweep = () => {
@@ -182,6 +244,17 @@ export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!s) return { ok: false, message: `No sign-in is saved yet (secret ${b.secret}). Sign in with GitHub Copilot first.` };
     const si = signIn(s.value);
     return { ...(await checkCopilotToken(ctx, si.token, si.enterprise)), ...(si.enterprise ? { enterprise: si.enterprise } : {}) };
+  });
+
+  // The signed-in user's own allowance (what VS Code shows).
+  app.get('/v1/copilot/quota', async (req) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    const q = z.object({ secret: z.string().regex(SECRET).default('github-copilot-token') }).parse(req.query ?? {});
+    const s = await resolveSecret(ctx, p.workspaceId, q.secret);
+    if (!s) return { ok: false, quotas: [], message: `No sign-in is saved yet (secret ${q.secret}).` };
+    const si = signIn(s.value);
+    return copilotQuota(ctx, si.token, si.enterprise);
   });
 
   // The sign-in OpenCode already has (its auth.json, or just the github-copilot entry), stored as the secret.

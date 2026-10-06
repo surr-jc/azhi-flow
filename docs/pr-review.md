@@ -146,6 +146,13 @@ with a pool size, the credits this workspace's Copilot steps used earlier in the
 left and what fell past the pool. Azhi sees only its own runs, not IDE use of the same pool.
 Mission control's Usage page and spend limits count the value like any estimated cost.
 
+The signed-in user's own allowance, as VS Code and OpenChamber show it, comes from GitHub's
+internal `copilot_internal/user` endpoint with the Copilot sign-in (no admin rights):
+`azhi copilot quota` (`--shape` prints the answer's field names, never the token or text values),
+`GET /v1/copilot/quota` (operator), and a line on the run's Usage tab. It is undocumented, so
+fields are read loosely; the billing REST API (`/organizations/ORG/settings/billing/ai_credit/usage`)
+is the documented route but needs an organization admin or billing manager.
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `AZHI_COPILOT_CREDIT_POOL` | unset | the organization's monthly AI credit pool |
