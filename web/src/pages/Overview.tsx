@@ -32,6 +32,7 @@ export function Overview() {
           next ? `next scheduled run ${ago(next.next_occurrence_at)}` : null,
         ].filter(Boolean).join(' · ')}
       />
+      <StatusTiles o={d} />
       <div className="today">
         <div className="today-main">
           <section className="today-sec" aria-labelledby="t-decisions">
@@ -58,10 +59,6 @@ export function Overview() {
         </div>
 
         <aside className="side-col" aria-label="Summary">
-          <div className="card">
-            <h3>Last 24 hours</h3>
-            <p>{total ? <><b>{num(total)} runs</b>: {num(day.succeeded ?? 0)} succeeded, {failed ? <span className="warn-text">{num(failed)} failed</span> : '0 failed'}{day.cancelled ? `, ${num(day.cancelled)} cancelled` : ''}.</> : 'No runs started.'}</p>
-          </div>
           <Link to="/ui/usage" className="card" style={{ color: 'inherit', textDecoration: 'none' }}>
             <h3>Model spend <span className="small">Limits</span></h3>
             <div className="kv-list">
@@ -90,6 +87,33 @@ export function Overview() {
         </aside>
       </div>
     </>
+  );
+}
+
+/** The mission control strip: the system's state in numbers, each one a way into the runs behind it. */
+export function StatusTiles({ o, active }: { o: OverviewData; active?: string }) {
+  const day = o.last_24h;
+  const open = o.open;
+  const failed = (day.failed ?? 0) + (day.delivery_failed ?? 0) + (day.expired ?? 0);
+  const tiles: Array<{ key: string; label: string; value: string; sub: string; to: string; tone?: string }> = [
+    { key: 'running,queued', label: 'Running', value: num((open.running ?? 0) + (open.queued ?? 0)), sub: open.queued ? `${num(open.queued)} queued` : 'now', to: '/ui/runs?state=running,queued', tone: (open.running ?? 0) + (open.queued ?? 0) ? 'run' : undefined },
+    { key: 'waiting', label: 'Waiting', value: num(open.waiting ?? 0), sub: 'on a person or worker', to: '/ui/runs?state=waiting', tone: open.waiting ? 'warn' : undefined },
+    { key: 'approvals', label: 'Needs you', value: num(o.approvals.mine), sub: `${num(o.approvals.pending)} approval${o.approvals.pending === 1 ? '' : 's'} pending`, to: '/ui/approvals', tone: o.approvals.mine ? 'warn' : undefined },
+    { key: 'succeeded', label: 'Succeeded', value: num(day.succeeded ?? 0), sub: 'last 24 hours', to: '/ui/runs?state=succeeded', tone: day.succeeded ? 'ok' : undefined },
+    { key: 'failed,delivery_failed,expired', label: 'Failed', value: num(failed), sub: 'last 24 hours', to: '/ui/runs?state=failed,delivery_failed,expired', tone: failed ? 'bad' : undefined },
+    { key: 'workers', label: 'Workers online', value: `${o.workers.online}/${o.workers.total}`, sub: o.workers.online ? 'ready for steps' : 'no worker can run steps', to: '/ui/workers', tone: o.workers.online ? 'ok' : 'bad' },
+    { key: 'spend', label: 'Spend today', value: money(o.spend.today.amount, o.spend.today.currency, o.spend.today.complete), sub: `${money(o.spend.week.amount, o.spend.week.currency, o.spend.week.complete)} this week`, to: '/ui/usage' },
+  ];
+  return (
+    <nav className="tiles" aria-label="System status">
+      {tiles.map((t) => (
+        <Link key={t.key} to={t.to} className={`tile${active === t.key ? ' active' : ''}`} aria-current={active === t.key ? 'true' : undefined}>
+          <span className="tile-label">{t.label}</span>
+          <span className={`tile-value ${t.tone ?? ''}`}>{t.value}</span>
+          <span className="tile-sub">{t.sub}</span>
+        </Link>
+      ))}
+    </nav>
   );
 }
 

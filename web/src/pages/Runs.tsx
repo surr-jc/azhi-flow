@@ -1,10 +1,10 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { api, atLeast, type RunRow, type WorkflowSummary } from '../api';
+import { api, atLeast, type Overview, type RunRow, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
 import { useRoute } from '../router';
 import { ErrorNote, Loading, PageHead, Panel } from '../ui';
-import { RunTable } from './Overview';
+import { RunTable, StatusTiles } from './Overview';
 
 const STATES = ['', 'running,queued', 'waiting', 'succeeded', 'failed,delivery_failed,expired', 'cancelled'];
 const LABEL: Record<string, string> = { '': 'All states', 'running,queued': 'Running', waiting: 'Waiting', succeeded: 'Succeeded', 'failed,delivery_failed,expired': 'Failed', cancelled: 'Cancelled' };
@@ -20,6 +20,7 @@ export function Runs() {
   const me = useMe();
   const [typed, setTyped] = useState(text);
   useEffect(() => setTyped(text), [text]);
+  const o = useQuery({ queryKey: ['overview'], queryFn: () => api<Overview>('/v1/overview'), refetchInterval: 5_000 });
   const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
   const q = useInfiniteQuery({
     queryKey: ['runs', state, workflow, text, from, to],
@@ -49,6 +50,7 @@ export function Runs() {
   return (
     <>
       <PageHead title="Runs" />
+      {o.data ? <StatusTiles o={o.data} active={state} /> : null}
       <div className="filters">
         <select aria-label="State" value={state} onChange={(e) => set('state', e.target.value)}>
           {states.map((s) => <option key={s} value={s}>{LABEL[s] ?? s}</option>)}
