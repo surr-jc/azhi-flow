@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFakeAnthropic, type FakeStep } from '../src/testing/fake-anthropic.js';
+import { startFakeOpenAI } from '../src/testing/fake-openai.js';
 import { ApiClient } from '../src/worker/api-client.js';
 import { startHarness, temporalAvailable, type Harness } from './helpers/harness.js';
 
@@ -61,12 +62,13 @@ describe.skipIf(!up)('workflow builder chat', () => {
     const before = await h.api.get<any>('/v1/builder');
     expect(before.default).toBeUndefined();
     expect(before.providers.find((p: any) => p.id === 'anthropic')).toMatchObject({ ready: false, reason: expect.stringContaining('anthropic-api-key') });
-    await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi' })).rejects.toThrow(/Anthropic or OpenAI key/);
+    await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi' })).rejects.toThrow(/Anthropic or OpenAI key, or a GitHub Copilot sign-in/);
 
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-test' });
     const after = await h.api.get<any>('/v1/builder');
     expect(after).toMatchObject({ default: 'anthropic' });
-    expect(after.providers.map((p: any) => [p.id, p.ready])).toEqual([['anthropic', true], ['openai', false], ['github-copilot', false]]);
+    expect(after.providers.map((p: any) => [p.id, p.ready])).toEqual([['anthropic', true], ['openai', false], ['opencode', false]]);
+    expect(after.providers.at(-1).reason).toMatch(/Sign in with GitHub Copilot/);
     // The provider's live model list, with the recommended model first.
     const models = await h.api.get<any>('/v1/builder/models?provider=anthropic');
     expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-5-5', reason: expect.any(String) } });
@@ -120,6 +122,49 @@ describe.skipIf(!up)('workflow builder chat', () => {
   });
 });
 
+describe.skipIf(!up)('workflow builder chat through OpenCode (GitHub Copilot)', () => {
+  it("lists the Copilot sign-in's models, recommends the strongest Claude, and calls Copilot as OpenCode does", async () => {
+    const copilotProfile = profile.replace('{provider: anthropic, name: default, credential: anthropic-api-key}', '{provider: github-copilot, name: default, credential: github-copilot-token}');
+    const files = { ...good, 'profiles/summariser@1.yaml': copilotProfile, 'workflow.yaml': good['workflow.yaml'].replace('    budget:', '    executor: opencode\n    budget:') };
+    const fake = await startFakeOpenAI({
+      bearer: 'gho_test',
+      models: ['gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-opus-4.7', 'claude-haiku-4.5'],
+      script: [script[0]!, script[1]!, { tool: 'propose_workflow', input: { summary: 'Summarises standup notes on demand.', files } }, { text: 'Here is a draft.' }],
+    });
+    const h = await startHarness({ worker: false, settings: { copilotApiUrl: fake.url, copilotModel: 'claude-sonnet-5', builderModel: undefined, builderProvider: undefined } });
+    try {
+      await h.api.put('/v1/secrets/github-copilot-token', { value: 'gho_test' });
+      const status = await h.api.get<any>('/v1/builder');
+      expect(status).toMatchObject({ default: 'opencode' });
+      expect(status.providers.find((p: any) => p.id === 'opencode')).toMatchObject({ ready: true, label: 'OpenCode (GitHub Copilot)', model: 'claude-opus-4.7' });
+      const models = await h.api.get<any>('/v1/builder/models?provider=opencode');
+      expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-4.7' } });
+      expect(models.models.map((m: any) => m.id)).toEqual(['claude-opus-4.7', 'gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-haiku-4.5']);
+
+      fake.requests.length = 0;
+      const first = await h.api.post<any>('/v1/builder/chat', { provider: 'opencode', messages: [], text: 'Summarise our standup notes' });
+      expect(first).toMatchObject({ provider: 'opencode', model: 'claude-opus-4.7', event: { kind: 'questions' } });
+      const [a, b] = fake.requests;
+      expect(a!.url).toBe('/chat/completions');
+      expect(a!.headers).toMatchObject({ authorization: 'Bearer gho_test', 'user-agent': expect.stringMatching(/^opencode\//), 'x-initiator': 'user' });
+      expect(a!.body.max_tokens).toBeGreaterThan(0);
+      // The tool round after the lookup is the agent's own, as OpenCode marks it.
+      expect(b!.headers['x-initiator']).toBe('agent');
+      // Drafts use Copilot through OpenCode.
+      expect(a!.system).toContain('provider github-copilot with credential github-copilot-token, on agent nodes with executor: opencode');
+
+      const second = await h.api.post<any>('/v1/builder/chat', { provider: 'opencode', model: 'claude-sonnet-5', messages: first.messages, text: 'trigger: On demand' });
+      expect(fake.requests.at(-1)!.model).toBe('claude-sonnet-5');
+      expect(second.event.kind).toBe('proposal');
+      expect(second.event.proposal.blockers.filter((x: any) => !/worker/i.test(x.message))).toEqual([]);
+      expect(await h.api.post<any>('/v1/builder/save', { files: second.event.proposal.files })).toMatchObject({ ok: true });
+    } finally {
+      await h.stop();
+      await fake.close();
+    }
+  });
+});
+
 describe.skipIf(!up)('workflow builder chat in the browser', () => {
   it('interviews with question cards, shows the compiled draft, and opens it in the editor', async () => {
     if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execSync('npm run build:web', { stdio: 'ignore' });
@@ -135,7 +180,7 @@ describe.skipIf(!up)('workflow builder chat in the browser', () => {
       await page.getByRole('link', { name: 'Build with chat' }).click();
       // The model picker lists the provider's models with the recommended one picked; the choice is remembered.
       await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-opus-5-5');
-      expect(await page.getByLabel('Provider').locator('option[disabled]').allTextContents()).toEqual(['OpenAI (not available)', 'GitHub Copilot (not available)']);
+      expect(await page.getByLabel('Provider').locator('option[disabled]').allTextContents()).toEqual(['OpenAI (not available)', 'OpenCode (GitHub Copilot) (not available)']);
       await page.getByLabel('Model', { exact: true }).selectOption('claude-sonnet-5-5');
       await page.reload();
       await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-sonnet-5-5');

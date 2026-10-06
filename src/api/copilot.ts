@@ -16,6 +16,8 @@ import { requireRole } from './auth.js';
  * this server's memory for the code's lifetime.
  */
 const OPENCODE_CLIENT_ID = 'Ov23li8tweQw6odWQebz';
+/** Copilot is called as OpenCode calls it, so it treats Azhi's requests as OpenCode's. */
+export const OPENCODE_USER_AGENT = 'opencode/1.18.34';
 const SECRET = /^[A-Za-z0-9._-]+$/;
 
 interface Pending {
@@ -71,7 +73,7 @@ const hostUrl = (host: string) => (host.startsWith('http://') ? host : `https://
  * The Copilot sign-in in what the secret holds: a bare token (github.com), or OpenCode's own entry
  * (auth.json, or its github-copilot entry), kept whole so OpenCode gets what its own login wrote.
  */
-function entryOf(value: string): { entry?: Record<string, unknown>; token: string; enterprise?: string } {
+export function copilotSignIn(value: string): { entry?: Record<string, unknown>; token: string; enterprise?: string } {
   const v = value.trim();
   if (!v.startsWith('{')) return { token: v };
   let j: any;
@@ -85,7 +87,7 @@ function entryOf(value: string): { entry?: Record<string, unknown>; token: strin
   const names = Object.keys(j).filter((k) => typeof j[k] === 'object');
   throw new AzhiError(ErrorClass.invalidInput, `that JSON has no github-copilot sign-in (a refresh token) in it${names.length ? `; it holds: ${names.join(', ')}` : ''}`);
 }
-const signIn = entryOf;
+const signIn = copilotSignIn;
 
 export interface CopilotCheck {
   ok: boolean;
@@ -95,7 +97,7 @@ export interface CopilotCheck {
 }
 
 /** The Copilot API as OpenCode reaches it: the stand-in URL in tests, copilot-api.<host> on Enterprise, else api.githubcopilot.com. */
-function copilotApi(ctx: AppContext, enterprise?: string): string {
+export function copilotApi(ctx: AppContext, enterprise?: string): string {
   if (ctx.settings.copilotApiUrl) return ctx.settings.copilotApiUrl.replace(/\/$/, '');
   return enterprise ? `https://copilot-api.${enterprise.replace(/^https?:\/\//, '')}` : 'https://api.githubcopilot.com';
 }
@@ -128,7 +130,7 @@ const brief = (r: { text: string; requestId?: string }) => {
  */
 export async function checkCopilotToken(ctx: AppContext, token: string, enterprise?: string): Promise<CopilotCheck> {
   const api = copilotApi(ctx, enterprise);
-  const headers = { authorization: `Bearer ${token}`, 'user-agent': 'opencode/1.18.34' };
+  const headers = { authorization: `Bearer ${token}`, 'user-agent': OPENCODE_USER_AGENT };
   const model = ctx.settings.copilotModel;
   const steps: CopilotCheck['steps'] = [];
   const models = await call(`${api}/models`, { headers: { ...headers, 'x-github-api-version': '2026-06-01' } });

@@ -1,11 +1,13 @@
+import { COPILOT_RATES } from '../agents/copilot-pricing.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
+import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
 
 /**
  * The models the workflow builder can use, per provider: the provider's own model list read with
  * the workspace key (Anthropic and OpenAI both have GET /v1/models), or a built-in list when that
- * call fails. One model per provider is recommended for workflow building; the person may pick any
+ * call fails; for OpenCode, the GitHub Copilot model list its sign-in sees. One model per provider is recommended for workflow building; the person may pick any
  * other, or type an id the list does not show.
  */
 export interface BuilderModel {
@@ -40,6 +42,43 @@ const ANTHROPIC_RECOMMENDED = {
 /** OpenAI ids that are not chat models the builder can drive. */
 const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|whisper|image|dall-e|embedding|moderation|search|instruct|davinci|babbage|codex|computer-use|sora)/i;
 const OPENAI_CHAT = /^(gpt-|o\d|chatgpt-)/i;
+
+export type ModelProviderId = 'anthropic' | 'openai' | 'opencode';
+
+/**
+ * Copilot's models as OpenCode lists them: chat models that take tool calls and that the
+ * organization has not switched off. Fields are read loosely; a model that does not say is kept.
+ */
+async function copilotModels(ctx: AppContext, signIn: string): Promise<BuilderModel[]> {
+  const si = copilotSignIn(signIn);
+  const body = await getJson(`${copilotApi(ctx, si.enterprise)}/models`, { authorization: `Bearer ${si.token}`, 'user-agent': OPENCODE_USER_AGENT, 'x-github-api-version': '2026-06-01' });
+  const list = (Array.isArray(body) ? body : (body.data ?? body.models ?? [])) as Array<Record<string, any>>;
+  const out: BuilderModel[] = [];
+  for (const m of list) {
+    if (typeof m?.id !== 'string') continue;
+    if (m.capabilities?.type && m.capabilities.type !== 'chat') continue;
+    if (m.capabilities?.supports?.tool_calls === false) continue;
+    if (m.policy?.state === 'disabled') continue;
+    if (Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions')) continue;
+    if (!out.some((x) => x.id === m.id)) out.push({ id: m.id, label: typeof m.name === 'string' && m.name !== m.id ? `${m.name} (${m.id})` : m.id });
+  }
+  return out;
+}
+
+/** The strongest Claude model on Copilot: the newest Opus, else the newest Sonnet. */
+function copilotBest(ids: string[]): string | undefined {
+  const version = (id: string) => (/(\d+)(?:[.-](\d+))?/.exec(id.replace(/^claude-(opus|sonnet)-/, '')) ?? []).slice(1).map((x) => Number(x ?? 0));
+  for (const family of ['opus', 'sonnet']) {
+    const found = ids.filter((id) => new RegExp(`^claude-${family}-\\d`).test(id) && !/preview|thought|fast/.test(id));
+    found.sort((a, b) => {
+      const va = version(a);
+      const vb = version(b);
+      return vb[0]! - va[0]! || (vb[1] ?? 0) - (va[1] ?? 0);
+    });
+    if (found[0]) return found[0];
+  }
+  return undefined;
+}
 
 const cache = new Map<string, { at: number; value: BuilderModels }>();
 const TTL_MS = 10 * 60 * 1000;
@@ -95,16 +134,27 @@ function finish(provider: string, models: BuilderModel[], recommended: BuilderMo
   return { provider, models: list, recommended, source, ...(note ? { note } : {}) };
 }
 
-export async function builderModels(ctx: AppContext, workspaceId: string, provider: 'anthropic' | 'openai', refresh = false): Promise<BuilderModels> {
+export async function builderModels(ctx: AppContext, workspaceId: string, provider: ModelProviderId, refresh = false): Promise<BuilderModels> {
   const key = `${workspaceId}:${provider}`;
   const hit = cache.get(key);
   if (hit && !refresh && Date.now() - hit.at < TTL_MS) return hit.value;
   const s = ctx.settings;
-  const configured = PROVIDER_DEFAULTS[provider].model(s);
+  const defaults = PROVIDER_DEFAULTS[provider === 'opencode' ? 'github-copilot' : provider];
+  const configured = defaults.model(s);
   const builderModel = s.builderModel && (!s.builderProvider || s.builderProvider === provider) ? s.builderModel : undefined;
-  const secret = await resolveSecret(ctx, workspaceId, PROVIDER_DEFAULTS[provider].credential);
+  const secret = await resolveSecret(ctx, workspaceId, defaults.credential);
   let value: BuilderModels;
-  if (provider === 'anthropic') {
+  if (provider === 'opencode') {
+    let live: BuilderModel[] | undefined;
+    let note: string | undefined;
+    if (secret) live = await copilotModels(ctx, secret.value).catch((e) => ((note = `could not read Copilot's model list (${(e as Error).message}); showing the models Azhi knows Copilot offers`), undefined));
+    const models = live?.length ? live : Object.keys(COPILOT_RATES).map((id) => ({ id, label: id }));
+    const best = copilotBest(models.map((m) => m.id));
+    const rec = best
+      ? { id: best, reason: 'The strongest Claude model your Copilot seat offers: best at long, structured drafts and at fixing what the compiler reports. It uses more AI Credits than smaller models.' }
+      : configured ? { id: configured, reason: 'The model this server already uses for OpenCode steps (AZHI_COPILOT_MODEL).' } : undefined;
+    value = finish('opencode', models, rec, live?.length ? 'live' : 'built-in', [builderModel, configured], note);
+  } else if (provider === 'anthropic') {
     let live: BuilderModel[] | undefined;
     let note: string | undefined;
     if (secret) live = await anthropicModels(ctx, secret.value).catch((e) => ((note = `could not read Anthropic's model list (${(e as Error).message}); showing the built-in list`), undefined));
@@ -126,9 +176,10 @@ export async function builderModels(ctx: AppContext, workspaceId: string, provid
 }
 
 /** The model the builder uses when the browser does not name one. */
-export async function defaultBuilderModel(ctx: AppContext, workspaceId: string, provider: 'anthropic' | 'openai'): Promise<string | undefined> {
+export async function defaultBuilderModel(ctx: AppContext, workspaceId: string, provider: ModelProviderId): Promise<string | undefined> {
   const s = ctx.settings;
   if (s.builderModel && (!s.builderProvider || s.builderProvider === provider)) return s.builderModel;
   if (provider === 'anthropic') return ANTHROPIC_RECOMMENDED.id;
+  if (provider === 'opencode') return (await builderModels(ctx, workspaceId, provider)).recommended?.id ?? s.copilotModel;
   return PROVIDER_DEFAULTS.openai.model(s) ?? (await builderModels(ctx, workspaceId, provider)).recommended?.id;
 }
