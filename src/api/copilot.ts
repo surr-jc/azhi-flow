@@ -170,6 +170,26 @@ export async function checkCopilotToken(ctx: AppContext, token: string, enterpri
   return { ok: true, plan, steps, message: `Copilot accepts this sign-in: the model list and a test chat with ${model} both worked${plan ? ` (plan: ${plan})` : ''}.` };
 }
 
+/**
+ * The Copilot API address of the sign-in's plan (api.business.githubcopilot.com for Business,
+ * api.enterprise.githubcopilot.com for Enterprise), from GitHub's copilot_internal/user; undefined
+ * when GitHub does not say, or when a stand-in API is configured.
+ */
+export async function copilotPlanApi(ctx: AppContext, token: string, enterprise?: string): Promise<string | undefined> {
+  if (ctx.settings.copilotApiUrl) return undefined;
+  const r = await call(`${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/user`, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' } });
+  if (r.status !== 200) return undefined;
+  try {
+    const api = JSON.parse(r.text)?.endpoints?.api;
+    // The token goes there, so only a Copilot API host: *.githubcopilot.com, or the Enterprise host's copilot-api.
+    const host = typeof api === 'string' && /^https:\/\/([A-Za-z0-9.-]+)\/?$/.exec(api)?.[1];
+    const ok = host && (host === 'githubcopilot.com' || host.endsWith('.githubcopilot.com') || (enterprise && host === `copilot-api.${enterprise.replace(/^https?:\/\//, '')}`));
+    return ok ? `https://${host}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface CopilotQuota {
   ok: boolean;
   message: string;

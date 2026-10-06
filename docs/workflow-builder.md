@@ -45,9 +45,13 @@ from **Sign in with GitHub Copilot** under Governance › Secrets, or `azhi copi
 `azhi copilot import`). The builder does not start the OpenCode program: it calls Copilot's API the
 way OpenCode does (the sign-in as the bearer token, OpenCode's user agent, `copilot-api.<host>`
 for a GitHub Enterprise sign-in), because the builder needs its own tools and its own stop when it
-asks you a question. The model list is Copilot's `GET /models` for that sign-in, keeping chat
-models that take tool calls and that your organization has not switched off; when it cannot be
-read, the models Azhi has Copilot prices for are shown.
+asks you a question. The model list is what your Copilot plan offers that sign-in, as
+Copilot's own model picker shows it: from Copilot's `GET /models` (at your plan's own address,
+such as api.enterprise.githubcopilot.com, when GitHub gives one), only models marked for the
+picker, enabled by your organization's policy (not switched off, and not waiting for an opt-in),
+chat models that take tool calls, one per model family (dated variants such as
+gpt-4o-2024-11-20 are left out). When the list cannot be read, the models Azhi has Copilot prices
+for are shown.
 
 Limits:
 

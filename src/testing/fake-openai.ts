@@ -18,7 +18,7 @@ export interface FakeOpenAIRequest {
   body: Record<string, any>;
 }
 
-export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number }; bearer?: string; models?: string[] }) {
+export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenAIRequest) => FakeStep[]); usage?: { input: number; output: number }; bearer?: string; models?: string[]; modelEntries?: Array<Record<string, unknown>> }) {
   const requests: FakeOpenAIRequest[] = [];
   let bearer = o.bearer;
   let chatOnly = false;
@@ -33,7 +33,7 @@ export async function startFakeOpenAI(o: { script: FakeStep[] | ((req: FakeOpenA
           return void res.end(JSON.stringify({ error: { message: 'Unauthorized' } }));
         }
         res.writeHead(200, { 'content-type': 'application/json' });
-        return void res.end(JSON.stringify({ data: (o.models ?? []).map((id) => ({ id })) }));
+        return void res.end(JSON.stringify({ data: o.modelEntries ?? (o.models ?? []).map((id) => ({ id })) }));
       }
       const b = raw ? JSON.parse(raw) : {};
       const messages = (b.messages ?? []) as Array<Record<string, any>>;

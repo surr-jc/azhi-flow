@@ -128,7 +128,23 @@ describe.skipIf(!up)('workflow builder chat through OpenCode (GitHub Copilot)', 
     const files = { ...good, 'profiles/summariser@1.yaml': copilotProfile, 'workflow.yaml': good['workflow.yaml'].replace('    budget:', '    executor: opencode\n    budget:') };
     const fake = await startFakeOpenAI({
       bearer: 'gho_test',
-      models: ['gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-opus-4.7', 'claude-haiku-4.5'],
+      // Copilot's list as GitHub sends it: picker models, plus dated variants, policy-blocked and non-chat ones the plan does not offer.
+      modelEntries: [
+        { id: 'gpt-5-mini', name: 'GPT-5 mini', model_picker_enabled: true, policy: { state: 'enabled' }, capabilities: { type: 'chat', family: 'gpt-5-mini', supports: { tool_calls: true } } },
+        { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', model_picker_enabled: true, policy: { state: 'enabled' }, capabilities: { type: 'chat', family: 'claude-sonnet-5' } },
+        { id: 'claude-opus-4.6', name: 'Claude Opus 4.6', model_picker_enabled: true, capabilities: { type: 'chat', family: 'claude-opus-4.6' } },
+        { id: 'claude-opus-4.7', name: 'Claude Opus 4.7', model_picker_enabled: true, policy: { state: 'enabled' }, capabilities: { type: 'chat', family: 'claude-opus-4.7' } },
+        { id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', model_picker_enabled: true, policy: { state: 'enabled' }, capabilities: { type: 'chat', family: 'claude-haiku-4.5' } },
+        { id: 'claude-opus-5', name: 'Claude Opus 5', model_picker_enabled: true, policy: { state: 'disabled' }, capabilities: { type: 'chat', family: 'claude-opus-5' } },
+        { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', model_picker_enabled: true, policy: { state: 'unconfigured' }, capabilities: { type: 'chat', family: 'gemini-3.7-flash' } },
+        { id: 'gpt-4o', name: 'GPT-4o', model_picker_enabled: false, capabilities: { type: 'chat', family: 'gpt-4o' } },
+        { id: 'gpt-4o-2024-11-20', name: 'GPT-4o', model_picker_enabled: false, capabilities: { type: 'chat', family: 'gpt-4o' } },
+        { id: 'gpt-3.5-turbo', name: 'GPT 3.5 Turbo', model_picker_enabled: false, capabilities: { type: 'chat', family: 'gpt-3.5-turbo' } },
+        { id: 'trajectory-compaction', name: 'Trajectory Compaction', model_picker_enabled: false, capabilities: { type: 'chat' } },
+        { id: 'text-embedding-3-small', name: 'Embedding V3 small', model_picker_enabled: false, capabilities: { type: 'embeddings' } },
+        { id: 'gpt-5.5', name: 'GPT-5.5', model_picker_enabled: true, policy: { state: 'enabled' }, supported_endpoints: ['/responses'], capabilities: { type: 'chat', family: 'gpt-5.5' } },
+        { id: 'claude-sonnet-5-2026-05-01', name: 'Claude Sonnet 5', model_picker_enabled: true, policy: { state: 'enabled' }, capabilities: { type: 'chat', family: 'claude-sonnet-5' } },
+      ],
       script: [script[0]!, script[1]!, { tool: 'propose_workflow', input: { summary: 'Summarises standup notes on demand.', files } }, { text: 'Here is a draft.' }],
     });
     const h = await startHarness({ worker: false, settings: { copilotApiUrl: fake.url, copilotModel: 'claude-sonnet-5', builderModel: undefined, builderProvider: undefined } });
@@ -140,6 +156,8 @@ describe.skipIf(!up)('workflow builder chat through OpenCode (GitHub Copilot)', 
       const models = await h.api.get<any>('/v1/builder/models?provider=opencode');
       expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-4.7' } });
       expect(models.models.map((m: any) => m.id)).toEqual(['claude-opus-4.7', 'gpt-5-mini', 'claude-sonnet-5', 'claude-opus-4.6', 'claude-haiku-4.5']);
+      // Labels are the names; the picker adds the id once.
+      expect(models.models[0].label).toBe('Claude Opus 4.7');
 
       fake.requests.length = 0;
       const first = await h.api.post<any>('/v1/builder/chat', { provider: 'opencode', messages: [], text: 'Summarise our standup notes' });
