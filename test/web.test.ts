@@ -70,7 +70,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('button', { name: 'Approve' }).click();
     await page.getByText('Decision recorded').waitFor();
     await waitForRun(h.api, run_id);
-    await page.getByText('finished').waitFor({ timeout: 30_000 });
+    await page.locator('.crumbs .live', { hasText: 'finished' }).waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
     // Scrubbing back to the first event shows the run before any step had started.
     await page.getByLabel('Event to show the run at').fill('0');
@@ -114,7 +114,12 @@ describe.skipIf(!up)('mission control', () => {
   it('shows the overview and starts a test run from the workflow page', async () => {
     const page = await open('/ui');
     await page.getByRole('heading', { name: 'Waiting for a decision' }).waitFor();
-    await page.getByRole('heading', { name: 'Last 24 hours' }).waitFor();
+    // The mission control strip: each tile opens the runs behind its number.
+    const tiles = page.getByRole('navigation', { name: 'System status' });
+    await tiles.getByRole('link', { name: /Needs you/ }).waitFor();
+    await tiles.getByRole('link', { name: /Failed/ }).click();
+    await page.waitForURL(/\/ui\/runs\?state=failed/);
+    expect(await page.locator('.tile.active').innerText()).toContain('Failed');
     await page.getByRole('link', { name: 'Workflows', exact: true }).click();
     await page.getByRole('link', { name: 'approval-check' }).click();
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
