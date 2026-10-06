@@ -15,6 +15,9 @@ export interface FakeGithubData {
     user?: string;
     base: { ref: string; sha: string };
     head: { ref: string; sha: string };
+    /** `mergeable`: what GitHub reports; an array is one value per GET (the last repeats), so null can resolve later. */
+    mergeable?: boolean | null | Array<boolean | null>;
+    mergeable_state?: string;
     files: Array<{ filename: string; status: string; additions: number; deletions: number }>;
   }>;
 }
@@ -74,8 +77,11 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const pr = data.pulls?.find((p) => p.number === Number(m![2]));
       if (!pr) return send(404, { message: 'Not Found' });
       if (m[3]) return send(200, slice(pr.files));
+      const seq = Array.isArray(pr.mergeable) ? pr.mergeable : [pr.mergeable === undefined ? true : pr.mergeable];
+      const reads = ((pr as any).reads = ((pr as any).reads ?? 0) + 1);
+      const mergeable = seq[Math.min(reads, seq.length) - 1] ?? null;
       const sum = (k: 'additions' | 'deletions') => pr.files.reduce((n, f) => n + f[k], 0);
-      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: 'open', draft: false, user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, additions: sum('additions'), deletions: sum('deletions') });
+      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: 'open', draft: false, user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, mergeable, mergeable_state: mergeable === null ? 'unknown' : pr.mergeable_state ?? (mergeable ? 'clean' : 'dirty'), additions: sum('additions'), deletions: sum('deletions') });
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/);
     if (m) {

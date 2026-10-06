@@ -156,12 +156,20 @@ function argNumber(n: unknown): number {
 }
 
 const MAX_BODY = 20_000;
+const MERGEABLE_RETRIES = 4;
+const MERGEABLE_BACKOFF_MS = 400;
 
 /** One pull request (`github.pull-request`): metadata, refs and the changed files with line counts. */
 export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
   const repo = argRepo(cfg, args.repo);
   const number = argNumber(args.number);
-  const pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  let pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, timeoutMs);
+  // GitHub computes mergeability lazily: null means "not yet", so ask again a few times.
+  for (let i = 1; pr.mergeable == null && i <= MERGEABLE_RETRIES && Date.now() + MERGEABLE_BACKOFF_MS * i < deadline; i++) {
+    await new Promise((r) => setTimeout(r, MERGEABLE_BACKOFF_MS * i));
+    pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, Math.max(1000, deadline - Date.now()));
+  }
   const files = await pages(cfg, token, `/repos/${repo}/pulls/${number}/files`, undefined, timeoutMs);
   return {
     repo,
@@ -171,6 +179,9 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
     author: String(pr.user?.login ?? ''),
     state: String(pr.state ?? ''),
     draft: Boolean(pr.draft),
+    // null while GitHub has not computed it; mergeable_state is 'unknown' then, never 'clean'.
+    mergeable: pr.mergeable ?? null,
+    mergeable_state: pr.mergeable == null ? 'unknown' : String(pr.mergeable_state ?? 'unknown'),
     url: String(pr.html_url ?? ''),
     base_ref: String(pr.base?.ref ?? ''),
     base_sha: String(pr.base?.sha ?? ''),

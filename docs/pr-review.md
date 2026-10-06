@@ -100,6 +100,10 @@ it, remove the `quality` step and its entry in `summarize`'s input in the editor
 that agent prompt, not `SKILL.md`. To update the skill, replace `SKILL.md` from the source, read it
 again, and update `SOURCE.md`.
 
+### Merge conflicts
+
+The `pr` step reads GitHub's `mergeable` and `mergeable_state` for the pull request (asking again a few times while GitHub is still computing it). The report starts with a line that does not depend on the agents: `Merge status: CONFLICTS with <base>` for `dirty`, and distinct lines for `behind`, `blocked` and `unknown` (GitHub had not computed it, so conflicts were not checked). A clean pull request gets no line. The reviewers still clone the PR head only, and the verdict is unchanged: a conflict is reported, not graded. Tool outputs changed, so click Install again (or `azhi example install pr-review`) to register the new tool revision.
+
 ## Run it
 
 Needs a worker with OpenCode (bundled with `npm install`) and git, a GitHub Copilot subscription

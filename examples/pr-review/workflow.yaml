@@ -76,7 +76,7 @@ nodes:
     description: Merge the findings into one review with a verdict and a comment body.
     executor: opencode
     profile: review-summarizer@1
-    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title, 'mergeable_state': nodes.pr.output.mergeable_state}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
     output_schema: schemas/review.json
     timeout: 10m
     budget: {max_tool_calls: 2}
@@ -85,7 +85,7 @@ nodes:
     type: report
     description: The review as a run artifact.
     template: templates/review.md
-    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output}"}
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
 
   - id: should_post
     type: condition

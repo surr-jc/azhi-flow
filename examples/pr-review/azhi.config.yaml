@@ -28,6 +28,8 @@ tools:
         author: {type: string}
         state: {type: string}
         draft: {type: boolean}
+        mergeable: {type: [boolean, 'null']}
+        mergeable_state: {type: string}
         url: {type: string}
         base_ref: {type: string}
         base_sha: {type: string}
