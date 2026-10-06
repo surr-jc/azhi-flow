@@ -62,13 +62,20 @@ describe.skipIf(!up)('mission control', () => {
     const page = await open(`/ui/runs/${run_id}`);
     await page.getByText('Waiting for a person to decide at step approve').waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-waiting').count()).toBe(1);
-    await page.getByText('Post 4 runs to C-QUALITY?').waitFor();
+    // The decision is pinned to the waiting step on the canvas, and in full below it.
+    await page.locator('.atlas-pop').getByText('Post 4 runs to C-QUALITY?').waitFor();
+    await page.locator('#decision').getByText('Post 4 runs to C-QUALITY?').waitFor();
 
     await page.getByLabel('note').fill('looks right');
     await page.getByRole('button', { name: 'Approve' }).click();
     await page.getByText('Decision recorded').waitFor();
     await waitForRun(h.api, run_id);
     await page.getByText('finished').waitFor({ timeout: 30_000 });
+    expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
+    // Scrubbing back to the first event shows the run before any step had started.
+    await page.getByLabel('Event to show the run at').fill('0');
+    expect(await page.locator('.wf-card.st-succeeded').count()).toBe(0);
+    await page.getByRole('button', { name: 'Back to live' }).click();
     expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
     const d = await h.api.get<any>(`/v1/runs/${run_id}`);
     expect(d.approvals[0]).toMatchObject({ decision: 'approved', data: { note: 'looks right' } });

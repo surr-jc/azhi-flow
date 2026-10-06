@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
-import { ApprovalCard } from './Approvals';
+import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 import { duration } from './Overview';
-import { nodeStates, TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
+import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
 
 interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
 
@@ -21,6 +21,24 @@ export function RunPage({ id }: { id: string }) {
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<Approval[]>('/v1/approvals'), refetchInterval: 5_000 });
   const { events, live } = useRunEvents(id, () => void qc.invalidateQueries({ queryKey: ['run', id] }));
   const [tab, setTab] = useState('timeline');
+  // Replay: the index of the event the canvas shows the run at, or null to follow the run live.
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => {
+    if (!playing) return;
+    const t = setInterval(() => {
+      setCursor((c) => {
+        const next = (c ?? -1) + 1;
+        if (next >= events.length - 1) {
+          setPlaying(false);
+          return null;
+        }
+        return next;
+      });
+    }, 450);
+    return () => clearInterval(t);
+  }, [playing, events.length]);
+  const replayStates = useMemo(() => (cursor === null ? undefined : statesAt(events, cursor)), [events, cursor]);
 
   const cancel = useMutation({ mutationFn: () => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['run', id] }) });
   const rerun = useMutation({
@@ -61,24 +79,36 @@ export function RunPage({ id }: { id: string }) {
       <ErrorNote error={cancel.error ?? rerun.error} />
       {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
-      <div className="run-layout">
-        <div style={{ minWidth: 0 }}>
-          {waiting.map((a) => <ApprovalCard key={a.node_id} approval={a} compact />)}
-          <section className="panel receipt" aria-labelledby="what-happened">
-            <header className="panel-head"><h2 id="what-happened">What happened</h2><span className="muted small">Started {when(r.created_at)} by {r.trigger}</span></header>
-            {version.data?.plan?.nodes ? <Steps nodes={version.data.plan.nodes} detail={d} /> : <Loading />}
-          </section>
-          <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} detail={d} plan={d.plan} /> : <p className="muted">Loading the workflow…</p>}</Panel>
-          <div id="run-detail" style={{ scrollMarginTop: 112 }}>
-            <div className="tabs" role="tablist">
-              {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
-            </div>
-            <div className="tab" role="tabpanel">
-              {tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
-            </div>
-          </div>
+      {version.data?.plan?.nodes ? (
+        <div className="atlas">
+          <WorkflowCanvas
+            nodes={version.data.plan.nodes}
+            detail={d}
+            plan={d.plan}
+            height="clamp(400px, 66vh, 760px)"
+            controls="top-left"
+            inset={{ right: 334, bottom: 64 }}
+            states={replayStates}
+            toolbar={waiting[0] && cursor === null ? { node: waiting[0].node_id, content: <DecisionPop a={waiting[0]} /> } : undefined}
+          >
+            <Drawer className="atlas-drawer floating" nodes={version.data.plan.nodes} detail={d} show={show} />
+            <Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />
+          </WorkflowCanvas>
+          <Drawer className="atlas-drawer stacked" nodes={version.data.plan.nodes} detail={d} show={show} />
         </div>
-        <Evidence detail={d} show={show} />
+      ) : <Loading />}
+      {waiting.length ? (
+        <section id="decision" className="atlas-decisions" aria-label="Decision details">
+          {waiting.map((a) => <ApprovalCard key={a.node_id} approval={a} compact />)}
+        </section>
+      ) : null}
+      <div id="run-detail" style={{ scrollMarginTop: 112 }}>
+        <div className="tabs" role="tablist">
+          {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
+        </div>
+        <div className="tab" role="tabpanel">
+          {tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+        </div>
       </div>
     </>
   );
@@ -169,8 +199,44 @@ function Steps({ nodes, detail: d }: { nodes: PlanNode[]; detail: any }) {
   );
 }
 
-/** The run's trust features, summarised: each card opens its full tab below. */
-function Evidence({ detail: d, show }: { detail: any; show: (tab: string) => void }) {
+/** The decision pinned under a waiting approval step: the question, a few facts and the buttons. */
+function DecisionPop({ a }: { a: Approval }) {
+  const decide = useDecide(a);
+  const payload = a.request.payload;
+  const facts = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? Object.entries(payload as Record<string, unknown>).slice(0, 3).map(([k, v]) => `${k.replace(/[_-]+/g, ' ')}: ${Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : v !== null && typeof v === 'object' ? 'details' : String(v)}`)
+    : [];
+  const details = () => document.getElementById('decision')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return (
+    <div className="atlas-pop" role="group" aria-label={`Decision on ${a.node_id}`}>
+      <b>{approvalQuestion(a)}</b>
+      {facts.length ? <span className="muted small">{facts.join(' · ')}</span> : null}
+      <span className="muted small">{whoCanDecide(a.role)} can decide{a.expires_at ? ` · expires ${ago(a.expires_at)}` : ''}</span>
+      {decide.isSuccess ? (
+        <span className="ok-note" role="status">Decision recorded.</span>
+      ) : (
+        <div className="row">
+          {a.can_decide && !needsForm(a) ? (
+            <>
+              <button className="primary" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'approved' })}>Approve</button>
+              <button className="danger" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'rejected' })}>Reject</button>
+            </>
+          ) : a.can_decide ? (
+            <button className="primary" onClick={details}>Decide</button>
+          ) : null}
+          <button className="link" style={{ marginLeft: 'auto' }} onClick={details}>Details</button>
+        </div>
+      )}
+      <ErrorNote error={decide.error} />
+    </div>
+  );
+}
+
+const DRAWER: Record<string, string> = { steps: 'Steps', ledger: 'Ledger', coverage: 'Policy', context: 'Context', usage: 'Cost' };
+
+/** The run's trust features in a panel over the canvas; each tab opens its full detail below. */
+function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; detail: any; show: (tab: string) => void; className: string }) {
+  const [tab, setTab] = useState('steps');
   const p: RunPlan | null = d.plan;
   const controls = p ? p.nodes.flatMap((n) => n.coverage ?? []) : [];
   const enforced = controls.filter((c) => c.enforcement === 'enforced').length;
@@ -178,38 +244,91 @@ function Evidence({ detail: d, show }: { detail: any; show: (tab: string) => voi
   const items = (d.context_manifests as any[]).reduce((t, m) => t + (m.items?.length ?? 0), 0);
   const tainted = (d.context_manifests as any[]).filter((m) => m.tainted).length;
   const u = d.usage;
+  const count: Record<string, string> = {
+    ledger: String(d.actions.length),
+    coverage: controls.length ? `${enforced}/${controls.length}` : '',
+    context: String(items),
+  };
+  const more = (k: string, label: string) => <button type="button" className="link small" onClick={() => show(k)}>{label}</button>;
   return (
-    <aside className="evidence" aria-label="Evidence">
-      <button type="button" className="card" onClick={() => show('coverage')}>
-        <h3>Run plan</h3>
-        {p ? <Badge tone={`s ${p.ok ? 'ok' : 'bad'}`}>{p.ok ? 'No blockers' : `${p.blockers.length} blocker${p.blockers.length === 1 ? '' : 's'}`}</Badge> : <p>Not recorded for this run.</p>}
-        {p ? <p>{p.signer?.verified ? `Signed by ${p.signer.publisher}.` : 'Signature not verified.'} Checked before the run started.</p> : null}
-      </button>
-      <button type="button" className="card" onClick={() => show('coverage')}>
-        <h3>Policy coverage</h3>
-        <span className="big">{controls.length ? `${enforced} of ${controls.length}` : 'None'}</span>
-        <p>{controls.length ? 'controls are enforced by Azhi itself.' : 'No step makes a controlled action.'}{gaps ? ` ${gaps} requirement${gaps === 1 ? ' is' : 's are'} not supported.` : ''}</p>
-      </button>
-      <button type="button" className="card" onClick={() => show('ledger')}>
-        <h3>Action ledger</h3>
-        <span className="big">{d.actions.length} {d.actions.length === 1 ? 'write' : 'writes'}</span>
-        {d.actions.length ? (
-          <div className="kv-list">
-            {(d.actions as any[]).slice(-4).map((a) => <div key={a.id}><span>{a.tool}</span><Badge tone={`s ${a.state === 'confirmed' ? 'ok' : a.state === 'failed' ? 'bad' : a.state === 'outcome_unknown' ? 'warn' : 'run'}`}>{a.state.replaceAll('_', ' ')}</Badge></div>)}
-          </div>
-        ) : <p>No external writes.</p>}
-      </button>
-      <button type="button" className="card" onClick={() => show('context')}>
-        <h3>Context manifest</h3>
-        <span className="big">{items} {items === 1 ? 'source' : 'sources'}</span>
-        <p>{d.context_manifests.length ? `Across ${d.context_manifests.length} model call${d.context_manifests.length === 1 ? '' : 's'}.` : 'No model calls.'}{tainted ? ` ${tainted} saw untrusted content.` : ''}</p>
-      </button>
-      <button type="button" className="card" onClick={() => show('usage')}>
-        <h3>Model cost</h3>
-        <span className="big">{u.turns ? (u.cost.amount === null ? 'Unknown' : money(u.cost.amount, u.cost.currency)) : money(0)}</span>
-        <p>{u.turns ? `${num(u.turns)} model call${u.turns === 1 ? '' : 's'}, usage known for ${u.completeness_pct}%.` : 'No model calls.'}</p>
-      </button>
+    <aside className={className} aria-label="Run evidence">
+      <div className="atlas-tabs" role="tablist">
+        {Object.entries(DRAWER).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{count[k] ? <span> {count[k]}</span> : null}</button>
+        ))}
+      </div>
+      <div className="atlas-panel" role="tabpanel">
+        {tab === 'steps' ? (
+          <><Steps nodes={nodes} detail={d} />{more('inputs', 'Inputs and outputs')}</>
+        ) : tab === 'ledger' ? (
+          <>
+            {d.actions.length ? (
+              <div className="kv-list">
+                {(d.actions as any[]).map((a) => <div key={a.id}><span>{a.tool} <span className="muted">· {a.node_id}</span></span><Badge tone={`s ${a.state === 'confirmed' ? 'ok' : a.state === 'failed' ? 'bad' : a.state === 'outcome_unknown' ? 'warn' : 'run'}`}>{a.state.replaceAll('_', ' ')}</Badge></div>)}
+              </div>
+            ) : <p className="muted">No external writes.</p>}
+            {more('ledger', 'Full action ledger')}
+          </>
+        ) : tab === 'coverage' ? (
+          <>
+            {p ? <Badge tone={`s ${p.ok ? 'ok' : 'bad'}`}>{p.ok ? 'Run plan has no blockers' : `${p.blockers.length} blocker${p.blockers.length === 1 ? '' : 's'}`}</Badge> : <p className="muted">No run plan was recorded.</p>}
+            {p ? <p>{p.signer?.verified ? `Signed by ${p.signer.publisher}.` : 'Signature not verified.'} {controls.length ? `${enforced} of ${controls.length} controls are enforced by Azhi itself.` : 'No step makes a controlled action.'}{gaps ? ` ${gaps} requirement${gaps === 1 ? ' is' : 's are'} not supported.` : ''}</p> : null}
+            {more('coverage', 'Full policy coverage')}
+          </>
+        ) : tab === 'context' ? (
+          <>
+            <p>{items} source{items === 1 ? '' : 's'} {d.context_manifests.length ? `across ${d.context_manifests.length} model call${d.context_manifests.length === 1 ? '' : 's'}.` : '(no model calls).'}{tainted ? ` ${tainted} saw untrusted content.` : ''}</p>
+            {more('context', 'Full context manifest')}
+          </>
+        ) : (
+          <>
+            <span className="big">{u.turns ? (u.cost.amount === null ? 'Unknown' : money(u.cost.amount, u.cost.currency)) : money(0)}</span>
+            <p>{u.turns ? `${num(u.turns)} model call${u.turns === 1 ? '' : 's'}, usage known for ${u.completeness_pct}%.` : 'No model calls.'}</p>
+            {more('usage', 'Full usage')}
+          </>
+        )}
+      </div>
     </aside>
+  );
+}
+
+/** Node states as they stood after event `upto`, rebuilt from the event log. */
+function statesAt(events: RunEvent[], upto: number): Record<string, NodeRunState> {
+  const s: Record<string, NodeRunState> = {};
+  for (const ev of events.slice(0, upto + 1)) {
+    if (!ev.node_id) continue;
+    const prev = s[ev.node_id] ?? { state: 'pending', attempts: 0 };
+    if (ev.kind === 'node.running') s[ev.node_id] = { ...prev, state: 'running', attempts: prev.attempts + 1 };
+    else if (ev.kind.startsWith('node.') && ['succeeded', 'failed', 'skipped', 'cancelled'].includes(ev.kind.slice(5))) {
+      s[ev.node_id] = { ...prev, state: ev.kind.slice(5), ...(ev.data?.route !== undefined ? { output: { route: ev.data.route } } : {}), ...(ev.data?.error ? { error: ev.data.error } : {}) };
+    } else if (ev.kind === 'approval.requested') s[ev.node_id] = { ...prev, state: 'waiting' };
+  }
+  return s;
+}
+
+/** A scrubber over the run's events: drag or play to watch how the run got to where it is. */
+function Replay({ events, cursor, playing, onCursor, onPlay }: { events: RunEvent[]; cursor: number | null; playing: boolean; onCursor: (c: number | null) => void; onPlay: () => void }) {
+  if (events.length < 2) return null;
+  const last = events.length - 1;
+  const at = cursor ?? last;
+  const ev = events[at]!;
+  return (
+    <div className="atlas-replay">
+      <button type="button" onClick={onPlay} aria-label={playing ? 'Pause the replay' : 'Replay the run'}>{playing ? 'Pause' : 'Replay'}</button>
+      <div className="atlas-track">
+        <div className="atlas-ticks" aria-hidden="true">
+          {events.map((e, i) => (
+            <i key={e.seq} className={e.kind.startsWith('approval') ? 'warn' : e.kind.endsWith('failed') ? 'bad' : ''} style={{ left: `${(i / last) * 100}%` }} title={e.kind} />
+          ))}
+        </div>
+        <input type="range" min={0} max={last} value={at} aria-label="Event to show the run at" aria-valuetext={`${ev.kind}${ev.node_id ? ` on ${ev.node_id}` : ''}, event ${at + 1} of ${events.length}`} onChange={(e) => onCursor(Number(e.target.value) >= last ? null : Number(e.target.value))} />
+      </div>
+      <span className="atlas-at">
+        <span className="mono">{new Date(ev.at).toLocaleTimeString()}</span> {ev.kind}{ev.node_id ? ` · ${ev.node_id}` : ''}
+        <span className="muted"> · {at + 1} of {events.length}</span>
+      </span>
+      {cursor !== null ? <button type="button" className="link small" onClick={() => onCursor(null)}>Back to live</button> : null}
+    </div>
   );
 }
 
