@@ -64,20 +64,33 @@ describe.skipIf(!up)('workflow builder chat', () => {
     await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi' })).rejects.toThrow(/Anthropic or OpenAI key/);
 
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-test' });
-    expect(await h.api.get<any>('/v1/builder')).toMatchObject({ default: 'anthropic' });
+    const after = await h.api.get<any>('/v1/builder');
+    expect(after).toMatchObject({ default: 'anthropic' });
+    expect(after.providers.map((p: any) => [p.id, p.ready])).toEqual([['anthropic', true], ['openai', false], ['github-copilot', false]]);
+    // The provider's live model list, with the recommended model first.
+    const models = await h.api.get<any>('/v1/builder/models?provider=anthropic');
+    expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-5-5', reason: expect.any(String) } });
+    expect(models.models.map((m: any) => m.id)).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5']);
+    // Without a key the list is the built-in one; no key means no live call.
+    expect(await h.api.get<any>('/v1/builder/models?provider=openai')).toMatchObject({ source: 'built-in', models: [] });
+    await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi', model: 'bad model id' })).rejects.toThrow(/not a model id/);
+    fake.requests.length = 0;
 
     const first = await h.api.post<any>('/v1/builder/chat', { messages: [], text: 'Summarise our standup notes' });
     expect(first.event).toMatchObject({ kind: 'questions', intro: 'A few questions first.', questions: [{ id: 'trigger', options: ['On demand (recommended)', 'Every weekday at 9:00'] }, { id: 'out' }] });
     expect(fake.requests[0]!.system).toContain('Azhi Flow workflow builder');
     expect(fake.requests[0]!.tools).toEqual(expect.arrayContaining(['workspace_overview', 'get_tool', 'read_example', 'ask_user', 'propose_workflow']));
-    expect(fake.requests[0]!.model).toBe('claude-sonnet-5-5');
+    expect(fake.requests[0]!.model).toBe('claude-opus-5-5');
     // The overview lists what the workspace has, and which secrets are set without their values.
     const overview = JSON.stringify(fake.requests[1]!.messages);
     expect(overview).toContain('quality-report');
     expect(overview).toContain('\\"anthropic-api-key\\": true');
     expect(overview).not.toContain('sk-test');
 
-    const second = await h.api.post<any>('/v1/builder/chat', { messages: first.messages, text: 'trigger: On demand\nout: just the run output' });
+    const second = await h.api.post<any>('/v1/builder/chat', { messages: first.messages, text: 'trigger: On demand\nout: just the run output', model: 'claude-sonnet-5-5' });
+    // The person picked another model for this turn.
+    expect(fake.requests.at(-1)!.model).toBe('claude-sonnet-5-5');
+    expect(second.model).toBe('claude-sonnet-5-5');
     // The compiler's errors went back to the model, which proposed again.
     expect(JSON.stringify(fake.requests[3]!.messages)).toContain('nope.missing@1');
     expect(second.event.kind).toBe('proposal');
@@ -120,6 +133,12 @@ describe.skipIf(!up)('workflow builder chat in the browser', () => {
       page.on('pageerror', (e) => errors.push(String(e)));
       await page.goto(`${h.server.url}/ui/workflows#token=${readFileSync(h.server.localTokenFile!, 'utf8').trim()}`);
       await page.getByRole('link', { name: 'Build with chat' }).click();
+      // The model picker lists the provider's models with the recommended one picked; the choice is remembered.
+      await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-opus-5-5');
+      expect(await page.getByLabel('Provider').locator('option[disabled]').allTextContents()).toEqual(['OpenAI (not available)', 'GitHub Copilot (not available)']);
+      await page.getByLabel('Model', { exact: true }).selectOption('claude-sonnet-5-5');
+      await page.reload();
+      await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-sonnet-5-5');
       await page.getByLabel('Message').fill('Summarise our standup notes');
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       await page.getByRole('radio', { name: 'On demand (recommended)' }).click();
@@ -129,6 +148,7 @@ describe.skipIf(!up)('workflow builder chat in the browser', () => {
       await page.waitForURL(/\/ui\/workflows\/standup-summary\/edit\?from=wfv_/);
       await page.getByRole('heading', { name: 'Edit Standup summary' }).waitFor();
       // The answers went to the model as one message, question by question.
+      expect(fake.requests.every((r) => r.model === 'claude-sonnet-5-5')).toBe(true);
       expect(JSON.stringify(fake.requests[2]!.messages)).toContain('When should it run?\\n→ On demand (recommended)');
       expect(errors).toEqual([]);
     } finally {

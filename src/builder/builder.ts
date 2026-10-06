@@ -12,6 +12,7 @@ import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
+import { defaultBuilderModel } from './models.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -27,8 +28,10 @@ import { checkPackage, getVersion, type VersionRow } from '../server/workflows.j
 export type BuilderProviderId = 'anthropic' | 'openai';
 
 export interface BuilderProviderInfo {
-  id: BuilderProviderId;
+  id: BuilderProviderId | 'github-copilot';
+  label: string;
   ready: boolean;
+  /** The model used when none is picked. */
   model?: string;
   reason?: string;
 }
@@ -70,30 +73,32 @@ const RESULT_CHARS = 24_000;
 /** Paths a proposed package may hold. */
 const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
-/** Anthropic's current mid-size model, when neither AZHI_BUILDER_MODEL nor AZHI_ANTHROPIC_MODEL is set. */
-const ANTHROPIC_FALLBACK_MODEL = 'claude-sonnet-5-5';
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
+const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', 'github-copilot': 'GitHub Copilot' } as const;
 
 async function hasSecret(ctx: AppContext, workspaceId: string, name: string): Promise<boolean> {
   return (await ctx.pool.query(`SELECT 1 FROM secrets WHERE workspace_id=$1 AND name=$2 LIMIT 1`, [workspaceId, name])).rows.length > 0;
 }
 
-/** Which providers the builder can use here, and with which model. */
+/**
+ * Every model provider Azhi knows, whether the builder can use it here, and its default model.
+ * GitHub Copilot is listed but never ready: its models are reached only through OpenCode steps.
+ */
 export async function builderProviders(ctx: AppContext, workspaceId: string): Promise<{ providers: BuilderProviderInfo[]; default?: BuilderProviderId }> {
   const s = ctx.settings;
   const out: BuilderProviderInfo[] = [];
   for (const id of ['anthropic', 'openai'] as const) {
     const d = PROVIDER_DEFAULTS[id];
-    const model = s.builderModel && (!s.builderProvider || s.builderProvider === id) ? s.builderModel : (d.model(s) ?? (id === 'anthropic' ? ANTHROPIC_FALLBACK_MODEL : undefined));
-    if (!(await hasSecret(ctx, workspaceId, d.credential))) out.push({ id, ready: false, model, reason: `the workspace secret ${d.credential} is not set` });
-    else if (!model) out.push({ id, ready: false, reason: `set ${d.modelEnv} (or AZHI_BUILDER_MODEL) on the server` });
-    else out.push({ id, ready: true, model });
+    if (!(await hasSecret(ctx, workspaceId, d.credential))) out.push({ id, label: LABELS[id], ready: false, reason: `the workspace secret ${d.credential} is not set` });
+    else out.push({ id, label: LABELS[id], ready: true, model: await defaultBuilderModel(ctx, workspaceId, id) });
   }
+  out.push({ id: 'github-copilot', label: LABELS['github-copilot'], ready: false, reason: 'Copilot models run only inside OpenCode workflow steps, so the builder cannot call them' });
   const ready = out.filter((p) => p.ready);
   const preferred = ready.find((p) => p.id === s.builderProvider) ?? ready[0];
-  return { providers: out, default: preferred?.id };
+  return { providers: out, default: preferred?.id as BuilderProviderId | undefined };
 }
 
-async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId): Promise<{ provider: ModelProvider; info: BuilderProviderInfo }> {
+async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId, model?: string): Promise<{ provider: ModelProvider; info: BuilderProviderInfo & { id: BuilderProviderId; model: string } }> {
   const { providers, default: def } = await builderProviders(ctx, workspaceId);
   const id = wanted ?? def;
   const info = providers.find((p) => p.id === id);
@@ -101,11 +106,14 @@ async function providerFor(ctx: AppContext, workspaceId: string, wanted?: Builde
     const why = info?.reason ?? 'no model provider is set up';
     throw new AzhiError(ErrorClass.unsupportedCapability, `the workflow builder needs an Anthropic or OpenAI key: ${why}. Add one under Governance › Secrets.`);
   }
-  const d = PROVIDER_DEFAULTS[info.id];
+  if (model !== undefined && !MODEL_ID.test(model)) throw new AzhiError(ErrorClass.invalidInput, `'${model}' is not a model id`);
+  const chosen = model ?? info.model;
+  if (!chosen) throw new AzhiError(ErrorClass.invalidInput, `pick a ${info.label} model, or set ${PROVIDER_DEFAULTS[info.id as BuilderProviderId].modelEnv} on the server`);
+  const d = PROVIDER_DEFAULTS[info.id as BuilderProviderId];
   const secret = await resolveSecret(ctx, workspaceId, d.credential);
   if (!secret) throw new AzhiError(ErrorClass.authorization, `credential '${d.credential}' is not set`);
   const make = info.id === 'openai' ? openaiProvider : anthropicProvider;
-  return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info };
+  return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info: { ...info, id: info.id as BuilderProviderId, model: chosen } };
 }
 
 const TOOLS: ModelTool[] = [
@@ -359,9 +367,9 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 export async function builderTurn(
   ctx: AppContext,
   workspaceId: string,
-  o: { messages: Message[]; text: string; provider?: BuilderProviderId; signal?: AbortSignal },
+  o: { messages: Message[]; text: string; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
 ): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
-  const { provider, info } = await providerFor(ctx, workspaceId, o.provider);
+  const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
   // After tool results the transcript ends on a user message; the person's words join it.
   const last = messages.at(-1);
@@ -370,11 +378,11 @@ export async function builderTurn(
 
   let usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
   for (let call = 0; call < MAX_CALLS; call++) {
-    const res = await provider.complete({ model: info.model!, system: system(info), messages, tools: TOOLS, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
+    const res = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
     usage = addUsage(usage, res.usage);
     messages.push({ role: 'assistant', content: res.content.length ? res.content : [{ type: 'text', text: '(no reply)' }] });
     const uses = res.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model!, usage };
+    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
 
     const results: Block[] = [];
     let event: BuilderEvent | undefined;
@@ -425,15 +433,15 @@ export async function builderTurn(
     }
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
-    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model!, usage };
+    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
     if (event?.kind === 'proposal') {
-      const res2 = await provider.complete({ model: info.model!, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
+      const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');
       if (text.length) messages.push({ role: 'assistant', content: text });
-      return { messages, event, provider: info.id, model: info.model!, usage };
+      return { messages, event, provider: info.id, model: info.model, usage };
     }
   }
   messages.push({ role: 'assistant', content: [{ type: 'text', text: 'I stopped after many steps without a draft. Tell me what to focus on, or say "draft it" and I will propose one with my assumptions.' }] });
-  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model!, usage };
+  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
 }

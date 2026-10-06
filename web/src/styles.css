@@ -422,3 +422,8 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
   .chat-log { max-height: 70vh; }
   .bubble { max-width: 100%; }
 }
+.model-picker { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-end; margin: -6px 0 14px; }
+.model-picker label { display: flex; flex-direction: column; gap: 2px; }
+.model-picker select { max-width: min(420px, 100%); }
+.model-picker .model-note { flex-basis: 100%; }
+.model-picker .model-note .block { display: block; }

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Message } from '../agents/providers.js';
 import { builderProviders, builderTurn, checkProposal } from '../builder/builder.js';
+import { builderModels } from '../builder/models.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
@@ -25,6 +26,7 @@ const block = z.union([
 ]);
 const chat = z.object({
   provider: z.enum(['anthropic', 'openai']).optional(),
+  model: z.string().min(1).max(160).optional(),
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })).max(400),
   text: z.string().min(1).max(20_000),
 });
@@ -36,12 +38,20 @@ export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
     return builderProviders(ctx, p.workspaceId);
   });
 
+  // The provider's models (its live list, or a built-in one) with the one recommended for building workflows.
+  app.get('/v1/builder/models', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const q = z.object({ provider: z.enum(['anthropic', 'openai']), refresh: z.enum(['1', 'true']).optional() }).parse(req.query);
+    return builderModels(ctx, p.workspaceId, q.provider, Boolean(q.refresh));
+  });
+
   app.post('/v1/builder/chat', async (req) => {
     const p = user(req);
     requireRole(p, 'author');
     const b = chat.parse(req.body);
     if (JSON.stringify(b.messages).length > 2_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
-    const r = await builderTurn(ctx, p.workspaceId, { messages: b.messages as Message[], text: b.text, provider: b.provider });
+    const r = await builderTurn(ctx, p.workspaceId, { messages: b.messages as Message[], text: b.text, provider: b.provider, model: b.model });
     await audit(ctx, p.workspaceId, p.userId, 'builder.turn', { provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
     return r;
   });
