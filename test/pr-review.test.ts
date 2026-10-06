@@ -457,6 +457,11 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(cp).toMatchObject({ currency: 'USD', credit_usd: 0.01, unpriced_models: [], models: [{ model: MODEL }] });
     expect(cp.cost).toBeCloseTo(cp.credits * 0.01, 4);
     expect(d.usage.cost.amount).toBeCloseTo(cp.cost, 4);
+    expect(d.usage.credits).toBeCloseTo(cp.credits, 3);
+    // Mission control's Usage page and overview count the credits too.
+    const summary = await h.api.get<any>('/v1/usage/summary?days=1');
+    expect(summary.by_workflow.find((w: any) => w.workflow === 'pr-review').credits).toBeGreaterThanOrEqual(cp.credits - 0.001);
+    expect((await h.api.get<any>('/v1/overview')).spend.today.credits).toBeGreaterThanOrEqual(cp.credits - 0.001);
     expect(cp.pool).toMatchObject({ monthly: 10_000, past_pool: 0 });
     expect(cp.pool.left_after).toBeCloseTo(10_000 - cp.pool.used_before - cp.credits, 2);
 

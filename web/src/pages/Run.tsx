@@ -288,11 +288,11 @@ function UsageTab({ usage: u }: { usage: any }) {
   return (
     <>
       <p>
-        {u.turns} turn(s). Usage is known for {u.completeness_pct}% of them. Tokens: {num(u.input_tokens)} in, {num(u.output_tokens)} out.{' '}
+        {u.turns} turn(s). Usage is known for {u.completeness_pct}% of them. Tokens: {num(u.input_tokens)} in, {num(u.output_tokens)} out.{u.credits !== null && u.credits !== undefined ? ` Copilot AI credits used: ${num(u.credits)}.` : ''}{' '}
         {u.cost.amount === null
           ? 'Cost is unavailable: at least one turn has no declared pricing or no token counts.'
           : u.copilot
-            ? `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)}.`
+            ? `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (${num(u.copilot.credits)} credits at ${u.cost.currency} ${u.copilot.credit_usd} each).`
             : `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (pricing ${u.cost.pricing_revision}).`}
       </p>
       {u.copilot ? <CopilotUsage c={u.copilot} /> : null}

@@ -39,13 +39,13 @@ async function spend(ctx: AppContext, workspaceId: string, since: string) {
     await ctx.pool.query(
       `SELECT count(*)::int AS turns, count(*) FILTER (WHERE cost_label = 'unavailable')::int AS unpriced,
          COALESCE(SUM(cost), 0)::float8 AS cost, MAX(currency) AS currency,
-         SUM(input_tokens)::float8 AS input_tokens, SUM(output_tokens)::float8 AS output_tokens
+         SUM(input_tokens)::float8 AS input_tokens, SUM(output_tokens)::float8 AS output_tokens, SUM(credits)::float8 AS credits
        FROM usage_records WHERE workspace_id=$1 AND at >= now() - $2::interval`,
       [workspaceId, since],
     )
   ).rows[0];
   // Unknown is not zero (spec section 11): with unpriced turns the total is a lower bound.
-  return { turns: r.turns, unpriced_turns: r.unpriced, amount: r.turns ? r.cost : 0, currency: r.currency ?? 'USD', complete: r.unpriced === 0, input_tokens: r.input_tokens, output_tokens: r.output_tokens };
+  return { turns: r.turns, unpriced_turns: r.unpriced, amount: r.turns ? r.cost : 0, currency: r.currency ?? 'USD', complete: r.unpriced === 0, input_tokens: r.input_tokens, output_tokens: r.output_tokens, credits: r.credits };
 }
 
 export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -156,13 +156,13 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     const [byDay, byWorkflow] = await Promise.all([
       ctx.pool.query(
         `SELECT date_trunc('day', u.at) AS day, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
-           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens
+           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens, SUM(u.credits)::float8 AS credits
          FROM usage_records u WHERE u.workspace_id=$1 AND u.at >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 1`,
         [p.workspaceId, days],
       ),
       ctx.pool.query(
         `SELECT w.slug AS workflow, count(DISTINCT u.run_id)::int AS runs, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
-           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens
+           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens, SUM(u.credits)::float8 AS credits
          FROM usage_records u JOIN runs r ON r.id = u.run_id JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE u.workspace_id=$1 AND u.at >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY cost DESC`,
         [p.workspaceId, days],

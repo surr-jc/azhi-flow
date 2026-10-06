@@ -4,7 +4,8 @@ import { api, atLeast, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
 import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, when } from '../ui';
 
-interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null }
+/** credits: GitHub Copilot AI Credits (null without Copilot turns). */
+interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null; credits: number | null }
 interface UsageSummary { days: number; by_day: Array<Row & { day: string }>; by_workflow: Array<Row & { workflow: string; runs: number }> }
 
 export function Usage() {
@@ -29,22 +30,24 @@ export function Usage() {
 }
 
 function UsageBody({ data }: { data: UsageSummary }) {
-  const total = data.by_day.reduce((a, r) => ({ cost: a.cost + r.cost, turns: a.turns + r.turns, unpriced: a.unpriced + r.unpriced }), { cost: 0, turns: 0, unpriced: 0 });
+  const total = data.by_day.reduce((a, r) => ({ cost: a.cost + r.cost, turns: a.turns + r.turns, unpriced: a.unpriced + r.unpriced, credits: r.credits === null ? a.credits : (a.credits ?? 0) + r.credits }), { cost: 0, turns: 0, unpriced: 0, credits: null as number | null });
+  const copilot = data.by_workflow.some((w) => w.credits !== null);
   return (
     <>
       <div className="stats">
         <div className="stat"><span className="stat-label">Spend</span><span className="stat-value">{money(total.cost, 'USD', total.unpriced === 0)}</span><span className="stat-hint">last {data.days} days</span></div>
+        {total.credits !== null ? <div className="stat"><span className="stat-label">Copilot AI credits</span><span className="stat-value">{num(Math.round(total.credits * 10) / 10)}</span><span className="stat-hint">last {data.days} days</span></div> : null}
         <div className="stat"><span className="stat-label">Model turns</span><span className="stat-value">{num(total.turns)}</span><span className="stat-hint">{total.unpriced ? `${total.unpriced} unpriced` : 'all priced'}</span></div>
       </div>
       <Panel title="Spend per day">
         <DayBars days={data.days} rows={data.by_day} />
       </Panel>
       <Panel title="By workflow">
-        <Table head={['Workflow', 'Runs', 'Turns', 'Tokens in', 'Tokens out', 'Spend']} empty="No model usage in this period.">
+        <Table head={['Workflow', 'Runs', 'Turns', 'Tokens in', 'Tokens out', ...(copilot ? ['Copilot credits'] : []), 'Spend']} empty="No model usage in this period.">
           {data.by_workflow.map((w) => (
             <tr key={w.workflow}>
               <td>{w.workflow}</td><td>{w.runs}</td><td>{w.turns}{w.unpriced ? <span className="muted small"> ({w.unpriced} unpriced)</span> : null}</td>
-              <td>{num(w.input_tokens)}</td><td>{num(w.output_tokens)}</td><td>{money(w.cost, 'USD', w.unpriced === 0)}</td>
+              <td>{num(w.input_tokens)}</td><td>{num(w.output_tokens)}</td>{copilot ? <td>{w.credits === null ? '—' : num(Math.round(w.credits * 10) / 10)}</td> : null}<td>{money(w.cost, 'USD', w.unpriced === 0)}</td>
             </tr>
           ))}
         </Table>

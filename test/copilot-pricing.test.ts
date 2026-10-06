@@ -74,6 +74,7 @@ describe('GitHub Copilot AI credit pricing', () => {
     const s = { copilotCreditUsd: 0.01, copilotCreditPool: 10_000 };
     const u = summariseUsage([row('dummy-big', 300), row('dummy-big', 200), row('dummy-plain', 100)], 9_800, s);
     expect(u.cost.amount).toBeCloseTo(6, 6);
+    expect(u.credits).toBe(600);
     expect(u.copilot).toEqual({
       credits: 600,
       cost: 6,
@@ -86,6 +87,8 @@ describe('GitHub Copilot AI credit pricing', () => {
     const partly = summariseUsage([row('dummy-big', 300), row('dummy-unknown', null)], 0, { copilotCreditUsd: 0.01, copilotCreditPool: undefined });
     expect(partly.cost.amount).toBeNull();
     expect(partly.copilot).toMatchObject({ credits: 300, unpriced_models: ['dummy-unknown'], pool: null });
-    expect(summariseUsage([{ ...row('m', 1), provider: 'anthropic', credits: null }], 0, s).copilot).toBeNull();
+    const other = summariseUsage([{ ...row('m', 1), provider: 'anthropic', credits: null }], 0, s);
+    expect(other.copilot).toBeNull();
+    expect(other.credits).toBeNull();
   });
 });

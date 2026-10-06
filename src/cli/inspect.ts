@@ -27,7 +27,7 @@ export function printInspect(d: any) {
   }
   if (d.usage?.turns) {
     const u = d.usage;
-    const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out`;
+    const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out${u.credits !== null && u.credits !== undefined ? `, ${u.credits} Copilot AI credits` : ''}`;
     const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.label} cost ${u.cost.amount.toFixed(4)} ${u.cost.currency} (pricing ${u.cost.pricing_revision})`;
     console.log(`\n${bold('Usage')}  ${u.turns} model turns, ${u.completeness_pct}% complete, tokens ${tokens}, ${cost}`);
     if (u.copilot) {

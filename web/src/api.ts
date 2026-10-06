@@ -109,6 +109,8 @@ export interface Spend {
   turns: number;
   unpriced_turns: number;
   amount: number;
+  /** GitHub Copilot AI Credits; null without Copilot turns. */
+  credits?: number | null;
   currency: string;
   complete: boolean;
   input_tokens: number | null;

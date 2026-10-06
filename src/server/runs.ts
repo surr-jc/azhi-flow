@@ -195,6 +195,8 @@ export function summariseUsage(rows: Array<Record<string, any>>, before = 0, s: 
     completeness_pct: rows.length ? Math.round((known.length / rows.length) * 100) : null,
     input_tokens: sum('input_tokens'),
     output_tokens: sum('output_tokens'),
+    /** GitHub Copilot AI Credits across the run's priced Copilot turns; null without any. */
+    credits: rows.some((r) => r.credits !== null && r.credits !== undefined) ? round(rows.reduce((n, r) => n + (r.credits ?? 0), 0), 3) : null,
     cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
     copilot: copilotUsage(rows, before, s),
     records: rows,

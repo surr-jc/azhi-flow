@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, TERMINAL, type Alert, type Overview as OverviewData, type RunRow } from '../api';
 import { Link } from '../router';
-import { ago, Badge, ErrorNote, Loading, money, PageHead, Panel, RunLink, Stat, StateBadge, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, RunLink, Stat, StateBadge, Table, when } from '../ui';
 
 export function Overview() {
   const o = useQuery({ queryKey: ['overview'], queryFn: () => api<OverviewData>('/v1/overview'), refetchInterval: 5_000 });
@@ -51,7 +51,8 @@ export function Overview() {
 
 function spendHint(s: OverviewData['spend']['today']) {
   if (!s.turns) return 'no model turns';
-  return s.complete ? `${s.turns} turns` : `${s.unpriced_turns} of ${s.turns} turns unpriced`;
+  const credits = s.credits ? `, ${num(Math.round(s.credits * 10) / 10)} Copilot credits` : '';
+  return (s.complete ? `${s.turns} turns` : `${s.unpriced_turns} of ${s.turns} turns unpriced`) + credits;
 }
 
 export function AlertList({ alerts }: { alerts: Alert[] }) {
