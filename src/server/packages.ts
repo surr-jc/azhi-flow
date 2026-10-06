@@ -14,6 +14,16 @@ export async function packageManifest(ctx: AppContext, workspaceId: string, pack
   return r.rows[0].manifest;
 }
 
+/**
+ * Makes a package that is not stored as a version readable by packageFile (the workflow builder
+ * run-plans a proposal before it is saved): its files go to the content-addressed artifact store,
+ * as an upload would put them, and its manifest is remembered by hash.
+ */
+export function stagePackage(ctx: AppContext, workspaceId: string, packageHash: string, manifest: PackageManifest, files: Map<string, Buffer>): void {
+  for (const data of files.values()) ctx.artifacts.put(data);
+  manifests.set(`${workspaceId}:${packageHash}`, manifest);
+}
+
 /** Reads one file of a stored package; package files live in the artifact store by content hash. */
 export async function packageFile(ctx: AppContext, workspaceId: string, packageHash: string, path: string): Promise<Buffer> {
   const manifest = await packageManifest(ctx, workspaceId, packageHash);

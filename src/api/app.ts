@@ -25,6 +25,7 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerBuilderRoutes } from './builder.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
 import { registerCopilotRoutes } from './copilot.js';
@@ -82,6 +83,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerWebRoutes(app);
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
+  registerBuilderRoutes(app, ctx);
   registerExampleRoutes(app, ctx);
   registerCopilotRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
