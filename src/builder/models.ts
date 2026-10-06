@@ -1,6 +1,6 @@
 import { COPILOT_RATES } from '../agents/copilot-pricing.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
-import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
+import { copilotApi, copilotPlanApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
 
@@ -46,23 +46,40 @@ const OPENAI_CHAT = /^(gpt-|o\d|chatgpt-)/i;
 export type ModelProviderId = 'anthropic' | 'openai' | 'opencode';
 
 /**
- * Copilot's models as OpenCode lists them: chat models that take tool calls and that the
- * organization has not switched off. Fields are read loosely; a model that does not say is kept.
+ * The Copilot models this sign-in's plan lets the person use, as Copilot's own model picker shows
+ * them: `model_picker_enabled` (older and dated variants such as gpt-4-0613 are listed but not
+ * offered), policy `enabled` (an organization policy can switch a model off, and `unconfigured`
+ * ones need an opt-in first), chat models that take tool calls on the chat API. One entry per
+ * model family. The list is read from the plan's own API address when GitHub gives one
+ * (api.business / api.enterprise.githubcopilot.com), else from the address OpenCode uses.
  */
 async function copilotModels(ctx: AppContext, signIn: string): Promise<BuilderModel[]> {
   const si = copilotSignIn(signIn);
-  const body = await getJson(`${copilotApi(ctx, si.enterprise)}/models`, { authorization: `Bearer ${si.token}`, 'user-agent': OPENCODE_USER_AGENT, 'x-github-api-version': '2026-06-01' });
-  const list = (Array.isArray(body) ? body : (body.data ?? body.models ?? [])) as Array<Record<string, any>>;
-  const out: BuilderModel[] = [];
-  for (const m of list) {
-    if (typeof m?.id !== 'string') continue;
-    if (m.capabilities?.type && m.capabilities.type !== 'chat') continue;
-    if (m.capabilities?.supports?.tool_calls === false) continue;
-    if (m.policy?.state === 'disabled') continue;
-    if (Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions')) continue;
-    if (!out.some((x) => x.id === m.id)) out.push({ id: m.id, label: typeof m.name === 'string' && m.name !== m.id ? `${m.name} (${m.id})` : m.id });
+  const api = (await copilotPlanApi(ctx, si.token, si.enterprise)) ?? copilotApi(ctx, si.enterprise);
+  const body = await getJson(`${api}/models`, { authorization: `Bearer ${si.token}`, 'user-agent': OPENCODE_USER_AGENT, 'x-github-api-version': '2026-06-01' });
+  return copilotPlanModels((Array.isArray(body) ? body : (body.data ?? body.models ?? [])) as Array<Record<string, any>>);
+}
+
+/** Filters Copilot's model list to what the plan offers (see copilotModels). */
+export function copilotPlanModels(list: Array<Record<string, any>>): BuilderModel[] {
+  const usable = list.filter((m) => {
+    if (typeof m?.id !== 'string') return false;
+    if (m.model_picker_enabled === false) return false;
+    if (m.policy?.state && m.policy.state !== 'enabled') return false;
+    if (m.capabilities?.type && m.capabilities.type !== 'chat') return false;
+    if (m.capabilities?.supports?.tool_calls === false) return false;
+    if (Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions')) return false;
+    return true;
+  });
+  // One per family: the family's own id (gpt-4o) over dated or preview variants (gpt-4o-2024-11-20).
+  const families = new Map<string, Record<string, any>>();
+  for (const m of usable) {
+    const family = typeof m.capabilities?.family === 'string' ? m.capabilities.family : m.id;
+    const had = families.get(family);
+    const plain = (x: Record<string, any>) => (x.id === family ? 0 : /\d{4}-\d{2}-\d{2}|preview|-\d{4}$/.test(x.id) ? 2 : 1);
+    if (!had || plain(m) < plain(had)) families.set(family, m);
   }
-  return out;
+  return [...families.values()].map((m) => ({ id: m.id, label: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : m.id }));
 }
 
 /** The strongest Claude model on Copilot: the newest Opus, else the newest Sonnet. */
@@ -153,7 +170,8 @@ export async function builderModels(ctx: AppContext, workspaceId: string, provid
     const rec = best
       ? { id: best, reason: 'The strongest Claude model your Copilot seat offers: best at long, structured drafts and at fixing what the compiler reports. It uses more AI Credits than smaller models.' }
       : configured ? { id: configured, reason: 'The model this server already uses for OpenCode steps (AZHI_COPILOT_MODEL).' } : undefined;
-    value = finish('opencode', models, rec, live?.length ? 'live' : 'built-in', [builderModel, configured], note);
+    // A live list is what the plan offers, so the configured model joins it only when the server names it for the builder.
+    value = finish('opencode', models, rec, live?.length ? 'live' : 'built-in', live?.length ? [builderModel] : [builderModel, configured], note);
   } else if (provider === 'anthropic') {
     let live: BuilderModel[] | undefined;
     let note: string | undefined;
