@@ -138,11 +138,11 @@ export interface OpenAIOptions {
   apiKey: string;
   /** The provider name in errors; default openai. */
   id?: string;
-  /** The completions path under apiUrl; default /v1/chat/completions. */
+  /** The path under apiUrl; default /v1/chat/completions (/v1/responses for the Responses API). */
   path?: string;
   /** Extra headers per request (Copilot wants OpenCode's). */
   headers?: (req: ModelRequest) => Record<string, string>;
-  /** Copilot takes max_tokens; OpenAI itself wants max_completion_tokens. */
+  /** Chat Completions only: Copilot takes max_tokens; OpenAI itself wants max_completion_tokens. */
   maxTokensParam?: 'max_tokens' | 'max_completion_tokens';
 }
 
@@ -213,6 +213,82 @@ export function openaiProvider(o: OpenAIOptions): ModelProvider {
           cache_read_tokens: num(u.prompt_tokens_details?.cached_tokens),
           cache_write_tokens: null,
           reasoning_tokens: num(u.completion_tokens_details?.reasoning_tokens),
+        },
+        model: body.model ?? req.model,
+      };
+    },
+  };
+}
+
+/**
+ * The OpenAI Responses API, for models served only there (Copilot's GPT-5 and Codex models, for
+ * one). Stateless (`store: false`): the whole transcript goes with each request, tool calls as
+ * `function_call` items and results as `function_call_output` items.
+ */
+export function responsesProvider(o: OpenAIOptions): ModelProvider {
+  const id = o.id ?? 'openai';
+  return {
+    id,
+    async complete(req) {
+      const input: unknown[] = [];
+      for (const m of req.messages) {
+        const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
+        if (m.role === 'assistant') {
+          if (text) input.push({ role: 'assistant', content: text });
+          for (const b of m.content) if (b.type === 'tool_use') input.push({ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input) });
+          continue;
+        }
+        for (const b of m.content) if (b.type === 'tool_result') input.push({ type: 'function_call_output', call_id: b.tool_use_id, output: b.is_error ? `ERROR: ${b.content}` : b.content });
+        if (text) input.push({ role: 'user', content: text });
+      }
+      const res = await post(`${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/responses'}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}`, ...o.headers?.(req) },
+        body: JSON.stringify({
+          model: req.model,
+          instructions: req.system,
+          input,
+          max_output_tokens: req.maxTokens,
+          store: false,
+          ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema })) } : {}),
+          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        }),
+        signal: req.signal,
+      });
+      const raw = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        throw new AzhiError(ErrorClass.transient, `${id} returned HTTP ${res.status} with a non-JSON body`);
+      }
+      if (!res.ok) throw httpError(id, res.status, body?.error?.message ?? raw.slice(0, 200));
+      const content: Block[] = [];
+      for (const item of (body.output ?? []) as any[]) {
+        if (item?.type === 'message') {
+          const text = (item.content ?? []).filter((c: any) => c?.type === 'output_text' && typeof c.text === 'string').map((c: any) => c.text).join('');
+          if (text) content.push({ type: 'text', text });
+        } else if (item?.type === 'function_call') {
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(item.arguments || '{}');
+          } catch {
+            args = { _invalid_json: String(item.arguments ?? '') };
+          }
+          content.push({ type: 'tool_use', id: String(item.call_id ?? item.id), name: String(item.name ?? ''), input: args });
+        }
+      }
+      const u = body.usage ?? {};
+      const num = (v: unknown) => (typeof v === 'number' ? v : null);
+      return {
+        content,
+        stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : body.status === 'incomplete' && body.incomplete_details?.reason === 'max_output_tokens' ? 'max_tokens' : 'end',
+        usage: {
+          input_tokens: num(u.input_tokens),
+          output_tokens: num(u.output_tokens),
+          cache_read_tokens: num(u.input_tokens_details?.cached_tokens),
+          cache_write_tokens: null,
+          reasoning_tokens: num(u.output_tokens_details?.reasoning_tokens),
         },
         model: body.model ?? req.model,
       };

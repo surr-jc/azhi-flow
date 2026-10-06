@@ -13,6 +13,8 @@ import { resolveSecret } from '../server/secrets.js';
 export interface BuilderModel {
   id: string;
   label: string;
+  /** Served only on the Responses API (some Copilot models); absent means Chat Completions. */
+  endpoint?: 'responses';
 }
 
 export interface BuilderModels {
@@ -48,15 +50,17 @@ export type ModelProviderId = 'anthropic' | 'openai' | 'opencode';
 /**
  * The Copilot models this sign-in's plan lets the person use, as Copilot's own model picker shows
  * them: `model_picker_enabled` (older and dated variants such as gpt-4-0613 are listed but not
- * offered), policy `enabled` (an organization policy can switch a model off, and `unconfigured`
- * ones need an opt-in first), chat models that take tool calls on the chat API. One entry per
- * model family. The list is read from the plan's own API address when GitHub gives one
+ * offered), not switched off by an organization policy (VS Code's "Contact your admin"), chat
+ * models that take tool calls on the Chat Completions or the Responses API. One entry per model
+ * family. The list is read from the plan's own API address when GitHub gives one
  * (api.business / api.enterprise.githubcopilot.com), else from the address OpenCode uses.
  */
 async function copilotModels(ctx: AppContext, signIn: string): Promise<BuilderModel[]> {
   const si = copilotSignIn(signIn);
-  const api = (await copilotPlanApi(ctx, si.token, si.enterprise)) ?? copilotApi(ctx, si.enterprise);
-  const body = await getJson(`${api}/models`, { authorization: `Bearer ${si.token}`, 'user-agent': OPENCODE_USER_AGENT, 'x-github-api-version': '2026-06-01' });
+  const headers = { authorization: `Bearer ${si.token}`, 'user-agent': OPENCODE_USER_AGENT, 'x-github-api-version': '2026-06-01' };
+  const plan = await copilotPlanApi(ctx, si.token, si.enterprise);
+  // The plan's address may want a Copilot session token rather than the sign-in; then OpenCode's address answers.
+  const body = (plan ? await getJson(`${plan}/models`, headers).catch(() => undefined) : undefined) ?? (await getJson(`${copilotApi(ctx, si.enterprise)}/models`, headers));
   return copilotPlanModels((Array.isArray(body) ? body : (body.data ?? body.models ?? [])) as Array<Record<string, any>>);
 }
 
@@ -65,10 +69,10 @@ export function copilotPlanModels(list: Array<Record<string, any>>): BuilderMode
   const usable = list.filter((m) => {
     if (typeof m?.id !== 'string') return false;
     if (m.model_picker_enabled === false) return false;
-    if (m.policy?.state && m.policy.state !== 'enabled') return false;
+    if (m.policy?.state === 'disabled') return false;
     if (m.capabilities?.type && m.capabilities.type !== 'chat') return false;
     if (m.capabilities?.supports?.tool_calls === false) return false;
-    if (Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions')) return false;
+    if (Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions') && !m.supported_endpoints.includes('/responses')) return false;
     return true;
   });
   // One per family: the family's own id (gpt-4o) over dated or preview variants (gpt-4o-2024-11-20).
@@ -79,7 +83,11 @@ export function copilotPlanModels(list: Array<Record<string, any>>): BuilderMode
     const plain = (x: Record<string, any>) => (x.id === family ? 0 : /\d{4}-\d{2}-\d{2}|preview|-\d{4}$/.test(x.id) ? 2 : 1);
     if (!had || plain(m) < plain(had)) families.set(family, m);
   }
-  return [...families.values()].map((m) => ({ id: m.id, label: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : m.id }));
+  return [...families.values()].map((m) => ({
+    id: m.id,
+    label: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : m.id,
+    ...(Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions') ? { endpoint: 'responses' as const } : {}),
+  }));
 }
 
 /** The strongest Claude model on Copilot: the newest Opus, else the newest Sonnet. */
@@ -200,4 +208,10 @@ export async function defaultBuilderModel(ctx: AppContext, workspaceId: string, 
   if (provider === 'anthropic') return ANTHROPIC_RECOMMENDED.id;
   if (provider === 'opencode') return (await builderModels(ctx, workspaceId, provider)).recommended?.id ?? s.copilotModel;
   return PROVIDER_DEFAULTS.openai.model(s) ?? (await builderModels(ctx, workspaceId, provider)).recommended?.id;
+}
+
+/** Which API a Copilot model answers on, from the plan's model list (Chat Completions when unknown). */
+export async function copilotEndpoint(ctx: AppContext, workspaceId: string, model: string): Promise<'chat' | 'responses'> {
+  const list = await builderModels(ctx, workspaceId, 'opencode');
+  return list.models.find((m) => m.id === model)?.endpoint === 'responses' ? 'responses' : 'chat';
 }
