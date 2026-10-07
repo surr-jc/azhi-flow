@@ -10,7 +10,7 @@ workflow package by conversation. Authors and above can use it.
    workflows, the shipped examples, executors, and whether the well-known secrets are set; never
    their values).
 3. It asks grouped questions with suggested answers (trigger, data sources, where a person must
-   approve, budgets, delivery). You pick options, write your own answer, or say "just draft it".
+   approve, token usage, delivery). You pick options, write your own answer, or say "just draft it".
 4. It proposes the whole package (workflow.yaml, agent profiles, schemas, templates, small
    scripts). The server compiles it and builds its run plan against the workspace, exactly as an
    upload would. Compiler errors go back to the model to fix; you only see drafts that compile.
@@ -70,6 +70,22 @@ Limits:
 |---|---|
 | `AZHI_BUILDER_PROVIDER` | `anthropic`, `openai` or `opencode`: the default when several are set up |
 | `AZHI_BUILDER_MODEL` | The model used when the browser has not picked one |
+
+## Token usage
+
+When the workflow has agent steps, the builder asks how to balance cost and quality, with a
+recommendation for this workflow and which step would get what:
+
+- **Economical**: smaller, cheaper models and tight limits (summarising, classifying, routing).
+- **Balanced**: a mid-tier model, with the strongest one only on the steps that need it.
+- **Highest quality**: the strongest models and roomier limits on every agent step (code and
+  security review, writing code, long reasoning).
+
+The draft applies the answer per agent step: the model (`model.name` set to one of the models the
+chosen provider lists for this workspace, or `default`), the profile's `max_turns` and
+`max_output_tokens`, and the step's `budget`. The summary lists each step's model and limits.
+A daily or monthly spend limit for the whole workflow is set by an admin under Governance › Usage
+and limits.
 
 ## The skill
 

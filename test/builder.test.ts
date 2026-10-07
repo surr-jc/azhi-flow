@@ -88,6 +88,10 @@ describe.skipIf(!up)('workflow builder chat', () => {
     expect(overview).toContain('quality-report');
     expect(overview).toContain('\\"anthropic-api-key\\": true');
     expect(overview).not.toContain('sk-test');
+    // The token-usage question: the skill asks it, and the overview lists the models profiles may name.
+    expect(fake.requests[0]!.system).toContain('## Token usage strategy');
+    expect(overview).toContain('models_for_profiles');
+    expect(overview).toContain('claude-haiku-4-5');
 
     const second = await h.api.post<any>('/v1/builder/chat', { messages: first.messages, text: 'trigger: On demand\nout: just the run output', model: 'claude-sonnet-5-5' });
     // The person picked another model for this turn.
