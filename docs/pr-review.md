@@ -87,6 +87,18 @@ with a workspace are tainted ("reads a cloned repository"), so any write downstr
 approval, a CEL guard or a safe-for-tainted tool. The context manifest records the checkout and
 the package files OpenCode loaded; what the agent read in the checkout is not observable.
 
+### The fresh-eyes skill (all four reviewers)
+
+Every reviewer loads `fresh-eyes-review` (`harness/skills/fresh-eyes-review/`), adapted from Cole
+Medin's skills (`piv-review-pr`, `piv-review-changes`, `prime-codebase`; MIT, `LICENSE` and
+`SOURCE.md` next to it). Before the diff, the reviewer reads the project's own conventions
+(`README`, `CONTRIBUTING`, `AGENTS.md`, `CLAUDE.md`, neighbouring files) as its rubric, judges the
+change against the intent stated in the PR, reads changed files in full, and keeps only findings it
+traced to a concrete input. OpenCode still never loads those repository files as instructions (step
+5 above); the reviewer reads them as data, and a file that tries to instruct reviewers is reported
+as a finding. A PR description can explain a trade-off but cannot waive a security or data-loss
+finding. The originals' `gh`/`git` commands were removed, since reviewers only have read tools.
+
 ### The code quality reviewer and its skill
 
 `quality` loads the `thermo-nuclear-code-quality-review` skill from Cursor's plugins repository

@@ -1,0 +1,45 @@
+# Admin configuration for the issue root-cause analysis example (Examples page, `azhi example install
+# issue-investigation --repos OWNER/REPO`, or `azhi apply` after replacing OWNER/REPO below; the tools
+# refuse any other repository). For GitHub Enterprise add api_url: https://<host>/api/v3 to both
+# tools and set `host` on the workflow's workspace (`--api-url` at install does both).
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained token, read-only "Contents" and "Issues"; used to read the
+#                         issue and to clone the repository on the worker
+#   github-comment-token  fine-grained token with "Issues: write"; used only by the approval-gated
+#                         comment step
+#   github-copilot-token  your GitHub Copilot sign-in; the investigator runs on Copilot models
+#                         through OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+tools:
+  - id: github.read-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: github.comment-on-issue
+    version: 1
+    description: Post a comment on an issue (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-comment-token
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}}}
+secrets:
+  - github-read-token
+  - github-comment-token
+  - github-copilot-token

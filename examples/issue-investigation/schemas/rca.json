@@ -1,0 +1,63 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 400},
+    "assessment": {
+      "type": "object",
+      "properties": {
+        "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+        "severity_reason": {"type": "string", "maxLength": 300},
+        "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+        "complexity_reason": {"type": "string", "maxLength": 300},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "confidence_reason": {"type": "string", "maxLength": 300}
+      },
+      "required": ["severity", "severity_reason", "complexity", "complexity_reason", "confidence", "confidence_reason"],
+      "additionalProperties": false
+    },
+    "origin": {"type": "string", "enum": ["regression", "long_standing", "original_behaviour", "unknown"]},
+    "origin_detail": {"type": "string", "maxLength": 400},
+    "root_cause": {"type": "string", "maxLength": 1500},
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "why": {"type": "string", "maxLength": 300},
+          "because": {"type": "string", "maxLength": 300},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0}
+        },
+        "required": ["why", "because", "path"],
+        "additionalProperties": false
+      }
+    },
+    "fix": {
+      "type": "object",
+      "properties": {
+        "strategy": {"type": "string", "maxLength": 1000},
+        "files": {
+          "type": "array",
+          "maxItems": 15,
+          "items": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "change": {"type": "string", "maxLength": 500}},
+            "required": ["path", "change"],
+            "additionalProperties": false
+          }
+        },
+        "alternatives": {"type": "string", "maxLength": 800},
+        "risks": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 300}}
+      },
+      "required": ["strategy", "files"],
+      "additionalProperties": false
+    },
+    "tests": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 300}},
+    "out_of_scope": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 300}},
+    "comment": {"type": "string", "minLength": 1, "maxLength": 12000}
+  },
+  "required": ["summary", "assessment", "origin", "root_cause", "evidence", "fix", "tests", "comment"],
+  "additionalProperties": false
+}

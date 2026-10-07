@@ -11,7 +11,7 @@ harness:
   opencode:
     agent: harness/agents/quality.md
     command: harness/commands/review.md
-    skills: [harness/skills/review-checklist, harness/skills/thermo-nuclear-code-quality-review]
+    skills: [harness/skills/fresh-eyes-review, harness/skills/review-checklist, harness/skills/thermo-nuclear-code-quality-review]
     tools: [read, grep, glob, skill]
     mcp:
       repo-facts: {command: [node, harness/mcp/repo-facts.mjs]}

@@ -1,0 +1,73 @@
+# Issue root-cause analysis with an OpenCode agent. The investigator runs in a fresh checkout of the
+# repository (cloned on a worker into a temporary folder with a read-only token, deleted after),
+# with read-only tools, a root-cause-analysis skill and a repo-history MCP server (git log, blame,
+# pickaxe search). It returns an evidence-backed RCA: severity, complexity and confidence with
+# reasons, a 5-whys chain with file:line evidence, and a proposed fix with its tests. Posting the
+# RCA on the issue is optional and waits for a person to approve the exact text.
+schema_version: "2.0"
+id: issue-investigation
+name: Issue root-cause analysis (OpenCode)
+description: Investigates a GitHub issue in an isolated checkout, writes an evidence-backed root-cause analysis with a proposed fix, and can post it on the issue after approval.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, description: "owner/name, for example acme/payments"}
+    issue: {type: integer, title: Issue number}
+    branch: {type: string, title: Branch, maxLength: 200, description: "Branch to investigate; leave empty for the default branch"}
+    post: {type: boolean, title: Post the analysis on the issue (after approval)}
+  required: [repo, issue, post]
+nodes:
+  - id: issue
+    type: tool
+    description: Read the issue and its first comments from GitHub.
+    tool: github.read-issue@1
+    arguments: {issue: {cel: "inputs.repo + '#' + string(inputs.issue)"}}
+
+  - id: investigate
+    type: agent
+    description: Find the root cause in the code and its history, and propose a fix (root-cause-analysis skill).
+    executor: opencode
+    profile: issue-investigator@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.branch) && inputs.branch != '' ? 'refs/heads/' + inputs.branch : 'HEAD'"}
+      credential: github-read-token
+    input: {map: "{'issue': nodes.issue.output}"}
+    output_schema: schemas/rca.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: report
+    type: report
+    description: The root-cause analysis as a run artifact.
+    template: templates/rca.md
+    input: {map: "{'issue': nodes.issue.output, 'rca': nodes.investigate.output}"}
+
+  - id: should_post
+    type: condition
+    description: Post only when asked to.
+    expression: "inputs.post ? 'post' : 'skip'"
+    depends_on: [investigate]
+    routes: {post: [approve_post], skip: []}
+    default: skip
+
+  - id: approve_post
+    type: approval
+    description: A person reads the analysis before it is posted on the issue.
+    role: author
+    message: {cel: "'Post this root-cause analysis (confidence ' + nodes.investigate.output.assessment.confidence + ') on ' + inputs.repo + '#' + string(inputs.issue) + '?'"}
+    payload: {map: "{'assessment': nodes.investigate.output.assessment, 'body': nodes.investigate.output.comment}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: post
+    type: tool
+    description: Post the analysis as a comment on the issue.
+    depends_on: [approve_post]
+    tool: github.comment-on-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.issue}, body: {ref: nodes.investigate.output.comment}}
+    # Taint gate (ADR-10): the investigator reads untrusted code and issue text, so the comment may
+    # only go to the issue under investigation, and only after the approval above.
+    guard: "args.repo == inputs.repo && args.number == inputs.issue"

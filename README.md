@@ -53,6 +53,12 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   or from the web UI); an approval gates the PR comment. Set up from Mission Control's Examples page or
   `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
   See [docs/pr-review.md](docs/pr-review.md).
+- Issue root-cause analysis with an OpenCode agent (`examples/issue-investigation`): an investigator
+  in a fresh checkout of the repository, with a root-cause-analysis skill and a read-only git
+  history MCP server, returns severity, complexity and confidence with reasons, a 5-whys chain with
+  `file:line` evidence and a proposed fix with tests; an approval gates the issue comment.
+  `azhi example install issue-investigation --repo OWNER/REPO`. See
+  [docs/issue-investigation.md](docs/issue-investigation.md).
 - Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
   decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
   timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,

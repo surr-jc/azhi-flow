@@ -10,7 +10,7 @@ harness:
   opencode:
     agent: harness/agents/correctness.md
     command: harness/commands/review.md
-    skills: [harness/skills/review-checklist]
+    skills: [harness/skills/fresh-eyes-review, harness/skills/review-checklist]
     tools: [read, grep, glob, skill]
     mcp:
       repo-facts: {command: [node, harness/mcp/repo-facts.mjs]}
