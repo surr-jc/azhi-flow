@@ -13,7 +13,7 @@ import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
-import { copilotEndpoint, defaultBuilderModel } from './models.js';
+import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -276,8 +276,16 @@ async function overview(ctx: AppContext, workspaceId: string, provider: BuilderP
       [workspaceId],
     )
   ).rows;
+  // The models a profile may name (model.name) for the token-usage strategy; `default` is the server's choice.
+  const listed = await builderModels(ctx, workspaceId, provider.id).catch(() => undefined);
+  const models = {
+    default_model: PROVIDER_DEFAULTS[profileProvider(provider.id).provider as keyof typeof PROVIDER_DEFAULTS].model(ctx.settings) ?? null,
+    available: (listed?.models ?? []).slice(0, 40).map((m) => (m.label !== m.id ? `${m.id} (${m.label})` : m.id)),
+    note: 'Pin model.name to one of these only when the token-usage strategy calls for a different tier than the default; otherwise keep name: default.',
+  };
   return {
     model_provider_for_profiles: profileProvider(provider.id),
+    models_for_profiles: models,
     tools: tools.map((t) => ({ ref: toolRef(t), description: t.description, effect: t.effect, output_trusted: t.output_trusted === true, safe_for_tainted: t.safe_for_tainted === true, credential: t.credential })),
     datasets,
     workflows,
