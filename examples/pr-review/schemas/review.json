@@ -2,8 +2,9 @@
   "type": "object",
   "properties": {
     "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
-    "summary": {"type": "string", "maxLength": 400},
+    "summary": {"type": "string", "maxLength": 1000, "description": "Two or three plain sentences, at most 1000 characters. Put detail in findings, not here."},
     "findings": {
+      "description": "Always include this field; use [] when there is nothing to report.",
       "type": "array",
       "maxItems": 50,
       "items": {
