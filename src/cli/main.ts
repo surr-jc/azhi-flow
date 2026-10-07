@@ -680,6 +680,22 @@ program
   });
 
 program
+  .command('setup')
+  .description('Check this machine has what OpenCode steps need (OpenCode, ripgrep, git) and say how to install what is missing')
+  .action(async () => {
+    const { detectCapabilities } = await import('../worker/capabilities.js');
+    const { ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
+    const rt = detectCapabilities().runtimes;
+    const line = (ok: boolean, name: string, detail: string) => console.log(`${ok ? green('ok  ') : red('MISSING')} ${name}: ${detail}`);
+    line(Boolean(rt.git), 'git', rt.git?.version ?? 'install git (needed to clone repositories for agent steps)');
+    line(Boolean(rt.opencode), 'opencode', rt.opencode ? `${rt.opencode.version} (${rt.opencode.path})` : 'run npm ci (it installs the pinned OpenCode), or set AZHI_OPENCODE_BIN');
+    if (rt.opencode) line(Boolean(rt.ripgrep), 'ripgrep', rt.ripgrep ? `${rt.ripgrep.version} (${rt.ripgrep.path})` : ripgrepInstallHint());
+    else console.log(dim(`ripgrep is checked once OpenCode is present. Tools folder: ${toolsDir()} (AZHI_TOOLS_DIR to change it)`));
+    if (process.platform === 'win32') console.log(dim('Native Windows workers cannot run OpenCode steps yet; use WSL for those.'));
+    process.exitCode = rt.git && rt.opencode && rt.ripgrep ? 0 : 1;
+  });
+
+program
   .command('up')
   .description('Run Azhi on this machine without Docker: embedded database, Temporal dev server, server and a worker')
   .option('--port <port>', 'web and API port (default: $AZHI_PORT or 7400)')

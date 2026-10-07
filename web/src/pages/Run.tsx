@@ -537,6 +537,12 @@ function CopilotQuotaLine() {
   );
 }
 
+/** Share of a turn's input that came from the prompt cache (cache read / input + cache read + cache write); input counts uncached tokens. */
+function cacheShare(x: any): string {
+  const total = (x.input_tokens ?? 0) + (x.cache_read_tokens ?? 0) + (x.cache_write_tokens ?? 0);
+  return x.cache_read_tokens === null || x.cache_read_tokens === undefined || !total ? '—' : `${Math.round((100 * x.cache_read_tokens) / total)}%`;
+}
+
 function UsageTab({ usage: u }: { usage: any }) {
   if (!u.turns) return <p className="muted">No model usage in this run.</p>;
   return (
@@ -551,10 +557,10 @@ function UsageTab({ usage: u }: { usage: any }) {
       </p>
       {u.copilot ? <CopilotUsage c={u.copilot} /> : null}
       <Panel>
-        <Table head={['Node', 'Turn', 'Executor', 'Model', 'In', 'Out', 'Cache read', 'Reasoning', 'Cost']}>
+        <Table head={['Node', 'Turn', 'Executor', 'Model', 'In', 'Out', 'Cache read', 'Cache share', 'Reasoning', 'Cost']}>
           {u.records.map((x: any, i: number) => (
             <tr key={i}>
-              <td>{x.node_id}</td><td>{x.attempt}.{x.turn}</td><td>{x.executor}</td><td>{x.model ?? '—'}</td><td>{num(x.input_tokens)}</td><td>{num(x.output_tokens)}</td><td>{num(x.cache_read_tokens)}</td><td>{num(x.reasoning_tokens)}</td>
+              <td>{x.node_id}</td><td>{x.attempt}.{x.turn}</td><td>{x.executor}</td><td>{x.model ?? '—'}</td><td>{num(x.input_tokens)}</td><td>{num(x.output_tokens)}</td><td>{num(x.cache_read_tokens)}</td><td>{cacheShare(x)}</td><td>{num(x.reasoning_tokens)}</td>
               <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label}${x.credits !== null && x.credits !== undefined ? `, ${num(x.credits)} credits` : ''})`}</td>
             </tr>
           ))}

@@ -14,6 +14,7 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
+import { pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
@@ -130,7 +131,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         }
         const copilot = input.provider === 'github-copilot';
         const providerID = copilot ? 'github-copilot' : 'anthropic';
-        const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system: input.system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
+        // Token saving adds search-first reading rules to the step's prompt (off unless the profile or the worker setting turns it on).
+        const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
+        const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
         writeFileSync(
           join(configDir, 'opencode.json'),
           JSON.stringify({
@@ -177,7 +180,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
 
         const password = randomBytes(24).toString('base64url');
         const env: NodeJS.ProcessEnv = {
-          PATH: process.env.PATH,
+          // ripgrep's folder is added when rg is not on PATH, so OpenCode finds it instead of downloading a copy on every step.
+          PATH: pathWithRipgrep(process.env.PATH, o.capabilities.runtimes.ripgrep?.path),
           HOME: home,
           XDG_CONFIG_HOME: join(home, '.config'),
           XDG_DATA_HOME: join(home, '.local/share'),
@@ -301,7 +305,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               ? client.session.command({ path: { id: session.id }, body: { command: setup.command, arguments: '', agent: setup.agent, model: `${providerID}/${input.model}` } })
               : client.session.prompt({
                   path: { id: session.id },
-                  body: { model: { providerID, modelID: input.model }, ...(setup ? { agent: setup.agent } : { system: input.system }), parts: [{ type: 'text', text }] },
+                  body: { model: { providerID, modelID: input.model }, ...(setup ? { agent: setup.agent } : { system }), parts: [{ type: 'text', text }] },
                 }),
           ).finally(() => clearInterval(watch));
           if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled; opencode session aborted');

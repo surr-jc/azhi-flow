@@ -58,6 +58,8 @@ export interface OpencodeHarness {
   tools?: string[];
   /** Local stdio MCP servers. Arguments naming a package file are passed as absolute paths. */
   mcp?: Record<string, { command: string[]; environment?: Record<string, string> }>;
+  /** `off` leaves the step as written; `on` adds Azhi's search-first guidance to its prompt. Omitted: the worker's AZHI_OPENCODE_TOKEN_SAVING setting (default off). */
+  token_saving?: 'on' | 'off';
 }
 
 /** Built-in OpenCode tools a profile may allow (verified against OpenCode 1.18.34). */
@@ -82,6 +84,7 @@ export function opencodeHarnessProblems(h: OpencodeHarness, read: (path: string)
       out.push(`harness.opencode.command '${h.command}' may not use $ARGUMENTS, $1... or !\`shell\` (the step input arrives as its own message, and OpenCode would run shell commands found in it)`);
     }
   }
+  if (h.token_saving !== undefined && h.token_saving !== 'on' && h.token_saving !== 'off') out.push(`harness.opencode.token_saving must be 'on' or 'off'`);
   for (const s of h.skills ?? []) file(`${String(s).replace(/\/$/, '')}/SKILL.md`, 'harness.opencode.skills entry');
   for (const t of h.tools ?? []) if (!OPENCODE_READ_TOOLS.includes(t)) out.push(`harness.opencode.tools: '${t}' is not allowed (allowed: ${OPENCODE_READ_TOOLS.join(', ')})`);
   for (const [name, m] of Object.entries(h.mcp ?? {})) {

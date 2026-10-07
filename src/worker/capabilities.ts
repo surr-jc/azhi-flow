@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { ripgrepBinary, ripgrepVersion } from './tools.js';
 
 export interface WorkerCapabilities {
   platform: NodeJS.Platform;
   arch: string;
-  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
+  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; ripgrep?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
 }
@@ -39,6 +40,8 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
   const git = tryRun('git', ['--version'])?.replace(/^git version\s+/, '');
   const ocPath = opencodeBinary();
   const oc = ocPath ? tryRun(ocPath, ['--version']) : undefined;
+  const rgPath = oc ? ripgrepBinary() : undefined;
+  const rg = rgPath ? ripgrepVersion(rgPath) : undefined;
   const sdk = claudeAgentSdkVersion();
   // Experimental: see the codex entry in src/executors/capabilities.ts. Off unless asked for.
   const codexPath = process.env.AZHI_EXPERIMENTAL_CODEX === '1' ? codexBinary() : undefined;
@@ -50,6 +53,7 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
       ...(python ? { python } : {}),
       ...(bun ? { bun: { version: bun } } : {}),
       ...(oc && ocPath ? { opencode: { version: oc, path: ocPath } } : {}),
+      ...(rg && rgPath ? { ripgrep: { version: rg, path: rgPath } } : {}),
       ...(sdk ? { 'claude-agent-sdk': { version: sdk } } : {}),
       ...(codex && codexPath ? { codex: { version: codex, path: codexPath } } : {}),
       ...(git ? { git: { version: git } } : {}),

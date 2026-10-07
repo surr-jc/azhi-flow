@@ -86,6 +86,29 @@ npx azhi worker start --trust workspace-publishers
 Script nodes need [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on
 the worker; the worker reports what it found and the run plan marks anything missing as a blocker.
 
+## Tools for OpenCode steps
+
+OpenCode's search tools (`grep`, `glob`) run [ripgrep](https://github.com/BurntSushi/ripgrep). Each step
+gets a fresh home folder, so without `rg` on the worker OpenCode downloads a copy on every step (and fails
+offline). Run `npx azhi setup` on each worker host: it checks git, OpenCode and ripgrep and prints the
+install command that fits the platform.
+
+| Platform | ripgrep |
+|---|---|
+| Debian, Ubuntu, WSL | `sudo apt install ripgrep` |
+| Fedora, RHEL | `sudo dnf install ripgrep` |
+| macOS | `brew install ripgrep` |
+| Native Windows | `winget install BurntSushi.ripgrep.MSVC` (OpenCode steps still need a Linux, macOS or WSL worker) |
+
+Without root, put `rg` in `~/.azhi/tools/bin` (or `$AZHI_TOOLS_DIR/bin`, for a small system drive) or set
+`AZHI_RG_BIN`. The worker adds that folder to the step's PATH and `azhi doctor` flags OpenCode workers
+without ripgrep.
+
+**Token saving (off by default).** Set `AZHI_OPENCODE_TOKEN_SAVING=on` on a worker, or `token_saving: on|off`
+under a profile's `harness.opencode`, to add search-first reading rules to OpenCode steps' prompts (search with
+grep and glob, read only the lines needed, never reread a file). The run's Usage tab shows each turn's cache
+share. See the plan in the project files for what else was considered.
+
 ## Checking the install
 
 ```bash

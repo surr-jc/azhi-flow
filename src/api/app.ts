@@ -593,6 +593,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     checks.push({ name: 'interpreter builds', ok: builds.length <= 3, detail: `current ${interpreterBuild}; with open runs: ${builds.map((b) => `${b.interpreter_build} (${b.open})`).join(', ') || 'none'} (max 3)` });
     const workers = (await ctx.pool.query(`SELECT count(*)::int AS n FROM workers WHERE workspace_id=$1 AND last_heartbeat > now() - interval '30 seconds'`, [req.principal.workspaceId])).rows[0].n;
     checks.push({ name: 'workers online', ok: workers > 0, detail: String(workers) });
+    // OpenCode steps search with ripgrep; without it on the worker, OpenCode downloads a copy on every step.
+    const ocWorkers = (
+      await ctx.pool.query(`SELECT name, capabilities FROM workers WHERE workspace_id=$1 AND last_heartbeat > now() - interval '30 seconds' AND capabilities->'runtimes' ? 'opencode'`, [req.principal.workspaceId])
+    ).rows as Array<{ name: string; capabilities: { runtimes?: { ripgrep?: { version: string } } } }>;
+    if (ocWorkers.length) {
+      const missing = ocWorkers.filter((w) => !w.capabilities.runtimes?.ripgrep).map((w) => w.name);
+      checks.push({ name: 'ripgrep on OpenCode workers', ok: missing.length === 0, detail: missing.length ? `missing on ${missing.join(', ')}; run 'azhi setup' on that host` : `${ocWorkers.length} worker(s)` });
+    }
     return { ok: checks.every((c) => c.ok), checks };
   });
 
