@@ -673,7 +673,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
           <div className="row wrap">
             <label>Provider
               <select value={provider ?? 'anthropic'} onChange={(e) => setModel('provider', e.target.value)}>
-                {['anthropic', 'openai', 'github-copilot', ...(provider === 'scripted' ? ['scripted'] : [])].map((p) => <option key={p} value={p}>{p === 'github-copilot' ? 'GitHub Copilot (OpenCode)' : p}</option>)}
+                {['anthropic', 'openai', 'github-copilot', 'openai-chatgpt', ...(provider === 'scripted' ? ['scripted'] : [])].map((p) => <option key={p} value={p}>{p === 'github-copilot' ? 'GitHub Copilot (OpenCode)' : p === 'openai-chatgpt' ? 'ChatGPT plan (OpenCode)' : p}</option>)}
               </select>
             </label>
             <label>Model
@@ -681,7 +681,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
               <span className="muted small">default uses the server's model setting</span>
             </label>
             <label>Key secret
-              <input value={doc.model?.credential ?? ''} spellCheck={false} placeholder={provider === 'github-copilot' ? 'github-copilot-token' : provider === 'openai' ? 'openai-api-key' : 'anthropic-api-key'} onChange={(e) => setModel('credential', e.target.value)} />
+              <input value={doc.model?.credential ?? ''} spellCheck={false} placeholder={provider === 'github-copilot' ? 'github-copilot-token' : provider === 'openai-chatgpt' ? 'openai-chatgpt-auth' : provider === 'openai' ? 'openai-api-key' : 'anthropic-api-key'} onChange={(e) => setModel('credential', e.target.value)} />
             </label>
           </div>
           {!providerOk ? <p className="warn-note small">{executor!.id} supports {executor!.providers.join(', ')} only; this profile uses {provider}.</p> : null}

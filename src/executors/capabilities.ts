@@ -18,7 +18,7 @@ export interface ExecutorDeclaration {
   id: string;
   version: string;
   /** Model providers the adapter can drive. */
-  providers: Array<'anthropic' | 'openai' | 'github-copilot'>;
+  providers: Array<'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'>;
   capabilities: ExecutorCapabilities;
   notes: string[];
 }
@@ -45,7 +45,7 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
   opencode: {
     id: 'opencode',
     version: '1.18.34',
-    providers: ['anthropic', 'github-copilot'],
+    providers: ['anthropic', 'github-copilot', 'openai-chatgpt'],
     capabilities: {
       streaming: true,
       resume: 'native',
@@ -103,6 +103,14 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
     notes: ['Experimental and unverified against a live model', 'Codex\'s shell tool cannot be removed, only sandboxed read-only with approvals off, so a node can refuse it with requires.enforced_restrictions', 'Runs with an isolated CODEX_HOME and web search off'],
   },
 };
+
+/**
+ * A Claude plan token (`claude setup-token`, sk-ant-oat...). Anthropic allows a Pro or Max plan only
+ * through its own runtime (Claude Code and the Agent SDK), so only the claude-agent-sdk executor takes one.
+ */
+export const isClaudePlanToken = (v: string) => v.trim().startsWith('sk-ant-oat');
+export const CLAUDE_PLAN_ONLY_SDK =
+  'this credential is a Claude plan token (claude setup-token). Anthropic allows a Claude plan only through Claude Code and its Agent SDK: give this step executor: claude-agent-sdk, or use an API key (anthropic-api-key) here';
 
 /** Executors that run on a worker as a separate harness process, bridged to the gateway over MCP. */
 export const HARNESS_EXECUTORS = ['opencode', 'claude-agent-sdk', 'codex'] as const;

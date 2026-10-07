@@ -29,6 +29,7 @@ import { isWebPath, registerWebRoutes } from '../web/routes.js';
 import { registerBuilderRoutes } from './builder.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
+import { freshChatgptAuth, keepRenewedChatgptAuth, registerChatgptRoutes } from './chatgpt.js';
 import { registerCopilotRoutes } from './copilot.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
@@ -87,6 +88,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerBuilderRoutes(app, ctx);
   registerExampleRoutes(app, ctx);
   registerCopilotRoutes(app, ctx);
+  registerChatgptRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
@@ -575,7 +577,18 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const s = await resolveSecret(ctx, c.ws, name);
     if (!s) throw notFound(`credential ${name}`);
     await audit(ctx, c.ws, `run:${c.run}`, 'credential.read', { name, node: c.node });
-    return { value: s.value };
+    // A ChatGPT sign-in is renewed here when it would expire during the step (only Azhi may renew it).
+    return { value: await freshChatgptAuth(ctx, c.ws, name, s.value) };
+  });
+
+  // A harness sends back a ChatGPT sign-in OpenCode renewed during its step (OpenAI rotates the refresh token).
+  app.post('/v1/gateway/credentials/:name/renewed', async (req) => {
+    if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'credentials need a run-scoped token');
+    const c = req.principal.claims;
+    const name = (req.params as { name: string }).name;
+    if (!c.creds?.includes(name)) throw new AzhiError(ErrorClass.authorization, `this run token may not update credential ${name}`);
+    const b = z.object({ value: z.string().min(2).max(20_000) }).parse(req.body);
+    return { kept: await keepRenewedChatgptAuth(ctx, c.ws, name, b.value, `run:${c.run}`) };
   });
 
   // A harness streams its agent transcript with the run token, for its own node only. Entries are

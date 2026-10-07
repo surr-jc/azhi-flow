@@ -11,7 +11,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
-import { EXECUTORS } from '../executors/capabilities.js';
+import { CLAUDE_PLAN_ONLY_SDK, EXECUTORS, isClaudePlanToken } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
 import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
@@ -152,10 +152,12 @@ async function providerFor(ctx: AppContext, workspaceId: string, profile: AgentP
   if (profile.model.provider === 'scripted') return scriptedProvider(profile.script ?? []);
   const provider = profile.model.provider;
   if (provider === 'github-copilot') throw new AzhiError(ErrorClass.unsupportedCapability, 'GitHub Copilot models run through OpenCode: give this step executor: opencode');
+  if (provider === 'openai-chatgpt') throw new AzhiError(ErrorClass.unsupportedCapability, 'ChatGPT plan models run through OpenCode: give this step executor: opencode');
   const d = PROVIDER_DEFAULTS[provider];
   const credential = profile.model.credential ?? d.credential;
   const key = await resolveSecret(ctx, workspaceId, credential);
   if (!key) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' for the ${provider} provider is not set`);
+  if (provider === 'anthropic' && isClaudePlanToken(key.value)) throw new AzhiError(ErrorClass.unsupportedCapability, CLAUDE_PLAN_ONLY_SDK);
   const make = provider === 'openai' ? openaiProvider : anthropicProvider;
   return make({ apiUrl: d.apiUrl(ctx.settings), apiKey: key.value });
 }

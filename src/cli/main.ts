@@ -341,6 +341,44 @@ example
     console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
   });
 
+const chatgpt = program.command('chatgpt').description('OpenAI models on your ChatGPT plan, for OpenCode steps');
+chatgpt
+  .command('login')
+  .description('Sign in with your ChatGPT plan and store the sign-in as a workspace secret (never shown)')
+  .option('--secret <name>', 'secret to store it in', 'openai-chatgpt-auth')
+  .action(async (opts: { secret: string }) => {
+    const api = client();
+    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/chatgpt/login', { secret: opts.secret });
+    console.log(`Open ${bold(l.verification_uri)} and enter the code ${bold(l.user_code)}`);
+    console.log(dim(`waiting for OpenAI (the code expires in ${Math.round(l.expires_in / 60)} minutes)...`));
+    let interval = l.interval;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await api.post<{ status: string; interval?: number; version?: number; message?: string; account?: string }>(`/v1/chatgpt/login/${l.id}`, {});
+      if (r.status === 'done') {
+        console.log(`${green('signed in')} with your ChatGPT plan; saved as secret ${opts.secret} (version ${r.version})`);
+        if (r.account === 'missing') console.log(yellow('OpenAI did not name a ChatGPT account in the sign-in; if steps are refused, sign in again.'));
+        console.log(dim('Azhi renews this sign-in itself. Do not paste it into your own OpenCode or Codex: each renewal cancels the other\'s.'));
+        return;
+      }
+      if (r.status !== 'pending') {
+        console.error(red(`not signed in: ${r.message ?? r.status}`));
+        process.exitCode = 1;
+        return;
+      }
+      interval = r.interval ?? interval;
+    }
+  });
+chatgpt
+  .command('check')
+  .description('Renew the saved ChatGPT sign-in once and say whether it works')
+  .option('--secret <name>', 'secret holding it', 'openai-chatgpt-auth')
+  .action(async (opts: { secret: string }) => {
+    const r = await client().post<{ ok: boolean; message: string }>('/v1/chatgpt/check', { secret: opts.secret });
+    console.log(r.ok ? green(r.message) : red(r.message));
+    if (!r.ok) process.exitCode = 1;
+  });
+
 const copilot = program.command('copilot').description('GitHub Copilot models for OpenCode steps');
 copilot
   .command('login')

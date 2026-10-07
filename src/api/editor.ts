@@ -89,7 +89,7 @@ export function registerEditorRoutes(app: FastifyInstance, ctx: AppContext) {
     user(req);
     return {
       executors: Object.values(EXECUTORS).map((e) => ({ id: e.id, version: e.version, capabilities: e.capabilities, notes: e.notes, providers: e.providers })),
-      providers: ['anthropic', 'openai', 'github-copilot'],
+      providers: ['anthropic', 'openai', 'github-copilot', 'openai-chatgpt'],
     };
   });
 
