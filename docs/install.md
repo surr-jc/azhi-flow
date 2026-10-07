@@ -107,7 +107,13 @@ without ripgrep.
 **Token saving (off by default).** Set `AZHI_OPENCODE_TOKEN_SAVING=on` on a worker, or `token_saving: on|off`
 under a profile's `harness.opencode`, to add search-first reading rules to OpenCode steps' prompts (search with
 grep and glob, read only the lines needed, never reread a file). The run's Usage tab shows each turn's cache
-share. See the plan in the project files for what else was considered.
+share. 
+**DCP (optional).** `npx azhi setup --dcp` installs the pinned [DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning)
+OpenCode plugin from npm into the tools folder (about 180 MB; `AZHI_TOOLS_DIR` moves it to another drive). It is
+AGPL-3.0-or-later, so Azhi does not ship it. When token saving is on and the worker has it, the step loads it with
+update checks, notifications and slash commands off. In DCP 3.2.0 the pruning (repeated reads, old failed calls)
+happens when the model calls DCP's `compress` tool, so that tool is allowed for the step. Check quality and cost
+before turning it on for a workflow. See the plan in the project files for what else was considered.
 
 ## Checking the install
 

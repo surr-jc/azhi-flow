@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BridgeState, BridgeTool } from '../agents/gateway-mcp.js';
 import { MAX_REPAIRS } from '../agents/model-agent.js';
 import { SUBMIT_TOOL } from '../agents/providers.js';
@@ -14,7 +14,7 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
-import { pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
+import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
@@ -133,6 +133,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         const providerID = copilot ? 'github-copilot' : 'anthropic';
         // Token saving adds search-first reading rules to the step's prompt (off unless the profile or the worker setting turns it on).
         const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
+        // DCP prunes stale tool output when token saving is on and the plugin is installed on this worker (azhi setup --dcp).
+        const dcp = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+        if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(DCP_CONFIG));
         const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
         writeFileSync(
           join(configDir, 'opencode.json'),
@@ -171,7 +174,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             },
             // Built-in tools off, then only the bridge's tools (and the profile's read-only tools and MCP servers) on;
             // every permission denied, so reads stay inside the step's directory.
-            tools: { '*': false, ...Object.fromEntries(OPENCODE_AMBIENT_TOOLS.map((t) => [t, false])), ...(setup?.tools ?? {}), [`${MCP_NAME}_*`]: true },
+            tools: { '*': false, ...Object.fromEntries(OPENCODE_AMBIENT_TOOLS.map((t) => [t, false])), ...(setup?.tools ?? {}), [`${MCP_NAME}_*`]: true, ...(dcp ? { compress: true } : {}) },
+            ...(dcp ? { plugin: [pathToFileURL(dcp.path).href] } : {}),
             permission: { edit: 'deny', bash: 'deny', webfetch: 'deny', external_directory: 'deny', doom_loop: 'deny' },
             autoupdate: false,
             share: 'disabled',

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -58,3 +58,45 @@ export const SEARCH_FIRST_GUIDANCE = `Reading rules: find things with grep and g
 export function tokenSavingOn(profileSetting: 'on' | 'off' | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   return (profileSetting ?? (env.AZHI_OPENCODE_TOKEN_SAVING === 'on' ? 'on' : 'off')) === 'on';
 }
+
+/**
+ * DCP (dynamic context pruning, github.com/Opencode-DCP/opencode-dynamic-context-pruning), an OpenCode plugin.
+ * It is AGPL-3.0-or-later, so Azhi does not ship it: `azhi setup --dcp` installs this exact version from npm into the tools folder.
+ */
+export const DCP_PACKAGE = '@tarquinen/opencode-dcp';
+export const DCP_VERSION = '3.2.0';
+
+export function dcpDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(toolsDir(env), 'dcp');
+}
+
+/** The installed plugin (entry file and version) when it is the pinned version. */
+export function dcpPlugin(env: NodeJS.ProcessEnv = process.env): { version: string; path: string } | undefined {
+  const root = join(dcpDir(env), 'node_modules', ...DCP_PACKAGE.split('/'));
+  try {
+    const version = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version?: string }).version;
+    const entry = join(root, 'dist', 'index.js');
+    return version === DCP_VERSION && existsSync(entry) ? { version, path: entry } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function installDcp(env: NodeJS.ProcessEnv = process.env): void {
+  const dir = dcpDir(env);
+  // Scripts off: nothing from the package's dependency tree runs at install time.
+  execFileSync('npm', ['install', '--prefix', dir, `${DCP_PACKAGE}@${DCP_VERSION}`, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', shell: process.platform === 'win32', timeout: 600_000 });
+}
+
+/**
+ * DCP's own config for a step. In 3.2.0 its deduplication and error-purging run only when the model calls its
+ * `compress` tool, so that tool is allowed; update checks, notifications and slash commands are off.
+ */
+export const DCP_CONFIG = {
+  enabled: true,
+  autoUpdate: false,
+  pruneNotification: 'off',
+  commands: { enabled: false },
+  compress: { permission: 'allow', showCompression: false },
+  strategies: { deduplication: { enabled: true }, purgeErrors: { enabled: true, turns: 4 } },
+};

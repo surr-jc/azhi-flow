@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { opencodeHarnessProblems } from '../src/agents/profile.js';
-import { pathWithRipgrep, ripgrepBinary, ripgrepInstallHint, SEARCH_FIRST_GUIDANCE, tokenSavingOn, toolsDir } from '../src/worker/tools.js';
+import { DCP_CONFIG, DCP_VERSION, dcpPlugin, pathWithRipgrep, ripgrepBinary, ripgrepInstallHint, SEARCH_FIRST_GUIDANCE, tokenSavingOn, toolsDir } from '../src/worker/tools.js';
 
 describe('token saving', () => {
   it('is off unless the profile or the worker setting turns it on', () => {
@@ -28,5 +28,12 @@ describe('token saving', () => {
     expect(ripgrepInstallHint('darwin', {})).toContain('brew');
     expect(ripgrepInstallHint('linux', { WSL_DISTRO_NAME: 'Ubuntu' })).toContain('WSL');
     expect(ripgrepInstallHint('win32', {})).toContain('winget');
+  });
+
+  it('uses DCP only when the pinned version is installed in the tools folder', () => {
+    expect(dcpPlugin({ AZHI_TOOLS_DIR: '/nonexistent/azhi-tools' })).toBeUndefined();
+    expect(DCP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(DCP_CONFIG.autoUpdate).toBe(false);
+    expect(DCP_CONFIG.commands.enabled).toBe(false);
   });
 });
