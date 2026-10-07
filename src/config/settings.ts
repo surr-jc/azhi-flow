@@ -35,7 +35,7 @@ export function settings() {
     builderProvider: (process.env.AZHI_BUILDER_PROVIDER || undefined) as 'anthropic' | 'openai' | 'opencode' | undefined,
     builderModel: process.env.AZHI_BUILDER_MODEL || undefined,
     /** GitHub Copilot model (through OpenCode) for profiles that say `name: default`. */
-    copilotModel: process.env.AZHI_COPILOT_MODEL || 'gpt-5.6-luna',
+    copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5',
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
     /**

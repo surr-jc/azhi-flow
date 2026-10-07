@@ -1,6 +1,6 @@
 # The correctness reviewer: OpenCode in a fresh checkout of the pull request, with read-only tools.
 # GitHub Copilot models through OpenCode, on your Copilot subscription. `default` is the server's
-# AZHI_COPILOT_MODEL (gpt-5.6-luna unless set); name any Copilot model here instead.
+# AZHI_COPILOT_MODEL (claude-sonnet-5 unless set); name any Copilot model here instead.
 model: {provider: github-copilot, name: default, credential: github-copilot-token}
 max_output_tokens: 4000
 instructions: |

@@ -140,7 +140,7 @@ The profiles say `model: {provider: github-copilot, name: default, credential: g
 Copilot plan offers in `name` instead (Workflows → Edit → reviewer step → Model). Copilot bills
 the tokens in AI Credits (see *Cost* below).
 
-The default is `gpt-5.6-luna`. Azhi has no published rate for it, so a run shows no cost until you set one, for example `export AZHI_COPILOT_RATES="gpt-5.6-luna=INPUT/CACHED/OUTPUT"` with the USD-per-million-token numbers from GitHub's pricing page.
+claude-sonnet-5 has a built-in rate; for any other model without one, set `AZHI_COPILOT_RATES`.
 
 Signing in uses GitHub's device flow with OpenCode's own OAuth app (the one `opencode auth login`
 uses, so Copilot accepts the token from OpenCode): **Sign in with GitHub Copilot** on the Examples
