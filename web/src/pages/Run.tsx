@@ -7,6 +7,7 @@ import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
 import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 import { duration } from './Overview';
+import { AgentActivityPanel } from './AgentActivity';
 import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
 
 interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
@@ -21,6 +22,13 @@ export function RunPage({ id }: { id: string }) {
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<Approval[]>('/v1/approvals'), refetchInterval: 5_000 });
   const { events, live } = useRunEvents(id, () => void qc.invalidateQueries({ queryKey: ['run', id] }));
   const [tab, setTab] = useState('timeline');
+  const [agentNode, setAgentNode] = useState<string | null>(null);
+  // A run with agent steps opens on what its agents are doing.
+  const hasAgents = Boolean(version.data?.plan?.nodes?.some((n: PlanNode) => n.type === 'agent'));
+  const picked = useRef(false);
+  useEffect(() => {
+    if (hasAgents && !picked.current) setTab('agent');
+  }, [hasAgents]);
   // Replay: the index of the event the canvas shows the run at, or null to follow the run live.
   const [cursor, setCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -54,8 +62,10 @@ export function RunPage({ id }: { id: string }) {
   const flags = Object.entries(r.flags ?? {}).filter(([, v]) => v) as Array<[string, any]>;
   const operator = atLeast(me.data?.role, 'operator');
   const waiting = (approvals.data ?? []).filter((a) => a.run_id === id);
-  const show = (k: string) => {
+  const show = (k: string, node?: string) => {
+    picked.current = true;
     setTab(k);
+    if (node) setAgentNode(node);
     requestAnimationFrame(() => document.getElementById('run-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
   return (
@@ -104,10 +114,10 @@ export function RunPage({ id }: { id: string }) {
       ) : null}
       <div id="run-detail" style={{ scrollMarginTop: 112 }}>
         <div className="tabs" role="tablist">
-          {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
+          {Object.entries(TABS).filter(([k]) => k !== 'agent' || hasAgents).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => { picked.current = true; setTab(k); }}>{label}</button>)}
         </div>
         <div className="tab" role="tabpanel">
-          {tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+          {tab === 'agent' ? <AgentActivityPanel runId={id} nodes={version.data?.plan?.nodes ?? []} detail={d} open={open} node={agentNode} onNode={setAgentNode} /> : tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
         </div>
       </div>
     </>
@@ -159,7 +169,7 @@ function outputSummary(v: unknown): string {
 }
 
 /** Each step in plan order, with what it did, when, and what its model calls cost. */
-function Steps({ nodes, detail: d }: { nodes: PlanNode[]; detail: any }) {
+function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; onAgent?: (node: string) => void }) {
   const states = nodeStates(d);
   return (
     <div className="receipt">
@@ -190,6 +200,7 @@ function Steps({ nodes, detail: d }: { nodes: PlanNode[]; detail: any }) {
             <div style={{ minWidth: 0 }}>
               <div className="name">{n.id} <span className="muted small">{TYPE[n.type]?.label ?? n.type}{st && st.attempts > 1 ? ` · ${st.attempts} attempts` : ''}</span></div>
               <div className={`what ${err ? 'bad' : ''}`}><span className="visually-hidden">{word}: </span>{what}</div>
+              {n.type === 'agent' && onAgent && state !== 'pending' && state !== 'skipped' ? <button type="button" className="link small" onClick={() => onAgent(n.id)}>{state === 'running' ? 'Watch the agent live' : 'See what the agent did'}</button> : null}
             </div>
             <span className="when">{at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}{cost ? <><br />{money(cost)}</> : null}</span>
           </div>
@@ -235,7 +246,7 @@ function DecisionPop({ a }: { a: Approval }) {
 const DRAWER: Record<string, string> = { steps: 'Steps', ledger: 'Ledger', coverage: 'Policy', context: 'Context', usage: 'Cost' };
 
 /** The run's trust features in a panel over the canvas; each tab opens its full detail below. */
-function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; detail: any; show: (tab: string) => void; className: string }) {
+function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; detail: any; show: (tab: string, node?: string) => void; className: string }) {
   const [tab, setTab] = useState('steps');
   const p: RunPlan | null = d.plan;
   const controls = p ? p.nodes.flatMap((n) => n.coverage ?? []) : [];
@@ -259,7 +270,7 @@ function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; deta
       </div>
       <div className="atlas-panel" role="tabpanel">
         {tab === 'steps' ? (
-          <><Steps nodes={nodes} detail={d} />{more('inputs', 'Inputs and outputs')}</>
+          <><Steps nodes={nodes} detail={d} onAgent={(n) => show('agent', n)} />{more('inputs', 'Inputs and outputs')}</>
         ) : tab === 'ledger' ? (
           <>
             {d.actions.length ? (
@@ -332,7 +343,7 @@ function Replay({ events, cursor, playing, onCursor, onPlay }: { events: RunEven
   );
 }
 
-const TABS: Record<string, string> = { timeline: 'Event log', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
+const TABS: Record<string, string> = { agent: 'Agent activity', timeline: 'Event log', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
 
 /** Follows the SSE stream, resuming from the last event ID after a disconnect. */
 function useRunEvents(id: string, onEvent: () => void) {

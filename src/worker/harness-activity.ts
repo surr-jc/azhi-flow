@@ -20,6 +20,8 @@ import { runCodex } from './harness-codex.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { cloneWorkspace, isolatedGitEnv, type WorkspaceSpec } from './workspace.js';
+import { OpencodeTranscript } from './opencode-transcript.js';
+import { TranscriptSink } from './transcript.js';
 
 /**
  * The OpenCode harness adapter (spec section 9). OpenCode runs headless in a scratch project with
@@ -114,17 +116,20 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
       const started = Date.now();
       const hb = setInterval(() => ctx.heartbeat(), 5000);
       let proc: ChildProcess | undefined;
+      let sink: TranscriptSink | undefined;
+      let transcript: OpencodeTranscript | undefined;
+      let workspaceToken: string | undefined;
       try {
         // The step's directory: a fresh checkout when the node has a workspace, else an empty folder.
         let project = join(root, 'project');
         if (input.workspace) {
-          const token = input.workspace.credential
+          const token = (workspaceToken = input.workspace.credential
             ? (
                 await runApi.get<{ value: string }>(`/v1/gateway/credentials/${encodeURIComponent(input.workspace.credential)}`).catch((e) => {
                   throw ApplicationFailure.create({ type: ErrorClass.authorization, message: `workspace credential ${input.workspace!.credential}: ${(e as Error).message}`, nonRetryable: true });
                 })
               ).value
-            : undefined;
+            : undefined);
           project = (await cloneWorkspace(input.workspace, { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal })).dir;
         } else {
           mkdirSync(project);
@@ -207,6 +212,10 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY ?? '127.0.0.1,localhost' } : {}),
           ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}),
         };
+        // The step's transcript goes to the run page live, with this step's secrets taken out first.
+        sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : [])]);
+        sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
+        if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
         proc = spawn(oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
         let logs = '';
         // The whole OpenCode log (up to 4 MB) is kept so a failed step can save it: the step folder is deleted.
@@ -265,6 +274,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           directory: project,
           headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
         } as Parameters<typeof createOpencodeClient>[0]);
+        transcript = new OpencodeTranscript(client, sink);
+        transcript.start();
         await step('bridge', () => waitForBridge(client, [MCP_NAME, ...Object.keys(setup?.mcp ?? {})], MCP_CONNECT_MS + 10_000));
         // The model must be one OpenCode offers for this provider; for Copilot that is the list your Copilot plan enables.
         const offered = (await step('providers', () => client.config.providers(), true)).data?.providers.find((p) => p.id === providerID);
@@ -280,6 +291,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         const session = (await step('session', () => client.session.create({ body: { title: `${input.runId}/${input.nodeId}` } }))).data;
         if (!session) throw ApplicationFailure.create({ type: ErrorClass.transient, message: 'opencode did not create a session' });
         ctx.cancellationSignal.addEventListener('abort', () => void client.session.abort({ path: { id: session.id } }).catch(() => {}));
+        transcript.follow(session.id);
 
         const readState = (): BridgeState => JSON.parse(readFileSync(stateFile, 'utf8'));
         let text = input.prompt;
@@ -330,6 +342,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         async function finish(client: ReturnType<typeof createOpencodeClient>, sessionId: string, r: Pick<HarnessResult, 'output' | 'error'>, state: BridgeState): Promise<HarnessResult> {
           // OpenCode reports tokens per assistant message; sum every message of the session.
           const messages = ((await step('messages', () => client.session.messages({ path: { id: sessionId } }), true)).data ?? []) as Array<{ info: { role: string; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } } }>;
+          transcript?.backfill(messages as never);
+          if (r.error) sink?.put({ id: 'azhi-result', kind: 'error', text: `${r.error.class}: ${r.error.message}`, at: Date.now() });
           const assistant = messages.filter((m) => m.info.role === 'assistant' && m.info.tokens);
           const sum = (f: (t: NonNullable<(typeof assistant)[number]['info']['tokens']>) => number) => (assistant.length ? assistant.reduce((n, m) => n + f(m.info.tokens!), 0) : null);
           return {
@@ -350,6 +364,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         }
       } finally {
         clearInterval(hb);
+        transcript?.stop();
+        await sink?.close();
         if (proc) await stopProcess(proc);
         rmSync(root, { recursive: true, force: true });
       }

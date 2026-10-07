@@ -14,6 +14,7 @@ import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
 import type { HarnessInput, HarnessResult } from './harness-activity.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
+import { TranscriptSink } from './transcript.js';
 
 /**
  * The Codex CLI adapter (spec section 9). `codex exec` runs headless with an isolated CODEX_HOME
@@ -100,6 +101,11 @@ export async function runCodex(o: ScriptWorkerOptions & { capabilities: WorkerCa
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
   };
 
+  // The step's transcript goes to the run page live, with this step's secrets taken out first.
+  const sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken]);
+  sink.put({ id: 'system', kind: 'system', text: input.system, at: Date.now() });
+  let prompts = 0;
+
   const started = Date.now();
   const totals = { input: null as number | null, cached: null as number | null, output: null as number | null, reasoning: null as number | null, turns: 0 };
   const add = (k: 'input' | 'cached' | 'output' | 'reasoning', n: unknown) => {
@@ -127,7 +133,11 @@ export async function runCodex(o: ScriptWorkerOptions & { capabilities: WorkerCa
     }
   }, 300);
 
-  const done = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => ({
+  const done = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => {
+    if (r.error) sink.put({ id: 'azhi-result', kind: 'error', text: `${r.error.class}: ${r.error.message}`, at: Date.now() });
+    return finished(r, calls);
+  };
+  const finished = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => ({
     ...r,
     usage: {
       // Codex counts cached tokens inside input_tokens; the usage records keep them apart.
@@ -147,6 +157,7 @@ export async function runCodex(o: ScriptWorkerOptions & { capabilities: WorkerCa
   /** One `codex exec` (or `exec resume`) run: the prompt goes in on stdin, events come back as JSON lines. */
   const exec = (prompt: string, thread?: string) =>
     new Promise<{ thread?: string; failed?: string; code: number | null; logs: string }>((resolve, reject) => {
+      sink.put({ id: `prompt-${++prompts}`, kind: 'user', text: prompt, at: Date.now() });
       const args = ['exec', ...(thread ? ['resume'] : []), '--json', '--skip-git-repo-check', ...(thread ? [thread] : []), '-'];
       const win = process.platform === 'win32' && /\.(cmd|bat)$/i.test(rt.path);
       const p = spawn(rt.path, args, { cwd: project, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], shell: win, windowsHide: true });
@@ -172,6 +183,8 @@ export async function runCodex(o: ScriptWorkerOptions & { capabilities: WorkerCa
               add('reasoning', e.usage?.reasoning_output_tokens);
             }
             if (e.type === 'turn.failed') failed = e.error?.message ?? 'turn failed';
+            if (e.type === 'turn.completed') sink.put({ id: `turn-${prompts}-${totals.turns}`, kind: 'step', tokens: { input: e.usage?.input_tokens, output: e.usage?.output_tokens, reasoning: e.usage?.reasoning_output_tokens, cache_read: e.usage?.cached_input_tokens }, at: Date.now() });
+            if (e.type.startsWith('item.')) codexItem(sink, (e as { item?: Record<string, any> }).item);
             if (e.type === 'error' && e.message) failed = e.message;
           } catch {
             /* not an event */
@@ -218,6 +231,33 @@ export async function runCodex(o: ScriptWorkerOptions & { capabilities: WorkerCa
     clearInterval(watch);
     ctx.cancellationSignal.removeEventListener('abort', onCancel);
     stop();
+    await sink.close();
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/** A Codex thread item (agent message, reasoning, MCP tool call, command, error) as a transcript entry. */
+function codexItem(sink: TranscriptSink, item: Record<string, any> | undefined) {
+  if (!item?.id) return;
+  const id = `item-${item.id}`;
+  switch (item.type) {
+    case 'agent_message':
+      if (item.text) sink.put({ id, kind: 'assistant', text: item.text, at: Date.now() });
+      return;
+    case 'reasoning':
+      if (item.text) sink.put({ id, kind: 'reasoning', text: item.text, at: Date.now() });
+      return;
+    case 'mcp_tool_call': {
+      const status = item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'error' : 'running';
+      const result = item.result?.content ? (item.result.content as any[]).map((c) => (c?.type === 'text' ? c.text : JSON.stringify(c))).join('\n') : item.result !== undefined && item.result !== null ? JSON.stringify(item.result) : undefined;
+      sink.put({ id, kind: 'tool', tool: `${item.server ? `${item.server}_` : ''}${item.tool ?? 'tool'}`, status, input: item.arguments, ...(status === 'error' ? { error: item.error?.message ?? 'failed' } : result !== undefined ? { output: result } : {}), at: Date.now() });
+      return;
+    }
+    case 'command_execution':
+      sink.put({ id, kind: 'tool', tool: 'shell', status: item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'error' : 'running', input: { command: item.command }, ...(item.aggregated_output ? { output: item.aggregated_output } : {}), at: Date.now() });
+      return;
+    case 'error':
+      sink.put({ id, kind: 'error', text: item.message ?? 'error', at: Date.now() });
+      return;
   }
 }

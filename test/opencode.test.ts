@@ -81,6 +81,20 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
     const m = d.context_manifests.find((x: any) => x.node_id === 'explain');
     expect(m.items.at(-1)).toMatchObject({ source: 'opencode', content_hash: 'unobservable' });
     expect(h.slack.messages.at(-1)!.text).toBe('1 of 4 runs failed (r3).');
+
+    // The run page's agent transcript: prompts, the tool call with its result, and the submitted output.
+    const tx = await h.api.get<any>(`/v1/runs/${run_id}/transcript?node=explain`);
+    const kinds = tx.entries.map((e: any) => e.kind);
+    expect(kinds).toContain('system');
+    expect(kinds).toContain('user');
+    expect(kinds).toContain('step');
+    const tool = tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'azhi_ci_list-runs_1');
+    expect(tool).toMatchObject({ status: 'completed', input: { team: 'payments' }, attempt: 1 });
+    expect(tool.output).toMatch(/r3/);
+    expect(tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'azhi_submit_output')).toMatchObject({ status: 'completed' });
+    expect(JSON.stringify(tx.entries)).not.toContain('sk-conformance');
+    // Polling with the cursor returns only what changed since.
+    expect((await h.api.get<any>(`/v1/runs/${run_id}/transcript?after=${tx.cursor}`)).entries).toEqual([]);
   });
 
   it('feeds schema failures back and fails after two repairs', async () => {

@@ -14,6 +14,7 @@ import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
+import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import type { Role } from '../db/schema.js';
@@ -575,6 +576,26 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     if (!s) throw notFound(`credential ${name}`);
     await audit(ctx, c.ws, `run:${c.run}`, 'credential.read', { name, node: c.node });
     return { value: s.value };
+  });
+
+  // A harness streams its agent transcript with the run token, for its own node only. Entries are
+  // redacted again here, with the values of the credentials the token may read.
+  app.post('/v1/gateway/transcript', async (req) => {
+    if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'transcripts need a run-scoped token');
+    const c = req.principal.claims;
+    if (!ctx.settings.agentTranscripts) return { stored: 0, enabled: false };
+    const b = z.object({ attempt: z.number().int().min(1).max(1000).default(1), entries: z.array(z.record(z.string(), z.unknown())).max(500) }).parse(req.body);
+    const secrets = await Promise.all((c.creds ?? []).map(async (n) => (await resolveSecret(ctx, c.ws, n).catch(() => undefined))?.value));
+    const stored = await writeTranscript(ctx.pool, { workspaceId: c.ws, runId: c.run, nodeId: c.node, attempt: b.attempt }, b.entries as never, redactor(secrets));
+    return { stored, enabled: true };
+  });
+
+  app.get('/v1/runs/:id/transcript', async (req) => {
+    const p = user(req);
+    const q = z.object({ after: z.coerce.number().int().min(0).default(0), node: z.string().optional() }).parse(req.query);
+    const run = (await ctx.pool.query(`SELECT 1 FROM runs WHERE id=$1 AND workspace_id=$2`, [(req.params as { id: string }).id, p.workspaceId])).rows[0];
+    if (!run) throw notFound('run');
+    return { enabled: ctx.settings.agentTranscripts, ...(await readTranscript(ctx.pool, p.workspaceId, (req.params as { id: string }).id, q)) };
   });
 
   app.get('/v1/doctor', async (req) => {

@@ -51,6 +51,8 @@ export function settings() {
     copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
+    /** Agent steps' transcripts (prompts, model text, tool calls and results, redacted) for the run page; on unless set to 0. */
+    agentTranscripts: process.env.AZHI_AGENT_TRANSCRIPTS !== '0',
     /** Deployments sharing one Temporal namespace need distinct gateway queues. */
     gatewayQueue: process.env.AZHI_GATEWAY_QUEUE || 'azhi-gateway',
   };

@@ -14,6 +14,7 @@ import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
 import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
+import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
@@ -184,7 +185,7 @@ function loadTranscript(ctx: AppContext, hash: string): Transcript {
 }
 
 /** Assembles the context (stable parts first, for prefix caching) and the first manifest items. */
-export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<AgentState> {
+export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { transcript?: boolean } = {}): Promise<AgentState> {
   const store = ctx.settings.storeContextContent;
   const { path, profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
   const model = resolveModelName(ctx, profile);
@@ -230,6 +231,11 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<A
     items,
     chunkIds: (i.chunks ?? []).map((c) => c.id),
   };
+  // A harness step records its own transcript (its harness rewrites the prompt), so only the model agent's goes here.
+  if (opts.transcript !== false) await showTranscript(ctx, i, [
+    { id: 'system', kind: 'system', text: t.system, at: Date.now() },
+    { id: 'u0', kind: 'user', text: user, at: Date.now() },
+  ]);
   return { transcript: saveTranscript(ctx, t), turn: 0, toolCalls: 0, outputTokens: 0, cost: 0, repairs: 0, failures: {} };
 }
 
@@ -295,6 +301,16 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
   }
 
   t.messages.push({ role: 'assistant', content: res.content });
+  const shown = new Map<string, TranscriptEntry>();
+  const said: TranscriptEntry[] = res.content.flatMap((b, n): TranscriptEntry[] => {
+    if (b.type === 'text' && b.text) return [{ id: `t${turn}-${n}`, kind: 'assistant', text: b.text, model: res.model, at: Date.now() }];
+    if (b.type !== 'tool_use') return [];
+    const e: TranscriptEntry = { id: `tool-${turn}-${b.id}`, kind: 'tool', tool: b.name, status: 'running', input: b.input, at: Date.now() };
+    shown.set(b.id, e);
+    return [e];
+  });
+  said.push({ id: `step-${turn}`, kind: 'step', model: res.model, tokens: { input: res.usage.input_tokens ?? undefined, output: res.usage.output_tokens ?? undefined, cache_read: res.usage.cache_read_tokens ?? undefined, cache_write: res.usage.cache_write_tokens ?? undefined, reasoning: res.usage.reasoning_tokens ?? undefined }, at: Date.now() });
+  await showTranscript(ctx, i, said);
   const results: Block[] = [];
   let output: unknown;
   let done = false;
@@ -389,8 +405,28 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
     t.items.push(item('repair', 'platform', 'no output submitted', reminder, store));
   }
   if (!done) t.messages.push({ role: 'user', content: results });
+  await showTranscript(
+    ctx,
+    i,
+    results.flatMap((b, n): TranscriptEntry[] => {
+      if (b.type === 'text') return [{ id: `u${turn}-${n}`, kind: 'user', text: b.text, at: Date.now() }];
+      if (b.type !== 'tool_result') return [];
+      const e = shown.get(b.tool_use_id);
+      return e ? [{ ...e, status: b.is_error ? 'error' : 'completed', ...(b.is_error ? { error: b.content } : { output: b.content }) }] : [];
+    }),
+  );
   state.transcript = saveTranscript(ctx, t);
   return { state, done, ...(done ? { output } : {}), usageKnown };
+}
+
+/** Adds entries to the step's transcript for the run page; never fails the turn. */
+async function showTranscript(ctx: AppContext, i: { workspaceId: string; runId: string; nodeId: string }, entries: TranscriptEntry[]) {
+  if (!ctx.settings.agentTranscripts || !entries.length) return;
+  try {
+    await writeTranscript(ctx.pool, { workspaceId: i.workspaceId, runId: i.runId, nodeId: i.nodeId, attempt: 1 }, entries, redactor([]));
+  } catch {
+    /* the transcript is a view; the turn's own records are what count */
+  }
 }
 
 /** Tool output for agent context: within the 8 KiB ceiling, or a summary plus the artifact handle. */
@@ -413,7 +449,7 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
  * The manifest adds one item for what the harness owns and Azhi cannot see.
  */
 export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string } }, executor: string) {
-  const state = await agentBegin(ctx, i);
+  const state = await agentBegin(ctx, i, { transcript: false });
   const t = loadTranscript(ctx, state.transcript);
   const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
   // The run plan marks providers an adapter cannot drive as unsupported; this is the same check at run time.

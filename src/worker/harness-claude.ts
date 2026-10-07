@@ -12,6 +12,7 @@ import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
 import type { HarnessInput, HarnessResult } from './harness-activity.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
+import { BlockTranscript, TranscriptSink } from './transcript.js';
 
 /**
  * The Claude Agent SDK adapter (spec section 9). The SDK drives the Claude Code runtime headless
@@ -73,6 +74,11 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
     },
   };
 
+  // The step's transcript goes to the run page live, with this step's secrets taken out first.
+  const sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken]);
+  const blocks = new BlockTranscript(sink);
+  sink.put({ id: 'system', kind: 'system', text: input.system, at: Date.now() });
+
   const started = Date.now();
   const totals: Totals = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null, reasoning_tokens: null, turns: 0 };
   const add = (k: keyof Omit<Totals, 'turns'>, n: unknown) => {
@@ -91,7 +97,11 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
     }
   }, 300);
 
-  const done = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => ({
+  const done = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => {
+    if (r.error) sink.put({ id: 'azhi-result', kind: 'error', text: `${r.error.class}: ${r.error.message}`, at: Date.now() });
+    return finished(r, calls);
+  };
+  const finished = (r: Pick<HarnessResult, 'output' | 'error'>, calls: { tool: number; repairs: number }): HarnessResult => ({
     ...r,
     usage: { input_tokens: totals.input_tokens, output_tokens: totals.output_tokens, cache_read_tokens: totals.cache_read_tokens, cache_write_tokens: totals.cache_write_tokens, reasoning_tokens: totals.reasoning_tokens },
     model_calls: totals.turns,
@@ -110,6 +120,7 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
       if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled');
       let result: Record<string, any> | undefined;
       let failure: string | undefined;
+      blocks.user(prompt);
       try {
         const q = query({
           prompt,
@@ -134,6 +145,9 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
         for await (const m of q as AsyncIterable<Record<string, any>>) {
           if (m.session_id) sessionId = m.session_id;
           if (m.type === 'result') result = m;
+          if (m.type === 'assistant') blocks.assistant(m.message?.content, m.message?.model);
+          if (m.type === 'user' && Array.isArray(m.message?.content)) blocks.user(m.message.content);
+          if (m.type === 'result') sink.put({ id: `result-${reminders}`, kind: 'step', text: m.subtype, tokens: { input: m.usage?.input_tokens, output: m.usage?.output_tokens, cache_read: m.usage?.cache_read_input_tokens, cache_write: m.usage?.cache_creation_input_tokens }, at: Date.now() });
         }
       } catch (e) {
         if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled; Claude Agent SDK session aborted');
@@ -172,6 +186,7 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
     clearInterval(hb);
     clearInterval(watch);
     ctx.cancellationSignal.removeEventListener('abort', onCancel);
+    await sink.close();
     rmSync(root, { recursive: true, force: true });
   }
 }

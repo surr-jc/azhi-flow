@@ -427,3 +427,25 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .model-picker select { max-width: min(420px, 100%); }
 .model-picker .model-note { flex-basis: 100%; }
 .model-picker .model-note .block { display: block; }
+
+/* Agent activity: an agent step's conversation with its model, tool calls folded. */
+.agent-picker { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.agent-picker button { display: inline-flex; align-items: center; gap: 6px; }
+.agent-picker button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.agent-picker .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); display: inline-block; }
+.transcript { display: flex; flex-direction: column; gap: 8px; }
+.tx { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel); min-width: 0; }
+.tx > summary { cursor: pointer; overflow-wrap: anywhere; }
+.tx-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.tx-head .muted:last-child, .tx-time { margin-left: auto; float: right; }
+.tx-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+.tx-label { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.tx-user { background: var(--bg); }
+.tx-assistant { border-left: 3px solid var(--accent); }
+.tx-reasoning { border-style: dashed; }
+.tx-reasoning .tx-text { color: var(--muted); font-style: italic; }
+.tx-system .tx-text { font: 12px/1.45 var(--f-mono); max-height: 360px; overflow: auto; }
+.tx-tool.ok { border-left: 3px solid var(--ok); } .tx-tool.bad { border-left: 3px solid var(--bad); } .tx-tool.run { border-left: 3px solid var(--run); }
+.tx-error { border-color: var(--bad); background: var(--bad-bg); }
+.tx-step { border: 0; background: none; padding: 0 12px; }
+.json.bad { color: var(--bad); }
