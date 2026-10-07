@@ -52,6 +52,34 @@ async function startFakeIssuer() {
   return { url: `http://127.0.0.1:${a.port}`, state: s, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
+/** OpenAI's Codex endpoint: Responses API answered only as an event stream. First a tool call, then ask_user. */
+async function startFakeCodex() {
+  const requests: Array<{ url: string; headers: Record<string, unknown>; body: any }> = [];
+  const server: Server = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => (raw += d));
+    req.on('end', () => {
+      const body = JSON.parse(raw);
+      requests.push({ url: req.url!, headers: req.headers, body });
+      if (!body.stream) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ detail: 'Stream must be set to true' }));
+      }
+      const turn = body.input.filter((i: any) => i.type === 'function_call_output').length;
+      const item = turn === 0
+        ? { type: 'function_call', call_id: 'c1', name: 'workspace_overview', arguments: '{}' }
+        : { type: 'function_call', call_id: 'c2', name: 'ask_user', arguments: JSON.stringify({ intro: 'A few questions first.', questions: [{ id: 'trigger', question: 'When should it run?' }] }) };
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: 'response.output_item.done', item })}\n\n`);
+      // The final event carries no output items; they come from the stream.
+      res.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { model: body.model, status: 'completed', output: [], usage: { input_tokens: 100, output_tokens: 20 } } })}\n\n`);
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const a = server.address() as { port: number };
+  return { url: `http://127.0.0.1:${a.port}`, requests, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
+
 describe('plan tokens', () => {
   it('knows a Claude plan token from an API key', () => {
     expect(isClaudePlanToken(' sk-ant-oat01-abc')).toBe(true);
@@ -74,14 +102,18 @@ describe.skipIf(!up)('ChatGPT plan sign-in', () => {
   let issuer: Awaited<ReturnType<typeof startFakeIssuer>>;
   let ws: string;
 
+  let codex: Awaited<ReturnType<typeof startFakeCodex>>;
+
   beforeAll(async () => {
     issuer = await startFakeIssuer();
-    h = await startHarness({ worker: false, settings: { chatgptIssuer: issuer.url } });
+    codex = await startFakeCodex();
+    h = await startHarness({ worker: false, settings: { chatgptIssuer: issuer.url, chatgptApiUrl: codex.url, builderModel: undefined, builderProvider: undefined } });
     ws = (await h.server.ctx.pool.query(`SELECT workspace_id FROM secrets WHERE name='slack-bot-token'`)).rows[0].workspace_id;
   }, 60_000);
   afterAll(async () => {
     await h?.stop();
     await issuer?.close();
+    await codex?.close();
   });
 
   const runApi = (creds: string[]) => new ApiClient(h.server.url, signRunToken(h.server.ctx.secretKey, { ws, run: 'run_1', node: 'n1', tools: [], creds, exp: Math.floor(Date.now() / 1000) + 600 }));
@@ -152,5 +184,29 @@ describe.skipIf(!up)('ChatGPT plan sign-in', () => {
     await h.api.put('/v1/secrets/not-chatgpt', { value: 'sk-x' });
     expect((await h.api.post<any>('/v1/chatgpt/check', { secret: 'not-chatgpt' })).message).toContain('not a ChatGPT sign-in');
     expect((await h.api.post<any>('/v1/chatgpt/check', { secret: 'nothing-here' })).message).toContain('No sign-in is saved');
+  });
+
+  it('lets the workflow builder chat on the ChatGPT plan, calling OpenAI\'s Codex endpoint as OpenCode does', async () => {
+    const status = await h.api.get<any>('/v1/builder');
+    expect(status.providers.find((p: any) => p.id === 'chatgpt')).toMatchObject({ ready: true, label: 'OpenCode (ChatGPT plan)', model: 'gpt-5.5' });
+    const models = await h.api.get<any>('/v1/builder/models?provider=chatgpt');
+    expect(models.models[0].id).toBe('gpt-5.5');
+    expect(models.models.map((m: any) => m.id)).toContain('gpt-5.4-mini');
+    // A sign-in good for hours: used as is.
+    const a = chatgptAuth((await resolveSecret(h.server.ctx, ws, 'openai-chatgpt-auth'))!.value)!;
+    await h.api.put('/v1/secrets/openai-chatgpt-auth', { value: JSON.stringify({ openai: { ...a, access: 'at_live', expires: Date.now() + 5 * 3600_000 } }) });
+    codex.requests.length = 0;
+    const r = await h.api.post<any>('/v1/builder/chat', { provider: 'chatgpt', messages: [], text: 'Summarise our standup notes' });
+    expect(r).toMatchObject({ provider: 'chatgpt', model: 'gpt-5.5', event: { kind: 'questions', intro: 'A few questions first.' } });
+    expect(codex.requests.length).toBe(2);
+    const [first, second] = codex.requests;
+    expect(first!.url).toBe('/responses');
+    expect(first!.headers).toMatchObject({ authorization: 'Bearer at_live', 'chatgpt-account-id': 'acct_123', originator: 'opencode', 'user-agent': expect.stringMatching(/^opencode\//) });
+    expect(first!.body).toMatchObject({ model: 'gpt-5.5', stream: true, store: false, instructions: expect.stringContaining('Azhi Flow workflow builder') });
+    expect(first!.body.max_output_tokens).toBeUndefined();
+    expect(second!.body.input.map((i: any) => i.type ?? i.role)).toEqual(['user', 'function_call', 'function_call_output']);
+    expect(r.usage).toMatchObject({ input_tokens: 200, output_tokens: 40 });
+    // Profiles it drafts use the ChatGPT plan on OpenCode steps.
+    expect(first!.body.instructions).toContain('provider openai-chatgpt with credential openai-chatgpt-auth, on agent nodes with executor: opencode');
   });
 });

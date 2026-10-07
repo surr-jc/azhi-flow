@@ -62,13 +62,14 @@ describe.skipIf(!up)('workflow builder chat', () => {
     const before = await h.api.get<any>('/v1/builder');
     expect(before.default).toBeUndefined();
     expect(before.providers.find((p: any) => p.id === 'anthropic')).toMatchObject({ ready: false, reason: expect.stringContaining('anthropic-api-key') });
-    await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi' })).rejects.toThrow(/Anthropic or OpenAI key, or a GitHub Copilot sign-in/);
+    await expect(h.api.post('/v1/builder/chat', { messages: [], text: 'hi' })).rejects.toThrow(/Anthropic or OpenAI key, or a GitHub Copilot or ChatGPT sign-in/);
 
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-test' });
     const after = await h.api.get<any>('/v1/builder');
     expect(after).toMatchObject({ default: 'anthropic' });
-    expect(after.providers.map((p: any) => [p.id, p.ready])).toEqual([['anthropic', true], ['openai', false], ['opencode', false]]);
-    expect(after.providers.at(-1).reason).toMatch(/Sign in with GitHub Copilot/);
+    expect(after.providers.map((p: any) => [p.id, p.ready])).toEqual([['anthropic', true], ['openai', false], ['opencode', false], ['chatgpt', false]]);
+    expect(after.providers.find((p: any) => p.id === 'opencode').reason).toMatch(/Sign in with GitHub Copilot/);
+    expect(after.providers.find((p: any) => p.id === 'chatgpt').reason).toMatch(/Sign in with ChatGPT/);
     // The provider's live model list, with the recommended model first.
     const models = await h.api.get<any>('/v1/builder/models?provider=anthropic');
     expect(models).toMatchObject({ source: 'live', recommended: { id: 'claude-opus-5-5', reason: expect.any(String) } });
@@ -218,7 +219,7 @@ describe.skipIf(!up)('workflow builder chat in the browser', () => {
       await page.getByRole('link', { name: 'Build with chat' }).click();
       // The model picker lists the provider's models with the recommended one picked; the choice is remembered.
       await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-opus-5-5');
-      expect(await page.getByLabel('Provider').locator('option[disabled]').allTextContents()).toEqual(['OpenAI (not available)', 'OpenCode (GitHub Copilot) (not available)']);
+      expect(await page.getByLabel('Provider').locator('option[disabled]').allTextContents()).toEqual(['OpenAI (not available)', 'OpenCode (GitHub Copilot) (not available)', 'OpenCode (ChatGPT plan) (not available)']);
       await page.getByLabel('Model', { exact: true }).selectOption('claude-sonnet-5-5');
       await page.reload();
       await expect.poll(() => page.getByLabel('Model', { exact: true }).inputValue()).toBe('claude-sonnet-5-5');

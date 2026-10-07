@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parse } from 'yaml';
 import { anthropicProvider, openaiProvider, responsesProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
+import { chatgptAuth } from '../agents/chatgpt-auth.js';
+import { freshChatgptAuth } from '../api/chatgpt.js';
 import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import { examplesDir } from '../api/examples.js';
 import type { Diagnostic } from '../definition/load.js';
@@ -26,7 +28,7 @@ import { checkPackage, getVersion, type VersionRow } from '../server/workflows.j
  *
  * The browser keeps the transcript (provider-neutral blocks) and sends it with each message.
  */
-export type BuilderProviderId = 'anthropic' | 'openai' | 'opencode';
+export type BuilderProviderId = 'anthropic' | 'openai' | 'opencode' | 'chatgpt';
 
 export interface BuilderProviderInfo {
   id: BuilderProviderId;
@@ -88,10 +90,10 @@ const RESULT_CHARS = 24_000;
 const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
-const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)' } as const;
-/** The secret each builder provider needs; OpenCode uses the GitHub Copilot sign-in OpenCode steps use. */
-const CREDENTIAL = { anthropic: PROVIDER_DEFAULTS.anthropic.credential, openai: PROVIDER_DEFAULTS.openai.credential, opencode: PROVIDER_DEFAULTS['github-copilot'].credential } as const;
-const MODEL_ENV = { anthropic: PROVIDER_DEFAULTS.anthropic.modelEnv, openai: PROVIDER_DEFAULTS.openai.modelEnv, opencode: PROVIDER_DEFAULTS['github-copilot'].modelEnv } as const;
+const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)', chatgpt: 'OpenCode (ChatGPT plan)' } as const;
+/** The secret each builder provider needs; the OpenCode ones use the sign-ins OpenCode steps use (GitHub Copilot, ChatGPT plan). */
+const CREDENTIAL = { anthropic: PROVIDER_DEFAULTS.anthropic.credential, openai: PROVIDER_DEFAULTS.openai.credential, opencode: PROVIDER_DEFAULTS['github-copilot'].credential, chatgpt: PROVIDER_DEFAULTS['openai-chatgpt'].credential } as const;
+const MODEL_ENV = { anthropic: PROVIDER_DEFAULTS.anthropic.modelEnv, openai: PROVIDER_DEFAULTS.openai.modelEnv, opencode: PROVIDER_DEFAULTS['github-copilot'].modelEnv, chatgpt: PROVIDER_DEFAULTS['openai-chatgpt'].modelEnv } as const;
 
 async function hasSecret(ctx: AppContext, workspaceId: string, name: string): Promise<boolean> {
   return (await ctx.pool.query(`SELECT 1 FROM secrets WHERE workspace_id=$1 AND name=$2 LIMIT 1`, [workspaceId, name])).rows.length > 0;
@@ -105,10 +107,15 @@ async function hasSecret(ctx: AppContext, workspaceId: string, name: string): Pr
 export async function builderProviders(ctx: AppContext, workspaceId: string): Promise<{ providers: BuilderProviderInfo[]; default?: BuilderProviderId }> {
   const s = ctx.settings;
   const out: BuilderProviderInfo[] = [];
-  for (const id of ['anthropic', 'openai', 'opencode'] as const) {
+  for (const id of ['anthropic', 'openai', 'opencode', 'chatgpt'] as const) {
     const credential = CREDENTIAL[id];
     if (!(await hasSecret(ctx, workspaceId, credential))) {
-      const reason = id === 'opencode' ? `sign in to GitHub Copilot first (Governance › Secrets › Sign in with GitHub Copilot); the workspace secret ${credential} is not set` : `the workspace secret ${credential} is not set`;
+      const reason =
+        id === 'opencode'
+          ? `sign in to GitHub Copilot first (Governance › Secrets › Sign in with GitHub Copilot); the workspace secret ${credential} is not set`
+          : id === 'chatgpt'
+            ? `sign in with your ChatGPT plan first (Governance › Secrets › Sign in with ChatGPT, or azhi chatgpt login); the workspace secret ${credential} is not set`
+            : `the workspace secret ${credential} is not set`;
       out.push({ id, label: LABELS[id], ready: false, reason });
     } else out.push({ id, label: LABELS[id], ready: true, model: await defaultBuilderModel(ctx, workspaceId, id) });
   }
@@ -123,7 +130,7 @@ async function providerFor(ctx: AppContext, workspaceId: string, wanted?: Builde
   const info = providers.find((p) => p.id === id);
   if (!info || !info.ready) {
     const why = info?.reason ?? 'no model provider is set up';
-    throw new AzhiError(ErrorClass.unsupportedCapability, `the workflow builder needs an Anthropic or OpenAI key, or a GitHub Copilot sign-in for OpenCode: ${why}. Add one under Governance › Secrets.`);
+    throw new AzhiError(ErrorClass.unsupportedCapability, `the workflow builder needs an Anthropic or OpenAI key, or a GitHub Copilot or ChatGPT sign-in for OpenCode: ${why}. Add one under Governance › Secrets.`);
   }
   if (model !== undefined && !MODEL_ID.test(model)) throw new AzhiError(ErrorClass.invalidInput, `'${model}' is not a model id`);
   const chosen = model ?? info.model;
@@ -133,6 +140,7 @@ async function providerFor(ctx: AppContext, workspaceId: string, wanted?: Builde
   if (!secret) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' is not set`);
   const done = { ...info, model: chosen };
   if (info.id === 'opencode') return { provider: copilotProvider(ctx, secret.value, await copilotEndpoint(ctx, workspaceId, chosen)), info: done };
+  if (info.id === 'chatgpt') return { provider: chatgptProvider(ctx, await freshChatgptAuth(ctx, workspaceId, credential, secret.value), credential), info: done };
   const d = PROVIDER_DEFAULTS[info.id];
   const make = info.id === 'openai' ? openaiProvider : anthropicProvider;
   return { provider: make({ apiUrl: d.apiUrl(ctx.settings), apiKey: secret.value }), info: done };
@@ -157,6 +165,24 @@ function copilotProvider(ctx: AppContext, signIn: string, endpoint: 'chat' | 're
     },
   };
   return endpoint === 'responses' ? responsesProvider({ ...common, path: '/responses' }) : openaiProvider({ ...common, path: '/chat/completions', maxTokensParam: 'max_tokens' });
+}
+
+/**
+ * A ChatGPT plan through OpenAI's Codex endpoint, called as OpenCode's ChatGPT login calls it: the
+ * sign-in's access token, the ChatGPT account id, OpenCode as originator, the Responses API as a stream.
+ * The sign-in was renewed just before if it was about to expire (freshChatgptAuth).
+ */
+function chatgptProvider(ctx: AppContext, value: string, credential: string): ModelProvider {
+  const a = chatgptAuth(value);
+  if (!a) throw new AzhiError(ErrorClass.authorization, `secret ${credential} is not a ChatGPT sign-in; sign in with azhi chatgpt login`);
+  return responsesProvider({
+    id: 'chatgpt',
+    apiUrl: ctx.settings.chatgptApiUrl,
+    path: '/responses',
+    apiKey: a.access,
+    codex: true,
+    headers: () => ({ originator: 'opencode', 'user-agent': OPENCODE_USER_AGENT, ...(a.accountId ? { 'ChatGPT-Account-Id': a.accountId } : {}) }),
+  });
 }
 
 const TOOLS: ModelTool[] = [
@@ -462,7 +488,9 @@ export async function checkProposal(
 
 /** What profiles drafted in this session use: the builder's own provider (OpenCode's is github-copilot, on executor opencode). */
 function profileProvider(id: BuilderProviderId) {
-  return id === 'opencode' ? { provider: 'github-copilot', credential: CREDENTIAL.opencode, executor: 'opencode' } : { provider: id, credential: CREDENTIAL[id] };
+  if (id === 'opencode') return { provider: 'github-copilot', credential: CREDENTIAL.opencode, executor: 'opencode' };
+  if (id === 'chatgpt') return { provider: 'openai-chatgpt', credential: CREDENTIAL.chatgpt, executor: 'opencode' };
+  return { provider: id, credential: CREDENTIAL[id] };
 }
 
 function system(info: BuilderProviderInfo): string {

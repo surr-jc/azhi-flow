@@ -25,7 +25,7 @@ const block = z.union([
   z.object({ type: z.literal('tool_result'), tool_use_id: z.string(), content: z.string(), is_error: z.boolean().optional() }),
 ]);
 const chat = z.object({
-  provider: z.enum(['anthropic', 'openai', 'opencode']).optional(),
+  provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']).optional(),
   model: z.string().min(1).max(160).optional(),
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })).max(400),
   text: z.string().min(1).max(20_000),
@@ -42,7 +42,7 @@ export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/builder/models', async (req) => {
     const p = user(req);
     requireRole(p, 'author');
-    const q = z.object({ provider: z.enum(['anthropic', 'openai', 'opencode']), refresh: z.enum(['1', 'true']).optional() }).parse(req.query);
+    const q = z.object({ provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']), refresh: z.enum(['1', 'true']).optional() }).parse(req.query);
     return builderModels(ctx, p.workspaceId, q.provider, Boolean(q.refresh));
   });
 
