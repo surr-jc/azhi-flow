@@ -325,6 +325,8 @@ async function modelRequirements(
         ? { name: 'model binding', mark: 'unsupported', detail: `the ${executor} adapter supports ${EXECUTORS[executor]!.providers.join(' or ')} profiles only, not ${provider}` }
         : !isHarness(executor) && provider === 'github-copilot'
           ? { name: 'model binding', mark: 'unsupported', detail: 'GitHub Copilot models run through OpenCode only (executor: opencode)' }
+        : !isHarness(executor) && provider === 'openai-chatgpt'
+          ? { name: 'model binding', mark: 'unsupported', detail: 'ChatGPT plan models run through OpenCode only (executor: opencode)' }
         : model
           ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${explicit ? '' : ' (server default)'}` }
           : { name: 'model binding', mark: 'unsupported', detail: `the profile uses the default ${provider} model and ${d.modelEnv} is not set` },
@@ -337,6 +339,8 @@ async function modelRequirements(
     reqs.push(
       profile.model.provider === 'github-copilot'
         ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'Copilot cost is counted in AI credits from the tokens reported when the step ends, so this cap is not enforced while it runs' }
+        : profile.model.provider === 'openai-chatgpt'
+        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'ChatGPT plan steps have no per-token charge (they use the plan\'s usage limits), so this cap does not apply to them' }
         : profile.pricing
         ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'native', detail: `estimated from pricing ${profile.pricing.revision}` }
         : { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'the profile declares no pricing, so cost is unavailable and this cap cannot be enforced' },

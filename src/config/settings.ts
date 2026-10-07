@@ -47,6 +47,10 @@ export function settings() {
     copilotRates: parseRates(process.env.AZHI_COPILOT_RATES),
     /** The organization's monthly AI Credit pool, to show how much is left and what falls past it. */
     copilotCreditPool: positive(process.env.AZHI_COPILOT_CREDIT_POOL),
+    /** ChatGPT plan model (through OpenCode) for profiles that say `name: default`. */
+    chatgptModel: process.env.AZHI_CHATGPT_MODEL || 'gpt-5.5',
+    /** OpenAI's sign-in server for ChatGPT plans; set only to point at a stand-in (tests). */
+    chatgptIssuer: (process.env.AZHI_CHATGPT_ISSUER || 'https://auth.openai.com').replace(/\/$/, ''),
     /** Where the Copilot sign-in's device flow runs. */
     copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */

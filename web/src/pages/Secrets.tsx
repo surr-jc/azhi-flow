@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
+import { ChatgptLogin } from '../components/ChatgptLogin';
 import { CopilotLogin } from '../components/CopilotLogin';
 import { ago, ErrorNote, Loading, PageHead, Panel, Table, when } from '../ui';
 
@@ -67,6 +68,13 @@ export function Secrets() {
         <Panel title="GitHub Copilot">
           <p className="muted small">OpenCode steps can use the models of your GitHub Copilot subscription. Signing in stores the sign-in as the secret github-copilot-token.</p>
           <CopilotLogin />
+        </Panel>
+        <Panel title="ChatGPT plan">
+          <p className="muted small">OpenCode steps can use the OpenAI models of your ChatGPT plan (Plus, Pro, Business). Signing in stores the sign-in as the secret openai-chatgpt-auth; Azhi renews it itself, so give Azhi its own sign-in rather than your OpenCode's.</p>
+          <ChatgptLogin />
+        </Panel>
+        <Panel title="Claude plan">
+          <p className="muted small">Claude Agent SDK steps can use your Claude Pro or Max plan, for your own use. Run <code>claude setup-token</code> on any computer with Claude Code, then save the token (it starts with sk-ant-oat) above as a secret such as claude-plan-token, and name it as the profile's credential. Anthropic does not allow plan tokens in OpenCode or direct API calls, so Azhi refuses them there.</p>
         </Panel>
       </div>
     </>

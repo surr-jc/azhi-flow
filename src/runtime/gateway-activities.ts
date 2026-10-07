@@ -259,7 +259,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           r.usage.reasoning_tokens,
           cost,
           priced?.currency ?? null,
-          cost === null ? 'unavailable' : 'estimated',
+          cost === null ? 'unavailable' : profile.model.provider === 'openai-chatgpt' ? 'reported' : 'estimated',
           priced?.revision ?? null,
           profile.model.provider,
           priced?.credits ?? null,
@@ -398,6 +398,8 @@ export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentPro
     if (!c) return null;
     return { cost: c.cost, currency: 'USD', credits: c.credits, revision: `${profile.pricing?.revision ?? COPILOT_PRICING_REVISION} at ${ctx.settings.copilotCreditUsd} USD/credit` };
   }
+  // A ChatGPT plan has no per-token charge: the step uses the plan's usage limits, so its cost is 0.
+  if (profile.model.provider === 'openai-chatgpt') return { cost: 0, currency: 'USD', credits: null, revision: 'ChatGPT plan (no per-token charge)' };
   const cost = estimateCost(r.usage, profile.pricing);
   return cost === null ? null : { cost, currency: profile.pricing!.currency ?? 'USD', credits: null, revision: profile.pricing!.revision ?? 'unversioned' };
 }

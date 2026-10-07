@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { BridgeState, BridgeTool } from '../agents/gateway-mcp.js';
 import { MAX_REPAIRS } from '../agents/model-agent.js';
 import { SUBMIT_TOOL } from '../agents/providers.js';
+import { chatgptAuth, type ChatgptAuth } from '../agents/chatgpt-auth.js';
+import { CLAUDE_PLAN_ONLY_SDK, isClaudePlanToken } from '../executors/capabilities.js';
 import { ErrorClass } from '../lib/errors.js';
 import { killTree } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
@@ -40,7 +42,7 @@ export interface HarnessInput {
   packageHash: string;
   /** Which harness runs the node; OpenCode when absent (older histories). */
   executor?: 'opencode' | 'claude-agent-sdk' | 'codex';
-  provider?: 'anthropic' | 'openai' | 'github-copilot';
+  provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt';
   runToken: string;
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
@@ -119,6 +121,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
       let sink: TranscriptSink | undefined;
       let transcript: OpencodeTranscript | undefined;
       let workspaceToken: string | undefined;
+      let chatgptSignIn: ChatgptAuth | undefined;
       try {
         // The step's directory: a fresh checkout when the node has a workspace, else an empty folder.
         let project = join(root, 'project');
@@ -135,7 +138,12 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           mkdirSync(project);
         }
         const copilot = input.provider === 'github-copilot';
-        const providerID = copilot ? 'github-copilot' : 'anthropic';
+        const chatgpt = input.provider === 'openai-chatgpt';
+        const providerID = copilot ? 'github-copilot' : chatgpt ? 'openai' : 'anthropic';
+        // The server renews a ChatGPT sign-in before handing it out (src/api/chatgpt.ts); OpenCode only uses it.
+        chatgptSignIn = chatgpt ? chatgptAuth(key.value) : undefined;
+        if (chatgpt && !chatgptSignIn) throw ApplicationFailure.create({ type: ErrorClass.authorization, message: `credential ${input.credential} is not a ChatGPT sign-in; sign in with \`azhi chatgpt login\``, nonRetryable: true });
+        if (!copilot && !chatgpt && isClaudePlanToken(key.value)) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: CLAUDE_PLAN_ONLY_SDK, nonRetryable: true });
         // Token saving adds search-first reading rules to the step's prompt (off unless the profile or the worker setting turns it on).
         const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
         // DCP prunes stale tool output when token saving is on and the plugin is installed on this worker (azhi setup --dcp).
@@ -146,7 +154,10 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           join(configDir, 'opencode.json'),
           JSON.stringify({
             $schema: 'https://opencode.ai/config.json',
-            provider: copilot
+            provider: chatgpt
+              ? // OpenCode's own ChatGPT plugin sends the requests to OpenAI's Codex endpoint and lists the plan's models.
+                { openai: {} }
+              : copilot
               ? {
                   // Copilot's endpoint and model list are OpenCode's own; only a stand-in or proxy URL is set here.
                   'github-copilot': input.providerUrl
@@ -209,11 +220,12 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           OPENCODE_SERVER_PASSWORD: password,
           // The Copilot sign-in reaches OpenCode in memory (OpenCode reads it instead of auth.json); nothing is written to disk.
           ...(copilot ? { OPENCODE_AUTH_CONTENT: JSON.stringify({ 'github-copilot': copilotAuth(key.value) }) } : {}),
+          ...(chatgptSignIn ? { OPENCODE_AUTH_CONTENT: JSON.stringify({ openai: chatgptSignIn }) } : {}),
           ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY ?? '127.0.0.1,localhost' } : {}),
           ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}),
         };
         // The step's transcript goes to the run page live, with this step's secrets taken out first.
-        sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : [])]);
+        sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
         sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
         if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
         proc = spawn(oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -241,7 +253,12 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           const refused = copilot && /Unauthorized|\b401\b/i.test(`${cause ?? ''} ${text} ${logs}`)
             ? ` GitHub Copilot refused the saved sign-in (secret ${input.credential}). Run \`azhi copilot check\` to see why, then sign in again with \`azhi copilot login\` (or Sign in with GitHub Copilot on the Examples page) and start a new run.`
             : '';
-          return `${cause ? `${cause} ` : ''}${text}${refused}${saveLog()}`;
+          const plan = chatgpt && /Unauthorized|\b401\b/i.test(`${cause ?? ''} ${text} ${logs}`)
+            ? ` OpenAI refused the ChatGPT sign-in (secret ${input.credential}). Run \`azhi chatgpt check\`, or sign in again with \`azhi chatgpt login\`, and start a new run.`
+            : chatgpt && /usage.?limit|rate.?limit|\b429\b/i.test(`${cause ?? ''} ${text}`)
+              ? ' The ChatGPT plan\'s usage limit is reached; it resets on its own (see your ChatGPT usage page). Start a new run after that.'
+              : '';
+          return `${cause ? `${cause} ` : ''}${text}${refused}${plan}${saveLog()}`;
         };
         let savedLog: string | undefined;
         const saveLog = (): string => {
@@ -281,11 +298,11 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         const offered = (await step('providers', () => client.config.providers(), true)).data?.providers.find((p) => p.id === providerID);
         if (!offered?.models[input.model]) {
           const names = Object.keys(offered?.models ?? {}).sort();
-          const where = copilot ? 'GitHub Copilot sign-in' : `${providerID} provider`;
+          const where = copilot ? 'GitHub Copilot sign-in' : chatgpt ? 'ChatGPT plan' : `${providerID} provider`;
           throw ApplicationFailure.create({
             type: ErrorClass.invalidInput,
             nonRetryable: true,
-            message: `model '${input.model}' is not available on this ${where}. ${names.length ? `Available: ${names.join(', ')}.` : 'OpenCode offers no models for it; check the sign-in.'} ${copilot ? 'Set AZHI_COPILOT_MODEL on the server or the profile\'s model name.' : 'Check the profile\'s model name.'}${saveLog()}`,
+            message: `model '${input.model}' is not available on this ${where}. ${names.length ? `Available: ${names.join(', ')}.` : 'OpenCode offers no models for it; check the sign-in.'} ${copilot ? 'Set AZHI_COPILOT_MODEL on the server or the profile\'s model name.' : chatgpt ? 'Set AZHI_CHATGPT_MODEL on the server or the profile\'s model name.' : 'Check the profile\'s model name.'}${saveLog()}`,
           });
         }
         const session = (await step('session', () => client.session.create({ body: { title: `${input.runId}/${input.nodeId}` } }))).data;
@@ -367,10 +384,26 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         transcript?.stop();
         await sink?.close();
         if (proc) await stopProcess(proc);
+        if (chatgptSignIn) await keepRenewedSignIn(runApi, input.credential, home, chatgptSignIn);
         rmSync(root, { recursive: true, force: true });
       }
     },
   };
+}
+
+/**
+ * When a step outlasts the ChatGPT access token, OpenCode renews it and writes the new tokens to the step's
+ * own auth.json. OpenAI rotates the refresh token, so the renewed sign-in goes back to the server; otherwise
+ * the next step would start from a dead one.
+ */
+export async function keepRenewedSignIn(runApi: ApiClient, credential: string, home: string, given: ChatgptAuth) {
+  try {
+    const file = join(home, '.local/share/opencode/auth.json');
+    const renewed = chatgptAuth(readFileSync(file, 'utf8'));
+    if (renewed && renewed.refresh !== given.refresh) await runApi.post(`/v1/gateway/credentials/${encodeURIComponent(credential)}/renewed`, { value: JSON.stringify({ openai: renewed }) });
+  } catch {
+    // No renewal happened (no file), or the server is unreachable: the next step's sign-in check will say so.
+  }
 }
 
 function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {

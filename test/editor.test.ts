@@ -76,7 +76,7 @@ describe.skipIf(!up)('workflow editor', () => {
   it('the harness builder: lists executors, and checks and saves profiles with the draft', async () => {
     const ex = await h.api.get<any>('/v1/executors');
     expect(ex.executors.map((e: any) => e.id)).toEqual(expect.arrayContaining(['model-agent', 'opencode']));
-    expect(ex.executors.find((e: any) => e.id === 'opencode').providers).toEqual(['anthropic', 'github-copilot']);
+    expect(ex.executors.find((e: any) => e.id === 'opencode').providers).toEqual(['anthropic', 'github-copilot', 'openai-chatgpt']);
 
     const profile = 'model: {provider: anthropic, name: default, credential: anthropic-api-key}\ninstructions: Summarise the ticket.\n';
     const withNode = { ...def, nodes: [...def.nodes, { id: 'summary', type: 'agent', profile: 'summariser@1', output_schema: { type: 'object' } }] };

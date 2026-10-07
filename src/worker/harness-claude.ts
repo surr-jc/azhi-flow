@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { BridgeState } from '../agents/gateway-mcp.js';
 import { MAX_REPAIRS } from '../agents/model-agent.js';
 import { SUBMIT_TOOL } from '../agents/providers.js';
+import { isClaudePlanToken } from '../executors/capabilities.js';
 import { ErrorClass } from '../lib/errors.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
@@ -52,8 +53,11 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
     HOME: home,
     USERPROFILE: home,
     CLAUDE_CONFIG_DIR: join(home, '.claude'),
-    ANTHROPIC_BASE_URL: input.providerUrl.replace(/\/$/, ''),
-    ANTHROPIC_API_KEY: key.value,
+    // A Claude plan token (claude setup-token) signs in as the plan, the way Anthropic allows for the Agent SDK:
+    // it goes to Anthropic directly, so no base URL. An API key goes to the configured endpoint.
+    ...(isClaudePlanToken(key.value)
+      ? { CLAUDE_CODE_OAUTH_TOKEN: key.value.trim() }
+      : { ANTHROPIC_BASE_URL: input.providerUrl.replace(/\/$/, ''), ANTHROPIC_API_KEY: key.value }),
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_AUTOUPDATER: '1',
     DISABLE_TELEMETRY: '1',
@@ -174,7 +178,9 @@ export async function runClaudeAgentSdk(o: ScriptWorkerOptions & { capabilities:
       if (state?.stopped) return done({ error: state.stopped }, calls);
       if (state?.output !== undefined) return done({ output: state.output }, calls);
       if (failure || result?.is_error) {
-        const message = failure ?? String(result?.result ?? result?.subtype ?? 'error');
+        let message = failure ?? String(result?.result ?? result?.subtype ?? 'error');
+        if (isClaudePlanToken(key.value) && /usage limit|limit reached|rate.?limit|\b429\b/i.test(message)) message += ' (the Claude plan\'s usage limit is reached; it resets on its own, then start a new run)';
+        if (isClaudePlanToken(key.value) && /\b401\b|invalid.*token|oauth/i.test(message)) message += ' (Anthropic refused the Claude plan token; make a new one with `claude setup-token` and save it again)';
         return done({ error: { class: /auth|api key|401|403/i.test(message) ? ErrorClass.authorization : ErrorClass.transient, message: `claude-agent-sdk: ${message.slice(0, 500)}` } }, calls);
       }
       if (++reminders > MAX_REPAIRS || Date.now() > deadline) {
