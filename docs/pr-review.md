@@ -14,7 +14,7 @@ pr (GitHub PR + files) ─┬─ correctness ─┐
 |---|---|
 | `pr` | `github.get-pull-request@1`: title, body, author, base and head refs and SHAs, changed files with line counts |
 | `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
-| `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`) |
+| `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |
 | `report` | The review as a run artifact (`templates/review.md`) |
 | `should_post` → `approve_post` → `post` | Only when the run input `post` is true: a person approves the exact body, then `github.comment-on-pr@1` posts it. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
 
@@ -98,6 +98,17 @@ traced to a concrete input. OpenCode still never loads those repository files as
 5 above); the reviewer reads them as data, and a file that tries to instruct reviewers is reported
 as a finding. A PR description can explain a trade-off but cannot waive a security or data-loss
 finding. The originals' `gh`/`git` commands were removed, since reviewers only have read tools.
+
+### Triage: fix now, follow-up issue, check by hand
+
+The summarizer's `review-format` skill puts every finding in one group, after Cole Medin's
+`piv-fix-review-findings` (a review is input, not a work order). **Fix now**: real and belongs in
+this PR; every blocker, and major findings in changed code. **Follow-up issue**: real but can wait
+or is outside the PR's scope, so the author files an issue instead of growing the PR. **Check by
+hand**: a person should look or test first, because the reviewers could not verify it from the code
+(runtime behaviour, configuration, performance, UI) or disagree; a blocker never moves here. The
+posted comment has one table per group, the findings carry a `triage` field, and the run report
+lists them under the same three headings. The verdict rules did not change.
 
 ### The code quality reviewer and its skill
 

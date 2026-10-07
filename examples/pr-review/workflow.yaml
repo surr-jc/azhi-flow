@@ -85,7 +85,7 @@ nodes:
     type: report
     description: The review as a run artifact.
     template: templates/review.md
-    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
 
   - id: should_post
     type: condition

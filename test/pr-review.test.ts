@@ -89,10 +89,10 @@ const REVIEW = {
   verdict: 'request_changes',
   summary: 'charge() now evaluates caller input.',
   findings: [
-    { severity: 'blocker', reviewer: 'security', path: 'src/payments.js', line: 3, title: 'eval of caller input', detail: 'Call processor.charge(amount) directly.' },
-    { severity: 'minor', reviewer: 'tests', path: 'src/payments.js', line: 1, title: 'note is untested', detail: 'Add a test that passes a note.' },
+    { severity: 'blocker', triage: 'fix_now', reviewer: 'security', path: 'src/payments.js', line: 3, title: 'eval of caller input', detail: 'Call processor.charge(amount) directly.' },
+    { severity: 'minor', triage: 'follow_up', reviewer: 'tests', path: 'src/payments.js', line: 1, title: 'note is untested', detail: 'Add a test that passes a note.' },
   ],
-  body: '## Azhi review: changes requested\n\ncharge() now evaluates caller input.\n\n| Severity | Where | Finding |\n|---|---|---|\n| blocker | `src/payments.js:3` | eval of caller input |',
+  body: '## Azhi review: changes requested\n\ncharge() now evaluates caller input.\n\n### Fix now\n| Severity | Where | Finding |\n|---|---|---|\n| blocker | `src/payments.js:3` | eval of caller input |',
 };
 
 /** Which agent a request belongs to, from the agent prompt OpenCode puts in the system prompt. */
@@ -368,6 +368,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const out = (id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.output;
     expect(out('summarize')).toEqual(REVIEW);
     for (const id of ['correctness', 'security', 'tests', 'quality'] as const) expect(out(id)).toEqual(FINDINGS[id]);
+    // The run artifact groups the findings by triage (fix now, follow-up issue, check by hand).
+    const md: string = out('report').markdown;
+    expect(md).toMatch(/Fix now:\n– blocker \(security\) src\/payments\.js:3: eval of caller input/);
+    expect(md).toMatch(/Follow-up issue:\n– minor \(tests\) src\/payments\.js:1: note is untested/);
+    expect(md).not.toContain('Check by hand:');
+    expect(toolResults(fake.requests.filter((r) => agentOf(r) === 'summarizer')[1]!)).toContain('Triage every finding into one group');
     expect(gh.comments).toHaveLength(1);
     expect(gh.comments[0]).toMatchObject({ repo: 'acme/payments', number: 7 });
     expect(gh.comments[0]!.body).toContain(REVIEW.body);

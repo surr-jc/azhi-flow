@@ -16,6 +16,21 @@ Merge status: UNKNOWN - GitHub had not computed mergeability, so conflicts were 
 Verdict: {{review.verdict}}. {{review.summary}}
 Head {{pr.head_sha}} against {{pr.base_ref}} ({{pr.base_sha}}), {{pr.additions}} additions and {{pr.deletions}} deletions.
 
-{{#review.findings}}
+{{#triage.fix_now.length}}
+Fix now:
+{{/triage.fix_now.length}}
+{{#triage.fix_now}}
 – {{severity}} ({{reviewer}}) {{path}}{{#line}}:{{line}}{{/line}}: {{title}}. {{detail}}
-{{/review.findings}}
+{{/triage.fix_now}}
+{{#triage.follow_up.length}}
+Follow-up issue:
+{{/triage.follow_up.length}}
+{{#triage.follow_up}}
+– {{severity}} ({{reviewer}}) {{path}}{{#line}}:{{line}}{{/line}}: {{title}}. {{detail}}
+{{/triage.follow_up}}
+{{#triage.check_by_hand.length}}
+Check by hand:
+{{/triage.check_by_hand.length}}
+{{#triage.check_by_hand}}
+– {{severity}} ({{reviewer}}) {{path}}{{#line}}:{{line}}{{/line}}: {{title}}. {{detail}}
+{{/triage.check_by_hand}}

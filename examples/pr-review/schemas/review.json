@@ -10,13 +10,14 @@
         "type": "object",
         "properties": {
           "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
+          "triage": {"type": "string", "enum": ["fix_now", "follow_up", "check_by_hand"]},
           "reviewer": {"type": "string"},
           "path": {"type": "string"},
           "line": {"type": "integer", "minimum": 0},
           "title": {"type": "string", "maxLength": 120},
           "detail": {"type": "string", "maxLength": 1000}
         },
-        "required": ["severity", "reviewer", "path", "title", "detail"],
+        "required": ["severity", "triage", "reviewer", "path", "title", "detail"],
         "additionalProperties": false
       }
     },
