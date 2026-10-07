@@ -147,6 +147,34 @@ export interface OpenAIOptions {
   headers?: (req: ModelRequest) => Record<string, string>;
   /** Chat Completions only: Copilot takes max_tokens; OpenAI itself wants max_completion_tokens. */
   maxTokensParam?: 'max_tokens' | 'max_completion_tokens';
+  /**
+   * Responses API only: OpenAI's Codex endpoint for ChatGPT plans (as OpenCode calls it). It answers
+   * only as a stream and takes neither max_output_tokens nor temperature.
+   */
+  codex?: boolean;
+}
+
+/** The final response of a Responses API event stream, with output items gathered from the stream when the final event leaves them out. */
+export function responseFromStream(id: string, raw: string): any {
+  let final: any;
+  const items: any[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === '[DONE]') continue;
+    let e: any;
+    try {
+      e = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    if (e?.type === 'response.output_item.done' && e.item) items.push(e.item);
+    else if (e?.type === 'response.completed' || e?.type === 'response.done' || e?.type === 'response.incomplete') final = e.response;
+    else if (e?.type === 'response.failed') throw new AzhiError(ErrorClass.transient, `${id}: ${e.response?.error?.message ?? 'the response failed'}`);
+    else if (e?.type === 'error') throw new AzhiError(ErrorClass.transient, `${id}: ${e.message ?? e.error?.message ?? 'error'}`);
+  }
+  if (!final) throw new AzhiError(ErrorClass.transient, `${id} ended the stream without a final response`);
+  return final.output?.length ? final : { ...final, output: items };
 }
 
 export function openaiProvider(o: OpenAIOptions): ModelProvider {
@@ -251,21 +279,25 @@ export function responsesProvider(o: OpenAIOptions): ModelProvider {
           model: req.model,
           instructions: req.system,
           input,
-          max_output_tokens: req.maxTokens,
+          ...(o.codex ? { stream: true } : { max_output_tokens: req.maxTokens }),
           store: false,
           ...(req.tools.length ? { tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema })) } : {}),
-          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+          ...(req.temperature !== undefined && !o.codex ? { temperature: req.temperature } : {}),
         }),
         signal: req.signal,
       });
       const raw = await res.text();
       let body: any;
-      try {
-        body = JSON.parse(raw);
-      } catch {
-        throw new AzhiError(ErrorClass.transient, `${id} returned HTTP ${res.status} with a non-JSON body`);
+      if (o.codex && res.ok) body = responseFromStream(id, raw);
+      else {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          if (!res.ok) throw httpError(id, res.status, raw.slice(0, 200));
+          throw new AzhiError(ErrorClass.transient, `${id} returned HTTP ${res.status} with a non-JSON body`);
+        }
       }
-      if (!res.ok) throw httpError(id, res.status, body?.error?.message ?? raw.slice(0, 200));
+      if (!res.ok) throw httpError(id, res.status, body?.error?.message ?? body?.detail ?? raw.slice(0, 200));
       const content: Block[] = [];
       for (const item of (body.output ?? []) as any[]) {
         if (item?.type === 'message') {

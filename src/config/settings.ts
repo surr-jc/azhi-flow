@@ -49,6 +49,8 @@ export function settings() {
     copilotCreditPool: positive(process.env.AZHI_COPILOT_CREDIT_POOL),
     /** ChatGPT plan model (through OpenCode) for profiles that say `name: default`. */
     chatgptModel: process.env.AZHI_CHATGPT_MODEL || 'gpt-5.5',
+    /** OpenAI's Codex endpoint for ChatGPT plans (the workflow builder calls it as OpenCode does); set only for a stand-in (tests). */
+    chatgptApiUrl: (process.env.AZHI_CHATGPT_API_URL || 'https://chatgpt.com/backend-api/codex').replace(/\/$/, ''),
     /** OpenAI's sign-in server for ChatGPT plans; set only to point at a stand-in (tests). */
     chatgptIssuer: (process.env.AZHI_CHATGPT_ISSUER || 'https://auth.openai.com').replace(/\/$/, ''),
     /** Where the Copilot sign-in's device flow runs. */
