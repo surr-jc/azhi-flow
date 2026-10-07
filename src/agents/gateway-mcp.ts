@@ -70,7 +70,12 @@ export async function runGatewayBridge(env: NodeJS.ProcessEnv = process.env) {
     if (s.stopped) return text(`stopped: ${s.stopped.message}`, true);
 
     if (req.params.name === SUBMIT_TOOL) {
-      const value = wrapped ? args.value : args;
+      let value = wrapped ? args.value : args;
+      // Some models write the call's own markup inside a string argument; recover what they meant.
+      if (!validate(value)) {
+        const fixed = salvageLeakedParameters(value);
+        if (fixed && validate(fixed)) value = fixed;
+      }
       if (validate(value)) {
         s.output = value;
         save(s);
@@ -112,4 +117,35 @@ export async function runGatewayBridge(env: NodeJS.ProcessEnv = process.env) {
   });
 
   await server.connect(new StdioServerTransport());
+}
+
+const LEAK = /<\/[\w-]+>\s*<parameter name="([\w-]+)">([\s\S]*?)(?:<\/parameter>|$)/g;
+
+/**
+ * A model sometimes ends a string argument with the markup of the call itself, e.g.
+ * `...text.</summary>\n<parameter name="findings">[]</parameter>\n</invoke>`, so the next argument
+ * is missing. This cuts the leaked markup off the string and sets each missing top-level argument
+ * from its JSON value. Returns undefined when nothing leaked, so ordinary invalid output is untouched.
+ */
+export function salvageLeakedParameters(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  let changed = false;
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v !== 'string') continue;
+    const first = v.search(/<\/[\w-]+>\s*<parameter name="/);
+    if (first < 0) continue;
+    const tail = v.slice(first);
+    out[key] = v.slice(0, first).trimEnd();
+    changed = true;
+    for (const m of tail.matchAll(LEAK)) {
+      if (m[1]! in out) continue;
+      try {
+        out[m[1]!] = JSON.parse(m[2]!.trim());
+      } catch {
+        out[m[1]!] = m[2]!.trim();
+      }
+    }
+  }
+  return changed ? out : undefined;
 }
