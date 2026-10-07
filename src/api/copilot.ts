@@ -102,10 +102,11 @@ export function copilotApi(ctx: AppContext, enterprise?: string): string {
   return enterprise ? `https://copilot-api.${enterprise.replace(/^https?:\/\//, '')}` : 'https://api.githubcopilot.com';
 }
 
-async function call(url: string, init: RequestInit): Promise<{ status: number | string; text: string; requestId?: string }> {
+/** `limit` caps the text kept: short for answers only shown in messages, large for answers that are parsed. */
+async function call(url: string, init: RequestInit, limit = 2000): Promise<{ status: number | string; text: string; requestId?: string; contentType?: string }> {
   try {
     const r = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
-    return { status: r.status, text: (await r.text()).slice(0, 2000), requestId: r.headers.get('x-copilot-service-request-id') ?? undefined };
+    return { status: r.status, text: (await r.text()).slice(0, limit), requestId: r.headers.get('x-copilot-service-request-id') ?? undefined, contentType: r.headers.get('content-type') ?? undefined };
   } catch (e) {
     return { status: 'unreachable', text: (e as Error).message };
   }
@@ -177,7 +178,7 @@ export async function checkCopilotToken(ctx: AppContext, token: string, enterpri
  */
 export async function copilotPlanApi(ctx: AppContext, token: string, enterprise?: string): Promise<string | undefined> {
   if (ctx.settings.copilotApiUrl) return undefined;
-  const r = await call(`${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/user`, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' } });
+  const r = await call(`${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/user`, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow' } }, 1_000_000);
   if (r.status !== 200) return undefined;
   try {
     const api = JSON.parse(r.text)?.endpoints?.api;
@@ -217,13 +218,14 @@ function shapeOf(v: unknown, depth = 0): unknown {
  */
 export async function copilotQuota(ctx: AppContext, token: string, enterprise?: string): Promise<CopilotQuota> {
   const url = `${apiBase(enterprise ? hostUrl(enterprise) : ctx.settings.copilotGithubUrl)}/copilot_internal/user`;
-  const r = await call(url, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow', 'x-github-api-version': '2025-04-01' } });
+  const r = await call(url, { headers: { accept: 'application/json', authorization: `token ${token}`, 'user-agent': 'azhi-flow', 'x-github-api-version': '2025-04-01' } }, 1_000_000);
   if (r.status !== 200) return { ok: false, quotas: [], message: r.status === 'unreachable' ? `Could not reach GitHub (${r.text}).` : `GitHub did not give the Copilot allowance for this sign-in (${r.status}: ${brief(r)}).` };
   let j: Record<string, any>;
   try {
     j = JSON.parse(r.text);
   } catch {
-    return { ok: false, quotas: [], message: 'GitHub answered with something that is not JSON.' };
+    // Never the body itself: it may carry account details. Its type and length say what came back.
+    return { ok: false, quotas: [], message: `GitHub answered with something that is not JSON (${r.contentType ?? 'no content type'}, ${r.text.length} characters${/^\s*</.test(r.text) ? ', an HTML page: a proxy or sign-in page may be in the way' : ''}).` };
   }
   const snaps = (j.quota_snapshots ?? j.quotas ?? {}) as Record<string, Record<string, unknown>>;
   const quotas = Object.entries(snaps)

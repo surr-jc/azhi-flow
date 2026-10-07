@@ -176,6 +176,8 @@ async function startFakeDeviceFlow(token: string) {
         return res.end(
           JSON.stringify({
             copilot_plan: 'enterprise',
+            // The real answer is long (endpoints, organizations, feature flags); it must be read whole.
+            organization_list: Array.from({ length: 80 }, (_, i) => ({ login: `org-${i}`, name: `Organization number ${i}` })),
             quota_reset_date_utc: '2026-11-01T00:00:00.000Z',
             quota_snapshots: {
               chat: { entitlement: 0, remaining: 0, percent_remaining: 100, unlimited: true },
