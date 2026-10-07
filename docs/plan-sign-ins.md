@@ -37,6 +37,10 @@ offer fails the step with the list it does offer.
   "ChatGPT plan"). Token counts are still recorded. When the plan's usage limit is reached the
   step fails and says so; it resets on OpenAI's schedule.
 - OpenCode steps need a Linux or macOS worker (on Windows, WSL).
+- **Build with chat:** once signed in, the builder's Provider list has **OpenCode (ChatGPT plan)**.
+  The builder calls OpenAI's Codex endpoint the way OpenCode does (no OpenCode process needed), and
+  the profiles it drafts use `provider: openai-chatgpt` on `executor: opencode` steps. Its model list
+  is the fixed list OpenCode offers on a ChatGPT plan; your plan may not include every model.
 
 ## Claude plan (Claude Agent SDK steps)
 

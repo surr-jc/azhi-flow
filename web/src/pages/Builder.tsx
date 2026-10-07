@@ -37,7 +37,7 @@ interface Proposal {
   blockers: Array<{ code: string; message: string; node?: string }>;
   new_version_of?: string;
 }
-interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode'; label: string; ready: boolean; model?: string; reason?: string }
+interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode' | 'chatgpt'; label: string; ready: boolean; model?: string; reason?: string }
 interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
 interface Choice { provider?: string; model?: string }
 interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal }; provider: string; model: string }

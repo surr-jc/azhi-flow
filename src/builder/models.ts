@@ -45,7 +45,13 @@ const ANTHROPIC_RECOMMENDED = {
 const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|whisper|image|dall-e|embedding|moderation|search|instruct|davinci|babbage|codex|computer-use|sora)/i;
 const OPENAI_CHAT = /^(gpt-|o\d|chatgpt-)/i;
 
-export type ModelProviderId = 'anthropic' | 'openai' | 'opencode';
+export type ModelProviderId = 'anthropic' | 'openai' | 'opencode' | 'chatgpt';
+
+/**
+ * The models OpenCode 1.18.34 offers on a ChatGPT plan (its ChatGPT login filters OpenAI's list to
+ * these; the -fast variants are left out). There is no model-list call for a plan, so this list is fixed.
+ */
+const CHATGPT_BUILT_IN: BuilderModel[] = ['gpt-5.5', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'].map((id) => ({ id, label: id }));
 
 /**
  * The Copilot models this sign-in's plan lets the person use, as Copilot's own model picker shows
@@ -164,12 +170,15 @@ export async function builderModels(ctx: AppContext, workspaceId: string, provid
   const hit = cache.get(key);
   if (hit && !refresh && Date.now() - hit.at < TTL_MS) return hit.value;
   const s = ctx.settings;
-  const defaults = PROVIDER_DEFAULTS[provider === 'opencode' ? 'github-copilot' : provider];
+  const defaults = PROVIDER_DEFAULTS[provider === 'opencode' ? 'github-copilot' : provider === 'chatgpt' ? 'openai-chatgpt' : provider];
   const configured = defaults.model(s);
   const builderModel = s.builderModel && (!s.builderProvider || s.builderProvider === provider) ? s.builderModel : undefined;
   const secret = await resolveSecret(ctx, workspaceId, defaults.credential);
   let value: BuilderModels;
-  if (provider === 'opencode') {
+  if (provider === 'chatgpt') {
+    const rec = { id: configured ?? s.chatgptModel, reason: 'The model this server uses for ChatGPT plan steps (AZHI_CHATGPT_MODEL).' };
+    value = finish('chatgpt', CHATGPT_BUILT_IN, rec, 'built-in', [builderModel, configured], 'the models OpenCode offers on a ChatGPT plan; your plan may not include all of them');
+  } else if (provider === 'opencode') {
     let live: BuilderModel[] | undefined;
     let note: string | undefined;
     if (secret) live = await copilotModels(ctx, secret.value).catch((e) => ((note = `could not read Copilot's model list (${(e as Error).message}); showing the models Azhi knows Copilot offers`), undefined));
@@ -207,6 +216,7 @@ export async function defaultBuilderModel(ctx: AppContext, workspaceId: string, 
   if (s.builderModel && (!s.builderProvider || s.builderProvider === provider)) return s.builderModel;
   if (provider === 'anthropic') return ANTHROPIC_RECOMMENDED.id;
   if (provider === 'opencode') return (await builderModels(ctx, workspaceId, provider)).recommended?.id ?? s.copilotModel;
+  if (provider === 'chatgpt') return s.chatgptModel;
   return PROVIDER_DEFAULTS.openai.model(s) ?? (await builderModels(ctx, workspaceId, provider)).recommended?.id;
 }
 
