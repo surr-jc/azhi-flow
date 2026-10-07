@@ -16,6 +16,14 @@ type Block =
   | { type: 'tool_use'; id: string; name: string; input: Record<string, any> }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 interface Message { role: 'user' | 'assistant'; content: Block[] }
+interface ToolProposal {
+  tool_use_id: string;
+  ref: string;
+  summary: string;
+  spec: Record<string, any>;
+  credential?: { name: string; set: boolean };
+  exists: boolean;
+}
 interface Question { id: string; question: string; why?: string; options?: string[]; multiple?: boolean }
 interface Proposal {
   tool_use_id: string;
@@ -32,8 +40,8 @@ interface Proposal {
 interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode'; label: string; ready: boolean; model?: string; reason?: string }
 interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
 interface Choice { provider?: string; model?: string }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal }; provider: string; model: string }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; shown?: string }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal }; provider: string; model: string }
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; shown?: string }
 
 const KEY = 'azhi-builder';
 const CHOICE_KEY = 'azhi-builder-model';
@@ -104,12 +112,14 @@ export function WorkflowBuilder() {
     onSuccess: (r) => {
       setState((s) => {
         const proposals = { ...s.proposals };
+        const tools = { ...s.tools };
         let shown = s.shown;
         if (r.event.kind === 'proposal' && r.event.proposal) {
-          proposals[r.event.proposal.tool_use_id] = r.event.proposal;
+          proposals[r.event.proposal.tool_use_id] = r.event.proposal as Proposal;
           shown = r.event.proposal.tool_use_id;
         }
-        return { messages: r.messages, proposals, shown };
+        if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
+        return { messages: r.messages, proposals, tools, shown };
       });
       setDraft('');
     },
@@ -188,7 +198,7 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} />
               ))}
               {send.isPending ? <div className="bubble assistant pending"><span className="dots" aria-hidden="true" /> Working on it: reading the workspace, drafting and checking with the compiler…</div> : null}
               <ErrorNote error={send.error} />
@@ -212,9 +222,10 @@ export function WorkflowBuilder() {
   );
 }
 
-function MessageView({ m, proposals, openAsk, busy, onAnswer, onShow, shown }: {
+function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, shown }: {
   m: Message;
   proposals: Record<string, Proposal>;
+  tools: Record<string, ToolProposal>;
   openAsk?: string;
   busy: boolean;
   onAnswer: (text: string) => void;
@@ -231,6 +242,10 @@ function MessageView({ m, proposals, openAsk, busy, onAnswer, onShow, shown }: {
         if (b.type === 'text') return b.text.trim() ? <div key={i} className="bubble assistant">{b.text}</div> : null;
         if (b.type !== 'tool_use') return null;
         if (b.name === 'ask_user') return <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />;
+        if (b.name === 'propose_tool') {
+          const t = tools[b.id];
+          return t ? <ToolCard key={i} t={t} /> : <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>;
+        }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
           if (!p) return <div key={i} className="chat-note muted small">Drafted a version the compiler sent back; fixing it…</div>;
@@ -250,6 +265,28 @@ function MessageView({ m, proposals, openAsk, busy, onAnswer, onShow, shown }: {
         return label ? <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div> : null;
       })}
     </>
+  );
+}
+
+/** A tool the builder proposes: an admin confirms to register it (a new revision when it exists). */
+function ToolCard({ t }: { t: ToolProposal }) {
+  const qc = useQueryClient();
+  const reg = useMutation({
+    mutationFn: () => api<{ ref: string; revision: number; changed: boolean }>('/v1/builder/register-tool', { method: 'POST', body: { tool: t.spec } }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+  });
+  const tr = t.spec.transport ?? {};
+  return (
+    <div className="draft-card">
+      <div>
+        <strong className="mono">{t.ref}</strong> <Badge tone="ok">{t.spec.effect}</Badge> {t.exists ? <Badge tone="warn">new revision</Badge> : null}
+        <div className="muted small">{tr.kind === 'mcp-stdio' ? `MCP: ${(tr.command ?? []).join(' ')} → ${tr.tool}` : `${tr.method} ${tr.url}`}</div>
+        {t.credential ? <div className="muted small">Secret <code>{t.credential.name}</code>: {t.credential.set ? 'set' : 'not set yet (Secrets page)'}</div> : null}
+        {reg.data ? <div className="ok-note" role="status">{reg.data.changed ? `Registered revision ${reg.data.revision}.` : `Already registered (revision ${reg.data.revision}).`}</div> : null}
+        {reg.error ? <ErrorNote error={reg.error} /> : null}
+      </div>
+      <button type="button" className="primary" disabled={reg.isPending || Boolean(reg.data)} onClick={() => reg.mutate()}>{reg.data ? 'Registered' : 'Register tool'}</button>
+    </div>
   );
 }
 

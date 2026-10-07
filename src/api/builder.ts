@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Message } from '../agents/providers.js';
-import { builderProviders, builderTurn, checkProposal } from '../builder/builder.js';
+import { builderProviders, builderTurn, checkProposal, registerProposedTool } from '../builder/builder.js';
 import { builderModels } from '../builder/models.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
@@ -53,6 +53,16 @@ export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
     if (JSON.stringify(b.messages).length > 2_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
     const r = await builderTurn(ctx, p.workspaceId, { messages: b.messages as Message[], text: b.text, provider: b.provider, model: b.model });
     await audit(ctx, p.workspaceId, p.userId, 'builder.turn', { provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
+    return r;
+  });
+
+  // Registers a tool the builder proposed, once an admin confirms it; checked again as at proposal time.
+  app.post('/v1/builder/register-tool', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ tool: z.record(z.string(), z.unknown()) }).parse(req.body);
+    const r = await registerProposedTool(ctx, p.workspaceId, b.tool, p.userId);
+    await audit(ctx, p.workspaceId, p.userId, 'builder.tool-registered', { tool: r.ref, revision: r.revision, changed: r.changed });
     return r;
   });
 

@@ -241,3 +241,46 @@ describe.skipIf(!up)('workflow builder chat in the browser', () => {
     }
   });
 });
+
+const tool = {
+  id: 'acme.lookup-customer',
+  version: 1,
+  description: 'Look up a customer in the internal MCP server',
+  effect: 'read',
+  credential: 'acme-api-token',
+  transport: { kind: 'mcp-stdio', command: ['npx', '-y', '@acme/mcp-server'], tool: 'customer_lookup', credential_env: 'ACME_TOKEN' },
+  input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+  output_schema: { type: 'object' },
+};
+
+describe.skipIf(!up)('workflow builder chat creates tools', () => {
+  it('proposes an MCP tool, repairs a bad spec, and registers it only when an admin confirms', async () => {
+    const fake = await startFakeAnthropic({
+      script: [
+        { tool: 'propose_tool', input: { summary: 'bad', tool: { ...tool, transport: { kind: 'mcp-stdio', command: 'npx x' }, env_token: 'sk-abcdefghijklmnopqrstuvwxyz' } } },
+        { tool: 'propose_tool', input: { summary: 'Looks customers up through your MCP server.', tool } },
+        { text: 'Confirm to register it; set acme-api-token on the Secrets page.' },
+      ],
+    });
+    const h = await startHarness({ worker: false, settings: { anthropicApiUrl: fake.url, anthropicModel: undefined, builderModel: undefined, builderProvider: undefined } });
+    try {
+      await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-test' });
+      const r = await h.api.post<any>('/v1/builder/chat', { messages: [], text: 'I have a custom MCP for customers, make a tool' });
+      expect(JSON.stringify(fake.requests[1]!.messages)).toMatch(/transport.command must be a list of strings/);
+      expect(JSON.stringify(fake.requests[1]!.messages)).toMatch(/looks like a secret/);
+      expect(r.event).toMatchObject({ kind: 'tool_proposal', proposal: { ref: 'acme.lookup-customer@1', exists: false, credential: { name: 'acme-api-token', set: false } } });
+      // Nothing is registered by the chat itself.
+      expect((await h.api.get<any[]>('/v1/tools')).some((t) => t.id === 'acme.lookup-customer')).toBe(false);
+
+      const author = await h.api.post<{ token: string }>('/v1/users', { display_name: 'au', role: 'author' });
+      await expect(new ApiClient(h.server.url, author.token).post('/v1/builder/register-tool', { tool })).rejects.toThrow(/admin/);
+      await expect(h.api.post('/v1/builder/register-tool', { tool: { ...tool, effect: 'nope' } })).rejects.toThrow(/effect must be/);
+      expect(await h.api.post<any>('/v1/builder/register-tool', { tool })).toMatchObject({ ref: 'acme.lookup-customer@1', revision: 1, changed: true });
+      expect(await h.api.post<any>('/v1/builder/register-tool', { tool })).toMatchObject({ revision: 1, changed: false });
+      expect((await h.api.get<any[]>('/v1/tools')).some((t) => t.id === 'acme.lookup-customer')).toBe(true);
+    } finally {
+      await h.stop();
+      await fake.close();
+    }
+  });
+});

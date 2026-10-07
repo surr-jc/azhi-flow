@@ -9,7 +9,7 @@ import { EXECUTORS } from '../executors/capabilities.js';
 import { toolRef, type ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { buildRunPlan } from '../plan/run-plan.js';
-import { loadCatalog } from '../server/catalog.js';
+import { loadCatalog, registerTool } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
@@ -61,8 +61,21 @@ export interface BuilderProposal {
   new_version_of?: string;
 }
 
+/** A tool the builder proposes to register; nothing is stored until a person with the admin role confirms. */
+export interface BuilderToolProposal {
+  tool_use_id: string;
+  ref: string;
+  summary: string;
+  spec: ToolSpec;
+  /** The credential secret and whether it is already set; its value is never asked for in chat. */
+  credential?: { name: string; set: boolean };
+  /** A tool with this id@version is registered: confirming adds a new revision of it. */
+  exists: boolean;
+}
+
 export type BuilderEvent =
   | { kind: 'text' }
+  | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
 
@@ -195,6 +208,22 @@ const TOOLS: ModelTool[] = [
     },
   },
   {
+    name: 'propose_tool',
+    description:
+      'Propose registering one tool (an MCP tool on a stdio server, or an HTTP call) that workflows can then call through the gateway. The server checks it; errors come back for you to fix. Nothing is registered until the person confirms with the admin role. Never put a secret value in the spec: name the credential and tell the person to set it on the Secrets page.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What the tool does, what the person must set up (secret, command installed on the worker), and how a workflow uses it.' },
+        tool: {
+          type: 'object',
+          description: 'The tool spec: id, version, description, effect (read|write-idempotent|write-dedupable|write-unsafe), source, credential (secret name), transport ({kind:mcp-stdio, command:[...], tool, env?, credential_env?} or {kind:http, method, url, headers?}), timeout, input_schema, output_schema.',
+        },
+      },
+      required: ['summary', 'tool'],
+    },
+  },
+  {
     name: 'propose_workflow',
     description:
       'Propose the whole workflow package. The server compiles it against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
@@ -209,6 +238,48 @@ const TOOLS: ModelTool[] = [
     },
   },
 ];
+
+const EFFECTS = ['read', 'write-idempotent', 'write-dedupable', 'write-unsafe'];
+
+/** Checks a proposed tool spec the way registration will, and reports what the person must set up. Throws a repairable message. */
+export async function checkToolProposal(ctx: AppContext, workspaceId: string, raw: unknown): Promise<{ spec: ToolSpec; ref: string; exists: boolean; credential?: { name: string; set: boolean } }> {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const errors: string[] = [];
+  if (typeof o.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(o.id)) errors.push('id must be lower-case letters, digits, dots, dashes, e.g. acme.lookup-customer');
+  if (!Number.isInteger(o.version) || o.version < 1) errors.push('version must be an integer from 1');
+  if (typeof o.description !== 'string' || !o.description.trim()) errors.push('description is required');
+  if (!EFFECTS.includes(o.effect)) errors.push(`effect must be one of ${EFFECTS.join(', ')}`);
+  for (const k of ['input_schema', 'output_schema']) if (!o[k] || typeof o[k] !== 'object' || Array.isArray(o[k])) errors.push(`${k} must be a JSON Schema object`);
+  if (o.input_schema?.type !== 'object') errors.push("input_schema must have type 'object'");
+  const t = o.transport;
+  if (t?.kind === 'mcp-stdio') {
+    if (!Array.isArray(t.command) || !t.command.length || t.command.some((c: unknown) => typeof c !== 'string')) errors.push('transport.command must be a list of strings');
+    if (typeof t.tool !== 'string' || !t.tool) errors.push('transport.tool (the MCP tool name) is required');
+  } else if (t?.kind === 'http') {
+    if (typeof t.url !== 'string' || !/^https?:\/\//.test(t.url)) errors.push('transport.url must be an http(s) address');
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(t.method)) errors.push('transport.method must be GET, POST, PUT, PATCH or DELETE');
+  } else errors.push("transport.kind must be 'mcp-stdio' or 'http' (built-in transports ship with Azhi)");
+  if (o.credential !== undefined && (typeof o.credential !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(o.credential))) errors.push('credential must be a secret name such as acme-api-token');
+  if (JSON.stringify(o).match(/(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|xox[bp]-[A-Za-z0-9-]{10,})/)) errors.push('the spec contains something that looks like a secret; use a credential name and let the person set its value on the Secrets page');
+  if (errors.length) throw new Error(`The tool spec is not valid yet. Fix these and propose it again:\n${errors.map((e) => `- ${e}`).join('\n')}`);
+  const spec = o as unknown as ToolSpec;
+  const ref = toolRef(spec);
+  const exists = (await loadCatalog(ctx, workspaceId)).get(ref) !== undefined;
+  let credential: { name: string; set: boolean } | undefined;
+  if (spec.credential) credential = { name: spec.credential, set: (await ctx.pool.query(`SELECT 1 FROM secrets WHERE workspace_id=$1 AND name=$2 LIMIT 1`, [workspaceId, spec.credential])).rows.length > 0 };
+  return { spec, ref, exists, ...(credential ? { credential } : {}) };
+}
+
+/** Registers a confirmed tool proposal (a new revision when its spec changed). */
+export async function registerProposedTool(ctx: AppContext, workspaceId: string, raw: unknown, actor: string) {
+  let c;
+  try {
+    c = await checkToolProposal(ctx, workspaceId, raw);
+  } catch (e) {
+    throw new AzhiError(ErrorClass.invalidInput, (e as Error).message);
+  }
+  return { ref: c.ref, ...(await registerTool(ctx, workspaceId, c.spec, actor)) };
+}
 
 const clip = (s: string) => (s.length > RESULT_CHARS ? `${s.slice(0, RESULT_CHARS)}\n…(cut at ${RESULT_CHARS} characters)` : s);
 
@@ -455,6 +526,10 @@ export async function builderTurn(
           }));
           answer(u.id, 'The questions are shown to the person. Their answers follow in the next message.');
           event = { kind: 'questions', tool_use_id: u.id, ...(input.intro ? { intro: String(input.intro) } : {}), questions };
+        } else if (u.name === 'propose_tool') {
+          const r = await checkToolProposal(ctx, workspaceId, input.tool);
+          answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
+          event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
         } else if (u.name === 'propose_workflow') {
           const r = await checkProposal(ctx, workspaceId, input.files, input.new_version_of ? String(input.new_version_of) : undefined);
           if (!r.ok) {
@@ -479,7 +554,7 @@ export async function builderTurn(
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
     if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
-    if (event?.kind === 'proposal') {
+    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal') {
       const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');

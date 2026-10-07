@@ -95,11 +95,22 @@ the compiler enforces (taint gate, registered tools, schemas, files), and the co
 (approvals, guards, budgets, pinned datasets, scripts for numbers). Edit it to change how the
 builder behaves; it is read when the server starts.
 
+## Creating tools
+
+When a requirement needs a tool that is not registered (your own MCP server, an internal HTTP API), say so in
+the chat. The builder asks for the MCP start command and tool name (or the HTTP method and URL), what it reads
+or changes, and the input and output shape, then proposes the tool with `propose_tool`. The server checks the
+spec (and refuses anything that looks like a secret value). The chat shows a card with **Register tool**; an
+admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
+for a token: it names the credential and you set its value on the Secrets page. Only stdio MCP servers run
+today. After registering, ask the builder to draft the workflow that uses it.
+
 ## API
 
 - `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
 - `GET /v1/builder/models?provider=anthropic|openai|opencode`: the model list, the recommended model and why.
 - `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
-  and an event (`questions`, `proposal` or `text`).
+  and an event (`questions`, `proposal`, `tool_proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.
+- `POST /v1/builder/register-tool` `{tool}` (admin): re-checks and registers a proposed tool.
