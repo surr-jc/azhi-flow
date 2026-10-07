@@ -24,6 +24,11 @@ describe('GitHub Copilot AI credit pricing', () => {
     expect(copilotRate('dummy-big', undefined, S)).toEqual({ input: 10, cached: 1, cache_write: 12.5, output: 50 });
     expect(copilotRate('github-copilot/claude-sonnet-5', undefined, S)).toEqual({ input: 2, cached: 0.2, cache_write: 2.5, output: 10 });
     expect(copilotRate('dummy-unknown', undefined, S)).toBeUndefined();
+    // Names are matched loosely, and a dated or preview build takes its model's rate, but a new version does not.
+    const luna = { input: 0.2, cached: 0.02, cache_write: 0.25, output: 1.2 };
+    for (const m of ['gpt-5.6-luna', 'GPT 5.6 Luna', 'gpt-5-6-luna', 'github-copilot/gpt-5.6-luna', 'gpt-5.6-luna-2026-09-01', 'gpt-5.6-luna-preview']) expect(copilotRate(m, undefined, S)).toEqual(luna);
+    expect(copilotRate('claude-sonnet-4.7', undefined, S)).toBeUndefined();
+    expect(copilotRate('gpt-5.6-luna-mini', undefined, S)).toBeUndefined();
     expect(copilotRate('claude-sonnet-5', undefined, { ...S, copilotRates: { 'claude-sonnet-5': { input: 1, output: 1 } } })).toEqual({ input: 1, output: 1 });
     expect(copilotRate('dummy-unknown', { input_per_mtok: 4, output_per_mtok: 20, cache_read_per_mtok: 0.4 }, S)).toEqual({ input: 4, output: 20, cached: 0.4 });
   });

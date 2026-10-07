@@ -37,7 +37,15 @@ export const COPILOT_RATES: Record<string, CopilotRate> = {
   'claude-opus-4.5': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
   'claude-opus-4.6': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
   'claude-opus-4.7': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
+  'claude-opus-5': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
   'gpt-5-mini': { input: 0.25, cached: 0.025, output: 2 },
+  'gpt-5.5': { input: 5, cached: 0.5, output: 30 },
+  // GPT-5.6 at the default tier; GitHub charges about twice that for a request over 200K input tokens,
+  // which Azhi cannot tell apart because OpenCode reports a step's tokens in total.
+  'gpt-5.6-luna': { input: 0.2, cached: 0.02, cache_write: 0.25, output: 1.2 },
+  'gpt-5.6-terra': { input: 2, cached: 0.2, cache_write: 2.5, output: 12 },
+  'gpt-5.6-sol': { input: 4, cached: 0.4, cache_write: 5, output: 20 },
+  'gemini-3.8-flash': { input: 0.75, cached: 0.075, output: 3.75 },
 };
 
 export const COPILOT_PRICING_REVISION = 'copilot-ai-credits-2026-06';
@@ -74,8 +82,23 @@ export function copilotRate(model: string, profile: AgentProfile['pricing'], s: 
   if (profile?.input_per_mtok !== undefined && profile.output_per_mtok !== undefined) {
     return { input: profile.input_per_mtok, output: profile.output_per_mtok, ...(profile.cache_read_per_mtok !== undefined ? { cached: profile.cache_read_per_mtok } : {}), ...(profile.cache_write_per_mtok !== undefined ? { cache_write: profile.cache_write_per_mtok } : {}) };
   }
-  const key = model.toLowerCase().replace(/^github-copilot\//, '');
-  return s.copilotRates[key] ?? COPILOT_RATES[key];
+  return lookup(s.copilotRates, model) ?? lookup(COPILOT_RATES, model);
+}
+
+/** Model names compared loosely: case, a provider prefix, and `.`/`_`/space against `-` (gpt-5.6-luna = GPT 5.6 Luna = gpt-5-6-luna). */
+const norm = (m: string) => m.toLowerCase().replace(/^github-copilot\//, '').trim().replace(/[.\s_]+/g, '-');
+
+/** The model's rate, or the rate of the longest name it extends with a suffix (a dated or preview build, e.g. gpt-5.6-luna-2026-09-01). */
+function lookup(table: Record<string, CopilotRate>, model: string): CopilotRate | undefined {
+  const m = norm(model);
+  let best: [string, CopilotRate] | undefined;
+  for (const [k, r] of Object.entries(table)) {
+    const n = norm(k);
+    if (n === m) return r;
+    // Only a date or preview suffix counts: claude-sonnet-4-7 is a different model from claude-sonnet-4.
+    if (m.startsWith(`${n}-`) && /^(\d{4}|preview|latest|exp)/.test(m.slice(n.length + 1)) && (!best || n.length > best[0].length)) best = [n, r];
+  }
+  return best?.[1];
 }
 
 export interface Tokens {

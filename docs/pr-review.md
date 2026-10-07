@@ -180,8 +180,9 @@ is the documented route but needs an organization admin or billing manager.
 | `AZHI_COPILOT_CREDIT_USD` | `0.01` | USD per credit, if a contract prices it differently |
 | profile `pricing.input_per_mtok` etc. | unset | per-profile rates |
 
-The built-in table (claude-haiku-4.5, claude-sonnet-4/4.5/4.6/5, claude-opus-4.5/4.6/4.7,
-gpt-5-mini) was taken from search excerpts of GitHub's "Models and pricing for GitHub Copilot"
+The built-in table (claude-haiku-4.5, claude-sonnet-4/4.5/4.6/5, claude-opus-4.5/4.6/4.7/5,
+gpt-5-mini, gpt-5.5, gpt-5.6-luna/terra/sol at the default tier, gemini-3.8-flash; names match
+loosely and dated or preview builds take their model's rate) was taken from search excerpts of GitHub's "Models and pricing for GitHub Copilot"
 page; check it there. A model without a rate has no cost (unavailable) and is named in the run's
 usage. The budget `max_cost_usd` is not enforced inside a Copilot step (tokens are known when it
 ends); the run plan says so.

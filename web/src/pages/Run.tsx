@@ -522,7 +522,7 @@ function CopilotUsage({ c }: { c: any }) {
   return (
     <p>
       GitHub Copilot: {num(c.credits)} AI credits{c.models.length ? ` (${c.models.map((m: any) => `${m.model} ${num(m.credits)}`).join('; ')})` : ''}, worth {c.currency} {c.cost.toFixed(4)} at {c.currency} {c.credit_usd} per credit.{' '}
-      {c.unpriced_models.length ? `No Copilot rate is set for ${c.unpriced_models.join(', ')}, so those steps have no cost; set AZHI_COPILOT_RATES. ` : ''}
+      {c.unpriced_models.length ? `No Copilot rate is set for ${c.unpriced_models.join(', ')}, so those steps have no cost. Add it before starting Azhi, for example AZHI_COPILOT_RATES="${c.unpriced_models[0]}=INPUT/CACHED/OUTPUT" in USD per million tokens from GitHub's Models and pricing page, then start a new run. ` : ''}
       {pool
         ? pool.past_pool > 0
           ? `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run, so ${num(pool.past_pool)} credits (${c.currency} ${pool.past_pool_cost.toFixed(4)}) fell past the pool and are charged as additional usage, or blocked if your organization does not allow it. `
