@@ -7,7 +7,8 @@ summarizer, and can post the review as a PR comment after a person approves it.
 pr (GitHub PR + files) ─┬─ correctness ─┐
                         ├─ security ────┤
                         ├─ tests ───────┼─ summarize ─ report
-                        └─ quality ─────┘      └─ should_post ─ approve_post ─ post (PR comment)
+                        └─ quality ─────┘      ├─ should_post ─ post (PR comment)
+                                                 └─ should_notify ─ notify (Slack)
 ```
 
 | Node | What it does |
@@ -16,7 +17,8 @@ pr (GitHub PR + files) ─┬─ correctness ─┐
 | `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |
 | `report` | The review as a run artifact (`templates/review.md`) |
-| `should_post` → `approve_post` → `post` | Only when the run input `post` is true: a person approves the exact body, then `github.comment-on-pr@1` posts it. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
+| `should_post` → `post` | Always, unless the run input `post` is false (a dry run): `github.comment-on-pr@1` posts the review. No approval step. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
+| `slack_message`, `should_notify` → `notify` | When the reviewers have any comment (and `post` is not false), a short Slack message (`templates/slack.md`: verdict, summary, findings) goes to the channel set at install (`slack_channel`, secret `slack-bot-token`); a guard only allows that channel |
 
 ## The agents' setup (profile `harness.opencode`)
 
@@ -235,8 +237,8 @@ azhi run <version-id> --published -i repo=OWNER/REPO -i pr=123 -i post=false --w
 ```
 
 `example install` prints the draft's version id and signs it with this machine's key
-(`~/.azhi/keys`). With `post=true` the run waits on `approve_post`; approve it in Approvals or with
-`azhi approve <run-id> approve_post`.
+(`~/.azhi/keys`). The review is posted and Slack is notified automatically; pass `-i post=false` for a dry run. Set the
+Slack channel at install: `--set slack_channel=C0123ABCD`, and the secret `slack-bot-token`.
 
 ### Changing the agents in the editor
 
@@ -308,7 +310,7 @@ subscription, no network), a stand-in for GitHub's device flow, a local git host
 (`git http-backend` behind a token check) and a stand-in GitHub API. It checks:
 
 - the structured review, every reviewer's findings, the approval request and the posted comment
-  (with its dedupe marker); with `post=false` the approval and comment are skipped;
+  (with its dedupe marker); with `post=false` the comment and Slack message are skipped;
 - the agent prompt, command, skills, `repo-facts` diff output and the exact tool list reach the
   model (no `bash`, `edit`, `write`, `webfetch`); the summarizer gets only `skill`;
 - the checkout is the PR head; the token is sent to the git host and is not in the checkout,

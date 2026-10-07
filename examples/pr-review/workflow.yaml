@@ -1,12 +1,13 @@
 # Pull request review with OpenCode agents. Each reviewer runs OpenCode in its own fresh checkout
 # of the PR (cloned on a worker into a temporary folder with a read-only token, deleted after),
 # with its own agent prompt, review command, skills, read-only tools and a repo-facts MCP server.
-# A summarizer merges the findings into one structured review. Posting the review as a PR comment
-# is optional and waits for a person to approve it.
+# A summarizer merges the findings into one structured review. The review is always posted as a PR
+# comment, and when the reviewers have comments a short summary goes to Slack. Set input post to
+# false for a dry run (nothing is posted or sent).
 schema_version: "2.0"
 id: pr-review
 name: Pull request review (OpenCode)
-description: Correctness, security and tests reviewers in isolated checkouts, a summarizer, and an approval-gated PR comment.
+description: Correctness, security and tests reviewers in isolated checkouts, a summarizer, a PR comment posted automatically, and a Slack notification when there are comments.
 trigger:
   manual: true
 inputs:
@@ -14,8 +15,11 @@ inputs:
   properties:
     repo: {type: string, title: Repository, description: "owner/name, for example acme/payments"}
     pr: {type: integer, title: Pull request number}
-    post: {type: boolean, title: Post the review as a PR comment (after approval)}
-  required: [repo, pr, post]
+    post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
+  required: [repo, pr]
+config:
+  # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
+  channel: "{{slack_channel}}"
 nodes:
   - id: pr
     type: tool
@@ -87,29 +91,42 @@ nodes:
     template: templates/review.md
     input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
 
+  - id: slack_message
+    type: report
+    description: "The short Slack message: verdict, summary and the findings."
+    template: templates/slack.md
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty'}}"}
+
   - id: should_post
     type: condition
-    description: Post only when asked to.
-    expression: "inputs.post ? 'post' : 'skip'"
+    description: Post the review unless this is a dry run (post set to false).
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : 'post'"
     depends_on: [summarize]
-    routes: {post: [approve_post], skip: []}
-    default: skip
+    routes: {post: [post], skip: []}
+    default: post
 
-  - id: approve_post
-    type: approval
-    description: A person reads the review before it is posted on the pull request.
-    role: author
-    message: {cel: "'Post this ' + nodes.summarize.output.verdict + ' review on ' + inputs.repo + '#' + string(inputs.pr) + '?'"}
-    payload: {map: "{'verdict': nodes.summarize.output.verdict, 'body': nodes.summarize.output.body}"}
-    expires_in: 24h
-    on_expiry: reject
+  - id: should_notify
+    type: condition
+    description: Tell Slack when the reviewers had comments, and only when posting.
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : (size(nodes.summarize.output.findings) > 0 ? 'notify' : 'skip')"
+    depends_on: [summarize]
+    routes: {notify: [notify], skip: []}
+    default: skip
 
   - id: post
     type: tool
     description: Post the review as a comment on the pull request.
-    depends_on: [approve_post]
     tool: github.comment-on-pr@1
     arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, body: {ref: nodes.summarize.output.body}}
     # Taint gate (ADR-10): the reviewers read untrusted code, so the comment may only go to the
-    # pull request under review, and only after the approval above.
+    # pull request under review. This guard replaces the approval step: the review always posts.
     guard: "args.repo == inputs.repo && args.number == inputs.pr"
+
+  - id: notify
+    type: notify
+    description: Slack message with the verdict and the reviewers' comments.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.slack_message.output.markdown}
+    # Taint gate: the message may only go to the configured channel.
+    guard: "args.channel == config.channel"

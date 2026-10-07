@@ -2,13 +2,20 @@
 # 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise add
 #    api_url: https://<host>/api/v3 to both tools and set `host` on the workflow's workspace
 #    (`azhi example install pr-review --api-url ...` does both).
+#    slack_channel (setting) and slack-bot-token (secret): the review summary goes to Slack when the
+#    reviewers have comments.
 # 2. Secrets (values never go in a package or run state):
 #    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read
 #                          the PR and to clone the repository on the worker
 #    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
-#                          approval-gated comment step
+#                          comment step (the review is posted automatically)
 #    github-copilot-token  your GitHub Copilot sign-in; the reviewers run on Copilot models through
 #                          OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the review summary is posted to when the reviewers have comments (the bot must be in it).
+    placeholder: C0123ABCD
 tools:
   - id: github.get-pull-request
     version: 1
@@ -53,3 +60,4 @@ secrets:
   - github-read-token
   - github-comment-token
   - github-copilot-token
+  - slack-bot-token

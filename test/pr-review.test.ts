@@ -14,6 +14,7 @@ import { startFakeOpenAI, type FakeOpenAIRequest as FakeRequest } from '../src/t
 import { createServer } from 'node:http';
 import { startFakeGit } from '../src/testing/fake-git.js';
 import { startFakeGithub } from '../src/testing/fake-github.js';
+import { startFakeSlack } from '../src/testing/fake-slack.js';
 import { opencodeBinary } from '../src/worker/capabilities.js';
 import { ApiClient } from '../src/worker/api-client.js';
 import { copilotAuth } from '../src/worker/harness-activity.js';
@@ -135,7 +136,7 @@ function packageFor(gitUrl: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'azhi-pr-review-'));
   cpSync(PKG, dir, { recursive: true });
   const wf = join(dir, 'workflow.yaml');
-  writeFileSync(wf, readFileSync(wf, 'utf8').replace('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${gitUrl}\n`));
+  writeFileSync(wf, readFileSync(wf, 'utf8').replace('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${gitUrl}\n`).replace('{{slack_channel}}', 'C-REVIEW'));
   cpSync('test/fixtures/pr-review/probe.mjs', join(dir, 'harness/mcp/probe.mjs'));
   const pf = join(dir, 'profiles/correctness-reviewer@1.yaml');
   const profile = parse(readFileSync(pf, 'utf8'));
@@ -283,6 +284,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
   let fake: Awaited<ReturnType<typeof startFakeOpenAI>>;
   let device: Awaited<ReturnType<typeof startFakeDeviceFlow>>;
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;
+  let slack: Awaited<ReturnType<typeof startFakeSlack>>;
   let git: Awaited<ReturnType<typeof startFakeGit>>;
   let version: string;
   let browser: Browser | undefined;
@@ -312,12 +314,14 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     // A stand-in for GitHub Copilot's API (OpenAI-style, as OpenCode's Copilot provider speaks it) and GitHub's device flow.
     fake = await startFakeOpenAI({ script, models: [MODEL] });
     device = await startFakeDeviceFlow(COPILOT_TOKEN);
-    h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotGithubUrl: device.url, copilotRates: { [MODEL]: { input: 2, cached: 0.2, cache_write: 2.5, output: 10 } }, copilotCreditPool: 10_000 } });
+    slack = await startFakeSlack();
+    h = await startHarness({ settings: { slackApiUrl: slack.url, copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotGithubUrl: device.url, copilotRates: { [MODEL]: { input: 2, cached: 0.2, cache_write: 2.5, output: 10 } }, copilotCreditPool: 10_000 } });
     for (const t of parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools) {
       t.transport.config = { repos: ['acme/payments'], api_url: gh.url };
       await h.api.post('/v1/tools', t);
     }
     await h.api.put('/v1/secrets/github-copilot-token', { value: COPILOT_TOKEN });
+    await h.api.put('/v1/secrets/slack-bot-token', { value: 'xoxb-test' });
     await h.api.put('/v1/secrets/github-read-token', { value: READ_TOKEN });
     await h.api.put('/v1/secrets/github-comment-token', { value: COMMENT_TOKEN });
     const pkgDir = packageFor(git.url);
@@ -339,6 +343,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await fake?.close();
     await device?.close();
     await gh?.stop();
+    await slack?.close();
     await git?.stop();
   });
 
@@ -355,16 +360,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(node.coverage).toContainEqual(expect.objectContaining({ action: 'MCP server repo-facts', enforcement: 'unobservable' }));
   });
 
-  it('reviews the pull request in isolated checkouts and posts the review after approval', async () => {
-    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7, post: true } });
-    const waiting = await waitForApproval(h, run_id, 'approve_post');
-    expect(waiting.approvals[0].request.message).toBe('Post this request_changes review on acme/payments#7?');
-    expect(waiting.approvals[0].request.payload.body).toBe(REVIEW.body);
-    expect(gh.comments).toEqual([]);
-    await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'approve_post', decision: 'approved' });
+  it('reviews the pull request in isolated checkouts, posts the review and tells Slack', async () => {
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7 } });
     const d = await waitForRun(h.api, run_id, 120_000);
     expect(d.run.error).toBeNull();
     expect(d.run.state).toBe('succeeded');
+    expect(nodeState(d, 'notify')).toBe('succeeded');
 
     // The structured review and the reviewers' findings.
     const out = (id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.output;
@@ -380,6 +381,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(gh.comments[0]).toMatchObject({ repo: 'acme/payments', number: 7 });
     expect(gh.comments[0]!.body).toContain(REVIEW.body);
     expect(gh.comments[0]!.body).toMatch(/<!-- azhi-action:[^ ]+ -->/);
+    // Slack gets the verdict and the reviewers' comments, in the configured channel only.
+    expect(slack.messages).toHaveLength(1);
+    expect(slack.messages[0]).toMatchObject({ channel: 'C-REVIEW' });
+    expect(slack.messages[0]!.text).toContain('acme/payments#7');
+    expect(slack.messages[0]!.text).toContain('request_changes');
+    expect(slack.messages[0]!.text).toContain('eval of caller input');
 
     const reqs = (who: string) => fake.requests.filter((r) => agentOf(r) === who);
     const c = reqs('correctness');
@@ -533,16 +540,18 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     }
   });
 
-  it('skips the approval and the comment when not asked to post', async () => {
+  it('posts nothing and tells nobody on a dry run (post false)', async () => {
     const before = gh.comments.length;
+    const sent = slack.messages.length;
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { repo: 'acme/payments', pr: 7, post: false } });
     const d = await waitForRun(h.api, run_id, 120_000);
     expect(d.run.error).toBeNull();
     expect(d.run.state).toBe('succeeded');
-    expect(nodeState(d, 'approve_post')).toBe('skipped');
     expect(nodeState(d, 'post')).toBe('skipped');
+    expect(nodeState(d, 'notify')).toBe('skipped');
     expect(nodeState(d, 'report')).toBe('succeeded');
     expect(gh.comments.length).toBe(before);
+    expect(slack.messages.length).toBe(sent);
   });
 
   async function open(path: string): Promise<Page> {
@@ -560,7 +569,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const list = await h.api.get<any[]>('/v1/examples');
     const e = list.find((x) => x.id === 'pr-review');
     expect(e).toMatchObject({ name: expect.any(String), needs_repos: true });
-    expect(e.secrets.map((x: any) => x.name)).toEqual(['github-comment-token', 'github-copilot-token', 'github-read-token']);
+    expect(e.secrets.map((x: any) => x.name)).toEqual(['github-comment-token', 'github-copilot-token', 'github-read-token', 'slack-bot-token']);
     expect(e.tools.map((t: any) => t.ref)).toEqual(['github.get-pull-request@1', 'github.comment-on-pr@1']);
     await expect(h.api.post('/v1/examples/pr-review/install', {})).rejects.toThrow(/repositories/);
     await expect(h.api.post('/v1/examples/pr-review/install', { repos: ['not a repo'] })).rejects.toThrow(/owner\/name/);
