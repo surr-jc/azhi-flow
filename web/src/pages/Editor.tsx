@@ -6,6 +6,7 @@ import { useMe } from '../App';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
+import { TYPE_HELP, effectsOf, helpFor, sentenceOf } from '../stepHelp';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Coverage } from './Run';
 
@@ -26,7 +27,7 @@ interface ExecutorInfo { id: string; version: string; capabilities: Record<strin
 const STEP_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ADDABLE = ['tool', 'agent', 'script', 'retrieve', 'condition', 'approval', 'parallel', 'loop', 'subworkflow', 'report', 'notify'];
 
-type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string };
+type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string; help?: string };
 const COMMON: Field[] = [
   { key: 'timeout', label: 'Timeout', kind: 'text', hint: 'For example 10m' },
   { key: 'retry', label: 'Retry', kind: 'value', hint: 'For example max_attempts: 3' },
@@ -329,7 +330,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       </div>
       <div className="ed-grid">
         <div className="ed-canvas">
-          <WorkflowCanvas nodes={graph} height={520} edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} />
+          <WorkflowCanvas nodes={graph} height={520} edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} />
           <CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} />
         </div>
         <aside className="ed-side">
@@ -436,6 +437,12 @@ function StepForm({ step, all, stillLinked, suggestions, harness, diagnostics, o
       </header>
       {diagnostics.some((d) => d.severity === 'error') ? <div className="error">{diagnostics.filter((d) => d.severity === 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
       {diagnostics.some((d) => d.severity !== 'error') ? <div className="warn-note">{diagnostics.filter((d) => d.severity !== 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
+      <div className="ed-explain" aria-label="In plain words">
+        <div className="ed-explain-title">In plain words</div>
+        <p className="ed-sentence">{sentenceOf(step, harness.tools, deps)}</p>
+        {effectsOf(step, harness.tools).length ? <div className="row wrap">{effectsOf(step, harness.tools).map((e) => <span key={e.label} className={`chip-effect ${e.tone}`}>{e.label}</span>)}</div> : null}
+        <p className="muted small">{TYPE_HELP[step.type]}</p>
+      </div>
       <div className="form">
         <label>
           Step id
@@ -460,12 +467,24 @@ function StepForm({ step, all, stillLinked, suggestions, harness, diagnostics, o
           {stillLinked.length ? <span className="muted small">Also after {stillLinked.join(', ')}, because it reads their output or is on their route.</span> : null}
         </div>
         {step.type === 'agent' ? <HarnessBuilder step={step} ctx={harness} set={set} /> : null}
-        {[...(FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key))), ...COMMON].map((f) => <FieldInput key={f.key} field={f} value={step[f.key]} onChange={(v) => set(f.key, v)} />)}
+        {[...(FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key))), ...COMMON].map((f) => <FieldInput key={f.key} field={{ ...f, help: helpFor(step.type, f.key) }} value={step[f.key]} onChange={(v) => set(f.key, v)} />)}
       </div>
       <div className="row">
         <button type="button" className="danger" onClick={onRemove}>Remove step</button>
       </div>
     </section>
+  );
+}
+
+/** An ⓘ button that opens the meaning of a setting under its label. */
+function Info({ text }: { text?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  return (
+    <>
+      <button type="button" className="info" aria-expanded={open} aria-label="What does this setting mean?" onClick={(e) => { e.preventDefault(); setOpen(!open); }}>ⓘ</button>
+      {open ? <span className="info-text" role="note">{text}</span> : null}
+    </>
   );
 }
 
@@ -491,7 +510,7 @@ function FieldInput({ field: f, value, onChange }: { field: Field; value: unknow
   }
   return (
     <label>
-      {f.label}
+      <span>{f.label}<Info text={f.help} /></span>
       {input}
       {f.hint ? <span className="muted small">{f.hint}</span> : null}
     </label>
@@ -502,7 +521,7 @@ function ListInput({ field: f, value, onChange }: { field: Field; value: unknown
   const [text, setText] = useState(Array.isArray(value) ? value.join(', ') : '');
   return (
     <label>
-      {f.label}
+      <span>{f.label}<Info text={f.help} /></span>
       <input
         value={text}
         spellCheck={false}
@@ -522,7 +541,7 @@ function ValueInput({ field: f, value, onChange }: { field: Field; value: unknow
   const [error, setError] = useState<string>();
   return (
     <label>
-      {f.label}
+      <span>{f.label}<Info text={f.help} /></span>
       <textarea
         className="mono"
         rows={Math.min(8, Math.max(2, text.split('\n').length))}

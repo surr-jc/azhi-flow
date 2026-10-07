@@ -449,3 +449,16 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .tx-error { border-color: var(--bad); background: var(--bad-bg); }
 .tx-step { border: 0; background: none; padding: 0 12px; }
 .json.bad { color: var(--bad); }
+
+/* Builder: plain-words panel, effect chips, setting help */
+.ed-explain { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--idle-bg); }
+.ed-explain-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.ed-sentence { margin: 4px 0 8px; font-size: 14px; line-height: 1.5; }
+.ed-explain p.small { margin: 8px 0 0; }
+.chip-effect { display: inline-flex; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 18px; background: var(--idle-bg); color: var(--muted); white-space: nowrap; }
+.chip-effect.ok { background: var(--ok-bg); color: var(--ok); }
+.chip-effect.warn { background: var(--warn-bg); color: var(--warn); }
+.wf-chips { display: flex; gap: 4px; flex-wrap: nowrap; overflow: hidden; margin-top: 2px; }
+button.info { all: unset; cursor: pointer; margin-left: 6px; color: var(--accent); font-size: 13px; line-height: 1; padding: 4px; border-radius: 4px; }
+button.info:focus-visible { outline: 2px solid var(--accent); }
+.info-text { display: block; margin-top: 4px; padding: 8px 10px; border-radius: 6px; background: var(--accent-bg); color: var(--ink); font-weight: 400; font-size: 13px; }

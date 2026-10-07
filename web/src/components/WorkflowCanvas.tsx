@@ -119,7 +119,7 @@ function layout(nodes: PlanNode[], shown: Map<string, string[]>) {
   return pos;
 }
 
-type CardData = { node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number; toolbar?: ReactNode };
+type CardData = { chips?: Array<{ label: string; tone: string }>; node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number; toolbar?: ReactNode };
 
 export interface CanvasEdit {
   selected: string | null;
@@ -131,7 +131,7 @@ export interface CanvasEdit {
 }
 
 function Card({ data }: NodeProps<Node<CardData>>) {
-  const { node, run, live, editing, problems, toolbar } = data;
+  const { node, run, live, editing, problems, toolbar, chips } = data;
   const t = TYPE[node.type] ?? { glyph: '•', label: node.type };
   const state = live ? (run?.state ?? 'pending') : undefined;
   const sub = node.type === 'agent' ? node.def?.profile : node.type === 'tool' ? node.def?.tool : node.type === 'approval' ? `role ${node.def?.role ?? 'operator'}` : node.type === 'condition' ? Object.keys(node.def?.routes ?? {}).join(' / ') : node.type === 'notify' ? node.def?.channel : node.type === 'script' ? node.def?.runtime : undefined;
@@ -152,6 +152,8 @@ function Card({ data }: NodeProps<Node<CardData>>) {
           {run && run.attempts > 1 ? <span className="muted small"> ×{run.attempts}</span> : null}
           {run?.route ? <span className="muted small"> → {run.route}</span> : null}
         </div>
+      ) : chips?.length ? (
+        <div className="wf-chips">{chips.map((c) => <span key={c.label} className={`chip-effect ${c.tone}`}>{c.label}</span>)}</div>
       ) : node.def?.description ? (
         <div className="wf-desc">{node.def.description}</div>
       ) : null}
@@ -163,7 +165,7 @@ function Card({ data }: NodeProps<Node<CardData>>) {
 
 const nodeTypes = { card: Card };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, states: override, toolbar, controls = 'top-right', inset, children }: {
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, states: override, toolbar, controls = 'top-right', inset, children, chips }: {
   nodes: PlanNode[];
   detail?: any;
   plan?: RunPlan | null;
@@ -174,6 +176,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   /** Content pinned under one step, such as the decision on a waiting approval. */
   toolbar?: { node: string; content: ReactNode };
   controls?: 'top-right' | 'top-left';
+  /** Short labels under a step in the editor, such as what it changes outside Azhi. */
+  chips?: (node: PlanNode) => Array<{ label: string; tone: string }>;
   /** Pixels taken by panels floating over the canvas, kept clear when the graph is framed. */
   inset?: { right: number; bottom: number };
   /** Panels floating over the canvas. */
@@ -194,7 +198,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     id: n.id,
     type: 'card',
     position: pos[n.id]!,
-    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], toolbar: toolbar?.node === n.id ? toolbar.content : undefined },
+    data: { node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], chips: chips?.(n), toolbar: toolbar?.node === n.id ? toolbar.content : undefined },
     selected: selected === n.id,
     width: W,
     height: H,
