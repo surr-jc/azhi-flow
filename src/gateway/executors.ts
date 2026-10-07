@@ -7,8 +7,13 @@ import { ciRuns, commentOnPullRequest, findPullRequestComment, flakyTests, incid
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
+import type { AppContext } from '../server/context.js';
+import { callRemoteMcpTool } from '../server/mcp.js';
 
 export interface ExecContext {
+  /** Gateway-owned fields are present for remote MCP execution. Kept optional for direct executor tests. */
+  app?: AppContext;
+  workspaceId?: string;
   /** Resolved credential value (never logged, never stored in run state). */
   credential?: string;
   idempotencyKey?: string;
@@ -184,6 +189,14 @@ const mcpStdio: ToolExecutor = {
   },
 };
 
+const mcpStreamableHttp: ToolExecutor = {
+  async call(spec, args, ctx) {
+    const t = spec.transport as Extract<ToolSpec['transport'], { kind: 'mcp-streamable-http' }>;
+    if (!ctx.app || !ctx.workspaceId) throw new AzhiError(ErrorClass.unsupportedCapability, 'remote MCP tools must run through the Azhi gateway');
+    return { value: await callRemoteMcpTool(ctx.app, ctx.workspaceId, t.connection, t.tool, args) };
+  },
+};
+
 export function executorFor(spec: ToolSpec): ToolExecutor {
   switch (spec.transport.kind) {
     case 'builtin': {
@@ -195,6 +208,8 @@ export function executorFor(spec: ToolSpec): ToolExecutor {
       return http;
     case 'mcp-stdio':
       return mcpStdio;
+    case 'mcp-streamable-http':
+      return mcpStreamableHttp;
   }
 }
 

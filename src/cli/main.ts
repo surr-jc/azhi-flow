@@ -551,6 +551,51 @@ tool
     console.log(`${green('allowed')} ${r.repos.join(', ')} ${dim(`(${ref} revision ${r.revision})`)}`);
   });
 
+const mcp = program.command('mcp').description('Manage shared remote Streamable HTTP MCP connections (admin)');
+mcp
+  .command('add')
+  .description('Add a remote MCP endpoint; use --auth oauth with the OAuth client settings when required')
+  .requiredOption('--name <name>', 'connection name')
+  .requiredOption('--url <url>', 'Streamable HTTP MCP URL')
+  .option('--auth <none|oauth>', 'authentication mode', 'none')
+  .option('--authorization-url <url>', 'OAuth authorization endpoint')
+  .option('--token-url <url>', 'OAuth token endpoint')
+  .option('--client-id <id>', 'OAuth client ID')
+  .option('--client-secret <secret>', 'OAuth client secret')
+  .option('--scopes <scopes>', 'OAuth scopes')
+  .action(async (opts) => {
+    const oauth = opts.auth === 'oauth' ? { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes } : undefined;
+    const r = await client().post<{ id: string; status: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
+    console.log(`${green('added')} ${opts.name} (${r.id}), ${r.status}`);
+    if (opts.auth === 'oauth') console.log(`authorize it with: azhi mcp login ${r.id}`);
+  });
+mcp.command('list').action(async () => {
+  const rows = await client().get<Array<{ id: string; name: string; url: string; auth_kind: string; status: string }>>('/v1/mcp/connections');
+  table([['ID', 'Name', 'Auth', 'Status', 'URL'], ...rows.map((r) => [r.id, r.name, r.auth_kind, r.status, r.url])]);
+});
+mcp.command('login').argument('<connection>').description('Print the browser URL that authorizes a shared OAuth MCP connection').action(async (id: string) => {
+  const r = await client().post<{ authorization_url: string }>(`/v1/mcp/connections/${encodeURIComponent(id)}/oauth/start`, {});
+  console.log(r.authorization_url);
+});
+mcp.command('discover').argument('<connection>').description('List the tools a ready remote MCP connection exposes').action(async (id: string) => {
+  const rows = await client().get<Array<{ name: string; description: string }>>(`/v1/mcp/connections/${encodeURIComponent(id)}/tools`);
+  table([['Tool', 'Description'], ...rows.map((r) => [r.name, r.description])]);
+});
+mcp
+  .command('register-tool')
+  .argument('<connection>')
+  .argument('<remote-tool>')
+  .requiredOption('--id <id>', 'Azhi tool id')
+  .option('--version <number>', 'tool version', '1')
+  .requiredOption('--description <text>', 'tool description')
+  .option('--effect <effect>', 'read, write-idempotent, write-dedupable, or write-unsafe', 'read')
+  .option('--input-schema <json>', 'JSON Schema for tool arguments', '{"type":"object"}')
+  .option('--output-schema <json>', 'JSON Schema for tool output', '{"type":"object"}')
+  .action(async (connection: string, remoteTool: string, opts) => {
+    const r = await client().post<{ ref: string; revision: number }>(`/v1/mcp/connections/${encodeURIComponent(connection)}/tools`, { id: opts.id, version: Number(opts.version), name: remoteTool, description: opts.description, effect: opts.effect, input_schema: JSON.parse(opts.inputSchema), output_schema: JSON.parse(opts.outputSchema) });
+    console.log(`${green('registered')} ${r.ref} revision ${r.revision}`);
+  });
+
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');
 dataset
   .command('create')

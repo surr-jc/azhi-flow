@@ -210,14 +210,14 @@ const TOOLS: ModelTool[] = [
   {
     name: 'propose_tool',
     description:
-      'Propose registering one tool (an MCP tool on a stdio server, or an HTTP call) that workflows can then call through the gateway. The server checks it; errors come back for you to fix. Nothing is registered until the person confirms with the admin role. Never put a secret value in the spec: name the credential and tell the person to set it on the Secrets page.',
+      'Propose registering one tool (an MCP tool on a stdio server, a registered remote Streamable HTTP MCP connection, or an HTTP call) that workflows can then call through the gateway. The server checks it; errors come back for you to fix. Nothing is registered until the person confirms with the admin role. Never put a secret value in the spec: name the credential and tell the person to set it on the Secrets page.',
     input_schema: {
       type: 'object',
       properties: {
         summary: { type: 'string', description: 'What the tool does, what the person must set up (secret, command installed on the worker), and how a workflow uses it.' },
         tool: {
           type: 'object',
-          description: 'The tool spec: id, version, description, effect (read|write-idempotent|write-dedupable|write-unsafe), source, credential (secret name), transport ({kind:mcp-stdio, command:[...], tool, env?, credential_env?} or {kind:http, method, url, headers?}), timeout, input_schema, output_schema.',
+          description: 'The tool spec: id, version, description, effect (read|write-idempotent|write-dedupable|write-unsafe), source, credential (secret name), transport ({kind:mcp-stdio, command:[...], tool, env?, credential_env?}, {kind:mcp-streamable-http, connection, tool}, or {kind:http, method, url, headers?}), timeout, input_schema, output_schema.',
         },
       },
       required: ['summary', 'tool'],
@@ -255,10 +255,13 @@ export async function checkToolProposal(ctx: AppContext, workspaceId: string, ra
   if (t?.kind === 'mcp-stdio') {
     if (!Array.isArray(t.command) || !t.command.length || t.command.some((c: unknown) => typeof c !== 'string')) errors.push('transport.command must be a list of strings');
     if (typeof t.tool !== 'string' || !t.tool) errors.push('transport.tool (the MCP tool name) is required');
+  } else if (t?.kind === 'mcp-streamable-http') {
+    if (typeof t.connection !== 'string' || !t.connection) errors.push('transport.connection (the registered MCP connection id) is required');
+    if (typeof t.tool !== 'string' || !t.tool) errors.push('transport.tool (the remote MCP tool name) is required');
   } else if (t?.kind === 'http') {
     if (typeof t.url !== 'string' || !/^https?:\/\//.test(t.url)) errors.push('transport.url must be an http(s) address');
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(t.method)) errors.push('transport.method must be GET, POST, PUT, PATCH or DELETE');
-  } else errors.push("transport.kind must be 'mcp-stdio' or 'http' (built-in transports ship with Azhi)");
+  } else errors.push("transport.kind must be 'mcp-stdio', 'mcp-streamable-http' or 'http' (built-in transports ship with Azhi)");
   if (o.credential !== undefined && (typeof o.credential !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(o.credential))) errors.push('credential must be a secret name such as acme-api-token');
   if (JSON.stringify(o).match(/(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|xox[bp]-[A-Za-z0-9-]{10,})/)) errors.push('the spec contains something that looks like a secret; use a credential name and let the person set its value on the Secrets page');
   if (errors.length) throw new Error(`The tool spec is not valid yet. Fix these and propose it again:\n${errors.map((e) => `- ${e}`).join('\n')}`);

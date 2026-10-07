@@ -102,8 +102,10 @@ the chat. The builder asks for the MCP start command and tool name (or the HTTP 
 or changes, and the input and output shape, then proposes the tool with `propose_tool`. The server checks the
 spec (and refuses anything that looks like a secret value). The chat shows a card with **Register tool**; an
 admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
-for a token: it names the credential and you set its value on the Secrets page. Only stdio MCP servers run
-today. After registering, ask the builder to draft the workflow that uses it.
+for a token: it names the credential and you set its value on the Secrets page. Local stdio MCP servers and
+admin-managed remote Streamable HTTP MCP connections run today. Add a remote connection on Tools (or with
+`azhi mcp`), authorize it once for the workspace when required, discover its tools, and register the selected
+ones. After registering, ask the builder to draft the workflow that uses it.
 
 ## API
 

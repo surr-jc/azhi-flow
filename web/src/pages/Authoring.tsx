@@ -278,3 +278,62 @@ export function ToolForm({ from }: { from?: Record<string, unknown> }) {
     </form>
   );
 }
+
+interface RemoteConnection { id: string; name: string; url: string; auth_kind: 'none' | 'oauth'; status: string; oauth?: { connected: boolean } }
+interface RemoteTool { name: string; description: string; input_schema: JsonSchema }
+
+/** Guided registration keeps endpoints and OAuth tokens out of free-form tool JSON. */
+export function McpForm() {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const [auth, setAuth] = useState<'none' | 'oauth'>('none');
+  const [authorizationUrl, setAuthorizationUrl] = useState('');
+  const [tokenUrl, setTokenUrl] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [scopes, setScopes] = useState('');
+  const [connection, setConnection] = useState<RemoteConnection>();
+  const [tools, setTools] = useState<RemoteTool[]>([]);
+  const [selected, setSelected] = useState('');
+  const [toolId, setToolId] = useState('');
+  const [effect, setEffect] = useState('read');
+  const create = useMutation({
+    mutationFn: () => api<RemoteConnection>('/v1/mcp/connections', { method: 'POST', body: { name, url, auth_kind: auth, ...(auth === 'oauth' ? { oauth: { authorization_url: authorizationUrl, token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(scopes ? { scopes } : {}) } } : {}) } }),
+    onSuccess: (r) => { setConnection(r); void qc.invalidateQueries({ queryKey: ['mcp-connections'] }); },
+  });
+  const connect = useMutation({ mutationFn: () => api<{ authorization_url: string }>(`/v1/mcp/connections/${connection!.id}/oauth/start`, { method: 'POST', body: {} }), onSuccess: (r) => window.open(r.authorization_url, '_blank', 'noopener') });
+  const discover = useMutation({ mutationFn: () => api<RemoteTool[]>(`/v1/mcp/connections/${connection!.id}/tools`), onSuccess: (r) => { setTools(r); if (r[0]) choose(r[0]); } });
+  const register = useMutation({
+    mutationFn: () => {
+      const remote = tools.find((t) => t.name === selected)!;
+      return api(`/v1/mcp/connections/${connection!.id}/tools`, { method: 'POST', body: { id: toolId, version: 1, name: remote.name, description: remote.description || remote.name, effect, input_schema: remote.input_schema, output_schema: { type: 'object' } } });
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+  });
+  const choose = (tool: RemoteTool) => { setSelected(tool.name); setToolId(tool.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'remote-tool'); };
+  return (
+    <div className="fields">
+      {!connection ? <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+        <div className="fields">
+          <div className="field"><label htmlFor="mcp-name">Connection name</label><input id="mcp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="linear" pattern="[a-z0-9][a-z0-9._\-]*" required /></div>
+          <div className="field"><label htmlFor="mcp-url">Streamable HTTP MCP URL</label><input id="mcp-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" required /></div>
+          <div className="field"><label htmlFor="mcp-auth">Authentication</label><select id="mcp-auth" value={auth} onChange={(e) => setAuth(e.target.value as 'none' | 'oauth')}><option value="none">None</option><option value="oauth">OAuth 2.0</option></select></div>
+          {auth === 'oauth' ? <>
+            <div className="field"><label htmlFor="mcp-authorize">Authorization URL</label><input id="mcp-authorize" type="url" value={authorizationUrl} onChange={(e) => setAuthorizationUrl(e.target.value)} required /></div>
+            <div className="field"><label htmlFor="mcp-token">Token URL</label><input id="mcp-token" type="url" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} required /></div>
+            <div className="field"><label htmlFor="mcp-client">Client ID</label><input id="mcp-client" value={clientId} onChange={(e) => setClientId(e.target.value)} required /></div>
+            <div className="field"><label htmlFor="mcp-client-secret">Client secret</label><input id="mcp-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} /><span className="hint">Stored encrypted; omit for public clients.</span></div>
+            <div className="field"><label htmlFor="mcp-scopes">Scopes</label><input id="mcp-scopes" value={scopes} onChange={(e) => setScopes(e.target.value)} /></div>
+          </> : null}
+        </div>
+        <button type="submit" className="primary" disabled={create.isPending}>Save connection</button><ErrorNote error={create.error} />
+      </form> : <>
+        <p><strong>{connection.name}</strong> is {connection.status}.</p>
+        {connection.auth_kind === 'oauth' && connection.status !== 'ready' ? <div className="row"><button type="button" onClick={() => connect.mutate()} disabled={connect.isPending}>Connect with OAuth</button><span className="muted small">Complete authorization in the opened window, then discover tools.</span><ErrorNote error={connect.error} /></div> : null}
+        <div className="row"><button type="button" onClick={() => discover.mutate()} disabled={discover.isPending}>Discover tools</button><ErrorNote error={discover.error} /></div>
+        {tools.length ? <div className="fields"><div className="field"><label htmlFor="mcp-tool">MCP tool</label><select id="mcp-tool" value={selected} onChange={(e) => { const t = tools.find((x) => x.name === e.target.value); if (t) choose(t); }}>{tools.map((t) => <option key={t.name} value={t.name}>{t.name}{t.description ? ` — ${t.description}` : ''}</option>)}</select></div><div className="field"><label htmlFor="mcp-tool-id">Azhi tool ID</label><input id="mcp-tool-id" value={toolId} onChange={(e) => setToolId(e.target.value)} required /></div><div className="field"><label htmlFor="mcp-effect">Effect</label><select id="mcp-effect" value={effect} onChange={(e) => setEffect(e.target.value)}><option>read</option><option>write-idempotent</option><option>write-dedupable</option><option>write-unsafe</option></select></div><button type="button" className="primary" onClick={() => register.mutate()} disabled={register.isPending}>Register selected tool</button><ErrorNote error={register.error} />{register.isSuccess ? <span className="ok-note">Tool registered. It is now available in workflow tool dropdowns.</span> : null}</div> : null}
+      </>}
+    </div>
+  );
+}

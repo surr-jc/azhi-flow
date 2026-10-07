@@ -20,7 +20,7 @@ type Definition = Record<string, any> & { id: string; nodes: Step[] };
 interface Diagnostic { severity: 'error' | 'warning' | 'info'; code: string; message: string; node?: string; path?: string }
 interface Check { ok: boolean; diagnostics: Diagnostic[]; yaml?: string; plan?: RunPlan }
 interface Source { workflow: string; files: Array<{ path: string; size: number; text?: string }> }
-interface Tool { id: string; version: number; description: string; effect: string }
+interface Tool { id: string; version: number; description: string; effect: string; transport?: { kind?: string } }
 interface ExecutorInfo { id: string; version: string; capabilities: Record<string, any>; notes: string[]; providers: string[] }
 
 const STEP_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -363,7 +363,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
           )}
         </aside>
       </div>
-      <datalist id="ed-tools">{suggestions.tools.map((t) => <option key={t} value={t} />)}</datalist>
+      <datalist id="ed-tools">{(tools.data ?? []).map((t) => <option key={`${t.id}@${t.version}`} value={`${t.id}@${t.version}`} label={`${t.effect}${t.transport?.kind === 'mcp-streamable-http' ? ' · remote MCP' : ''} · ${t.description}`} />)}</datalist>
       <datalist id="ed-profiles">{suggestions.profiles.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="ed-schemas">{suggestions.schemas.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="ed-files">{suggestions.files.map((t) => <option key={t} value={t} />)}</datalist>

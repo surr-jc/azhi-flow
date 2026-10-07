@@ -74,6 +74,27 @@ export const tools = pgTable(
   (t) => [primaryKey({ columns: [t.workspaceId, t.toolId, t.version, t.revision] })],
 );
 
+export const mcpConnections = pgTable('mcp_connections', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  name: text('name').notNull(),
+  url: text('url').notNull(),
+  authKind: text('auth_kind').notNull(),
+  oauthAuthorizationUrl: text('oauth_authorization_url'),
+  oauthTokenUrl: text('oauth_token_url'),
+  oauthClientId: text('oauth_client_id'),
+  oauthClientSecret: bytea('oauth_client_secret'),
+  oauthScopes: text('oauth_scopes'),
+  oauthTokens: bytea('oauth_tokens'),
+  oauthState: text('oauth_state'),
+  oauthVerifier: bytea('oauth_verifier'),
+  status: text('status').notNull(),
+  lastError: text('last_error'),
+  createdBy: text('created_by'),
+  createdAt: ts('created_at').notNull().defaultNow(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
 export const workflows = pgTable('workflows', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),

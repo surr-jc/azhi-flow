@@ -35,6 +35,7 @@ import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
 import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
+import { registerMcpRoutes } from './mcp.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -72,7 +73,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url === SLACK_INTERACTIONS) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -91,6 +92,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerChatgptRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
+  registerMcpRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -548,6 +550,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     // tool unless it is marked safe for tainted callers.
     const node = (run.plan as ExecutionPlan).nodes.find((n) => n.id === c.node);
     const agentTool = node?.agentTools?.find((t) => t.ref === b.tool);
+    if (node?.type === 'agent' && !agentTool) throw new AzhiError(ErrorClass.authorization, `tool ${b.tool} is not assigned to agent node ${c.node}`);
     const tainted = (run.plan as ExecutionPlan).taint?.tainted?.[c.node];
     if (tainted && agentTool && agentTool.effect !== 'read' && !agentTool.safeForTainted) {
       await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'gateway.refused',$3,$4)`, [c.ws, c.run, c.node, JSON.stringify({ tool: b.tool, reason: 'tainted_write' })]);

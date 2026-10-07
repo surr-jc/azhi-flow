@@ -11,6 +11,12 @@ export type ToolTransport =
       cwd?: string;
       /** Environment variable the credential is passed in (default AZHI_TOOL_CREDENTIAL), for servers that read their own, such as JIRA_API_TOKEN. */
       credential_env?: string;
+    }
+  | {
+      /** A workspace-admin managed MCP server reached with the Streamable HTTP transport. */
+      kind: 'mcp-streamable-http';
+      connection: string;
+      tool: string;
     };
 
 /** A registered tool revision (spec section 9, "Registration"). */

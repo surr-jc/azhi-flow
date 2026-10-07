@@ -107,7 +107,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   }
   const asOf: Record<string, string> = {};
   const scope = (): ValueScope => ({ inputs: input.inputs, nodes: outputs, config: plan.config, now: snapshot.reference_time, run: { id: runId, attempt: workflowInfo().attempt } });
-  const allowedTools = [...new Set(plan.nodes.flatMap((n) => (n.tool ? [n.tool.ref] : [])))];
+  // The run token is shared by activities, while each gateway call still verifies the calling
+  // node. Include both deterministic tool nodes and agent-declared tools so harness bridges such
+  // as OpenCode can invoke the catalog tools assigned to their own agent node.
+  const allowedTools = [...new Set(plan.nodes.flatMap((n) => [...(n.tool ? [n.tool.ref] : []), ...(n.agentTools ?? []).map((t) => t.ref)]))];
   let deliveryFailed = false;
   let fatal: NodeError | undefined;
 
