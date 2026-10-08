@@ -212,9 +212,10 @@ button.linkish { background: none; border: 0; padding: 0; color: var(--accent); 
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--idle-bg); font-size: 12px; }
 .code { margin: 8px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 var(--f-mono); white-space: pre; overflow: auto; max-height: 480px; }
 .ed-palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
-.ed-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
-.ed-side .panel { max-height: 760px; overflow: auto; }
-.ed-side .form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.ed-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.ed-side .panel { max-height: none; }
+.ed-side .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 20px; margin-bottom: 12px; }
+.ed-side .form > :not(label) { grid-column: 1 / -1; }
 .ed-side .form > label, .ed-deps { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
 .ed-side .form > label > span, .ed-deps > span.muted { font-weight: 400; }
 .ed-deps .label { font-weight: 500; }
@@ -229,7 +230,6 @@ button.linkish { background: none; border: 0; padding: 0; color: var(--accent); 
 .wf-problem { margin-left: auto; background: var(--bad); color: #fff; border-radius: 999px; font-size: 10px; padding: 0 6px; line-height: 16px; }
 .wf .react-flow__handle.connectable { width: 10px; height: 10px; background: var(--run); border-color: var(--panel); }
 .wf .react-flow__edge.selected .react-flow__edge-path { stroke-width: 2.5; }
-@media (max-width: 1100px) { .ed-grid { grid-template-columns: 1fr; } }
 
 /* authoring */
 label.button { display: inline-block; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
