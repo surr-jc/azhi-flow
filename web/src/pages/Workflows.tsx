@@ -8,6 +8,7 @@ import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFiel
 import { RunTable } from './Overview';
 import { Coverage } from './Run';
 import { WorkflowCanvas } from '../components/WorkflowCanvas';
+import { keySettings } from '../stepHelp';
 
 export function Workflows() {
   const me = useMe();
@@ -48,6 +49,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Array<{ id: string; version: number; effect: string; description?: string }>>('/v1/tools') });
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
   const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
   const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
@@ -86,7 +88,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
         </Panel>
       </div>
       <PortableAssets slug={slug} assets={portableAssets.data} />
-      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} /> : <Loading />}</Panel>
+      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} settings={(n) => keySettings({ type: n.type, ...(n.def ?? {}) }, tools.data ?? [])} /> : <Loading />}</Panel>
       <details className="panel">
         <summary>Files in this version</summary>
         <WorkflowFiles versionId={current.id} />
