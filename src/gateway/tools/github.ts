@@ -19,6 +19,8 @@ export interface GithubConfig {
   quarantine_label?: string;
   /** At most this many failed runs get a jobs lookup, to bound API use. */
   failed_run_details?: number;
+  /** Branches the push and pull request tools may create or move start with this. Default `azhi/`. */
+  branch_prefix?: string;
 }
 
 const MAX_PAGES = 3;
@@ -33,7 +35,7 @@ async function get(cfg: GithubConfig, token: string | undefined, path: string, t
   return request(cfg, token, 'GET', path, undefined, timeoutMs);
 }
 
-async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST', path: string, body: unknown, timeoutMs: number): Promise<any> {
+async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH', path: string, body: unknown, timeoutMs: number): Promise<any> {
   if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
   await checkEgress(url);
@@ -248,4 +250,174 @@ export async function issue(cfg: GithubConfig, args: { issue?: unknown }, token:
     url: String(it.html_url ?? ''),
     comments: (Array.isArray(comments) ? comments : []).map((c: any) => ({ author: String(c.user?.login ?? ''), body: String(c.body ?? '').slice(0, 4000) })),
   };
+}
+
+/** A lookup that answers 404 when the thing is not there (a branch, a commit). */
+async function getOrNull(cfg: GithubConfig, token: string | undefined, path: string, timeoutMs: number): Promise<any | null> {
+  try {
+    return await get(cfg, token, path, timeoutMs);
+  } catch (err) {
+    if (err instanceof SendError && /GitHub HTTP 404/.test(err.message)) return null;
+    throw err;
+  }
+}
+
+const TRAILER = 'Azhi-Action:';
+const trailer = (key: string) => `${TRAILER} ${key}`;
+const MAX_PUSH_FILES = 300;
+const MAX_PUSH_BYTES = 1_500_000;
+
+/**
+ * A branch name the tools may write: under the configured prefix (default `azhi/`), and made git-safe here
+ * (lower case; anything but letters, digits, `.`, `_`, `-` and `/` becomes `-`), so a ticket key can name it.
+ */
+export function branchName(cfg: GithubConfig, raw: unknown): string {
+  const prefix = cfg.branch_prefix ?? 'azhi/';
+  if (!/^[a-z0-9][a-z0-9._/-]*\/$/.test(prefix)) throw new SendError(`branch_prefix must be lower-case letters, digits, '.', '_', '-' and '/', ending in '/', got '${prefix}'`, true, ErrorClass.invalidInput);
+  const given = String(raw ?? '').trim();
+  if (!given.toLowerCase().startsWith(prefix)) throw new SendError(`branch must start with ${prefix} (this tool only writes its own branches), got '${given.slice(0, 100)}'`, true, ErrorClass.authorization);
+  const rest = given
+    .slice(prefix.length)
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/\/{2,}/g, '/')
+    .split('/')
+    .map((p) => p.replace(/^[.-]+|[.-]+$/g, '').replace(/\.lock$/, ''))
+    .filter(Boolean)
+    .join('/')
+    .slice(0, 100);
+  if (!rest) throw new SendError(`branch needs a name after ${prefix}`, true, ErrorClass.invalidInput);
+  return `${prefix}${rest}`;
+}
+
+function filePath(p: unknown): string {
+  const s = String(p ?? '');
+  const parts = s.split('/');
+  if (!s || s.length > 400 || s.startsWith('/') || s.includes('\\') || /[\u0000-\u001f]/.test(s) || parts.some((x) => !x || x === '.' || x === '..' || x.toLowerCase() === '.git')) {
+    throw new SendError(`file path '${s.slice(0, 200)}' is not a plain path inside the repository`, true, ErrorClass.invalidInput);
+  }
+  return s;
+}
+
+interface PushFile {
+  path?: unknown;
+  status?: unknown;
+  mode?: unknown;
+  content?: unknown;
+  encoding?: unknown;
+}
+
+/**
+ * Commits a set of changed files onto `base_sha` and points a branch at the commit (`github.push-branch`,
+ * write-dedupable), with the Git Data API: no clone and no git on the gateway. `files` is the shape a
+ * write-mode workspace step returns (path, status, mode, content, encoding). The branch is created, or
+ * moved when Azhi made its current commit (a re-run after a send-back); a branch someone else made is
+ * refused. The commit message carries the ledger action ID as a trailer, which the lookup finds.
+ */
+export async function pushBranch(cfg: GithubConfig, args: { repo?: unknown; branch?: unknown; base_sha?: unknown; message?: unknown; files?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const branch = branchName(cfg, args.branch);
+  const base = String(args.base_sha ?? '');
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(base)) throw new SendError(`base_sha must be a full commit SHA, got '${base.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  const files = Array.isArray(args.files) ? (args.files as PushFile[]) : [];
+  if (!files.length) throw new SendError('there are no changed files to push', true, ErrorClass.invalidInput);
+  if (files.length > MAX_PUSH_FILES) throw new SendError(`at most ${MAX_PUSH_FILES} files per push, got ${files.length}`, true, ErrorClass.invalidInput);
+  const title = String(args.message ?? '').trim();
+  if (!title) throw new SendError('the commit message is empty', true, ErrorClass.invalidInput);
+  const message = `${title.slice(0, 5000)}\n\n${trailer(key)}`;
+
+  // Everything is checked before anything is written.
+  let bytes = 0;
+  const entries = files.map((f) => {
+    const path = filePath(f.path);
+    if (f.status === 'deleted') return { path, deleted: true as const };
+    if (f.status !== 'added' && f.status !== 'modified') throw new SendError(`file ${path}: status must be added, modified or deleted`, true, ErrorClass.invalidInput);
+    const mode = f.mode === undefined ? '100644' : String(f.mode);
+    if (mode !== '100644' && mode !== '100755') throw new SendError(`file ${path}: only regular files (mode 100644 or 100755) are pushed, got ${mode}`, true, ErrorClass.invalidInput);
+    const encoding = f.encoding === 'base64' ? 'base64' : 'utf-8';
+    const content = typeof f.content === 'string' ? f.content : '';
+    bytes += encoding === 'base64' ? Math.floor((content.length * 3) / 4) : Buffer.byteLength(content);
+    return { path, mode, content, encoding };
+  });
+  if (new Set(entries.map((e) => e.path)).size !== entries.length) throw new SendError('a file is listed twice', true, ErrorClass.invalidInput);
+  if (bytes > MAX_PUSH_BYTES) throw new SendError(`the change has ${bytes} bytes of content; at most ${MAX_PUSH_BYTES} per push`, true, ErrorClass.invalidInput);
+
+  const existing = await getOrNull(cfg, token, `/repos/${repo}/git/ref/heads/${branch}`, timeoutMs);
+  if (existing) {
+    const head = await get(cfg, token, `/repos/${repo}/git/commits/${existing.object?.sha}`, timeoutMs);
+    if (!String(head.message ?? '').includes(TRAILER)) {
+      throw new SendError(`branch ${branch} already exists in ${repo} and its last commit was not made by Azhi; delete it or use another branch name`, true, ErrorClass.invalidInput);
+    }
+  }
+  const baseCommit = await get(cfg, token, `/repos/${repo}/git/commits/${base}`, timeoutMs);
+  const tree: Array<Record<string, unknown>> = [];
+  for (const e of entries) {
+    if ('deleted' in e) tree.push({ path: e.path, mode: '100644', type: 'blob', sha: null });
+    else {
+      const blob = await request(cfg, token, 'POST', `/repos/${repo}/git/blobs`, { content: e.content, encoding: e.encoding }, timeoutMs);
+      tree.push({ path: e.path, mode: e.mode, type: 'blob', sha: String(blob.sha) });
+    }
+  }
+  const newTree = await request(cfg, token, 'POST', `/repos/${repo}/git/trees`, { base_tree: String(baseCommit.tree?.sha ?? ''), tree }, timeoutMs);
+  const commit = await request(cfg, token, 'POST', `/repos/${repo}/git/commits`, { message, tree: String(newTree.sha), parents: [base] }, timeoutMs);
+  if (existing) await request(cfg, token, 'PATCH', `/repos/${repo}/git/refs/heads/${branch}`, { sha: String(commit.sha), force: true }, timeoutMs);
+  else await request(cfg, token, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: String(commit.sha) }, timeoutMs);
+  return pushResult(cfg, repo, branch, commit, base, entries.length, !existing);
+}
+
+/** The web address of the repository's host, from a commit's html_url (GitHub Enterprise included). */
+function webBase(cfg: GithubConfig, repo: string, htmlUrl: unknown): string {
+  const u = String(htmlUrl ?? '');
+  const at = u.indexOf(`/${repo}/commit/`);
+  if (at > 0) return u.slice(0, at);
+  const api = (cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '');
+  return api === 'https://api.github.com' ? 'https://github.com' : api.replace(/\/api\/v3$/, '');
+}
+
+function pushResult(cfg: GithubConfig, repo: string, branch: string, commit: any, base: string, files: number, created: boolean) {
+  const web = webBase(cfg, repo, commit.html_url);
+  return { repo, branch, commit_sha: String(commit.sha), base_sha: base, files, created, url: `${web}/${repo}/tree/${branch}`, commit_url: `${web}/${repo}/commit/${commit.sha}` };
+}
+
+/** Finds a push by its ledger action ID: the branch's current commit carries it as a trailer. */
+export async function findPush(cfg: GithubConfig, args: { repo?: unknown; branch?: unknown; base_sha?: unknown; files?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const branch = branchName(cfg, args.branch);
+  const ref = await getOrNull(cfg, token, `/repos/${repo}/git/ref/heads/${branch}`, timeoutMs);
+  if (!ref) return null;
+  const head = await get(cfg, token, `/repos/${repo}/git/commits/${ref.object?.sha}`, timeoutMs);
+  if (!String(head.message ?? '').includes(trailer(key))) return null;
+  return pushResult(cfg, repo, branch, head, String(args.base_sha ?? ''), Array.isArray(args.files) ? args.files.length : 0, true);
+}
+
+async function openPullRequestFor(cfg: GithubConfig, token: string | undefined, repo: string, head: string, timeoutMs: number) {
+  const owner = repo.split('/')[0]!;
+  const open = await get(cfg, token, `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${head}`)}&per_page=10`, timeoutMs);
+  const pr = (Array.isArray(open) ? open : []).find((p: any) => p.head?.ref === head);
+  return pr ? { repo, number: Number(pr.number), url: String(pr.html_url ?? ''), head, base: String(pr.base?.ref ?? ''), draft: Boolean(pr.draft), created: false } : null;
+}
+
+/**
+ * Opens a pull request from one of Azhi's branches (`github.create-pull-request`, write-dedupable). When
+ * the branch already has an open pull request (a re-run moved the branch), that one is returned: it shows
+ * the new commit already. `base` empty means the repository's default branch.
+ */
+export async function createPullRequest(cfg: GithubConfig, args: { repo?: unknown; head?: unknown; base?: unknown; title?: unknown; body?: unknown; draft?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const head = branchName(cfg, args.head);
+  const title = String(args.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 250);
+  if (!title) throw new SendError('the pull request title is empty', true, ErrorClass.invalidInput);
+  const already = await openPullRequestFor(cfg, token, repo, head, timeoutMs);
+  if (already) return already;
+  let base = String(args.base ?? '').trim();
+  if (!base) base = String((await get(cfg, token, `/repos/${repo}`, timeoutMs)).default_branch ?? '');
+  if (!/^(?!.*\.\.)(?!-)[A-Za-z0-9/_.-]{1,200}$/.test(base)) throw new SendError(`base must be a branch name, got '${base.slice(0, 100)}'`, true, ErrorClass.invalidInput);
+  const body = `${String(args.body ?? '').slice(0, 60_000)}\n\n${marker(key)}`;
+  const pr = await request(cfg, token, 'POST', `/repos/${repo}/pulls`, { title, head, base, body, draft: args.draft === true }, timeoutMs);
+  return { repo, number: Number(pr.number), url: String(pr.html_url ?? ''), head, base, draft: Boolean(pr.draft), created: true };
+}
+
+export async function findPullRequest(cfg: GithubConfig, args: { repo?: unknown; head?: unknown }, token: string | undefined, _key: string, timeoutMs: number) {
+  return openPullRequestFor(cfg, token, argRepo(cfg, args.repo), branchName(cfg, args.head), timeoutMs);
 }

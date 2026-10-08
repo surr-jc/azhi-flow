@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "approved": {"type": "boolean"},
+    "summary": {"type": "string", "maxLength": 300},
+    "criteria": {"type": "array", "items": {"type": "object", "properties": {"criterion": {"type": "string"}, "met": {"type": "boolean"}, "evidence": {"type": "string"}}, "required": ["criterion", "met"], "additionalProperties": false}},
+    "findings": {"type": "array", "items": {"type": "object", "properties": {"severity": {"type": "string", "enum": ["blocker", "major", "minor"]}, "path": {"type": "string"}, "line": {"type": "integer"}, "text": {"type": "string"}}, "required": ["severity", "text"], "additionalProperties": false}}
+  },
+  "required": ["approved", "summary", "criteria", "findings"],
+  "additionalProperties": false
+}

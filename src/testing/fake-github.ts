@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 
 /**
@@ -22,6 +23,17 @@ export interface FakeGithubData {
   }>;
 }
 
+/** What the push and pull request tools wrote. */
+export interface FakeGitState {
+  blobs: Map<string, Buffer>;
+  trees: Map<string, { base_tree?: string; tree: Array<{ path: string; mode: string; type: string; sha: string | null }> }>;
+  commits: Map<string, { message: string; tree: string; parents: string[] }>;
+  /** Branch name to commit SHA. */
+  refs: Map<string, string>;
+  /** Pull requests opened through the API. */
+  pulls: Array<{ number: number; repo: string; title: string; head: string; base: string; body: string; draft: boolean }>;
+}
+
 export interface FakeComment {
   id: number;
   repo: string;
@@ -31,8 +43,14 @@ export interface FakeComment {
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }> } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }> } = {}) {
   const requests: string[] = [];
+  const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
+  for (const [name, c] of Object.entries(opts.refs ?? {})) {
+    git.refs.set(name, c.sha);
+    git.commits.set(c.sha, { message: c.message, tree: `tree-${c.sha}`, parents: [] });
+  }
+  const sha = (...parts: unknown[]) => createHash('sha1').update(JSON.stringify(parts)).digest('hex');
   const comments: Array<FakeComment & { user?: string }> = [...(opts.comments ?? [])];
   const server = http.createServer(async (req, res) => {
     let raw = '';
@@ -46,7 +64,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     };
     if (opts.token && ![opts.token].flat().some((t) => req.headers.authorization === `Bearer ${t}`)) return send(401, { message: 'Bad credentials' });
     const writeTokens = [opts.token].flat().slice(1);
-    if (req.method === 'POST' && writeTokens.length && !writeTokens.some((t) => req.headers.authorization === `Bearer ${t}`)) return send(403, { message: 'Resource not accessible by personal access token' });
+    if (req.method !== 'GET' && writeTokens.length && !writeTokens.some((t) => req.headers.authorization === `Bearer ${t}`)) return send(403, { message: 'Resource not accessible by personal access token' });
     const page = Number(url.searchParams.get('page') ?? 1);
     const per = Number(url.searchParams.get('per_page') ?? 30);
     const slice = <T>(xs: T[]) => xs.slice((page - 1) * per, page * per);
@@ -71,6 +89,73 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       if (!i) return send(404, { message: 'Not Found' });
       const count = comments.filter((c) => c.repo === repo && c.number === number).length;
       return send(200, { number, title: i.title, body: i.body ?? null, state: 'open', user: { login: i.user ?? 'octocat' }, comments: count, labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${repo}/issues/${number}`, ...(i.pull_request ? { pull_request: {} } : {}) });
+    }
+    const body = () => JSON.parse(raw || '{}');
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
+    if (m && req.method === 'GET') return send(200, { full_name: m[1], default_branch: opts.defaultBranch ?? 'main' });
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/(.+)$/);
+    if (m && req.method === 'GET') {
+      const at = git.refs.get(decodeURIComponent(m[2]!));
+      return at ? send(200, { ref: `refs/heads/${m[2]}`, object: { sha: at, type: 'commit' } }) : send(404, { message: 'Not Found' });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/refs\/heads\/(.+)$/);
+    if (m && req.method === 'PATCH') {
+      const name = decodeURIComponent(m[2]!);
+      if (!git.refs.has(name)) return send(422, { message: 'Reference does not exist' });
+      const b = body();
+      if (!git.commits.has(b.sha)) return send(422, { message: 'Object does not exist' });
+      git.refs.set(name, b.sha);
+      return send(200, { ref: `refs/heads/${name}`, object: { sha: b.sha } });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/refs$/);
+    if (m && req.method === 'POST') {
+      const b = body();
+      const name = String(b.ref ?? '').replace(/^refs\/heads\//, '');
+      if (git.refs.has(name)) return send(422, { message: 'Reference already exists' });
+      if (!git.commits.has(b.sha)) return send(422, { message: 'Object does not exist' });
+      git.refs.set(name, b.sha);
+      return send(201, { ref: b.ref, object: { sha: b.sha } });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/commits\/([0-9a-f]+)$/);
+    if (m && req.method === 'GET') {
+      // A commit the fake did not make is taken to exist (the base commit of a checkout from the fake git host).
+      const c = git.commits.get(m[2]!) ?? (m[2]!.length === 40 ? { message: 'base', tree: `tree-${m[2]}`, parents: [] } : undefined);
+      return c ? send(200, { sha: m[2], message: c.message, tree: { sha: c.tree }, parents: c.parents.map((p) => ({ sha: p })), html_url: `https://github.com/${m[1]}/commit/${m[2]}` }) : send(404, { message: 'Not Found' });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/(blobs|trees|commits)$/);
+    if (m && req.method === 'POST') {
+      const b = body();
+      if (m[2] === 'blobs') {
+        const data = Buffer.from(String(b.content ?? ''), b.encoding === 'base64' ? 'base64' : 'utf8');
+        const id = createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex');
+        git.blobs.set(id, data);
+        return send(201, { sha: id });
+      }
+      if (m[2] === 'trees') {
+        for (const e of b.tree ?? []) if (e.sha !== null && !git.blobs.has(e.sha)) return send(422, { message: `blob ${e.sha} does not exist` });
+        const id = sha('tree', b);
+        git.trees.set(id, { base_tree: b.base_tree, tree: b.tree ?? [] });
+        return send(201, { sha: id });
+      }
+      if (!git.trees.has(b.tree)) return send(422, { message: 'tree does not exist' });
+      const id = sha('commit', b, git.commits.size);
+      git.commits.set(id, { message: String(b.message ?? ''), tree: b.tree, parents: b.parents ?? [] });
+      return send(201, { sha: id, message: b.message, html_url: `https://github.com/${m[1]}/commit/${id}` });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls$/);
+    if (m) {
+      const repo = m[1]!;
+      const view = (p: FakeGitState['pulls'][number]) => ({ number: p.number, title: p.title, body: p.body, draft: p.draft, state: 'open', html_url: `https://github.com/${repo}/pull/${p.number}`, head: { ref: p.head, sha: git.refs.get(p.head) }, base: { ref: p.base } });
+      if (req.method === 'POST') {
+        const b = body();
+        if (!git.refs.has(b.head)) return send(422, { message: 'Validation Failed', errors: [{ field: 'head', code: 'invalid' }] });
+        if (git.pulls.some((p) => p.repo === repo && p.head === b.head)) return send(422, { message: 'A pull request already exists' });
+        const p = { number: 100 + git.pulls.length + 1, repo, title: String(b.title), head: String(b.head), base: String(b.base), body: String(b.body ?? ''), draft: b.draft === true };
+        git.pulls.push(p);
+        return send(201, view(p));
+      }
+      const head = url.searchParams.get('head')?.split(':').pop();
+      return send(200, git.pulls.filter((p) => p.repo === repo && (!head || p.head === head)).map(view));
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/files)?$/);
     if (m) {
@@ -97,5 +182,11 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
   });
   await new Promise<void>((r) => server.listen(0, opts.host ?? '127.0.0.1', r));
   const port = (server.address() as { port: number }).port;
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  /** The files a branch's commit sets: path to content (deleted paths map to null). */
+  const branchFiles = (name: string): Record<string, string | null> => {
+    const c = git.commits.get(git.refs.get(name) ?? '');
+    const t = c && git.trees.get(c.tree);
+    return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
+  };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

@@ -22,6 +22,11 @@ export class TranscriptSink {
     this.redact = redactor(secrets);
   }
 
+  /** Text with this step's secrets taken out, for anything else the step hands back. */
+  redactText(s: string): string {
+    return this.redact(s);
+  }
+
   /** Queues an entry; a later entry with the same id replaces it. */
   put(e: TranscriptEntry) {
     if (this.off) return;

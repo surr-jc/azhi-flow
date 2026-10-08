@@ -1,0 +1,172 @@
+# Admin configuration for the feature-delivery-to-pull-request example. Set it up with
+# `azhi example install sdlc-implement --repos OWNER/REPO --set slack_channel=C0123ABCD` (or the
+# Examples page), which fills in the settings (here and in workflow.yaml) and the repositories the
+# GitHub tools may use; `azhi apply` works too once the {{...}} values are replaced by hand.
+#
+# Try it on a throwaway repository first: a successful run pushes a branch and opens a pull request.
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained, read-only "Contents" and "Issues": reads the issue and clones
+#                         the repository on the worker for every agent step
+#   github-write-token    fine-grained, "Contents: read and write" and "Pull requests: read and write"
+#                         on the same repositories; used only by the two steps after release approval
+#   github-copilot-token  your GitHub Copilot sign-in; the agents run on Copilot models through
+#                         OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+#   slack-bot-token       posts the pull request link, or the send-back, to the delivery channel
+#   jira-api-token        only for Jira tickets (Atlassian API token of jira_username)
+#
+# The test command runs on the worker, in the checkout, after the build agent's edits: that is
+# repository code (which the agent may have changed) running on that machine, with no secrets in its
+# environment. Use a worker you would trust as a CI runner for the repository.
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID pull requests and send-backs are posted to (the bot must be in it).
+    placeholder: C0123ABCD
+  - name: test_command
+    title: Test command
+    description: Run in the checkout after the change (a shell command; it must exit 0 for the change to ship).
+    placeholder: npm ci && npm test
+    default: npm ci && npm test
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address (only for Jira tickets).
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the API token belongs to (only for Jira tickets).
+    placeholder: you@example.com
+tools:
+  - id: jira.get-issue
+    version: 1
+    description: One Jira issue, read through a Jira MCP server (mcp-atlassian, read-only)
+    effect: read
+    source: jira
+    credential: jira-api-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_get_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_get_issue}
+    timeout: 120s
+    input_schema: {type: object, properties: {issue_key: {type: string, pattern: "^[A-Z][A-Z0-9_]*-[0-9]+$"}}, required: [issue_key], additionalProperties: false}
+    output_schema: {type: object}
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: ticket.normalize
+    version: 1
+    description: A Jira or GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport: {kind: builtin, name: ticket.normalize}
+    input_schema: {type: object, properties: {source: {type: string, enum: [jira, github]}, issue: {type: object}}, required: [source, issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        source: {type: string}
+        key: {type: string}
+        title: {type: string}
+        description: {type: string}
+        priority: {type: string}
+        reporter: {type: string}
+        status: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+      required: [source, key, title, description]
+  - id: github.push-branch
+    version: 1
+    description: Commit a change onto a base commit as an azhi/ branch (GitHub Git Data API); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.push-branch, config: {repos: [OWNER/REPO], branch_prefix: azhi/}}
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        branch: {type: string, maxLength: 250}
+        base_sha: {type: string}
+        message: {type: string, maxLength: 5000}
+        files:
+          type: array
+          maxItems: 300
+          items:
+            type: object
+            properties:
+              path: {type: string}
+              status: {enum: [added, modified, deleted]}
+              mode: {enum: ["100644", "100755"]}
+              content: {type: string}
+              encoding: {enum: [utf-8, base64]}
+              additions: {type: integer}
+              deletions: {type: integer}
+            required: [path, status]
+      required: [repo, branch, base_sha, message, files]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        branch: {type: string}
+        commit_sha: {type: string}
+        base_sha: {type: string}
+        files: {type: integer}
+        created: {type: boolean}
+        url: {type: string}
+        commit_url: {type: string}
+      required: [repo, branch, commit_sha, url]
+  - id: github.create-pull-request
+    version: 1
+    description: Open a pull request from an azhi/ branch, or return the one already open for it (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.create-pull-request, config: {repos: [OWNER/REPO], branch_prefix: azhi/}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        head: {type: string}
+        base: {type: string}
+        title: {type: string}
+        body: {type: string}
+        draft: {type: boolean}
+      required: [repo, head, title, body]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        url: {type: string}
+        head: {type: string}
+        base: {type: string}
+        draft: {type: boolean}
+        created: {type: boolean}
+      required: [repo, number, url, head]
+secrets:
+  - slack-bot-token
+  - github-read-token
+  - github-write-token
+  - github-copilot-token
+  - jira-api-token

@@ -68,6 +68,48 @@ export const SUBWORKFLOW_OUTPUT_SCHEMA: JsonSchema = {
   },
 };
 
+/**
+ * What the worker adds to a write-mode workspace step's output as `workspace`: the commit the change
+ * is based on, the changed files with their new content (what a push tool commits), a unified diff
+ * for people and reviewers, and the result of the step's test command.
+ */
+export const WORKSPACE_CHANGE_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    repo: { type: 'string' },
+    ref: { type: 'string' },
+    base_sha: { type: 'string' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          status: { enum: ['added', 'modified', 'deleted'] },
+          mode: { enum: ['100644', '100755'] },
+          content: { type: 'string' },
+          encoding: { enum: ['utf-8', 'base64'] },
+          additions: { type: 'integer' },
+          deletions: { type: 'integer' },
+        },
+      },
+    },
+    diff: { type: 'string' },
+    diff_truncated: { type: 'boolean' },
+    stats: { type: 'object', properties: { files: { type: 'integer' }, additions: { type: 'integer' }, deletions: { type: 'integer' } } },
+    tests: {
+      type: 'object',
+      properties: {
+        status: { enum: ['passed', 'failed', 'not_run'] },
+        command: { type: 'string' },
+        exit_code: { type: ['integer', 'null'] },
+        attempts: { type: 'integer' },
+        output: { type: 'string' },
+      },
+    },
+  },
+};
+
 export const CONDITION_OUTPUT_SCHEMA: JsonSchema = { type: 'object', properties: { route: { type: 'string' } } };
 
 export const APPROVAL_OUTPUT_SCHEMA: JsonSchema = {

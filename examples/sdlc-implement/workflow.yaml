@@ -1,0 +1,218 @@
+# Feature delivery that ends in a pull request: one ticket from intake to an opened PR and a retro.
+# A run starts from a Jira ticket (read through a Jira MCP server) or a GitHub issue, and names the
+# repository to change. Every agent is OpenCode in a fresh checkout of that repository (cloned on a
+# worker with a read-only token, deleted after), each with a skill adapted from Cole Medin's PIV loop:
+#   requirements  requirements-brief (from plan-create-prd): grounded in the code, open questions
+#                 carry a recommended default
+#   design        implementation-plan (from piv-plan-implementation and plan-architecture): options,
+#                 then the files, the patterns to mirror and step-by-step tasks
+#   design_review a person answers the open questions; the build gets the answers
+#   build         implement-change (from piv-implement, piv-implement-issue, piv-validate): edits the
+#                 checkout (write mode), then the worker runs the test command; a failure goes back to
+#                 the agent while attempts remain. The worker returns the real change (files, diff, tests)
+#   code_review   fresh-eyes-review (from piv-review-pr): reads the diff against the base checkout
+#   quality_gate  ship only when the tests passed, the review approves and the change is not empty
+#   release_approval  an admin approves the exact change, then the gateway pushes an azhi/ branch
+#                 and opens a pull request (from piv-commit and piv-create-pr), and Slack hears of it
+# Ticket and repository text are untrusted: every agent is tainted, writes happen only after an
+# approval, through ledgered gateway tools, behind CEL guards.
+schema_version: "2.0"
+id: sdlc-implement
+name: Feature delivery to a pull request (OpenCode)
+description: Intake from a Jira ticket or GitHub issue, then grounded requirements and design, design review with open questions, implementation with real tests, code review, release approval, a pushed branch and an opened pull request.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source: {type: string, title: Source, enum: [jira, github], description: "Where the ticket lives"}
+    ticket: {type: string, title: Ticket, maxLength: 300, description: "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"}
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The repository to change, owner/name"}
+    base_branch: {type: string, title: Base branch, maxLength: 200, description: "Branch to build on and open the pull request against; leave empty for the default branch"}
+  required: [source, ticket, repo]
+config:
+  # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
+  channel: "{{slack_channel}}"
+  # The command the worker runs in the checkout after the build agent's edits (setting test_command).
+  test_command: "{{test_command}}"
+nodes:
+  - id: source
+    type: condition
+    description: Read the ticket from Jira or from GitHub.
+    expression: inputs.source
+    routes: {jira: [jira_issue], github: [github_issue]}
+
+  - id: jira_issue
+    type: tool
+    description: Read the Jira ticket through the Jira MCP server.
+    tool: jira.get-issue@1
+    arguments: {issue_key: {ref: inputs.ticket}}
+
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {ref: inputs.ticket}}
+
+  - id: intake
+    type: tool
+    description: Turn the Jira ticket or GitHub issue into one plain ticket (key, title, description, priority, reporter).
+    tool: ticket.normalize@1
+    merge: any
+    arguments:
+      source: {ref: inputs.source}
+      issue: {cel: "inputs.source == 'jira' ? nodes.jira_issue.output : nodes.github_issue.output"}
+    project: [source, key, title, description, priority, reporter, status, labels, url]
+
+  - id: requirements
+    type: agent
+    description: Turn the ticket into testable requirements grounded in the code (requirements-brief skill).
+    executor: opencode
+    profile: product-analyst@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.intake.output, 'repository': inputs.repo}"}
+    output_schema: schemas/requirements.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: design
+    type: agent
+    description: Weigh the approaches and plan the change file by file (implementation-plan skill).
+    executor: opencode
+    profile: architect@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output}"}
+    output_schema: schemas/design.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+
+  - id: design_review
+    type: approval
+    description: A senior engineer approves the design and answers its open questions before any code is written.
+    role: author
+    message: {cel: "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.design.output.summary + '? Answer the ' + string(size(nodes.requirements.output.open_questions) + size(nodes.design.output.open_questions)) + ' open question(s) first.'"}
+    payload: {map: "{'open_questions': nodes.requirements.output.open_questions + nodes.design.output.open_questions, 'requirements': nodes.requirements.output, 'design': nodes.design.output}"}
+    # The answers are required, so the open questions cannot be waved through: write one answer per
+    # question, or "use the recommended defaults".
+    decision_schema:
+      type: object
+      properties:
+        answers: {type: string, minLength: 1, title: Answers to the open questions, description: "One answer per open question, or: use the recommended defaults"}
+        notes: {type: string, title: Notes for the engineer}
+      required: [answers]
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: build
+    type: agent
+    description: Implement the approved plan in the checkout; the worker then runs the tests (implement-change skill).
+    executor: opencode
+    profile: engineer@1
+    depends_on: [design_review]
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+      # The agent may edit files in this checkout. The worker returns the change as the output's
+      # `workspace` field (base commit, files with content, diff, test result); nothing is pushed here.
+      mode: write
+      test:
+        command: "{{test_command}}"
+        timeout: 15m
+        attempts: 3
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data}"}
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget: {max_tool_calls: 10}
+
+  - id: code_review
+    type: agent
+    description: Review the diff against the requirements, the design and the base code (fresh-eyes-review skill).
+    executor: opencode
+    profile: reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}}"}
+    output_schema: schemas/review.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: quality_gate
+    type: condition
+    description: Ship only when the tests passed, the review approves and there is a change.
+    expression: "nodes.build.output.workspace.tests.status == 'passed' && nodes.code_review.output.approved && size(nodes.build.output.workspace.files) > 0 ? 'ship' : 'fix'"
+    routes: {ship: [release_approval], fix: [send_back]}
+    default: fix
+
+  - id: release_approval
+    type: approval
+    description: The release owner approves the exact change before a branch is pushed and a pull request opened.
+    role: admin
+    message: {cel: "'Push ' + string(nodes.build.output.workspace.stats.files) + ' changed file(s) for ' + nodes.intake.output.key + ' to ' + inputs.repo + ' and open a pull request? Tests ' + nodes.build.output.workspace.tests.status + '.'"}
+    payload: {map: "{'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title': nodes.build.output.pr_title, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'tests': nodes.build.output.workspace.tests, 'review': nodes.code_review.output}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: push_branch
+    type: tool
+    description: Commit the change onto the base commit and push it as an azhi/ branch (Git Data API).
+    tool: github.push-branch@1
+    depends_on: [release_approval]
+    arguments:
+      repo: {ref: inputs.repo}
+      branch: {cel: "'azhi/' + nodes.intake.output.key"}
+      base_sha: {ref: nodes.build.output.workspace.base_sha}
+      message: {cel: "nodes.build.output.commit_message + '\\n\\nRefs: ' + nodes.intake.output.key"}
+      files: {ref: nodes.build.output.workspace.files}
+    # Taint gate (ADR-10): the change was written by an agent that read untrusted text, so it may only
+    # go to the repository named for this run, after the approval above.
+    guard: "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+
+  - id: open_pr
+    type: tool
+    description: Open a pull request for the branch (or return the one already open for it).
+    tool: github.create-pull-request@1
+    arguments:
+      repo: {ref: inputs.repo}
+      head: {ref: nodes.push_branch.output.branch}
+      base: {cel: "has(inputs.base_branch) ? inputs.base_branch : ''"}
+      title: {ref: nodes.build.output.pr_title}
+      body: {cel: "nodes.build.output.pr_body + '\\n\\n## Validation\\n- Tests: ' + nodes.build.output.workspace.tests.status + ' (' + nodes.build.output.workspace.tests.command + ', attempt ' + string(nodes.build.output.workspace.tests.attempts) + ')\\n- Agent review: ' + nodes.code_review.output.summary + '\\n\\nTicket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow after a person approved this change._'"}
+      draft: false
+    guard: "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
+
+  - id: release
+    type: notify
+    description: Announce the pull request.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "'Pull request for ' + nodes.intake.output.key + ': ' + nodes.open_pr.output.url + ' (' + nodes.build.output.summary + ')'"}
+    guard: "args.channel == config.channel"
+
+  - id: send_back
+    type: notify
+    description: Send the change back with the reasons.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "nodes.intake.output.key + ' needs more work (tests ' + nodes.build.output.workspace.tests.status + ', ' + string(nodes.build.output.workspace.stats.files) + ' file(s) changed): ' + nodes.code_review.output.summary"}
+    guard: "args.channel == config.channel"
+
+  - id: retro
+    type: report
+    description: Write the delivery record and retro notes (planned vs actual).
+    depends_on: [release]
+    template: templates/retro.md
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'tests': nodes.build.output.workspace.tests}, 'review': nodes.code_review.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"}

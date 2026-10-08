@@ -17,6 +17,7 @@ import {
   REPORT_OUTPUT_SCHEMA,
   RETRIEVE_OUTPUT_SCHEMA,
   SUBWORKFLOW_OUTPUT_SCHEMA,
+  WORKSPACE_CHANGE_SCHEMA,
   type ExecutionPlan,
   type PlanNode,
 } from './plan.js';
@@ -261,6 +262,8 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   for (const id of order.order) {
     const n = byId.get(id)!;
     let outputSchema: JsonSchema | undefined;
+    /** What downstream refs see, when it differs from what the node itself produces (write-mode workspaces). */
+    let refSchema: JsonSchema | undefined;
     let toolInfo: PlanNode['tool'];
 
     const typeOfRef = (segments: string[], site: ExprSite): JsonSchema | undefined => {
@@ -343,6 +346,25 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         const profileText = opts.pkg?.readText(profilePath(n.profile));
         if (opts.pkg && profileText === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
         if (n.workspace && n.executor !== 'opencode') err('workspace_unsupported', `a workspace needs executor: opencode (got ${n.executor ?? 'model-agent'})`, n.id, 'workspace');
+        if (n.workspace?.test && n.workspace.mode !== 'write') err('workspace_test_needs_write', 'workspace.test runs after the agent changes the checkout, so it needs mode: write', n.id, 'workspace.test');
+        if (n.workspace?.test && /\{\{\w+\}\}/.test(n.workspace.test.command)) warn('unfilled_setting', `workspace.test.command is still a setting placeholder (${n.workspace.test.command}); the example install fills it, or edit it`, n.id, 'workspace.test.command');
+        if (n.workspace?.test?.timeout) {
+          try {
+            parseDuration(n.workspace.test.timeout);
+          } catch {
+            err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
+          }
+        }
+        if (n.workspace?.mode === 'write') {
+          // The worker fills `workspace` with what really changed in the checkout; the agent may not claim it.
+          const props = (outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+          if (outputSchema && (outputSchema as { type?: unknown }).type !== 'object') err('workspace_output', 'a write-mode workspace step needs an object output_schema (the worker adds a workspace field)', n.id, 'output_schema');
+          else if (props && 'workspace' in props) err('workspace_output', "output_schema may not declare 'workspace': the worker sets it to the change it found in the checkout", n.id, 'output_schema');
+          else if (outputSchema) {
+            const required = (outputSchema as { required?: string[] }).required ?? [];
+            refSchema = { ...outputSchema, properties: { ...(props ?? {}), workspace: WORKSPACE_CHANGE_SCHEMA }, required: [...required, 'workspace'] } as JsonSchema;
+          }
+        }
         if (opts.pkg && profileText !== undefined) {
           let harness: AgentProfile['harness'];
           try {
@@ -413,7 +435,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       default:
         outputSchema = undefined;
     }
-    outputs.set(id, outputSchema);
+    outputs.set(id, refSchema ?? outputSchema);
 
     const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.type === 'approval' && n.expires_in ? n.expires_in : n.timeout;
     let timeoutMs = DEFAULT_TIMEOUTS[n.type];

@@ -23,6 +23,7 @@ import {
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { AgentNode, ApprovalNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
+import { parseDuration } from '../lib/duration.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
@@ -155,6 +156,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
             ...(ws.credential ? { credential: ws.credential } : {}),
             ...(ws.depth ? { depth: ws.depth } : {}),
+            ...(ws.mode === 'write' ? { mode: 'write' as const } : {}),
+            ...(ws.mode === 'write' && ws.test ? { test: { command: ws.test.command, timeoutMs: ws.test.timeout ? parseDuration(ws.test.timeout) : 600_000, attempts: ws.test.attempts ?? 1 } } : {}),
           }
         : undefined;
       const prep = await act.harnessPrepare({
