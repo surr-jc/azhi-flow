@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import { Badge, Json, num, Panel } from '../ui';
+import { Formatted, Markdown } from '../components/Rich';
+import { Badge, num, Panel } from '../ui';
 import type { PlanNode } from '../components/WorkflowCanvas';
 
 /** One transcript entry as the API returns it (src/agents/transcript.ts). */
@@ -146,18 +147,18 @@ function Entry({ e }: { e: TranscriptEntry }) {
       return (
         <details className="tx tx-system">
           <summary><b>System prompt</b> <span className="muted small">{e.text?.length ?? 0} characters</span></summary>
-          <div className="tx-text">{e.text}</div>
+          <Markdown className="tx-text" text={e.text ?? ''} />
         </details>
       );
     case 'user':
       return <div className="tx tx-user"><div className="tx-head"><b>Prompt</b><span className="muted small">{time(e.at)}</span></div><Long text={e.text ?? ''} /></div>;
     case 'assistant':
-      return <div className="tx tx-assistant"><div className="tx-head"><b>Model</b>{e.model ? <span className="muted small">{e.model}</span> : null}<span className="muted small">{time(e.at)}</span></div><div className="tx-text">{e.text}</div></div>;
+      return <div className="tx tx-assistant"><div className="tx-head"><b>Model</b>{e.model ? <span className="muted small">{e.model}</span> : null}<span className="muted small">{time(e.at)}</span></div><Markdown className="tx-text" text={e.text ?? ''} /></div>;
     case 'reasoning':
       return (
         <details className="tx tx-reasoning">
           <summary><b>Reasoning</b> <span className="muted small">{time(e.at)}</span></summary>
-          <div className="tx-text">{e.text}</div>
+          <Markdown className="tx-text" text={e.text ?? ''} />
         </details>
       );
     case 'tool': {
@@ -170,8 +171,8 @@ function Entry({ e }: { e: TranscriptEntry }) {
             <span className="muted small tx-time">{time(e.at)}</span>
           </summary>
           <div className="tx-label">Input</div>
-          <Json value={e.input ?? {}} />
-          {e.status === 'error' ? <><div className="tx-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="tx-label">Result</div><Json value={pretty(e.output)} /></> : <p className="muted small">Waiting for the result…</p>}
+          <Formatted value={e.input ?? {}} plain />
+          {e.status === 'error' ? <><div className="tx-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="tx-label">Result</div><Formatted value={e.output} plain /></> : <p className="muted small">Waiting for the result…</p>}
         </details>
       );
     }
@@ -182,7 +183,7 @@ function Entry({ e }: { e: TranscriptEntry }) {
         </div>
       );
     case 'error':
-      return <div className="tx tx-error"><div className="tx-head"><b>Error</b><span className="muted small">{time(e.at)}</span></div><div className="tx-text">{e.text}</div></div>;
+      return <div className="tx tx-error"><div className="tx-head"><b>Error</b><span className="muted small">{time(e.at)}</span></div><Markdown className="tx-text" text={e.text ?? ''} /></div>;
     default:
       return <div className="tx tx-step muted small">{e.text}</div>;
   }
@@ -191,25 +192,14 @@ function Entry({ e }: { e: TranscriptEntry }) {
 /** A long prompt shows its start, with the rest a click away. */
 function Long({ text }: { text: string }) {
   const [all, setAll] = useState(false);
-  if (text.length <= 1200 || all) return <div className="tx-text">{text}</div>;
-  return <div className="tx-text">{text.slice(0, 1200)}… <button type="button" className="link small" onClick={() => setAll(true)}>Show all ({text.length} characters)</button></div>;
+  if (text.length <= 1200 || all) return <Markdown className="tx-text" text={text} />;
+  return <div className="tx-text"><Markdown text={`${text.slice(0, 1200)}…`} /><button type="button" className="link small" onClick={() => setAll(true)}>Show all ({text.length} characters)</button></div>;
 }
 
 function argLine(input: unknown): string {
   if (input === undefined || input === null) return '';
   const t = typeof input === 'string' ? input : JSON.stringify(input);
   return t === '{}' ? '' : t.length > 90 ? `${t.slice(0, 89)}…` : t;
-}
-
-/** Tool results are often JSON in a string; show them indented when they are. */
-function pretty(s: string): unknown {
-  const t = s.trim();
-  if (!(t.startsWith('{') || t.startsWith('['))) return s;
-  try {
-    return JSON.parse(t);
-  } catch {
-    return s;
-  }
 }
 
 export function AgentActivityPanel(props: Parameters<typeof AgentActivity>[0]) {

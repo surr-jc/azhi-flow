@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, TERMINAL, type Alert, type Approval, type Overview as OverviewData, type RunRow } from '../api';
 import { Link } from '../router';
 import { ago, Badge, ErrorNote, Loading, money, num, PageHead, RunLink, StateBadge, Table, when } from '../ui';
+import { plainText } from '../components/Rich';
 import { approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 
 export function Overview() {
@@ -123,7 +124,7 @@ function DecisionRow({ a }: { a: Approval }) {
   return (
     <div className="decision-row">
       <div className="what">
-        <span className="q">{approvalQuestion(a)}</span>
+        <span className="q">{plainText(approvalQuestion(a))}</span>
         <span className="meta-line">
           {a.workflow}{a.test ? ' (test run)' : ''} · {whoCanDecide(a.role).toLowerCase()} can decide
           {a.expires_at ? <> · <span className={soon ? 'soon' : ''}>expires {ago(a.expires_at)}</span></> : null}

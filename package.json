@@ -47,8 +47,8 @@
     "zod": "4.6.5"
   },
   "optionalDependencies": {
-    "opencode-ai": "1.18.34",
-    "@anthropic-ai/claude-agent-sdk": "0.3.289"
+    "@anthropic-ai/claude-agent-sdk": "0.3.289",
+    "opencode-ai": "1.18.34"
   },
   "devDependencies": {
     "@fontsource-variable/public-sans": "5.3.0",
@@ -66,6 +66,9 @@
     "playwright-core": "1.56.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-breaks": "4.0.0",
+    "remark-gfm": "4.0.1",
     "typescript": "5.9.3",
     "vite": "7.3.6",
     "vitest": "5.0.3"

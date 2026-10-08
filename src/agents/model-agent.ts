@@ -34,7 +34,8 @@ const PLATFORM_RULES = `You are one agent node in an Azhi Flow workflow.
 - Use only the tools provided. Every call goes through a governed gateway that may refuse it.
 - When you are done, call ${SUBMIT_TOOL} exactly once with a result that matches its schema.
 - If the evidence is insufficient, say so in your result instead of guessing.
-- Cite retrieved excerpts by their chunk id.`;
+- Cite retrieved excerpts by their chunk id.
+- Write free-text string fields (summaries, explanations, designs, findings) in GitHub-flavored Markdown: short paragraphs, lists, tables and code spans where they help. Keep identifiers, enums, URLs, numbers and every other structured field exactly as the schema asks, with no Markdown.`;
 
 export interface ManifestItem {
   kind: 'instructions' | 'profile' | 'output_schema' | 'tool_schema' | 'input' | 'chunk' | 'tool_result' | 'repair';
