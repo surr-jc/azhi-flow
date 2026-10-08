@@ -81,6 +81,14 @@ export interface AgentWorkspace {
   credential?: string;
   /** Shallow fetch depth; full history when absent. */
   depth?: number;
+  /**
+   * `read` (default): the agent may only read the checkout. `write`: it may also edit files in it, and the
+   * worker returns what changed as the node output's `workspace` field (base commit, changed files, diff,
+   * test result). Nothing is pushed from the worker: a write tool after an approval does that.
+   */
+  mode?: 'read' | 'write';
+  /** Write mode: a shell command the worker runs in the checkout after the agent submits (repository code runs on the worker). */
+  test?: { command: string; timeout?: string; attempts?: number };
 }
 
 export interface RetrieveNode extends NodeCommon {

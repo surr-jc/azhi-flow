@@ -46,6 +46,13 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   issue to requirements, design, two approval gates, release and retro. Set it up with
   `azhi example install sdlc --repo OWNER/REPO --set slack_channel=... --set jira_url=...`. See
   [docs/sdlc.md](docs/sdlc.md).
+- Feature delivery to a pull request (`examples/sdlc-implement`): the same intake, with OpenCode
+  agents in checkouts of the repository using skills adapted from Cole Medin's PIV loop; the design
+  review must answer the open questions, the build agent edits a writable checkout and the worker
+  runs the project's tests on it (failures go back to the agent), and after a person approves the
+  diff the gateway pushes an `azhi/` branch and opens a pull request.
+  `azhi example install sdlc-implement --repo OWNER/REPO --set slack_channel=...`. See
+  [docs/sdlc-implement.md](docs/sdlc-implement.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from

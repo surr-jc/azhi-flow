@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, findPullRequestComment, flakyTests, incidents, issue, pullRequest, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, createPullRequest, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
@@ -71,6 +71,25 @@ const builtin: Record<string, ToolExecutor> = {
     },
     async lookup(spec, args, key, _since, ctx) {
       const hit = await findPullRequestComment(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  /** The SDLC implement example: commit a workspace step's change onto a branch, and open a pull request for it. */
+  'github.push-branch': {
+    async call(spec, args, ctx) {
+      return { value: await pushBranch(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPush(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  'github.create-pull-request': {
+    async call(spec, args, ctx) {
+      return { value: await createPullRequest(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPullRequest(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
       return hit ? { value: hit } : null;
     },
   },

@@ -132,6 +132,20 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         enforcement: 'harness',
         detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
       });
+      if (ws.mode === 'write') {
+        np.coverage.push({
+          action: 'edits in the checkout',
+          enforcement: 'harness',
+          detail: 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
+        });
+      }
+      if (ws.test) {
+        np.coverage.push({
+          action: `test command: ${ws.test.command}`,
+          enforcement: 'unobservable',
+          detail: `runs on the worker in the checkout, after the agent's edits, with no secrets in its environment (up to ${ws.test.attempts ?? 1} attempt(s)); this executes repository code the agent may have written, so use a worker you would trust as a CI runner for this repository`,
+        });
+      }
     }
     let harness: AgentProfile['harness'];
     try {

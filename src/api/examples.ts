@@ -227,7 +227,8 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
     for (const name of Object.keys(b.settings ?? {})) if (!wanted.includes(name)) throw new AzhiError(ErrorClass.invalidInput, `example '${id}' has no setting '${name}'${wanted.length ? ` (it has: ${wanted.join(', ')})` : ''}`);
     // Settings left out keep what an earlier install filled in; blank values are left out.
     const given = Object.fromEntries(Object.entries(b.settings ?? {}).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
-    const values = { ...(await registeredSettings(ctx, p.workspaceId, e)), ...given };
+    const defaults = Object.fromEntries(settingsOf(e).flatMap((s) => ('default' in s && typeof s.default === 'string' && s.default ? [[s.name, s.default]] : [])));
+    const values = { ...defaults, ...(await registeredSettings(ctx, p.workspaceId, e)), ...given };
     const tools = e.config.tools ?? [];
     if (tools.some(needsRepos) && !b.repos?.length) throw new AzhiError(ErrorClass.invalidInput, `example '${id}' needs the repositories its GitHub tools may use (owner/name)`);
 

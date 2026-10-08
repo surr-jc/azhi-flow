@@ -15,7 +15,7 @@ export interface AdminConfig {
    * Values the example install asks for (`azhi example install --set name=value`, or the Examples
    * page), filled into the tools wherever `{{name}}` appears, for example a Jira site address.
    */
-  settings?: Array<{ name: string; title?: string; description?: string; placeholder?: string }>;
+  settings?: Array<{ name: string; title?: string; description?: string; placeholder?: string; /** Used when neither this install nor an earlier one gives a value. */ default?: string }>;
 }
 
 export function loadAdminConfig(path: string): AdminConfig {

@@ -143,6 +143,17 @@ export const workflowSchema = {
             host: { type: 'string', pattern: '^https?://' },
             credential: { type: 'string' },
             depth: { type: 'integer', minimum: 1 },
+            mode: { enum: ['read', 'write'] },
+            test: {
+              type: 'object',
+              properties: {
+                command: { type: 'string', minLength: 1, maxLength: 1000 },
+                timeout: duration,
+                attempts: { type: 'integer', minimum: 1, maximum: 5 },
+              },
+              required: ['command'],
+              additionalProperties: false,
+            },
           },
           required: ['repo', 'ref'],
           additionalProperties: false,

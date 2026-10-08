@@ -930,6 +930,15 @@ function WorkspaceFields({ value, onChange }: { value: Record<string, any> | und
               <input type="number" min="1" value={typeof w.depth === 'number' ? w.depth : ''} onChange={(e) => set('depth', e.target.value === '' ? undefined : Number(e.target.value))} />
             </label>
           </div>
+          <label className="check">
+            <input type="checkbox" checked={w.mode === 'write'} onChange={(e) => onChange(e.target.checked ? { ...w, mode: 'write' } : (({ mode: _m, test: _t, ...rest }) => rest)(w))} />
+            Let the agent edit the checkout (the change comes back as the step's output; nothing is pushed)
+          </label>
+          {w.mode === 'write' ? (
+            <label>Test command (runs on the worker after the edits; repository code)
+              <input value={w.test?.command ?? ''} spellCheck={false} placeholder="npm ci && npm test" onChange={(e) => set('test', e.target.value ? { ...(w.test ?? {}), command: e.target.value } : undefined)} />
+            </label>
+          ) : null}
         </>
       ) : null}
     </fieldset>

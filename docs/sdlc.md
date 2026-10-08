@@ -4,6 +4,10 @@
 ticket**, read through a Jira MCP server, or a **GitHub issue**, read with the GitHub API. The
 intake step turns either into one plain ticket, and the rest of the workflow reads only that.
 
+Its agents plan and review but have no tools and no checkout, and its CI result is fixture data, so
+a run never changes code. To have a run implement the ticket, test it and open a pull request, use
+[`examples/sdlc-implement`](sdlc-implement.md).
+
 ```
 source ─┬─ jira_issue (Jira MCP) ──┐
         └─ github_issue (GitHub) ──┴─ intake ─ requirements ─ design ─ design_review ─ build ─ ...
