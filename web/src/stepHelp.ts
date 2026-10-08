@@ -130,3 +130,120 @@ export function sentenceOf(step: Step, tools: ToolInfo[], after: string[]): stri
     default: return `${lead}this step runs.`;
   }
 }
+
+/** A setting as shown on a canvas card and in the step details: a short label and value. */
+export interface KeySetting { label: string; value: string; keys: string[]; tone?: 'ok' | 'warn' | 'idle' }
+
+const REF_IN = /(nodes\.([A-Za-z_][A-Za-z0-9_]*)|inputs\.([A-Za-z_][A-Za-z0-9_]*)|config\.([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/** Where a value comes from, in a few words: the steps, inputs and config it reads. */
+export function sourcesOf(v: unknown): string[] {
+  const out = new Set<string>();
+  for (const m of JSON.stringify(v ?? null).matchAll(REF_IN)) out.add(m[2] ?? (m[3] ? `input ${m[3]}` : `config ${m[4]}`));
+  return [...out];
+}
+
+/** A setting's value in a few words, for a card or a summary line. */
+export function brief(v: unknown): string {
+  if (v === undefined || v === null || v === '') return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map(brief).filter(Boolean).join(', ');
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.ref === 'string' && Object.keys(o).length === 1) return o.ref;
+    if (typeof o.cel === 'string' || typeof o.map === 'string') {
+      const from = sourcesOf(o);
+      return from.length ? `from ${from.join(', ')}` : String(o.cel ?? o.map);
+    }
+    return Object.keys(o).join(', ');
+  }
+  return '';
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+/**
+ * The settings that matter most for a step, most important first: the canvas shows the first
+ * few on each card and the step details show them all.
+ */
+export function keySettings(step: Step, tools: ToolInfo[]): KeySetting[] {
+  const rows: KeySetting[] = [];
+  const add = (label: string, value: string, keys: string[], tone?: KeySetting['tone']) => value && rows.push({ label, value, keys, ...(tone ? { tone } : {}) });
+  const limits = (extra: string[] = []) => [step.timeout ? String(step.timeout) : '', ...extra].filter(Boolean).join(' · ');
+  const effect = effectsOf(step, tools)[0];
+  const gets = sourcesOf(step.input ?? step.arguments ?? step.query ?? step.for_each);
+  switch (step.type) {
+    case 'tool':
+      add('Uses', typeof step.tool === 'string' ? step.tool : '', ['tool']);
+      if (effect) add('Effect', effect.label, ['tool'], effect.tone);
+      add('Guard', step.guard ? 'checked on every call' : '', ['guard'], 'ok');
+      add('Gets', gets.join(', '), ['arguments']);
+      add('Keeps', brief(step.project), ['project']);
+      break;
+    case 'agent': {
+      const b = (step.budget ?? {}) as Record<string, number>;
+      add('Profile', brief(step.profile), ['profile']);
+      add('Runs on', step.executor ? String(step.executor) : 'built-in model', ['executor']);
+      add('Limits', limits([b.max_tool_calls !== undefined ? plural(b.max_tool_calls, 'tool call') : '', b.max_output_tokens ? `${b.max_output_tokens.toLocaleString('en')} tokens` : '', b.max_cost_usd ? `$${b.max_cost_usd}` : '']), ['timeout', 'budget']);
+      add('Works in', step.workspace ? `checkout of ${brief((step.workspace as Record<string, unknown>).repo) || 'a repository'}` : '', ['workspace']);
+      add('Gets', gets.join(', '), ['input']);
+      add('Returns', typeof step.output_schema === 'string' ? step.output_schema : step.output_schema ? 'inline schema' : '', ['output_schema']);
+      add('Tools', brief(step.tools), ['tools']);
+      add('Knows', brief(step.datasets), ['datasets']);
+      break;
+    }
+    case 'script': {
+      const l = (step.limits ?? {}) as Record<string, unknown>;
+      add('Runs', [step.runtime ?? 'python', step.entrypoint].filter(Boolean).join(' · '), ['runtime', 'entrypoint']);
+      add('Limits', limits([l.time ? String(l.time) : '', l.memory_mb ? `${l.memory_mb} MB` : '']), ['timeout', 'limits']);
+      add('Gets', gets.join(', '), ['input']);
+      add('Returns', brief(step.output_schema), ['output_schema']);
+      break;
+    }
+    case 'approval':
+      add('Decided by', `${step.role ?? 'operator'} or higher`, ['role']);
+      add('Waits', step.expires_in ? `${step.expires_in}, then ${step.on_expiry ?? 'fail'}` : 'until decided', ['expires_in', 'on_expiry']);
+      add('Shows', step.payload ? brief(step.payload) : 'no details', ['payload'], step.payload ? undefined : 'warn');
+      add('Form', step.decision_schema ? brief((step.decision_schema as Record<string, unknown>).properties) || 'yes' : '', ['decision_schema']);
+      break;
+    case 'condition':
+      add('Routes', Object.keys(step.routes ?? {}).join(' / '), ['routes']);
+      add('Default', brief(step.default), ['default']);
+      add('Reads', sourcesOf(step.expression).join(', '), ['expression']);
+      break;
+    case 'notify':
+      add('Effect', effect?.label ?? 'sends a message', ['channel'], 'warn');
+      add('Sends to', brief(step.destination), ['destination']);
+      add('Guard', step.guard ? 'checked on every message' : '', ['guard'], 'ok');
+      add('Message', brief(step.message), ['message']);
+      break;
+    case 'report':
+      add('Template', brief(step.template), ['template']);
+      add('Format', step.format ?? 'markdown', ['format']);
+      add('Gets', gets.join(', '), ['input']);
+      break;
+    case 'retrieve':
+      add('Searches', brief(step.datasets), ['datasets']);
+      add('Results', step.top_k !== undefined ? String(step.top_k) : '', ['top_k']);
+      add('Query', brief(step.query), ['query']);
+      break;
+    case 'parallel':
+      add('For each', brief(step.for_each), ['for_each']);
+      add('Runs', brief((step.node as Record<string, unknown> | undefined)?.type), ['node']);
+      add('At once', step.max_concurrency !== undefined ? String(step.max_concurrency) : '', ['max_concurrency']);
+      break;
+    case 'loop':
+      add('At most', step.max_iterations !== undefined ? plural(step.max_iterations, 'time') : '', ['max_iterations']);
+      add('Stops when', brief(step.exit), ['exit']);
+      add('Repeats', brief((step.node as Record<string, unknown> | undefined)?.type), ['node']);
+      break;
+    case 'subworkflow':
+      add('Runs', brief(step.workflow), ['workflow']);
+      add('Gets', gets.join(', '), ['input']);
+      break;
+  }
+  if (step.type !== 'agent' && step.type !== 'script') add('Limits', limits(), ['timeout']);
+  const tries = (step.retry as Record<string, unknown> | undefined)?.max_attempts;
+  add('Retry', typeof tries === 'number' ? `up to ${plural(tries, 'attempt')}` : brief(step.retry), ['retry']);
+  return rows;
+}

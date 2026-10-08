@@ -1,12 +1,12 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { parse, stringify } from 'yaml';
 import { api, atLeast, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
-import { TYPE_HELP, effectsOf, helpFor, sentenceOf } from '../stepHelp';
+import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Coverage } from './Run';
 
@@ -302,6 +302,18 @@ export function WorkflowEditor({ slug }: { slug: string }) {
     if (JSON.stringify(next) !== JSON.stringify(def)) change(next);
   };
   const stillLinked = step ? graphOf(def).find((n) => n.id === step.id)?.deps.filter((d) => !(step.depends_on ?? []).includes(d)) : [];
+  // What changed since the saved version, per step and setting: marked on the cards and the panel.
+  const savedSteps = new Map<string, Step>(((base.data.definition as Definition).nodes ?? []).map((n) => [n.id, n]));
+  const changedKeys = (n: Step): Set<string> => {
+    const was = savedSteps.get(n.id);
+    if (!was) return new Set(Object.keys(n));
+    return new Set([...new Set([...Object.keys(n), ...Object.keys(was)])].filter((k) => JSON.stringify(n[k]) !== JSON.stringify(was[k])));
+  };
+  const cardSettings = (n: PlanNode) => {
+    const s = (n.def ?? { id: n.id, type: n.type }) as Step;
+    const changed = changedKeys(s);
+    return keySettings(s, tools.data ?? []).map((r) => ({ ...r, changed: r.keys.some((k) => changed.has(k)) }));
+  };
 
   return (
     <>
@@ -330,7 +342,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       </div>
       <div className="ed-grid">
         <div className="ed-canvas">
-          <WorkflowCanvas nodes={graph} height={520} edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} />
+          <WorkflowCanvas nodes={graph} height={520} edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings} />
           <CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} />
         </div>
         <aside className="ed-side">
@@ -338,6 +350,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
             <StepForm
               key={`${step.id}/${revision}`}
               step={step}
+              saved={savedSteps.get(step.id)}
               all={def.nodes.map((n) => n.id)}
               stillLinked={stillLinked ?? []}
               suggestions={suggestions}
@@ -407,8 +420,10 @@ function CheckSummary({ check, current, error, onPick }: { check?: Check; curren
   );
 }
 
-function StepForm({ step, all, stillLinked, suggestions, harness, diagnostics, onChange, onRename, onRemove, onClose }: {
+function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnostics, onChange, onRename, onRemove, onClose }: {
   step: Step;
+  /** The step as saved in the version being edited; missing for a new step. */
+  saved?: Step;
   all: string[];
   stillLinked: string[];
   suggestions: Record<'tools' | 'profiles' | 'schemas' | 'files', string[]>;
@@ -429,50 +444,110 @@ function StepForm({ step, all, stillLinked, suggestions, harness, diagnostics, o
   };
   const deps: string[] = step.depends_on ?? [];
   const t = TYPE[step.type];
+  // A setting differs from the saved version: the row is marked and says what it was.
+  const was = (key: string): string | undefined => {
+    if (!saved || JSON.stringify(saved[key]) === JSON.stringify(step[key])) return undefined;
+    return saved[key] === undefined ? 'not set' : brief(saved[key]) || 'set';
+  };
+  const summary = keySettings(step, harness.tools);
+  const changes = saved ? Object.keys({ ...saved, ...step }).filter((k) => JSON.stringify(saved[k]) !== JSON.stringify(step[k])).length : 0;
+  const typed = (FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key)));
+  const row = (f: Field) => <FieldInput key={f.key} row field={{ ...f, help: helpFor(step.type, f.key) }} value={step[f.key]} was={was(f.key)} onChange={(v) => set(f.key, v)} />;
   return (
-    <section className="panel" aria-label={`Step ${step.id}`}>
-      <header className="panel-head">
-        <h2><span aria-hidden="true">{t?.glyph} </span>{step.id} <span className="muted small">{t?.label ?? step.type}</span></h2>
-        <button type="button" className="small" onClick={onClose}>Done</button>
-      </header>
-      {diagnostics.some((d) => d.severity === 'error') ? <div className="error">{diagnostics.filter((d) => d.severity === 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
-      {diagnostics.some((d) => d.severity !== 'error') ? <div className="warn-note">{diagnostics.filter((d) => d.severity !== 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
-      <div className="ed-explain" aria-label="In plain words">
-        <div className="ed-explain-title">In plain words</div>
+    <section className="panel step-panel" aria-label={`Step ${step.id}`}>
+      <header className="step-head">
+        <h2><span className={`step-type t-${step.type}`}>{t?.label ?? step.type}</span>{step.id}</h2>
+        {!saved ? <Badge tone="idle">new step</Badge> : changes ? <Badge tone="warn">{changes} change{changes === 1 ? '' : 's'} since the saved version</Badge> : null}
+        <div className="actions"><button type="button" className="small" onClick={onClose}>Done</button></div>
         <p className="ed-sentence">{sentenceOf(step, harness.tools, deps)}</p>
-        {effectsOf(step, harness.tools).length ? <div className="row wrap">{effectsOf(step, harness.tools).map((e) => <span key={e.label} className={`chip-effect ${e.tone}`}>{e.label}</span>)}</div> : null}
-        <p className="muted small">{TYPE_HELP[step.type]}</p>
+      </header>
+      {summary.length ? (
+        <dl className="step-summary" aria-label="Key settings">
+          {summary.map((r) => (
+            <div key={r.label} className={r.keys.some((k) => was(k) !== undefined) ? 'changed' : undefined}>
+              <dt>{r.label}</dt>
+              <dd className={r.tone ? `tone-${r.tone}` : undefined} title={r.value}>{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <div className="step-body">
+        {diagnostics.some((d) => d.severity === 'error') ? <div className="error">{diagnostics.filter((d) => d.severity === 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
+        {diagnostics.some((d) => d.severity !== 'error') ? <div className="warn-note">{diagnostics.filter((d) => d.severity !== 'error').map((d, i) => <div key={i}>{d.message}</div>)}</div> : null}
+
+        <section className="set-group" aria-label="Step">
+          <h3>Step</h3>
+          <SettingRow label="Step id" help="The name other steps use to read this one's output.">
+            {(fid) => (
+              <>
+                <input id={fid} value={id} onChange={(e) => setId(e.target.value)} onBlur={() => !idError && id !== step.id && onRename(id)} onKeyDown={(e) => e.key === 'Enter' && !idError && id !== step.id && onRename(id)} spellCheck={false} />
+                {idError ? <span className="error small">{idError}</span> : id !== step.id ? <span className="muted small">References to it are renamed too.</span> : null}
+              </>
+            )}
+          </SettingRow>
+          <SettingRow label="Description" help="One line shown on the card and in the run." was={was('description')}>
+            {(fid) => <input id={fid} value={step.description ?? ''} onChange={(e) => set('description', e.target.value)} />}
+          </SettingRow>
+          <SettingRow label="Runs after" help="Steps that must finish before this one starts." was={was('depends_on')}>
+            {(fid) => (
+              <>
+                <div className="row wrap">
+                  {deps.map((d) => (
+                    <span key={d} className="chip">{d} <button type="button" className="linkish" aria-label={`Stop running after ${d}`} onClick={() => set('depends_on', deps.filter((x) => x !== d))}>×</button></span>
+                  ))}
+                  <select id={fid} aria-label="Run after" value="" onChange={(e) => e.target.value && set('depends_on', [...deps, e.target.value])}>
+                    <option value="">add…</option>
+                    {all.filter((x) => x !== step.id && !deps.includes(x)).map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </div>
+                {stillLinked.length ? <span className="muted small">Also after {stillLinked.join(', ')}, because it reads their output or is on their route.</span> : null}
+              </>
+            )}
+          </SettingRow>
+        </section>
+
+        {step.type === 'agent' ? (
+          <section className="set-group" aria-label="Harness">
+            <h3>Harness</h3>
+            <HarnessBuilder step={step} ctx={harness} set={set} />
+          </section>
+        ) : null}
+
+        {typed.length ? (
+          <section className="set-group" aria-label={`${t?.label ?? step.type} settings`}>
+            <h3>{t?.label ?? step.type} settings</h3>
+            {step.type !== 'agent' ? <p className="muted small">{TYPE_HELP[step.type]}</p> : null}
+            {typed.map(row)}
+          </section>
+        ) : null}
+
+        <section className="set-group" aria-label="Limits">
+          <h3>Limits</h3>
+          {COMMON.map(row)}
+        </section>
       </div>
-      <div className="form">
-        <label>
-          Step id
-          <input value={id} onChange={(e) => setId(e.target.value)} onBlur={() => !idError && id !== step.id && onRename(id)} onKeyDown={(e) => e.key === 'Enter' && !idError && id !== step.id && onRename(id)} spellCheck={false} />
-          {idError ? <span className="error small">{idError}</span> : id !== step.id ? <span className="muted small">References to it are renamed too.</span> : null}
-        </label>
-        <label>
-          Description
-          <input value={step.description ?? ''} onChange={(e) => set('description', e.target.value)} />
-        </label>
-        <div className="ed-deps">
-          <span className="label">Runs after</span>
-          <div className="row wrap">
-            {deps.map((d) => (
-              <span key={d} className="chip">{d} <button type="button" className="linkish" aria-label={`Stop running after ${d}`} onClick={() => set('depends_on', deps.filter((x) => x !== d))}>×</button></span>
-            ))}
-            <select aria-label="Run after" value="" onChange={(e) => e.target.value && set('depends_on', [...deps, e.target.value])}>
-              <option value="">add…</option>
-              {all.filter((x) => x !== step.id && !deps.includes(x)).map((x) => <option key={x} value={x}>{x}</option>)}
-            </select>
-          </div>
-          {stillLinked.length ? <span className="muted small">Also after {stillLinked.join(', ')}, because it reads their output or is on their route.</span> : null}
-        </div>
-        {step.type === 'agent' ? <HarnessBuilder step={step} ctx={harness} set={set} /> : null}
-        {[...(FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key))), ...COMMON].map((f) => <FieldInput key={f.key} field={{ ...f, help: helpFor(step.type, f.key) }} value={step[f.key]} onChange={(v) => set(f.key, v)} />)}
-      </div>
-      <div className="row">
+      <footer className="step-foot">
         <button type="button" className="danger" onClick={onRemove}>Remove step</button>
-      </div>
+      </footer>
     </section>
+  );
+}
+
+/** One setting: its name and meaning on the left, the control on the right, aligned with the rest. */
+function SettingRow({ label, help, hint, was, children }: { label: string; help?: string; hint?: ReactNode; was?: string; children: (id: string) => ReactNode }) {
+  const id = useId();
+  return (
+    <div className={`set-row${was !== undefined ? ' changed' : ''}`}>
+      <div className="set-label">
+        <label htmlFor={id}>{label}</label>
+        {help ? <p>{help}</p> : null}
+      </div>
+      <div className="set-control">
+        {children(id)}
+        {hint ? <span className="muted small">{hint}</span> : null}
+        {was !== undefined ? <span className="set-was">Changed. Saved version: {was}</span> : null}
+      </div>
+    </div>
   );
 }
 
@@ -488,77 +563,91 @@ function Info({ text }: { text?: string }) {
   );
 }
 
-function FieldInput({ field: f, value, onChange }: { field: Field; value: unknown; onChange: (v: unknown) => void }) {
+function FieldInput({ field: f, value, onChange, row, was }: { field: Field; value: unknown; onChange: (v: unknown) => void; row?: boolean; was?: string }) {
   const list = f.suggest ? `ed-${f.suggest}` : undefined;
-  let input: ReactNode;
-  if (f.kind === 'select') {
-    input = (
-      <select value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)}>
+  if (f.kind === 'list') return <ListInput field={f} value={value} onChange={onChange} row={row} was={was} />;
+  if (f.kind === 'value' || (f.kind === 'text' && value !== undefined && typeof value !== 'string')) return <ValueInput field={f} value={value} onChange={onChange} row={row} was={was} />;
+  const input = (id?: string): ReactNode =>
+    f.kind === 'select' ? (
+      <select id={id} value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)}>
         {f.options!.map((o) => <option key={o} value={o}>{o || 'default'}</option>)}
       </select>
+    ) : f.kind === 'number' ? (
+      <input id={id} type="number" value={typeof value === 'number' ? value : ''} onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))} />
+    ) : f.kind === 'expr' ? (
+      <textarea id={id} className="mono" rows={2} value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+    ) : (
+      <input id={id} value={typeof value === 'string' ? value : ''} list={list} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
     );
-  } else if (f.kind === 'number') {
-    input = <input type="number" value={typeof value === 'number' ? value : ''} onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))} />;
-  } else if (f.kind === 'list') {
-    return <ListInput field={f} value={value} onChange={onChange} />;
-  } else if (f.kind === 'value' || (f.kind === 'text' && value !== undefined && typeof value !== 'string')) {
-    return <ValueInput field={f} value={value} onChange={onChange} />;
-  } else if (f.kind === 'expr') {
-    input = <textarea className="mono" rows={2} value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)} spellCheck={false} />;
-  } else {
-    input = <input value={typeof value === 'string' ? value : ''} list={list} onChange={(e) => onChange(e.target.value)} spellCheck={false} />;
-  }
+  if (row) return <SettingRow label={f.label} help={f.help} hint={f.hint} was={was}>{input}</SettingRow>;
   return (
     <label>
       <span>{f.label}<Info text={f.help} /></span>
-      {input}
+      {input()}
       {f.hint ? <span className="muted small">{f.hint}</span> : null}
     </label>
   );
 }
 
-function ListInput({ field: f, value, onChange }: { field: Field; value: unknown; onChange: (v: unknown) => void }) {
+function ListInput({ field: f, value, onChange, row, was }: { field: Field; value: unknown; onChange: (v: unknown) => void; row?: boolean; was?: string }) {
   const [text, setText] = useState(Array.isArray(value) ? value.join(', ') : '');
+  const input = (id?: string) => (
+    <input
+      id={id}
+      value={text}
+      spellCheck={false}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean));
+      }}
+    />
+  );
+  if (row) return <SettingRow label={f.label} help={f.help} hint="Separate with commas." was={was}>{input}</SettingRow>;
   return (
     <label>
       <span>{f.label}<Info text={f.help} /></span>
-      <input
-        value={text}
-        spellCheck={false}
-        onChange={(e) => {
-          setText(e.target.value);
-          onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean));
-        }}
-      />
+      {input()}
       <span className="muted small">Separate with commas.</span>
     </label>
   );
 }
 
 /** A structured value (refs, CEL, maps, schemas) edited as YAML; it is applied once it parses. */
-function ValueInput({ field: f, value, onChange }: { field: Field; value: unknown; onChange: (v: unknown) => void }) {
+function ValueInput({ field: f, value, onChange, row, was }: { field: Field; value: unknown; onChange: (v: unknown) => void; row?: boolean; was?: string }) {
   const [text, setText] = useState(value === undefined ? '' : stringify(value, { lineWidth: 0 }).trimEnd());
   const [error, setError] = useState<string>();
+  const input = (id?: string) => (
+    <textarea
+      id={id}
+      className="mono"
+      rows={Math.min(8, Math.max(2, text.split('\n').length))}
+      value={text}
+      spellCheck={false}
+      onChange={(e) => {
+        setText(e.target.value);
+        try {
+          const v = e.target.value.trim() ? parse(e.target.value) : undefined;
+          setError(undefined);
+          onChange(v === null ? undefined : v);
+        } catch (err) {
+          setError((err as Error).message.split('\n')[0]);
+        }
+      }}
+    />
+  );
+  const note = error ? <span className="error small">Not applied: {error}</span> : f.hint ? <span className="muted small">{f.hint}</span> : <span className="muted small">YAML, for example {'{ref: inputs.team}'} or {'{cel: "nodes.a.output.count > 0"}'}</span>;
+  if (row) {
+    return (
+      <SettingRow label={f.label} help={f.help} was={was}>
+        {(id) => <>{input(id)}{note}</>}
+      </SettingRow>
+    );
+  }
   return (
     <label>
       <span>{f.label}<Info text={f.help} /></span>
-      <textarea
-        className="mono"
-        rows={Math.min(8, Math.max(2, text.split('\n').length))}
-        value={text}
-        spellCheck={false}
-        onChange={(e) => {
-          setText(e.target.value);
-          try {
-            const v = e.target.value.trim() ? parse(e.target.value) : undefined;
-            setError(undefined);
-            onChange(v === null ? undefined : v);
-          } catch (err) {
-            setError((err as Error).message.split('\n')[0]);
-          }
-        }}
-      />
-      {error ? <span className="error small">Not applied: {error}</span> : f.hint ? <span className="muted small">{f.hint}</span> : <span className="muted small">YAML, for example {'{ref: inputs.team}'} or {'{cel: "nodes.a.output.count > 0"}'}</span>}
+      {input()}
+      {note}
     </label>
   );
 }
@@ -574,12 +663,12 @@ function WorkflowForm({ def, onChange }: { def: Definition; onChange: (d: Defini
     <section className="panel" aria-label="Workflow settings">
       <header className="panel-head"><h2>Workflow</h2></header>
       <p className="muted small">Select a step on the canvas to change it. The workflow id <span className="mono">{def.id}</span> stays the same.</p>
-      <div className="form">
-        <label>Name<input value={def.name ?? ''} onChange={(e) => set('name', e.target.value)} /></label>
-        <label>Description<textarea rows={3} value={def.description ?? ''} onChange={(e) => set('description', e.target.value)} /></label>
-        <ValueInput field={{ key: 'trigger', label: 'Trigger', kind: 'value', hint: 'manual: true, or schedule: {cron, timezone}' }} value={def.trigger} onChange={(v) => set('trigger', v)} />
-        <ValueInput field={{ key: 'inputs', label: 'Inputs (JSON schema)', kind: 'value' }} value={def.inputs} onChange={(v) => set('inputs', v)} />
-        <ValueInput field={{ key: 'config', label: 'Config', kind: 'value' }} value={def.config} onChange={(v) => set('config', v)} />
+      <div className="set-group">
+        <SettingRow label="Name" help="Shown in lists, runs and approvals.">{(id) => <input id={id} value={def.name ?? ''} onChange={(e) => set('name', e.target.value)} />}</SettingRow>
+        <SettingRow label="Description" help="What the workflow is for, in a sentence or two.">{(id) => <textarea id={id} rows={3} value={def.description ?? ''} onChange={(e) => set('description', e.target.value)} />}</SettingRow>
+        <ValueInput row field={{ key: 'trigger', label: 'Trigger', kind: 'value', help: 'When it runs: by hand, on a schedule, or both.', hint: 'manual: true, or schedule: {cron, timezone}' }} value={def.trigger} onChange={(v) => set('trigger', v)} />
+        <ValueInput row field={{ key: 'inputs', label: 'Inputs (JSON schema)', kind: 'value', help: 'What a run asks for. Steps read them as inputs.name.' }} value={def.inputs} onChange={(v) => set('inputs', v)} />
+        <ValueInput row field={{ key: 'config', label: 'Config', kind: 'value', help: 'Fixed values such as the Slack channel. Steps read them as config.name.' }} value={def.config} onChange={(v) => set('config', v)} />
       </div>
     </section>
   );
