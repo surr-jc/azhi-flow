@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { CopilotLogin } from '../components/CopilotLogin';
+import { Popup } from '../components/Popup';
+import { StepPanel } from '../components/StepDrawer';
+import { WorkflowCanvas } from '../components/WorkflowCanvas';
+import { graphOf } from '../graph';
+import type { ToolInfo } from '../stepHelp';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 
 /**
@@ -23,6 +28,8 @@ interface Example {
   /** Repositories the installed tools allow now; empty before install. */
   repos: string[];
   settings?: Setting[];
+  /** The workflow's steps as written, for looking at it before installing. */
+  nodes?: Array<Record<string, any> & { id: string; type: string }>;
 }
 interface Diagnostic { severity: string; message: string; node?: string }
 interface Installed {
@@ -56,6 +63,9 @@ function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
   return writes.length ? { label: `can change ${[...new Set(writes.map((t) => t.ref.split('.')[0]))].join(', ')}`, tone: 'warn' } : { label: 'read-only', tone: 'ok' };
 }
 
+/** The step count comes from the workflow itself; the table is only a fallback. */
+const stepCount = (e: Example) => e.nodes?.length || metaOf(e).steps;
+
 const installed = (e: Example) => e.repos.length > 0 || (e.settings ?? []).some((s) => s.value);
 
 export function Examples() {
@@ -64,6 +74,7 @@ export function Examples() {
   const id = path.startsWith('/ui/examples/') ? decodeURIComponent(path.slice('/ui/examples/'.length)) : undefined;
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
+  const [look, setLook] = useState<string>();
   const all = q.data ?? [];
   const one = id ? all.find((e) => e.id === id) : undefined;
   if (id) {
@@ -93,18 +104,19 @@ export function Examples() {
               ))}
             </div>
           </div>
-          {featured ? <MarketCard example={featured} featured /> : null}
+          {featured ? <MarketCard example={featured} featured onLook={() => setLook(featured.id)} /> : null}
           <div className="market-grid">
-            {shown.filter((e) => e !== featured).map((e) => <MarketCard key={e.id} example={e} />)}
+            {shown.filter((e) => e !== featured).map((e) => <MarketCard key={e.id} example={e} onLook={() => setLook(e.id)} />)}
           </div>
           {shown.length === 0 ? <p className="muted">No workflow matches. <Link to="/ui/workflows/new">Describe it to Build with chat</Link> instead.</p> : null}
+          {look && all.find((x) => x.id === look) ? <QuickLook example={all.find((x) => x.id === look)!} onClose={() => setLook(undefined)} /> : null}
         </>
       )}
     </>
   );
 }
 
-function MarketCard({ example: e, featured }: { example: Example; featured?: boolean }) {
+function MarketCard({ example: e, featured, onLook }: { example: Example; featured?: boolean; onLook?: () => void }) {
   const m = metaOf(e);
   const c = changes(e);
   return (
@@ -113,15 +125,55 @@ function MarketCard({ example: e, featured }: { example: Example; featured?: boo
       <h3><Link to={`/ui/examples/${encodeURIComponent(e.id)}`}>{e.name}</Link></h3>
       <p className="small muted">{e.description}</p>
       <div className="row wrap">
-        {m.steps ? <span className="chip-effect">{m.steps} step{m.steps === 1 ? '' : 's'}</span> : null}
+        {stepCount(e) ? <span className="chip-effect">{stepCount(e)} step{stepCount(e) === 1 ? '' : 's'}</span> : null}
         {m.works_with.length ? <span className="chip-effect">{m.works_with.join(' · ')}</span> : null}
         <span className={`chip-effect ${c.tone}`}>{c.label}</span>
         {e.secrets.length === 0 ? <span className="chip-effect ok">no secrets needed</span> : null}
       </div>
       <div className="row">
         <Link to={`/ui/examples/${encodeURIComponent(e.id)}`} className="button primary small">{installed(e) ? 'Open' : 'Install'}</Link>
+        {e.nodes?.length && onLook ? <button type="button" className="small" onClick={onLook}>Quick look</button> : null}
       </div>
     </article>
+  );
+}
+
+/**
+ * A bundled workflow looked at before installing: its steps on the canvas, each one explained in
+ * the same panel the workflow page uses, and what must be set up first.
+ */
+function QuickLook({ example: e, onClose }: { example: Example; onClose: () => void }) {
+  const nodes = useMemo(() => graphOf({ nodes: e.nodes ?? [] }), [e]);
+  const tools: ToolInfo[] = e.tools.map((t) => ({ id: t.ref.split('@')[0]!, version: Number(t.ref.split('@')[1]), effect: t.effect, description: t.description }));
+  const [selected, setSelected] = useState<string | null>(null);
+  const step = nodes.find((n) => n.id === selected);
+  const c = changes(e);
+  const todo = [
+    ...(e.needs_repos && !e.repos.length ? [{ label: 'Repositories to allow', ok: false }] : []),
+    ...(e.settings ?? []).map((s) => ({ label: s.title ?? s.name, ok: Boolean(s.value) })),
+    ...e.secrets.map((s) => ({ label: s.name, ok: s.set })),
+  ];
+  return (
+    <Popup title={e.name} sub={`${metaOf(e).category} · ${stepCount(e)} steps`} size="full" onClose={onClose} footer={<div className="row"><span className="muted small">Installing registers {e.tools.length} tool{e.tools.length === 1 ? '' : 's'} and saves a signed draft. Nothing else changes.</span><Link to={`/ui/examples/${encodeURIComponent(e.id)}`} className="button primary" style={{ marginLeft: 'auto' }}>{installed(e) ? 'Open' : 'Set up and install'}</Link></div>}>
+      <div className="quicklook">
+        <div>
+          {e.description ? <p className="ed-sentence">{e.description}</p> : null}
+          <WorkflowCanvas nodes={nodes} height={380} select={{ selected, onSelect: setSelected }} />
+        </div>
+        {step ? (
+          <StepPanel node={step} nodes={nodes} tools={tools} onPick={setSelected} onClose={() => setSelected(null)} />
+        ) : (
+          <aside className="quicklook-side">
+            <div><span className="label">It changes</span><p className="small"><Badge tone={c.tone}>{c.label}</Badge></p></div>
+            <div>
+              <span className="label">Before you install</span>
+              {todo.length ? <ul className="small quicklook-todo">{todo.map((t) => <li key={t.label}><Badge tone={t.ok ? 'ok' : 'warn'}>{t.ok ? 'set' : 'needed'}</Badge> {t.label}</li>)}</ul> : <p className="muted small">Nothing to set up.</p>}
+            </div>
+            <p className="muted small">Select a step on the canvas to read what it does and every setting.</p>
+          </aside>
+        )}
+      </div>
+    </Popup>
   );
 }
 

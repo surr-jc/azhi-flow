@@ -1,13 +1,15 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { api, atLeast, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
-import { PublishDraft, ScheduleForm, WorkflowFiles } from './Authoring';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
 import { RunTable } from './Overview';
 import { Coverage } from './Run';
-import { WorkflowCanvas } from '../components/WorkflowCanvas';
+import { Popup } from '../components/Popup';
+import { StepPanel } from '../components/StepDrawer';
+import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
+import { nodeStates, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { keySettings } from '../stepHelp';
 
 export function Workflows() {
@@ -40,24 +42,37 @@ export function Workflows() {
   );
 }
 
-interface VersionRow { id: string; version: number; draft: boolean; package_hash: string; signed: boolean; created_at: string }
-
 export function WorkflowPage({ slug }: { slug: string }) {
   const me = useMe();
   const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<VersionRow[]>(`/v1/workflows/${encodeURIComponent(slug)}/versions`) });
   const { search } = useRoute();
   const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [section, setSection] = useState<SectionId | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [mode, setMode] = useState<'plan' | 'run'>('plan');
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
-  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Array<{ id: string; version: number; effect: string; description?: string }>>('/v1/tools') });
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<ToolRow[]>('/v1/tools') });
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
   const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
   const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
-  const portableAssets = useQuery({ queryKey: ['workflow-assets', slug], queryFn: () => api<Array<{ id: string; kind: string; slug: string; name: string; version: number }>>(`/v1/workflows/${encodeURIComponent(slug)}/assets`) });
+  const portableAssets = useQuery({ queryKey: ['workflow-assets', slug], queryFn: () => api<PortableAsset[]>(`/v1/workflows/${encodeURIComponent(slug)}/assets`) });
+  const lastId = runs.data?.[0]?.id;
+  const lastRun = useQuery({ queryKey: ['run', lastId], queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(lastId!)}`), enabled: Boolean(lastId) });
+  const nodes: PlanNode[] | undefined = version.data?.plan?.nodes;
+  const toolList = tools.data ?? [];
+  const settings = useCallback((n: PlanNode) => keySettings({ type: n.type, ...(n.def ?? {}) }, toolList), [toolList]);
   if (versions.error) return <ErrorNote error={versions.error} />;
   if (!versions.data) return <Loading />;
   if (!current) return <p>No versions of {slug}.</p>;
   const def = version.data?.definition;
+  const step = nodes?.find((n) => n.id === selected);
+  const runStates = lastRun.data ? nodeStates(lastRun.data) : {};
+  const lastLabel = runs.data?.[0] ? `#${runs.data[0].id.slice(-8)}` : undefined;
+  const data: SettingsData = { slug, version: current, def, nodes: nodes ?? [], plan: plan.data, tools: toolList, role: me.data?.role, schedule: schedules.data?.find((s) => s.workflow === slug), schedulesLoaded: Boolean(schedules.data), hasPublished: versions.data.some((v) => !v.draft), assets: portableAssets.data };
+  const blockers = plan.data?.blockers.length ?? 0;
   return (
     <>
       <PageHead
@@ -65,63 +80,63 @@ export function WorkflowPage({ slug }: { slug: string }) {
         sub={def?.description ?? (def?.name && def.name !== slug ? <span className="mono">{slug}</span> : undefined)}
         actions={
           <div className="row">
-            <select aria-label="Version" value={current.id} onChange={(e) => setPicked(e.target.value)}>
+            {plan.data ? (blockers ? <Badge tone="bad">{blockers} blocker{blockers === 1 ? '' : 's'}</Badge> : <Badge tone="ok">ready to run</Badge>) : null}
+            {plan.data ? <Badge tone={plan.data.signer.verified ? 'ok' : 'warn'}>{plan.data.signer.verified ? 'signed' : 'not signed'}</Badge> : null}
+            <select aria-label="Version" value={current.id} onChange={(e) => { setPicked(e.target.value); setSelected(null); }}>
               {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
             </select>
             {atLeast(me.data?.role, 'author') ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="button">Edit</Link> : null}
+            {atLeast(me.data?.role, 'operator') ? <button type="button" className="primary" onClick={() => setStarting(true)}>Run…</button> : null}
           </div>
         }
       />
-      <div className="grid-2">
-        <Panel title="Start a run">
-          {atLeast(me.data?.role, 'operator') ? <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} /> : <p className="muted">Your role cannot start runs.</p>}
-        </Panel>
-        <Panel title="About this version">
-          <div className="meta tight">
-            <div><span>Version</span>v{current.version} {current.draft ? <Badge tone="idle">draft</Badge> : <Badge tone="ok">published</Badge>}</div>
-            <div><span>Signature</span>{plan.data ? (plan.data.signer.verified ? `verified, ${plan.data.signer.publisher}` : `not verified${plan.data.signer.error ? `: ${plan.data.signer.error}` : ''}`) : '…'}</div>
-            <div><span>Uploaded</span>{when(current.created_at)}</div>
-            <div><span>Package</span><span className="mono">{current.package_hash.slice(0, 19)}</span></div>
-            <div><span>Trigger</span>{def?.trigger?.schedule ? `${def.trigger.schedule.cron} (${def.trigger.schedule.timezone})` : 'manual'}</div>
+      <div className={`workbench${step ? ' with-step' : ''}`}>
+        <SettingsDock data={data} collapsed={Boolean(step)} active={section ?? undefined} onOpen={setSection} />
+        <div className="wb-canvas">
+          <div className="wb-modebar">
+            <div className="seg" role="group" aria-label="Show">
+              <button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}>Plan</button>
+              <button type="button" aria-pressed={mode === 'run'} disabled={!lastId} onClick={() => setMode('run')} title={lastId ? undefined : 'This workflow has not run yet'}>Last run{lastLabel ? ` · ${lastLabel}` : ''}</button>
+            </div>
+            <span className="muted small">{mode === 'run' ? 'Each step shows what happened in the latest run.' : 'Select a step to read what it does and every setting.'}</span>
           </div>
-          {atLeast(me.data?.role, 'author') ? <PublishDraft version={current} slug={slug} /> : null}
-        </Panel>
+          {nodes ? <WorkflowCanvas nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined} /> : <Loading />}
+          {plan.data ? (
+            <div className="runplan-strip">
+              <Badge tone={blockers ? 'bad' : 'ok'}>{blockers ? `${blockers} blocker${blockers === 1 ? '' : 's'}` : '0 blockers'}</Badge>
+              <span className="muted small">{blockers ? plan.data.blockers[0]!.message : 'The run plan compiles and every step can run.'}</span>
+              <a className="small" href="#run-plan" style={{ marginLeft: 'auto' }}>View run plan</a>
+            </div>
+          ) : null}
+        </div>
+        {step && nodes ? (
+          <aside className="wb-drawer">
+            <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setSelected(null)} onExpand={() => setExpanded(true)} />
+          </aside>
+        ) : null}
       </div>
-      <PortableAssets slug={slug} assets={portableAssets.data} />
-      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} settings={(n) => keySettings({ type: n.type, ...(n.def ?? {}) }, tools.data ?? [])} /> : <Loading />}</Panel>
-      <details className="panel">
-        <summary>Files in this version</summary>
-        <WorkflowFiles versionId={current.id} />
-      </details>
-      {atLeast(me.data?.role, 'admin') && schedules.data && versions.data.some((v) => !v.draft) ? (
-        <details className="panel" open={schedules.data.some((s) => s.workflow === slug)}>
-          <summary>Schedule</summary>
-          <ScheduleForm key={slug} slug={slug} schema={version.data?.plan?.inputsSchema ?? def?.inputs} schedule={schedules.data.find((s) => s.workflow === slug)} />
-        </details>
+      {section ? (
+        <Popup title="Workflow settings" sub={`${def?.name ?? slug} · v${current.version}`} onClose={() => setSection(null)} footer={<span className="muted small">Changes apply to the next run. A run that has started keeps the version it began with.</span>}>
+          <SettingsBody data={data} section={section} onSection={setSection} onClose={() => setSection(null)} />
+        </Popup>
       ) : null}
-      <h2 className="section">Run plan</h2>
+      {expanded && step && nodes ? (
+        <Popup title={<span className="mono">{step.id}</span>} onClose={() => setExpanded(false)}>
+          <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setExpanded(false)} />
+        </Popup>
+      ) : null}
+      {starting ? (
+        <Popup title="Start a run" sub={`${def?.name ?? slug} · v${current.version}`} size="narrow" onClose={() => setStarting(false)}>
+          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} />
+        </Popup>
+      ) : null}
+      <h2 className="section" id="run-plan">Run plan</h2>
       {plan.error ? <ErrorNote error={plan.error} /> : plan.data ? <Coverage plan={plan.data} live /> : <Loading />}
       <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>
         {runs.data ? <RunTable runs={runs.data} /> : <Loading />}
       </Panel>
     </>
   );
-}
-
-function PortableAssets({ slug, assets }: { slug: string; assets?: Array<{ id: string; kind: string; slug: string; name: string; version: number }> }) {
-  const [error, setError] = useState<string>();
-  const download = async () => {
-    try {
-      const bundle = await api<{ files: Record<string, string> }>(`/v1/workflows/${encodeURIComponent(slug)}/opencode-export`);
-      const blob = new Blob([JSON.stringify(bundle.files, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob); const link = document.createElement('a');
-      link.href = url; link.download = `${slug}-opencode-assets.json`; link.click(); URL.revokeObjectURL(url);
-    } catch (e) { setError((e as Error).message); }
-  };
-  return <Panel title="Portable assets" action={assets?.length ? <button onClick={download}>Download OpenCode bundle</button> : undefined}>
-    {!assets ? <Loading /> : assets.length ? <div className="asset-attached">{assets.map((a) => <span className="badge" key={a.id}>{a.kind}: {a.name} <span className="mono">v{a.version}</span></span>)}</div> : <p className="muted">No portable assets are attached. Add published MCP servers, agents, skills, or commands from the Portable assets library.</p>}
-    {error ? <div className="error">{error}</div> : null}
-  </Panel>;
 }
 
 function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan }) {

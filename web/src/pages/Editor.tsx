@@ -4,6 +4,7 @@ import { parse, stringify } from 'yaml';
 import { api, atLeast, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
+import { graphOf } from '../graph';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
@@ -122,28 +123,6 @@ function starter(type: string, ctx: { tools: string[]; profiles: string[]; schem
     case 'notify': return { channel: 'slack', destination: { ref: 'config.channel' }, message: 'Done.' };
     default: return {};
   }
-}
-
-const NODE_REF = /nodes\.([A-Za-z_][A-Za-z0-9_]*)/g;
-
-/** The graph as the compiler will see it: depends_on, condition routes, and refs to other steps. */
-export function graphOf(def: Definition): PlanNode[] {
-  const ids = new Set(def.nodes.map((n) => n.id));
-  const routeOf = new Map<string, { condition: string; route: string }>();
-  for (const n of def.nodes) {
-    if (n.type !== 'condition') continue;
-    for (const [route, members] of Object.entries((n.routes ?? {}) as Record<string, unknown>)) {
-      if (Array.isArray(members)) for (const m of members) if (typeof m === 'string' && !routeOf.has(m)) routeOf.set(m, { condition: n.id, route });
-    }
-  }
-  return def.nodes.map((n) => {
-    const deps = new Set<string>(Array.isArray(n.depends_on) ? n.depends_on : []);
-    const route = routeOf.get(n.id);
-    if (route) deps.add(route.condition);
-    const { id: _id, depends_on: _d, routes: _r, ...rest } = n;
-    for (const m of JSON.stringify(rest).matchAll(NODE_REF)) deps.add(m[1]!);
-    return { id: n.id, type: n.type, deps: [...deps].filter((d) => d !== n.id && ids.has(d)), route, def: n };
-  });
 }
 
 function upstream(nodes: PlanNode[], id: string): Set<string> {

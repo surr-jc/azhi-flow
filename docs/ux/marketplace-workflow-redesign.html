@@ -1,0 +1,1134 @@
+<title>Azhi Flow Redesign Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600&display=swap">
+<style>
+/* Layout: one reading column for the plan, full-width framed mockups that scroll sideways on narrow screens.
+   Tokens are the app's own "Ledger" set from web/src/styles.css, so every mockup matches the product. */
+:root {
+  --bg: #f7f8fa; --panel: #ffffff; --ink: #13213b; --muted: #556072; --line: #e1e5ec; --side: #ffffff;
+  --ok: #17743f; --bad: #b42318; --warn: #8a5300; --run: #2463a8; --idle: #6b7686;
+  --ok-bg: #e4f5ea; --bad-bg: #fde8e6; --warn-bg: #fff3dc; --run-bg: #e3eefa; --idle-bg: #eef1f5;
+  --accent: #0e6f6a; --accent-bg: #e1f2f0; --accent-ink: #ffffff; --attention: #d4900f;
+  --frame: #e9edf2; --pin: #13213b; --pin-ink: #ffffff;
+  --shadow: 0 1px 2px rgba(19,33,59,.05), 0 4px 12px -6px rgba(19,33,59,.12);
+  --f-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-title: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e141b; --panel: #151d27; --ink: #e6ecf3; --muted: #9aa7b8; --line: #263241; --side: #121921;
+    --ok: #5ccf8c; --bad: #ff8c80; --warn: #f2b75b; --run: #79b4f2; --idle: #7d8a9b;
+    --ok-bg: #12301f; --bad-bg: #3d1a17; --warn-bg: #3a2a0e; --run-bg: #16304d; --idle-bg: #1d2733;
+    --accent: #3cc0b4; --accent-bg: #10302e; --accent-ink: #062421; --attention: #e0a63a;
+    --frame: #1a232e; --pin: #e6ecf3; --pin-ink: #0e141b;
+    --shadow: 0 0 0 1px rgba(255,255,255,.03);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e141b; --panel: #151d27; --ink: #e6ecf3; --muted: #9aa7b8; --line: #263241; --side: #121921;
+  --ok: #5ccf8c; --bad: #ff8c80; --warn: #f2b75b; --run: #79b4f2; --idle: #7d8a9b;
+  --ok-bg: #12301f; --bad-bg: #3d1a17; --warn-bg: #3a2a0e; --run-bg: #16304d; --idle-bg: #1d2733;
+  --accent: #3cc0b4; --accent-bg: #10302e; --accent-ink: #062421; --attention: #e0a63a;
+  --frame: #1a232e; --pin: #e6ecf3; --pin-ink: #0e141b;
+  --shadow: 0 0 0 1px rgba(255,255,255,.03);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--f-ui); -webkit-font-smoothing: antialiased; }
+.page { max-width: 1160px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; }
+.prose { max-width: 70ch; }
+h1, h2, h3, h4 { text-wrap: balance; }
+.doc-h1 { font: 600 40px/1.1 var(--f-title); letter-spacing: -.015em; margin: 6px 0 14px; }
+.doc-h2 { font: 600 28px/1.2 var(--f-title); margin: 0 0 10px; letter-spacing: -.01em; }
+.doc-h3 { font-size: 17px; font-weight: 650; margin: 34px 0 8px; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.lede { font-size: 17px; color: var(--muted); }
+p { margin: 0 0 12px; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--f-mono); font-size: .86em; }
+section.doc { padding-block: 44px 8px; border-top: 1px solid var(--line); margin-top: 44px; }
+.jump { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.jump a { font-size: 13px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); text-decoration: none; }
+.jump a:hover, .jump a:focus-visible { border-color: var(--accent); color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* plan tables */
+.tw { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin: 14px 0 6px; }
+table.plan { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
+table.plan th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--idle-bg); }
+table.plan td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.plan tr:last-child td { border-bottom: 0; }
+table.plan td:first-child { font-weight: 600; white-space: nowrap; }
+.file { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 14px; margin-top: 16px; }
+.rule { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.rule h4 { margin: 0 0 6px; font-size: 15px; }
+.rule p { font-size: 13.5px; color: var(--muted); margin: 0 0 8px; }
+.rule .src { font-family: var(--f-mono); font-size: 11.5px; color: var(--accent); }
+
+.four { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; margin: 16px 0; }
+.four div { padding: 14px 16px; border-right: 1px solid var(--line); }
+.four div:last-child { border-right: 0; }
+.four b { display: block; font-size: 14px; margin-bottom: 2px; }
+.four span { font-size: 13px; color: var(--muted); }
+
+.dir-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 28px; align-items: start; }
+.dir-tag { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.dir-tag i { font-style: normal; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: 14px; }
+.fit { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; font-size: 13.5px; }
+.fit dt { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 8px; }
+.fit dt:first-child { margin-top: 0; }
+.fit dd { margin: 2px 0 0; }
+
+.mock-wrap { margin: 18px 0 8px; }
+.mock-cap { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.mock-cap b { font-size: 15px; }
+.mock-cap span { font-size: 13px; color: var(--muted); }
+.notes { list-style: none; padding: 0; margin: 10px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 20px; font-size: 13.5px; }
+.notes li { display: flex; gap: 10px; align-items: flex-start; }
+.notes li .pin { flex: none; margin-top: 2px; }
+
+/* ===================== mockup frame and app chrome ===================== */
+.mock { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--frame); box-shadow: var(--shadow); }
+.mock-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; }
+.mock-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+.mock-bar .url { margin-left: 10px; font: 11.5px var(--f-mono); color: var(--muted); background: var(--panel); border-radius: 6px; padding: 3px 10px; flex: 1; max-width: 420px; }
+.mock-scroll { overflow-x: auto; }
+.app { min-width: 1020px; background: var(--bg); font: 13px/1.45 var(--f-ui); color: var(--ink); }
+.app-top { display: flex; align-items: stretch; gap: 16px; padding: 0 18px; height: 44px; background: var(--side); border-bottom: 1px solid var(--line); }
+.app-brand { font-weight: 700; display: flex; align-items: center; gap: 7px; font-size: 13.5px; }
+.app-brand::before { content: ""; width: 15px; height: 15px; border-radius: 4px; background: var(--accent); }
+.app-nav { display: flex; gap: 2px; }
+.app-nav span { display: flex; align-items: center; padding: 0 10px; color: var(--muted); font-weight: 550; }
+.app-nav span.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.app-right { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.app-sub { display: flex; gap: 4px; padding: 6px 18px; background: var(--side); border-bottom: 1px solid var(--line); }
+.app-sub span { padding: 3px 9px; border-radius: 6px; color: var(--muted); font-size: 12px; font-weight: 500; }
+.app-sub span.on { background: var(--accent-bg); color: var(--accent); }
+.app-body { padding: 18px 20px 22px; }
+.ph { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+.ph h1 { font: 600 21px/1.2 var(--f-title); margin: 0; }
+.ph .sub { color: var(--muted); margin-top: 3px; max-width: 70ch; }
+.ph .act { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* app primitives */
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 5px 11px; font: 500 12.5px var(--f-ui); white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.sm { padding: 3px 8px; font-size: 11.5px; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 8px; font-size: 11.5px; background: var(--idle-bg); color: var(--muted); white-space: nowrap; }
+.chip.ok { background: var(--ok-bg); color: var(--ok); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
+.chip.run { background: var(--run-bg); color: var(--run); }
+.chip.acc { background: var(--accent-bg); color: var(--accent); }
+.chip.line { background: transparent; border: 1px solid var(--line); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: currentColor; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.pad { padding: 14px 16px; }
+.lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.mut { color: var(--muted); }
+.sm { font-size: 11.5px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stack { display: grid; gap: 10px; }
+.input { border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 6px 9px; font-size: 12.5px; color: var(--ink); min-height: 30px; display: flex; align-items: center; gap: 6px; }
+.input.mono { font-family: var(--f-mono); font-size: 11.5px; }
+.input.ph-text { color: var(--muted); }
+.input.focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.toggle { width: 30px; height: 17px; border-radius: 999px; background: var(--accent); position: relative; flex: none; }
+.toggle::after { content: ""; position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--accent-ink); }
+.hr { height: 1px; background: var(--line); margin: 10px 0; }
+
+/* step type glyph: neutral by design (status colors only mean status) */
+.g { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: var(--idle-bg); color: var(--ink); font-size: 12px; flex: none; font-family: var(--f-ui); }
+.g.sm2 { width: 17px; height: 17px; font-size: 10px; border-radius: 4px; }
+.g.on { background: var(--accent); color: var(--accent-ink); }
+.strip { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.strip .grp { display: inline-flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.strip .arr { color: var(--muted); font-size: 10px; }
+
+/* numbered annotation pin, matched to the notes under each mockup */
+.pin { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--pin); color: var(--pin-ink); font: 700 10.5px var(--f-ui); flex: none; vertical-align: middle; }
+.pin.abs { position: absolute; z-index: 3; }
+
+/* config sheet rows: setting | value | meaning */
+.cfg { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 0; font-size: 12.5px; }
+.cfg > div { padding: 8px 0; border-top: 1px solid var(--line); }
+.cfg > div:nth-child(-n+2) { border-top: 0; }
+.cfg dt, .cfg .k { color: var(--muted); font-weight: 500; }
+.cfg .v { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink); }
+.cfg .m { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-family: var(--f-ui); }
+.cfg .from { margin-top: 4px; }
+.sentence { background: var(--accent-bg); color: var(--ink); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; }
+.sentence b { color: var(--accent); }
+
+/* ---------- A: recipe ---------- */
+.a-hero { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; margin-bottom: 14px; }
+.a-hero h2 { font: 600 19px var(--f-title); margin: 0; }
+.a-search { display: flex; gap: 8px; }
+.a-search .input { flex: 1; min-height: 36px; font-size: 13px; }
+.a-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.a-card { padding: 14px 15px; display: grid; gap: 9px; align-content: start; }
+.a-card h3 { margin: 0; font-size: 14px; }
+.a-card p { margin: 0; color: var(--muted); font-size: 12px; }
+.a-card .need { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; font-size: 11.5px; }
+.a-card .need span:nth-child(odd) { color: var(--muted); }
+.a-card .foot { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding-top: 9px; margin-top: 2px; }
+.a-card.feat { grid-column: span 3; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px 24px; background: var(--panel); }
+
+.a-detail { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 16px; align-items: start; }
+.tl { position: relative; display: grid; gap: 0; }
+.stage { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; position: relative; padding-bottom: 12px; }
+.stage::before { content: ""; position: absolute; left: 13px; top: 28px; bottom: 0; width: 2px; background: var(--line); }
+.stage:last-child::before { display: none; }
+.stage-n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); border: 2px solid var(--line); font-weight: 700; font-size: 12px; color: var(--muted); z-index: 1; }
+.stage-h { display: flex; gap: 8px; align-items: baseline; padding-top: 4px; margin-bottom: 6px; }
+.stage-h b { font-size: 13px; }
+.steps-mini { display: grid; gap: 6px; }
+.srow { display: flex; align-items: center; gap: 9px; padding: 8px 11px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.srow .id { font-family: var(--f-mono); font-size: 11.5px; font-weight: 500; }
+.srow .d { color: var(--muted); font-size: 12px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .chev { color: var(--muted); }
+.srow.open { border-color: var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; background: var(--panel); }
+.sopen { border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; background: var(--panel); padding: 12px 14px; display: grid; gap: 10px; }
+.para { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.para .srow { padding: 7px 9px; }
+.side-card { display: grid; gap: 10px; }
+.touch li { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; font-size: 12px; }
+.touch { list-style: none; margin: 0; padding: 0; }
+.check { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12px; }
+.check li { display: flex; gap: 8px; align-items: center; }
+.tick { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; flex: none; }
+.tick.y { background: var(--ok-bg); color: var(--ok); }
+.tick.n { background: var(--warn-bg); color: var(--warn); }
+.tick.o { border: 1.5px dashed var(--line); }
+
+.wiz { display: flex; gap: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
+.wiz div { flex: 1; padding: 10px 14px; display: flex; gap: 9px; align-items: center; border-right: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.wiz div:last-child { border-right: 0; }
+.wiz .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 11px; background: var(--idle-bg); flex: none; }
+.wiz .done .n { background: var(--ok-bg); color: var(--ok); }
+.wiz .cur { color: var(--ink); background: var(--accent-bg); font-weight: 600; }
+.wiz .cur .n { background: var(--accent); color: var(--accent-ink); }
+.secret { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; padding: 14px 16px; border-top: 1px solid var(--line); }
+.secret:first-of-type { border-top: 0; }
+.secret h4 { margin: 0 0 3px; font: 500 12.5px var(--f-mono); display: flex; gap: 8px; align-items: center; }
+
+.life { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.life div { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; position: relative; }
+.life div.cur { border-color: var(--attention); box-shadow: inset 3px 0 0 var(--attention); }
+.life b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.life span { font-size: 11.5px; color: var(--muted); }
+
+/* ---------- B: blueprint ---------- */
+.b3 { display: grid; grid-template-columns: 190px minmax(0, 1fr) 330px; gap: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-height: 440px; }
+.rail { border-right: 1px solid var(--line); padding: 14px; display: grid; gap: 14px; align-content: start; background: var(--side); }
+.rail .grp { display: grid; gap: 4px; }
+.rail .opt { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 6px; border-radius: 5px; }
+.rail .opt.on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.rail .opt i { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.blist { display: grid; align-content: start; }
+.bitem { padding: 11px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 5px; }
+.bitem.on { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+.bitem .t { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 13px; }
+.bprev { border-left: 1px solid var(--line); padding: 14px 16px; display: grid; gap: 12px; align-content: start; }
+.mini-frame { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); height: 150px; overflow: hidden; position: relative; }
+.mini-frame .scaler { position: absolute; left: 8px; top: 6px; transform: scale(.46); transform-origin: 0 0; }
+.facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.facts div { background: var(--bg); border-radius: 7px; padding: 8px 10px; font-size: 11.5px; }
+
+.canvas-shell { display: grid; grid-template-columns: minmax(0, 1fr) 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.canvas-area { position: relative; background-color: var(--bg); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 16px 16px; padding: 12px; min-height: 410px; }
+.canvas-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--panel); }
+.seg span { padding: 3px 9px; font-size: 11.5px; color: var(--muted); border-right: 1px solid var(--line); }
+.seg span:last-child { border-right: 0; }
+.seg span.on { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+.cv { position: relative; width: 640px; height: 316px; }
+.cv svg { position: absolute; inset: 0; overflow: visible; }
+.cv path { fill: none; stroke: var(--muted); stroke-width: 1.4; opacity: .55; }
+.cv path.dash { stroke-dasharray: 4 4; }
+.cv path.hot { stroke: var(--accent); opacity: 1; stroke-width: 2; }
+.cv text { fill: var(--muted); font: 10px var(--f-ui); }
+.cn { position: absolute; width: 108px; height: 46px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 6px; align-content: center; box-shadow: var(--shadow); }
+.cn .g { grid-row: span 2; width: 20px; height: 20px; font-size: 11px; align-self: center; }
+.cn b { font: 500 11px var(--f-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cn small { font-size: 9.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cn.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.cn .fx { position: absolute; top: -6px; right: -6px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--panel); }
+.cn .fx.w { background: var(--attention); }
+.cn .lock { position: absolute; bottom: -9px; left: 8px; font-size: 9.5px; padding: 0 6px; border-radius: 999px; white-space: nowrap; border: 1px solid var(--panel); }
+.cn .lock.n { background: var(--warn-bg); color: var(--warn); }
+.cn .lock.y { background: var(--ok-bg); color: var(--ok); }
+.cv.dim .cn:not(.need) { opacity: .55; }
+.legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+.legend span { display: inline-flex; gap: 5px; align-items: center; }
+.insp { border-left: 1px solid var(--line); display: grid; align-content: start; }
+.insp-h { padding: 12px 14px 0; display: grid; gap: 6px; }
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); padding: 0 14px; margin-top: 8px; }
+.tabs span { padding: 7px 10px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.tabs span.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.insp-b { padding: 12px 14px; display: grid; gap: 10px; }
+.irow { display: grid; gap: 2px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+.irow:last-child { border-bottom: 0; }
+.irow .top { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.irow .top .i { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--muted); display: grid; place-items: center; font-size: 9px; font-weight: 700; font-family: var(--f-title); }
+.irow .val { font: 11.5px var(--f-mono); word-break: break-word; }
+.irow .mean { font-size: 11.5px; color: var(--muted); background: var(--bg); border-radius: 6px; padding: 6px 8px; margin-top: 3px; }
+.flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; font-size: 11.5px; }
+.flow .col { display: grid; gap: 4px; }
+.flow .col div { background: var(--bg); border-radius: 6px; padding: 4px 7px; font-family: var(--f-mono); font-size: 10.5px; }
+
+.pop { position: absolute; z-index: 4; width: 290px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 30px -10px rgba(19,33,59,.35); padding: 12px 14px; display: grid; gap: 8px; }
+.pop::before { content: ""; position: absolute; left: -7px; top: 26px; width: 12px; height: 12px; background: var(--panel); border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: rotate(45deg); }
+.ready-bar { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
+.meter { flex: 1; max-width: 260px; height: 7px; border-radius: 999px; background: var(--idle-bg); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+
+.ds-split { display: grid; grid-template-columns: 230px minmax(0, 1fr); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.ds-list .it { padding: 10px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 3px; }
+.ds-list .it.on { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+.revline { display: flex; align-items: center; gap: 0; margin: 6px 0 4px; }
+.rev { display: grid; justify-items: center; gap: 4px; font-size: 11px; min-width: 92px; }
+.rev .o { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); background: var(--panel); }
+.rev.tag .o { border-color: var(--ok); background: var(--ok); }
+.rev.new .o { border-color: var(--attention); border-style: dashed; }
+.revline .ln { flex: 1; height: 2px; background: var(--line); min-width: 30px; margin-bottom: 30px; }
+
+/* ---------- C: spec sheet ---------- */
+.seg-row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+table.spec { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.spec th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--side); }
+table.spec td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.spec tr.exp td { background: var(--bg); }
+table.spec .nm { font-weight: 600; }
+table.spec .mono2 { font-family: var(--f-mono); font-size: 11.5px; }
+.c-detail { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; align-items: start; }
+.toc { position: sticky; top: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 2px; font-size: 12px; }
+.toc .h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; padding: 8px 6px 3px; }
+.toc .h:first-child { padding-top: 2px; }
+.toc a, .toc span.a { display: flex; gap: 7px; align-items: center; padding: 3px 6px; border-radius: 5px; color: var(--ink); font-family: var(--f-mono); font-size: 11px; text-decoration: none; }
+.toc .a.on { background: var(--accent-bg); color: var(--accent); }
+.toc .a .w { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--attention); }
+.spec-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.spec-card .hd { padding: 12px 14px; display: grid; gap: 6px; border-bottom: 1px solid var(--line); }
+.spec-card .hd .t { display: flex; gap: 8px; align-items: center; }
+.spec-card .hd .t b { font: 600 13.5px var(--f-mono); }
+.sticky-ready { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px; }
+.big { font: 600 26px/1 var(--f-title); font-variant-numeric: tabular-nums; }
+.c-install { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 16px; align-items: start; }
+.fsec { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.fsec > .hd { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.frow { display: grid; grid-template-columns: 180px minmax(0, 1fr) 210px; gap: 14px; padding: 11px 14px; border-bottom: 1px solid var(--line); align-items: start; }
+.frow:last-child { border-bottom: 0; }
+.frow .k b { display: block; font-size: 12.5px; }
+.frow .k span { font-size: 11px; color: var(--muted); }
+.frow .why { font-size: 11.5px; color: var(--muted); }
+
+/* comparison */
+.score { display: inline-flex; gap: 3px; vertical-align: middle; }
+.score i { width: 9px; height: 9px; border-radius: 2px; background: var(--line); }
+.score i.f { background: var(--accent); }
+.rec { background: var(--accent-bg); border-radius: 12px; padding: 20px 22px; margin-top: 18px; }
+.rec h3 { margin: 0 0 8px; font-size: 17px; }
+.phases { display: grid; gap: 12px; margin-top: 14px; }
+.phase { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+.phase .when { font-weight: 700; font-size: 13px; }
+.phase .when span { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.phase ul { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; }
+.phase li { margin: 3px 0; }
+.gap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+.gap div { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--attention); border-radius: 8px; padding: 12px 14px; font-size: 13.5px; }
+.gap b { display: block; margin-bottom: 2px; }
+
+@media (max-width: 760px) {
+  .doc-h1 { font-size: 30px; }
+  .dir-head { grid-template-columns: 1fr; }
+  .phase { grid-template-columns: 1fr; gap: 4px; }
+  .four div { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jump a { transition: border-color .15s, color .15s; }
+}
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Azhi Flow · Mission control UX</div>
+    <h1 class="doc-h1">Marketplace and workflow redesign</h1>
+    <p class="lede prose">A plan for making every workflow readable before anyone runs it: what each step does, what each setting means, and what must be set up first. It is built on data the app already has, with three distinct directions, each shown as screen mockups using the product's own colors, type and real example workflows.</p>
+    <p class="prose mut" style="font-size:13.5px;color:var(--muted)">Step names, settings, tools, secrets and help text in the mockups come from the bundled examples and <code>stepHelp.ts</code>. Repository names, counts and set/missing states are examples.</p>
+    <nav class="jump" aria-label="Sections">
+      <a href="#audit">1 · What exists today</a>
+      <a href="#rules">2 · Shared rules</a>
+      <a href="#dir-a">A · Guided recipe</a>
+      <a href="#dir-b">B · Blueprint canvas</a>
+      <a href="#dir-c">C · Spec sheet</a>
+      <a href="#compare">Compare and recommend</a>
+      <a href="#build">Build plan</a>
+    </nav>
+  </header>
+
+  <!-- ============================ AUDIT ============================ -->
+  <section class="doc" id="audit">
+    <div class="eyebrow">Section 1</div>
+    <h2 class="doc-h2">What exists today</h2>
+    <p class="prose">I went through every page and component under <code>web/src</code> that touches the marketplace, workflows, datasets, tools and portable assets. The building blocks for a clear UX are already in the code: <code>stepHelp.ts</code> has a plain-language explanation for every step type and every setting, a one-sentence reading of each configured step, and the effect each step has outside Azhi. Most of that help appears only inside the editor's side panel, so someone browsing or installing a workflow never sees it.</p>
+
+    <div class="tw">
+      <table class="plan">
+        <thead><tr><th>Screen</th><th>Components</th><th>What works</th><th>What gets in the way</th></tr></thead>
+        <tbody>
+          <tr><td>Marketplace list</td><td><span class="file">Examples.tsx</span> · MarketCard, filters, featured card</td><td>Search, category chips, a "read-only / can change" chip, "no secrets needed" chip.</td><td>Step count, category and "works with" are hard-coded in a <code>META</code> map, so they drift from the real workflow. Cards say nothing about which steps run or what setup is needed.</td></tr>
+          <tr><td>Marketplace detail</td><td>ExampleDetail, ExampleCard, AllowedRepos, SecretRow</td><td>"It reads / It changes / Secrets" facts; repository validation; Copilot sign-in inline.</td><td>The steps are invisible until after install. The install form mixes tools, repos, settings and secrets in one panel. Secrets come after the Install button, so people install, then find out what is missing. No "ready / not ready" summary.</td></tr>
+          <tr><td>Workflows list</td><td><span class="file">Workflows.tsx</span> · Workflows table</td><td>Published version, signature, schedule and last run in one table.</td><td>No description, no step outline, no sign of missing secrets or run-plan blockers until you open the workflow.</td></tr>
+          <tr><td>Workflow detail</td><td>WorkflowPage, StartRun, PortableAssets, WorkflowCanvas, WorkflowFiles, ScheduleForm, Coverage, RunTable</td><td>The canvas already shows key settings per card (<code>keySettings</code>), and the run plan lists blockers.</td><td>Eight panels stacked vertically. "Start a run" sits above any explanation of what the run does. Clicking a canvas node shows raw settings with no meaning attached. Blockers live far down the page.</td></tr>
+          <tr><td>Editor</td><td><span class="file">Editor.tsx</span> · palette, canvas, StepForm, SettingRow, HarnessBuilder</td><td>Best existing pattern: each setting row pairs the control with its meaning, the step sentence, and "changed since saved" marks.</td><td>Its explanation pattern is not reused anywhere else, so the same step reads differently on the detail page, the run page and the editor.</td></tr>
+          <tr><td>Datasets</td><td><span class="file">Catalog.tsx</span>, <span class="file">Authoring.tsx</span> · Datasets, NewDataset, DatasetPage</td><td>Clear trust badge, revisions table, tag explanation.</td><td>The "New dataset" form sits above the list permanently. No view of which workflows read a dataset, and the add → publish → tag lifecycle is spread over three panels.</td></tr>
+          <tr><td>Tools</td><td>Tools, ToolForm, McpForm</td><td>Effect badge (read / write / write-unsafe), built-in marker.</td><td>No "used by", and the input fields a tool accepts are not shown, so the arguments in a tool step cannot be checked against anything.</td></tr>
+          <tr><td>Portable assets</td><td><span class="file">Assets.tsx</span></td><td>One library for MCP servers, agents, skills, commands.</td><td>Creation is a raw JSON textarea, and attaching an asset gives no preview of what the workflow gains.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================ RULES ============================ -->
+  <section class="doc" id="rules">
+    <div class="eyebrow">Section 2</div>
+    <h2 class="doc-h2">Rules all three directions share</h2>
+    <p class="prose">The directions differ in layout and interaction. They agree on what a person must be able to learn about any step, anywhere it appears: in the marketplace, on the workflow page, in the editor and on a run.</p>
+    <div class="four" role="list">
+      <div role="listitem"><b>What it does</b><span>The step sentence, e.g. "After pr finishes, opencode runs correctness-reviewer@1…"</span></div>
+      <div role="listitem"><b>What it reads</b><span>Which inputs and earlier steps feed it, as links.</span></div>
+      <div role="listitem"><b>What it changes</b><span>Writes, messages and waits, in the attention color.</span></div>
+      <div role="listitem"><b>What limits it</b><span>Timeout, tool calls, cost, retries, guard rules.</span></div>
+    </div>
+    <div class="rules">
+      <div class="rule"><h4>Every setting shows its meaning</h4><p>Setting name, current value, one plain sentence of meaning, and where the value comes from. Never a bare key and value.</p><span class="src">FIELD_HELP · helpFor() · sourcesOf()</span></div>
+      <div class="rule"><h4>One step component everywhere</h4><p>A single StepCard and ConfigRow, used by the marketplace, workflow page, editor and run page, so a step always reads the same.</p><span class="src">keySettings() · sentenceOf() · TYPE</span></div>
+      <div class="rule"><h4>Readiness before action</h4><p>Show what is missing (secrets, settings, repos, run-plan blockers) before the Install or Run button, and say which steps need it.</p><span class="src">secrets[].set · settings[].value · plan.blockers</span></div>
+      <div class="rule"><h4>Effects use status color only</h4><p>Reads are green, writes and messages amber. Step types stay neutral, keeping the app's rule that color always means status.</p><span class="src">effectsOf() · tool.effect</span></div>
+      <div class="rule"><h4>Stages, not just a graph</h4><p>Group steps by dependency depth into named stages (Read, Review, Decide, Act). The order is real, so numbering it is honest.</p><span class="src">layout() longest-path layers</span></div>
+    </div>
+  </section>
+
+  <!-- ============================ DIRECTION A ============================ -->
+  <section class="doc" id="dir-a">
+    <div class="dir-head">
+      <div>
+        <div class="dir-tag"><i>A</i> Direction A</div>
+        <h2 class="doc-h2">Guided recipe</h2>
+        <p class="prose">Every workflow reads like a recipe: numbered stages from top to bottom, each step a row that expands into a config sheet with a meaning beside every setting. Installation becomes a five-step wizard that ends only when everything is ready. It suits people who are new to Azhi and arrive from the marketplace.</p>
+      </div>
+      <dl class="fit">
+        <dt>Best for</dt><dd>First-time users, operators, marketplace installs</dd>
+        <dt>Core interaction</dt><dd>Progressive disclosure: expand one step at a time</dd>
+        <dt>Reuses</dt><dd>sentenceOf, keySettings, FIELD_HELP, SchemaFields</dd>
+      </dl>
+    </div>
+
+    <!-- A1 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>A1 · Marketplace</b><span>Cards show the real step outline and the setup cost before you click.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span class="on">Marketplace</span><span>Datasets</span><span>Tools</span></div>
+        <div class="app-body">
+          <div class="a-hero">
+            <h2>What do you want to automate?</h2>
+            <div class="a-search"><div class="input ph-text">⌕&nbsp; Search: "review pull requests", "weekly report", "investigate an issue"</div><span class="btn">Describe it in chat instead</span></div>
+            <div class="row"><span class="chip acc">All 8</span><span class="chip line">Code review 1</span><span class="chip line">Delivery 1</span><span class="chip line">Investigation 1</span><span class="chip line">Reports 2</span><span class="chip line">Learn Azhi 3</span><span class="mut sm" style="margin-left:auto">Filter: <span class="chip line">No secrets needed</span> <span class="chip line">Read-only</span></span></div>
+          </div>
+          <div class="a-grid">
+            <article class="card a-card feat">
+              <div class="stack">
+                <div class="lbl">Start here · Reports</div>
+                <h3 style="font-size:16px">Weekly quality report</h3>
+                <p>Reads CI runs, flaky tests and incidents, computes metrics, asks an analyst agent to explain them against your quality guidelines, and posts the report to Slack.</p>
+                <div class="row"><span class="btn primary">See how it works <span class="pin">1</span></span><span class="chip ok">reads CI, incidents</span><span class="chip warn">sends Slack message</span></div>
+              </div>
+              <div class="stack">
+                <div class="lbl">7 steps in 5 stages <span class="pin">2</span></div>
+                <div class="strip"><span class="grp"><span class="g sm2">⚙</span><span class="g sm2">⚙</span><span class="g sm2">⚙</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">{ }</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">✦</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">▤</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">➤</span></span></div>
+                <div class="mut sm">Fetch 3 sources › compute metrics › analyse › write report › post</div>
+                <div class="lbl" style="margin-top:6px">Setup <span class="pin">3</span></div>
+                <div class="row"><span class="chip">1 setting</span><span class="chip">1 secret</span><span class="chip">1 dataset</span><span class="mut sm">about 3 minutes</span></div>
+              </div>
+            </article>
+            <article class="card a-card">
+              <div class="lbl">Code review · <span style="color:var(--ok)">Installed</span></div>
+              <h3>Pull request review (OpenCode)</h3>
+              <p>Four reviewers in isolated checkouts, a summarizer, a PR comment and a Slack note when there are findings.</p>
+              <div class="strip"><span class="grp"><span class="g sm2">⚙</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">✦</span><span class="g sm2">✦</span><span class="g sm2">✦</span><span class="g sm2">✦</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">✦</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">▤</span><span class="g sm2">▤</span><span class="g sm2">◇</span><span class="g sm2">◇</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">⚙</span><span class="g sm2">➤</span></span></div>
+              <div class="need"><span>Steps</span><span>12 in 5 stages</span><span>Changes</span><span><span class="chip warn">PR comment</span> <span class="chip warn">Slack</span></span><span>Needs</span><span>repos · 1 setting · 4 secrets</span></div>
+              <div class="foot"><span class="chip ok"><span class="dot"></span>Ready to run</span><span class="btn sm" style="margin-left:auto">Open</span></div>
+            </article>
+            <article class="card a-card">
+              <div class="lbl">Investigation</div>
+              <h3>Issue root-cause analysis</h3>
+              <p>Investigates a GitHub issue in a checkout, writes an evidence-backed analysis and can post it after approval.</p>
+              <div class="strip"><span class="grp"><span class="g sm2">⚙</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">✦</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">▤</span><span class="g sm2">◇</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">⛉</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">⚙</span></span></div>
+              <div class="need"><span>Steps</span><span>6 in 5 stages</span><span>Changes</span><span><span class="chip warn">issue comment</span> after approval</span><span>Needs</span><span>repos · 3 secrets</span></div>
+              <div class="foot"><span class="chip">Not installed</span><span class="btn sm primary" style="margin-left:auto">Set up</span></div>
+            </article>
+            <article class="card a-card">
+              <div class="lbl">Reports</div>
+              <h3>Daily CI digest</h3>
+              <p>Fetches yesterday's CI results, computes pass rates and posts a short digest.</p>
+              <div class="strip"><span class="grp"><span class="g sm2">⚙</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">{ }</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">▤</span></span><span class="arr">›</span><span class="grp"><span class="g sm2">➤</span></span></div>
+              <div class="need"><span>Steps</span><span>4 in 4 stages</span><span>Changes</span><span><span class="chip warn">Slack</span></span><span>Needs</span><span>1 secret</span></div>
+              <div class="foot"><span class="chip">Not installed</span><span class="btn sm primary" style="margin-left:auto">Set up</span></div>
+            </article>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>The primary action is "See how it works", not "Install". People read the recipe before they commit.</span></li>
+        <li><span class="pin">2</span><span>The step strip is generated from the workflow's real nodes, grouped by stage. It replaces the hard-coded step count.</span></li>
+        <li><span class="pin">3</span><span>Setup cost is visible on the card: settings, secrets and datasets to provide, so nobody is surprised mid-install.</span></li>
+      </ul>
+    </div>
+
+    <!-- A2 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>A2 · Workflow page</b><span>Numbered stages; one step open with its full config sheet.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/workflows/pr-review</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ph"><div><div class="mut sm">Workflows › pr-review · v3 published · signed</div><h1>Pull request review (OpenCode)</h1><div class="sub">Correctness, security, tests and quality reviewers in isolated checkouts, a summarizer, a PR comment posted automatically, and a Slack note when there are comments.</div></div><div class="act"><span class="chip ok"><span class="dot"></span>Ready to run</span><span class="btn">Edit</span><span class="btn">v3 ▾</span></div></div>
+          <div class="a-detail">
+            <div class="tl">
+              <div class="stage"><span class="stage-n">1</span><div><div class="stage-h"><b>Read the pull request</b><span class="mut sm">1 step</span></div>
+                <div class="steps-mini"><div class="srow"><span class="g">⚙</span><span class="id">pr</span><span class="d">Read the pull request and its changed files from GitHub.</span><span class="chip ok">reads GitHub</span><span class="chev">›</span></div></div></div></div>
+              <div class="stage"><span class="stage-n" style="border-color:var(--accent);color:var(--accent)">2</span><div><div class="stage-h"><b>Review in parallel</b><span class="mut sm">4 agents run at the same time, each in its own checkout</span></div>
+                <div class="steps-mini">
+                  <div class="srow open"><span class="g on">✦</span><span class="id">correctness</span><span class="d">Look for bugs the change introduces.</span><span class="chip ok">reads a checkout</span><span class="chev">⌄</span></div>
+                  <div class="sopen">
+                    <div class="sentence"><span class="pin">1</span> After <b>pr</b> finishes, <b>opencode</b> runs <b>correctness-reviewer@1</b> in its own checkout of the repository for up to <b>10 tool calls</b> and <b>15m</b>, and must answer in the shape of <b>schemas/findings.json</b>.</div>
+                    <div class="cfg">
+                      <div class="k">Profile</div><div><div class="v">correctness-reviewer@1</div><div class="m">The saved prompt, skills and allowed tools for this agent. <a href="#dir-a">View profile</a></div></div>
+                      <div class="k">Runs on</div><div><div class="v">opencode</div><div class="m">What runs the agent. opencode runs OpenCode in a checkout; empty uses the built-in model agent.</div></div>
+                      <div class="k">Works in</div><div><div class="v">checkout of inputs.repo @ refs/pull/{pr}/head</div><div class="m">Cloned on a worker with <span class="mono">github-read-token</span>. The agent never sees the credential value. <span class="pin">2</span></div></div>
+                      <div class="k">Gets</div><div><div class="v">{ pr: nodes.pr.output }</div><div class="from"><span class="chip acc">from step 1 · pr</span></div><div class="m">What the agent is given to work on. Nothing else is visible to it.</div></div>
+                      <div class="k">Returns</div><div><div class="v">schemas/findings.json</div><div class="m">A reply that does not match this schema fails the step instead of passing bad data on. <a href="#dir-a">See fields</a></div></div>
+                      <div class="k">Limits</div><div><div class="v">15m · 10 tool calls</div><div class="m">When a limit is hit the step stops and the run records why. <span class="pin">3</span></div></div>
+                    </div>
+                  </div>
+                  <div class="para">
+                    <div class="srow"><span class="g">✦</span><span class="id">security</span></div>
+                    <div class="srow"><span class="g">✦</span><span class="id">tests</span></div>
+                    <div class="srow"><span class="g">✦</span><span class="id">quality</span></div>
+                    <div class="srow mut sm" style="justify-content:center">same checkout and limits</div>
+                  </div>
+                </div></div></div>
+              <div class="stage"><span class="stage-n">3</span><div><div class="stage-h"><b>Summarize</b><span class="mut sm">1 step</span></div>
+                <div class="steps-mini"><div class="srow"><span class="g">✦</span><span class="id">summarize</span><span class="d">Merge the findings into one review with a verdict and a comment body.</span><span class="chev">›</span></div></div></div></div>
+              <div class="stage"><span class="stage-n">4</span><div><div class="stage-h"><b>Prepare and decide</b><span class="mut sm">2 reports, 2 conditions</span></div>
+                <div class="steps-mini"><div class="srow"><span class="g">◇</span><span class="id">should_post</span><span class="d">Post the review unless this is a dry run.</span><span class="chip">post / skip</span><span class="chev">›</span></div></div></div></div>
+              <div class="stage"><span class="stage-n">5</span><div><div class="stage-h"><b>Act</b><span class="mut sm">changes things outside Azhi</span></div>
+                <div class="steps-mini"><div class="srow"><span class="g">⚙</span><span class="id">post</span><span class="d">Post the review as a comment on the pull request.</span><span class="chip warn">writes to GitHub</span><span class="chip ok">guarded</span><span class="chev">›</span></div><div class="srow"><span class="g">➤</span><span class="id">notify</span><span class="d">Slack message with the verdict and the reviewers' comments.</span><span class="chip warn">sends Slack message</span><span class="chev">›</span></div></div></div></div>
+            </div>
+            <aside class="side-card">
+              <div class="card pad stack">
+                <div class="lbl">Start a run <span class="pin">4</span></div>
+                <div class="stack" style="gap:7px">
+                  <div><div class="sm" style="font-weight:600">Repository *</div><div class="input mono">acme/payments</div><div class="mut sm">owner/name, for example acme/payments</div></div>
+                  <div><div class="sm" style="font-weight:600">Pull request number *</div><div class="input mono">1482</div></div>
+                  <div class="row"><span class="toggle"></span><span class="sm">Post the review and notify Slack</span></div>
+                  <div class="mut sm">Turn off for a dry run: stage 5 is skipped.</div>
+                </div>
+                <div class="row"><span class="btn primary">Start run</span><span class="btn">Test run</span></div>
+              </div>
+              <div class="card pad">
+                <div class="lbl" style="margin-bottom:6px">What this workflow touches</div>
+                <ul class="touch">
+                  <li><span class="chip ok">reads</span><span>GitHub pull request and a read-only checkout</span></li>
+                  <li><span class="chip warn">writes</span><span>One PR comment, only on the PR under review (guard)</span></li>
+                  <li><span class="chip warn">sends</span><span>Slack message to C0123ABCD when there are findings</span></li>
+                </ul>
+              </div>
+              <div class="card pad">
+                <div class="lbl" style="margin-bottom:8px">Ready to run</div>
+                <ul class="check">
+                  <li><span class="tick y">✓</span>Signed by local-publisher</li>
+                  <li><span class="tick y">✓</span>4 of 4 secrets set</li>
+                  <li><span class="tick y">✓</span>Slack channel set</li>
+                  <li><span class="tick y">✓</span>2 workers online with opencode</li>
+                </ul>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>The step sentence from <code>sentenceOf()</code> leads every open step, with the values in bold.</span></li>
+        <li><span class="pin">2</span><span>Each setting shows value and meaning together. References like <code>nodes.pr.output</code> become links to the step they come from.</span></li>
+        <li><span class="pin">3</span><span>Limits are always listed last and always present, so a reviewer can check how far an agent can go.</span></li>
+        <li><span class="pin">4</span><span>The run form moves to the side, under the summary of what the run touches and the readiness checklist.</span></li>
+      </ul>
+    </div>
+
+    <!-- A3 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>A3 · Set-up wizard</b><span>Secrets step: every secret says why it is needed and which steps use it.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples/pr-review/setup</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ph"><div><div class="mut sm">Marketplace › Pull request review</div><h1>Set up Pull request review</h1></div><div class="act"><span class="btn ghost">Save and finish later</span></div></div>
+          <div class="wiz"><div class="done"><span class="n">✓</span>Review steps</div><div class="done"><span class="n">✓</span>Repositories</div><div class="done"><span class="n">✓</span>Slack channel</div><div class="cur"><span class="n">4</span>Secrets <span class="pin">1</span></div><div><span class="n">5</span>Install and sign</div></div>
+          <div class="a-detail" style="grid-template-columns:minmax(0,1fr) 260px">
+            <div class="card">
+              <div class="secret"><div><h4>github-read-token <span class="chip ok">set</span></h4><div class="mut sm">Fine-grained token with read-only <b>Contents</b> and <b>Pull requests</b>. Reads the PR and clones the repository on the worker.</div><div class="row" style="margin-top:6px"><span class="mut sm">Used by</span><span class="chip acc">pr</span><span class="chip acc">correctness</span><span class="chip acc">security</span><span class="chip acc">tests</span><span class="chip acc">quality</span></div></div><div class="stack" style="gap:6px"><div class="input ph-text">Replace value</div></div></div>
+              <div class="secret"><div><h4>github-comment-token <span class="chip warn">missing</span></h4><div class="mut sm">Fine-grained token with <b>Pull requests: write</b>. Used only by the comment step. The guard limits it to the PR under review. <span class="pin">2</span></div><div class="row" style="margin-top:6px"><span class="mut sm">Used by</span><span class="chip acc">post</span></div></div><div class="stack" style="gap:6px"><div class="input focus mono">ghp_•••••••••••••</div><div class="row"><span class="btn sm primary">Save</span><span class="mut sm">Sent once, never shown again.</span></div></div></div>
+              <div class="secret"><div><h4>github-copilot-token <span class="chip ok">set</span></h4><div class="mut sm">Your GitHub Copilot sign-in. The reviewers run on Copilot models through OpenCode; no other model key is needed.</div><div class="row" style="margin-top:6px"><span class="mut sm">Used by</span><span class="chip acc">4 reviewers</span><span class="chip acc">summarize</span></div></div><div class="stack"><span class="btn sm">Sign in again with GitHub Copilot</span></div></div>
+              <div class="secret"><div><h4>slack-bot-token <span class="chip warn">missing</span></h4><div class="mut sm">Bot token for the Slack app. The bot must be a member of channel C0123ABCD.</div><div class="row" style="margin-top:6px"><span class="mut sm">Used by</span><span class="chip acc">notify</span><span class="mut sm">· optional: skip and the run still posts the PR comment</span></div></div><div class="stack" style="gap:6px"><div class="input ph-text">xoxb-…</div><span class="btn sm ghost" style="justify-self:start">Skip for now</span></div></div>
+            </div>
+            <aside class="card pad stack">
+              <div class="lbl">Before you install <span class="pin">3</span></div>
+              <ul class="check">
+                <li><span class="tick y">✓</span>Steps reviewed</li>
+                <li><span class="tick y">✓</span>Repository acme/payments</li>
+                <li><span class="tick y">✓</span>Slack channel C0123ABCD</li>
+                <li><span class="tick y">✓</span>github-read-token</li>
+                <li><span class="tick n">!</span>github-comment-token</li>
+                <li><span class="tick y">✓</span>github-copilot-token</li>
+                <li><span class="tick o"></span>slack-bot-token (optional)</li>
+              </ul>
+              <div class="hr"></div>
+              <div class="mut sm">Installing registers 2 tools, saves the workflow as a draft and signs it in this browser.</div>
+              <div class="row"><span class="btn">Back</span><span class="btn primary">Next: install</span></div>
+            </aside>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>Setup order matches dependencies: you cannot reach "Install and sign" with a required item missing.</span></li>
+        <li><span class="pin">2</span><span>Each secret explains its scope and names the steps that use it. Today this text only lives in YAML comments in <code>azhi.config.yaml</code>.</span></li>
+        <li><span class="pin">3</span><span>A persistent checklist shows the whole setup at a glance, including what is optional.</span></li>
+      </ul>
+    </div>
+
+    <!-- A4 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>A4 · Dataset</b><span>The add → publish → tag lifecycle as one row of counts, plus who reads it.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/datasets/quality-guidelines</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span>Marketplace</span><span class="on">Datasets</span><span>Tools</span></div>
+        <div class="app-body">
+          <div class="ph"><div><div class="mut sm">Datasets</div><h1>quality-guidelines</h1><div class="sub"><span class="chip ok">trusted</span> Readable by role operator or higher. Knowledge that agents and retrieve steps search, pinned per run.</div></div><div class="act"><span class="btn">Add documents</span><span class="btn primary">Publish r4</span></div></div>
+          <div class="life">
+            <div><b>3</b><span>documents in the dataset</span></div>
+            <div class="cur"><b>1</b><span>changed since r3, not searchable yet <span class="pin">1</span></span></div>
+            <div><b>r3</b><span>latest revision · 41 chunks</span></div>
+            <div><b>r2</b><span>tagged <span class="mono">approved</span> · what runs use</span></div>
+          </div>
+          <div class="a-detail" style="grid-template-columns:minmax(0,1fr) 300px">
+            <div class="card">
+              <div class="pad" style="padding-bottom:6px"><div class="lbl">Documents</div></div>
+              <div class="srow" style="border:0;border-top:1px solid var(--line);border-radius:0"><span class="id">quality-guidelines.md</span><span class="d">12,480 B · added 6d ago</span><span class="chip ok">published</span></div>
+              <div class="srow" style="border:0;border-top:1px solid var(--line);border-radius:0"><span class="id">flaky-test-policy.md</span><span class="d">3,102 B · changed 2h ago</span><span class="chip warn">not published yet</span></div>
+              <div class="srow" style="border:0;border-top:1px solid var(--line);border-radius:0"><span class="id">incident-severity.md</span><span class="d">5,870 B · added 6d ago</span><span class="chip ok">published</span></div>
+            </div>
+            <aside class="stack">
+              <div class="card pad stack" style="gap:8px">
+                <div class="lbl">Used by <span class="pin">2</span></div>
+                <div class="srow"><span class="g">✦</span><div style="min-width:0"><div class="id">Weekly quality report › analyse</div><div class="mut sm">agent · datasets: quality-guidelines@approved</div></div></div>
+                <div class="mut sm">This step reads r2 through the <span class="mono">approved</span> tag. Publishing r4 changes nothing until you move the tag. <span class="pin">3</span></div>
+              </div>
+              <div class="card pad stack" style="gap:6px"><div class="lbl">What a tag does</div><div class="mut sm">Runs pin a revision when they start. <span class="mono">quality-guidelines@approved</span> follows the approved tag, so you can test a new revision before moving it.</div></div>
+            </aside>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>The one number that needs action is marked in the attention color: changes that are not searchable yet.</span></li>
+        <li><span class="pin">2</span><span>"Used by" links each dataset to the workflow steps that read it.</span></li>
+        <li><span class="pin">3</span><span>The consequence of publishing is spelled out in terms of those steps.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================ DIRECTION B ============================ -->
+  <section class="doc" id="dir-b">
+    <div class="dir-head">
+      <div>
+        <div class="dir-tag"><i>B</i> Direction B</div>
+        <h2 class="doc-h2">Blueprint canvas</h2>
+        <p class="prose">The graph is the page. The existing React Flow canvas becomes the main surface for browsing, understanding and setting up a workflow, with an inspector on the right that explains whatever you select. Setup happens on the canvas itself: steps that need something carry a pin, and you fill the gap in place. It suits authors and people who think in data flow.</p>
+      </div>
+      <dl class="fit">
+        <dt>Best for</dt><dd>Authors, admins, complex branching workflows</dd>
+        <dt>Core interaction</dt><dd>Select on the canvas, read in the inspector</dd>
+        <dt>Reuses</dt><dd>WorkflowCanvas, CardDetail levels, StepForm rows</dd>
+      </dl>
+    </div>
+
+    <!-- B1 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>B1 · Marketplace</b><span>Filter rail, compact list, live preview of the selected workflow's graph.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples?selected=pr-review</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span class="on">Marketplace</span><span>Datasets</span><span>Tools</span></div>
+        <div class="app-body">
+          <div class="b3">
+            <div class="rail">
+              <div class="input ph-text">⌕ Search</div>
+              <div class="grp"><div class="lbl">Category</div><div class="opt on">All <i>8</i></div><div class="opt">Code review <i>1</i></div><div class="opt">Delivery <i>1</i></div><div class="opt">Investigation <i>1</i></div><div class="opt">Reports <i>2</i></div><div class="opt">Learn Azhi <i>3</i></div></div>
+              <div class="grp"><div class="lbl">Works with <span class="pin">1</span></div><div class="opt">GitHub <i>4</i></div><div class="opt">Slack <i>4</i></div><div class="opt">OpenCode <i>3</i></div><div class="opt">Jira <i>1</i></div></div>
+              <div class="grp"><div class="lbl">Changes</div><div class="opt">Read-only <i>4</i></div><div class="opt">Writes outside Azhi <i>4</i></div></div>
+            </div>
+            <div class="blist">
+              <div class="bitem on"><div class="t">Pull request review (OpenCode)<span class="chip ok">installed</span></div><div class="mut sm">12 steps · GitHub, Slack, OpenCode</div></div>
+              <div class="bitem"><div class="t">Weekly quality report<span class="chip">7 steps</span></div><div class="mut sm">CI, incidents, Slack · 1 dataset</div></div>
+              <div class="bitem"><div class="t">Feature delivery (SDLC)<span class="chip">15 steps</span></div><div class="mut sm">Jira or GitHub, Slack · 2 approvals</div></div>
+              <div class="bitem"><div class="t">Issue root-cause analysis<span class="chip">6 steps</span></div><div class="mut sm">GitHub, OpenCode · 1 approval</div></div>
+              <div class="bitem"><div class="t">Daily CI digest<span class="chip">4 steps</span></div><div class="mut sm">Slack</div></div>
+              <div class="bitem"><div class="t">Doubler<span class="chip">1 step</span></div><div class="mut sm">Learn Azhi · no secrets</div></div>
+            </div>
+            <div class="bprev">
+              <div><div class="lbl">Code review</div><div style="font-weight:650;font-size:15px">Pull request review (OpenCode)</div></div>
+              <div class="mini-frame"><div class="scaler"><div class="cv" data-canvas="mini"></div></div><span class="pin abs" style="right:8px;top:8px">2</span></div>
+              <div class="facts">
+                <div><div class="lbl">Reads</div>PR, files, checkout</div>
+                <div><div class="lbl">Changes</div><span style="color:var(--warn)">PR comment, Slack</span></div>
+                <div><div class="lbl">Approvals</div>None; guard instead</div>
+                <div><div class="lbl">Needs</div>4 secrets, 1 setting</div>
+              </div>
+              <div class="mut sm">Hover a step in the preview to read its sentence. <span class="pin">3</span></div>
+              <div class="row"><span class="btn primary">Open on canvas</span><span class="btn">Set up</span></div>
+            </div>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>Facets come from the tools each workflow registers, so filters stay true as examples change.</span></li>
+        <li><span class="pin">2</span><span>The preview is the real canvas at small scale, drawn from the same node list the server compiles.</span></li>
+        <li><span class="pin">3</span><span>No navigation needed to compare: arrow keys move through the list and the preview follows.</span></li>
+      </ul>
+    </div>
+
+    <!-- B2 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>B2 · Workflow page</b><span>Canvas with the "post" step selected; the inspector explains every setting.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/workflows/pr-review#post</span></div>
+      <div class="mock-scroll"><div class="app" style="min-width:1060px">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ph"><div><h1>Pull request review (OpenCode)</h1><div class="sub">v3 published · signed · 12 steps · manual trigger</div></div><div class="act"><span class="btn">v3 ▾</span><span class="btn">Edit</span><span class="btn">Files</span><span class="btn">Schedule</span><span class="btn primary">Run…</span></div></div>
+          <div class="canvas-shell">
+            <div class="canvas-area">
+              <div class="canvas-tools"><span class="mut sm">Cards show</span><div class="seg"><span>Names</span><span class="on">Key settings</span><span>All</span></div><span class="pin">1</span><span class="mut sm" style="margin-left:auto">Highlight</span><div class="seg"><span class="on">Data into post</span><span>Writes</span><span>None</span></div></div>
+              <div class="cv" data-canvas="full" data-sel="post"></div>
+              <div class="legend"><span><span class="g sm2">⚙</span>Tool</span><span><span class="g sm2">✦</span>Agent</span><span><span class="g sm2">▤</span>Report</span><span><span class="g sm2">◇</span>Condition</span><span><span class="g sm2">➤</span>Notify</span><span><span class="dot" style="color:var(--attention)"></span>Changes something outside Azhi</span><span>- - - reads output only</span></div>
+            </div>
+            <aside class="insp">
+              <div class="insp-h">
+                <div class="row"><span class="g">⚙</span><b class="mono" style="font-size:13px">post</b><span class="chip">Tool</span><span class="chip warn">writes to GitHub</span></div>
+                <div class="sentence">After <b>should_post</b> takes the <b>post</b> route, Azhi calls <b>github.comment-on-pr@1</b> (comment on a pull request). It changes something outside Azhi.</div>
+              </div>
+              <div class="tabs"><span>Overview</span><span class="on">Settings</span><span>Data</span><span>Last runs</span></div>
+              <div class="insp-b">
+                <div class="irow"><div class="top"><span class="i">i</span>Uses</div><div class="val">github.comment-on-pr@1</div><div class="mean">Which registered tool to call. <a href="#dir-b">Open in Tools</a>: write · uses github-comment-token · allowed repos acme/payments.</div></div>
+                <div class="irow"><div class="top"><span class="i">i</span>Arguments <span class="pin">2</span></div>
+                  <div class="flow"><div class="col"><div>inputs.repo</div><div>inputs.pr</div><div>summarize.output.body</div></div><span class="mut">→</span><div class="col"><div>repo</div><div>number</div><div>body</div></div></div>
+                  <div class="mean">The values passed to the tool, mapped from workflow inputs and earlier steps.</div></div>
+                <div class="irow"><div class="top"><span class="i">i</span>Guard <span class="chip ok" style="margin-left:4px">checked on every call</span> <span class="pin">3</span></div><div class="val">args.repo == inputs.repo &amp;&amp; args.number == inputs.pr</div><div class="mean">A rule checked on the final arguments. If false, the call is refused. Here it pins the comment to the PR under review, because the reviewers read untrusted code.</div></div>
+                <div class="irow"><div class="top"><span class="i">i</span>Runs only when</div><div class="val">should_post → post</div><div class="mean">Skipped on a dry run (input <span class="mono">post</span> = false).</div></div>
+                <div class="irow"><div class="top"><span class="i">i</span>Limits</div><div class="val mut">default timeout · no retry</div><div class="mean">How long the step may run, and how many times it is retried after a failure.</div></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>Keeps the canvas's existing Names / Key settings / All levels and adds highlighting of the data path into the selected step.</span></li>
+        <li><span class="pin">2</span><span>Arguments are drawn as a mapping from source to field, using <code>sourcesOf()</code>, instead of raw JSON.</span></li>
+        <li><span class="pin">3</span><span>Safety controls (guard, routes, limits) each get their meaning and the reason they exist in this workflow.</span></li>
+      </ul>
+    </div>
+
+    <!-- B3 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>B3 · Set up on the canvas</b><span>Steps that need something carry a pin; fill it in place.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples/pr-review?setup</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ready-bar"><b>Set up Pull request review</b><div class="meter" aria-label="5 of 7 ready"><i style="width:71%"></i></div><span class="sm">5 of 7 ready <span class="pin">1</span></span><span class="mut sm">Next: github-comment-token on <span class="mono">post</span></span><span class="btn primary" style="margin-left:auto;opacity:.55">Install and sign</span></div>
+          <div class="canvas-area" style="border:1px solid var(--line);border-radius:10px;min-height:360px">
+            <div style="position:relative">
+              <div class="cv dim" data-canvas="setup"></div>
+              <div class="pop" style="left:648px;top:154px">
+                <div class="row"><span class="g">⚙</span><b class="mono">post</b><span class="chip warn">needs a secret</span> <span class="pin">2</span></div>
+                <div class="sm"><b class="mono">github-comment-token</b></div>
+                <div class="mut sm">Fine-grained token with <b>Pull requests: write</b>. Only this step uses it, and its guard limits it to the PR under review.</div>
+                <div class="input focus mono">ghp_•••••••••</div>
+                <div class="row"><span class="btn sm primary">Save secret</span><span class="mut sm">Never shown again</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="legend"><span><span class="chip ok">✓ set</span> ready</span><span><span class="chip warn">needs</span> required before install</span><span>Faded steps need nothing <span class="pin">3</span></span></div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>One meter for the whole install; the button stays disabled until every required item is set.</span></li>
+        <li><span class="pin">2</span><span>The popover explains the secret in the context of the step that uses it, so its scope is obvious.</span></li>
+        <li><span class="pin">3</span><span>Steps with no setup fade back, so the eye goes to the gaps.</span></li>
+      </ul>
+    </div>
+
+    <!-- B4 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>B4 · Datasets</b><span>List and detail side by side, with a revision line showing where the tag points.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/datasets/quality-guidelines</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span>Marketplace</span><span class="on">Datasets</span><span>Tools</span></div>
+        <div class="app-body">
+          <div class="ds-split">
+            <div class="ds-list" style="border-right:1px solid var(--line)">
+              <div class="it"><div class="row" style="justify-content:space-between"><span class="input ph-text" style="flex:1">⌕ Filter</span><span class="btn sm">New</span></div></div>
+              <div class="it on"><b class="mono" style="font-size:12px">quality-guidelines</b><span class="mut sm">3 docs · r3 · 1 unpublished</span></div>
+              <div class="it"><b class="mono" style="font-size:12px">runbooks</b><span class="mut sm">18 docs · r7</span></div>
+              <div class="it"><b class="mono" style="font-size:12px">api-style-guide</b><span class="mut sm">4 docs · <span style="color:var(--warn)">untrusted</span></span></div>
+            </div>
+            <div class="pad stack">
+              <div class="row"><b style="font-size:15px" class="mono">quality-guidelines</b><span class="chip ok">trusted</span><span class="mut sm">operator or higher can read</span><span class="btn primary sm" style="margin-left:auto">Publish r4</span></div>
+              <div class="lbl">Revisions <span class="pin">1</span></div>
+              <div class="revline">
+                <div class="rev"><span class="o"></span><b>r1</b><span class="mut">22 chunks</span></div><span class="ln"></span>
+                <div class="rev tag"><span class="o"></span><b>r2</b><span class="chip ok">approved</span></div><span class="ln"></span>
+                <div class="rev"><span class="o"></span><b>r3</b><span class="mut">41 chunks · latest</span></div><span class="ln"></span>
+                <div class="rev new"><span class="o"></span><b>r4</b><span class="chip warn">1 change pending</span></div>
+              </div>
+              <div class="grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div class="card pad stack" style="gap:6px"><div class="lbl">Change since r3</div><div class="row"><span class="chip warn">changed</span><span class="mono sm">flaky-test-policy.md</span></div><div class="mut sm">Publish to make it searchable as r4.</div></div>
+                <div class="card pad stack" style="gap:6px"><div class="lbl">Read by <span class="pin">2</span></div><div class="row"><span class="g sm2">✦</span><span class="mono sm">quality-report › analyse</span><span class="chip">@approved → r2</span></div><div class="mut sm">Move the tag to r4 to roll it out.</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>The revision line shows the whole history and where the tag points, without reading a table.</span></li>
+        <li><span class="pin">2</span><span>Readers are listed with the revision they resolve to today.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================ DIRECTION C ============================ -->
+  <section class="doc" id="dir-c">
+    <div class="dir-head">
+      <div>
+        <div class="dir-tag"><i>C</i> Direction C</div>
+        <h2 class="doc-h2">Spec sheet</h2>
+        <p class="prose">Everything is visible at once, laid out like good reference documentation. Workflows are compared in a table, each workflow page is a specification with a step index on the left, and every step is a table of setting, value, meaning and source. Setup is a single page with a sticky readiness count. It suits reviewers, security and anyone auditing what a workflow can do.</p>
+      </div>
+      <dl class="fit">
+        <dt>Best for</dt><dd>Reviewers, security, compliance, power users</dd>
+        <dt>Core interaction</dt><dd>Scan and search; nothing is hidden behind clicks</dd>
+        <dt>Reuses</dt><dd>Table, Coverage, keySettings, FIELD_HELP</dd>
+      </dl>
+    </div>
+
+    <!-- C1 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>C1 · Marketplace</b><span>A comparison table; one row expanded into its step list.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples?view=table</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span class="on">Marketplace</span><span>Datasets</span><span>Tools</span></div>
+        <div class="app-body">
+          <div class="ph"><div><h1>Marketplace</h1><div class="sub">Ready-made workflows bundled with Azhi. Compare what each one reads, changes and needs.</div></div><div class="act"><div class="seg"><span>Cards</span><span class="on">Table</span></div></div></div>
+          <div class="seg-row"><div class="input ph-text" style="width:260px">⌕ Search workflows</div><div class="seg"><span class="on">All</span><span>Read-only</span><span>Writes</span><span>Needs approval</span></div><span class="mut sm" style="margin-left:auto">Sort: Setup effort ▾</span></div>
+          <div class="card" style="overflow:hidden">
+            <table class="spec">
+              <thead><tr><th>Workflow</th><th>Steps</th><th>Reads</th><th>Changes <span class="pin">1</span></th><th>People in the loop</th><th>Needs</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><div class="nm">Doubler</div><div class="mut sm">Learn Azhi</div></td><td>1</td><td>input only</td><td><span class="chip ok">nothing</span></td><td class="mut">—</td><td><span class="chip ok">nothing</span></td><td><span class="btn sm">Install</span></td></tr>
+                <tr><td><div class="nm">Daily CI digest</div><div class="mut sm">Reports</div></td><td>4</td><td>CI runs</td><td><span class="chip warn">Slack message</span></td><td class="mut">—</td><td>1 secret</td><td><span class="btn sm">Install</span></td></tr>
+                <tr><td><div class="nm">Pull request review</div><div class="mut sm">Code review</div></td><td>12</td><td>PR, checkout</td><td><span class="chip warn">PR comment</span> <span class="chip warn">Slack</span></td><td class="mut">none · guarded</td><td>repos · 1 setting · 4 secrets</td><td><span class="btn sm">Open</span></td></tr>
+                <tr class="exp"><td colspan="7">
+                  <div class="row" style="margin-bottom:6px"><span class="lbl">Issue root-cause analysis · 6 steps</span> <span class="pin">2</span></div>
+                  <table class="spec" style="background:var(--panel);border:1px solid var(--line);border-radius:8px">
+                    <thead><tr><th>#</th><th>Step</th><th>Type</th><th>What it does</th><th>Effect</th></tr></thead>
+                    <tbody>
+                      <tr><td>1</td><td class="mono2">issue</td><td>⚙ Tool</td><td>Reads the GitHub issue and its comments.</td><td><span class="chip ok">reads GitHub</span></td></tr>
+                      <tr><td>2</td><td class="mono2">investigate</td><td>✦ Agent</td><td>Investigates in an isolated checkout and writes a root-cause analysis.</td><td><span class="chip ok">reads a checkout</span></td></tr>
+                      <tr><td>3</td><td class="mono2">report · should_post</td><td>▤ ◇</td><td>Keeps the analysis with the run; decides whether to post.</td><td class="mut">—</td></tr>
+                      <tr><td>4</td><td class="mono2">approve_post</td><td>⛉ Approval</td><td>Waits for an operator to approve the comment.</td><td><span class="chip">waits for a person</span></td></tr>
+                      <tr><td>5</td><td class="mono2">post</td><td>⚙ Tool</td><td>Posts the analysis on the issue.</td><td><span class="chip warn">writes to GitHub</span></td></tr>
+                    </tbody>
+                  </table>
+                </td></tr>
+                <tr><td><div class="nm">Feature delivery (SDLC)</div><div class="mut sm">Delivery</div></td><td>15</td><td>Jira or GitHub issue</td><td><span class="chip warn">Slack</span></td><td>2 approvals</td><td>repos · 3 secrets</td><td><span class="btn sm">Install</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>Columns answer the questions a reviewer asks first: what it changes and whether a person approves it.</span></li>
+        <li><span class="pin">2</span><span>Expanding a row shows every step with its sentence and effect, before install.</span></li>
+      </ul>
+    </div>
+
+    <!-- C2 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>C2 · Workflow page</b><span>Step index on the left; each step is a specification table.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/workflows/pr-review/spec#notify</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ph"><div><h1>Pull request review (OpenCode)</h1><div class="sub">v3 · signed · 12 steps · touches GitHub and Slack</div></div><div class="act"><div class="seg"><span>Canvas</span><span class="on">Spec</span></div><span class="btn">Edit</span><span class="btn primary">Run…</span></div></div>
+          <div class="c-detail">
+            <nav class="toc">
+              <div class="h">Workflow</div><span class="a">Inputs · 3</span><span class="a">Effects summary</span>
+              <div class="h">1 · Read</div><span class="a"><span class="g sm2">⚙</span>pr</span>
+              <div class="h">2 · Review</div><span class="a"><span class="g sm2">✦</span>correctness</span><span class="a"><span class="g sm2">✦</span>security</span><span class="a"><span class="g sm2">✦</span>tests</span><span class="a"><span class="g sm2">✦</span>quality</span>
+              <div class="h">3 · Summarize</div><span class="a"><span class="g sm2">✦</span>summarize</span>
+              <div class="h">4 · Prepare</div><span class="a"><span class="g sm2">▤</span>report</span><span class="a"><span class="g sm2">▤</span>slack_message</span><span class="a"><span class="g sm2">◇</span>should_post</span><span class="a"><span class="g sm2">◇</span>should_notify</span>
+              <div class="h">5 · Act <span class="pin" style="width:15px;height:15px;font-size:9px">1</span></div><span class="a"><span class="g sm2">⚙</span>post<span class="w"></span></span><span class="a on"><span class="g sm2">➤</span>notify<span class="w"></span></span>
+            </nav>
+            <div class="stack" style="gap:14px">
+              <div class="spec-card">
+                <div class="hd"><div class="t"><span class="lbl">Inputs</span></div></div>
+                <table class="spec"><thead><tr><th>Input</th><th>Type</th><th>Required</th><th>Default</th><th>Meaning</th></tr></thead><tbody>
+                  <tr><td class="mono2">repo</td><td>string</td><td>yes</td><td class="mut">—</td><td>Repository, owner/name, for example acme/payments</td></tr>
+                  <tr><td class="mono2">pr</td><td>integer</td><td>yes</td><td class="mut">—</td><td>Pull request number</td></tr>
+                  <tr><td class="mono2">post</td><td>boolean</td><td>no</td><td class="mono2">true</td><td>Post the review and notify Slack. Turn off for a dry run.</td></tr>
+                </tbody></table>
+              </div>
+              <div class="spec-card">
+                <div class="hd">
+                  <div class="t"><span class="g">➤</span><b>notify</b><span class="chip">Notify</span><span class="chip warn">sends Slack message</span><span class="mut sm" style="margin-left:auto">Stage 5 · after slack_message, should_notify</span></div>
+                  <div class="sentence">After <b>slack_message</b> and <b>should_notify</b> finish, Azhi sends a Slack message to the configured channel, only when the reviewers had comments and the run is posting.</div>
+                </div>
+                <table class="spec"><thead><tr><th>Setting</th><th>Value</th><th>Meaning</th><th>Comes from <span class="pin">2</span></th></tr></thead><tbody>
+                  <tr><td>Channel</td><td class="mono2">slack</td><td>Where the message goes. Slack is the only channel today.</td><td class="mut">fixed</td></tr>
+                  <tr><td>Destination</td><td class="mono2">C0123ABCD</td><td>The Slack channel ID. The bot must be in the channel.</td><td><span class="chip acc">setting slack_channel</span></td></tr>
+                  <tr><td>Message</td><td class="mono2">slack_message.output.markdown</td><td>The text to send.</td><td><span class="chip acc">step slack_message</span></td></tr>
+                  <tr><td>Guard</td><td class="mono2">args.channel == config.channel</td><td>Checked on the final arguments; the message may only go to the configured channel.</td><td class="mut">workflow file</td></tr>
+                  <tr><td>Runs when</td><td class="mono2">should_notify → notify</td><td>Skipped on a dry run or when there are no findings.</td><td><span class="chip acc">step should_notify</span></td></tr>
+                  <tr><td>Credential</td><td class="mono2">slack-bot-token</td><td>Used by the gateway to send. Steps never see the value. <span class="pin">3</span></td><td><span class="chip ok">secret · set</span></td></tr>
+                </tbody></table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>The index marks steps that change things outside Azhi, so a reviewer can jump straight to them.</span></li>
+        <li><span class="pin">2</span><span>"Comes from" shows provenance for every value: a setting, an earlier step, a secret or the workflow file.</span></li>
+        <li><span class="pin">3</span><span>Credentials appear with their set or missing state, inside the step that uses them.</span></li>
+      </ul>
+    </div>
+
+    <!-- C3 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>C3 · Set up on one page</b><span>Every field with its meaning and the steps that use it; a sticky count on the right.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/examples/pr-review</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-body">
+          <div class="ph"><div><div class="mut sm">Marketplace</div><h1>Install Pull request review</h1></div></div>
+          <div class="c-install">
+            <div class="stack" style="gap:12px">
+              <div class="fsec"><div class="hd">Repositories <span class="chip ok">done</span></div>
+                <div class="frow"><div class="k"><b>Repositories it may use</b><span>required</span></div><div><div class="input mono">acme/payments, acme/ledger</div></div><div class="why">The GitHub tools refuse any other repository. Used by <span class="mono">pr</span>, the 4 reviewer checkouts and <span class="mono">post</span>.</div></div>
+                <div class="frow"><div class="k"><b>GitHub Enterprise</b><span>optional</span></div><div><div class="input ph-text mono">https://ghe.example.com/api/v3</div></div><div class="why">Leave empty for github.com, including organization repositories.</div></div>
+              </div>
+              <div class="fsec"><div class="hd">Settings <span class="chip ok">done</span></div>
+                <div class="frow"><div class="k"><b>Slack channel</b><span class="mono">slack_channel</span></div><div><div class="input mono">C0123ABCD</div></div><div class="why">Channel ID for the review summary. Fills <span class="mono">notify</span> › Destination. <span class="pin">1</span></div></div>
+              </div>
+              <div class="fsec"><div class="hd">Secrets <span class="chip warn">1 missing</span></div>
+                <div class="frow"><div class="k"><b class="mono" style="font-size:11.5px">github-read-token</b><span><span style="color:var(--ok)">set</span></span></div><div><div class="input ph-text">Replace value</div></div><div class="why">Read-only Contents and Pull requests. Used by 5 steps.</div></div>
+                <div class="frow"><div class="k"><b class="mono" style="font-size:11.5px">github-comment-token</b><span><span style="color:var(--warn)">missing</span></span></div><div class="row"><div class="input focus mono" style="flex:1">ghp_•••••</div><span class="btn sm primary">Save</span></div><div class="why">Pull requests: write. Used only by <span class="mono">post</span>.</div></div>
+                <div class="frow"><div class="k"><b class="mono" style="font-size:11.5px">github-copilot-token</b><span><span style="color:var(--ok)">set</span></span></div><div><span class="btn sm">Sign in again</span></div><div class="why">Runs the 5 agents on your Copilot models.</div></div>
+              </div>
+            </div>
+            <aside class="sticky-ready">
+              <div class="lbl">Readiness <span class="pin">2</span></div>
+              <div class="row" style="align-items:baseline"><span class="big">5</span><span class="mut">of 6 required</span></div>
+              <div class="meter" style="max-width:none"><i style="width:83%"></i></div>
+              <ul class="check">
+                <li><span class="tick y">✓</span>Repositories</li><li><span class="tick y">✓</span>Slack channel</li><li><span class="tick y">✓</span>github-read-token</li><li><span class="tick n">!</span>github-comment-token</li><li><span class="tick y">✓</span>github-copilot-token</li><li><span class="tick y">✓</span>Run plan compiles</li>
+              </ul>
+              <div class="hr"></div>
+              <div class="mut sm">Registers <span class="mono">github.get-pull-request@1</span> (read) and <span class="mono">github.comment-on-pr@1</span> (write).</div>
+              <span class="btn primary" style="opacity:.55;justify-content:center">Install and sign</span>
+            </aside>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>Each field states exactly which step setting it fills, linking setup to behavior.</span></li>
+        <li><span class="pin">2</span><span>The sticky count includes the compile check, so "Install" never fails after you press it.</span></li>
+      </ul>
+    </div>
+
+    <!-- C4 -->
+    <div class="mock-wrap">
+      <div class="mock-cap"><b>C4 · Tools registry</b><span>The same table pattern for tools (and datasets), with "used by" and accepted fields.</span></div>
+      <div class="mock"><div class="mock-bar"><i></i><i></i><i></i><span class="url">/ui/tools</span></div>
+      <div class="mock-scroll"><div class="app">
+        <div class="app-top"><span class="app-brand">Azhi Flow</span><div class="app-nav"><span>Today</span><span>Runs</span><span class="on">Workflows</span><span>Governance</span><span>System</span></div><div class="app-right">owner · Sign out</div></div>
+        <div class="app-sub"><span>Workflows</span><span>Portable assets</span><span>Marketplace</span><span>Datasets</span><span class="on">Tools</span></div>
+        <div class="app-body">
+          <div class="ph"><div><h1>Tools</h1><div class="sub">Every external call goes through the gateway as one of these tools. Writes are recorded in each run's action ledger.</div></div><div class="act"><span class="btn">Add remote MCP</span><span class="btn">Register a tool</span></div></div>
+          <div class="seg-row"><div class="seg"><span class="on">All 9</span><span>Read 5</span><span>Write 3</span><span>Write-unsafe 1</span></div><div class="seg"><span class="on">In use</span><span>Unused</span></div></div>
+          <div class="card" style="overflow:hidden">
+            <table class="spec">
+              <thead><tr><th>Tool</th><th>Effect</th><th>Credential</th><th>Allowed</th><th>Used by <span class="pin">1</span></th><th></th></tr></thead>
+              <tbody>
+                <tr><td><div class="mono2">github.get-pull-request@1</div><div class="mut sm">One pull request with its refs and changed files</div></td><td><span class="chip ok">read</span></td><td class="mono2">github-read-token <span class="chip ok">set</span></td><td class="mono2">acme/payments, acme/ledger</td><td><span class="chip acc">pr-review › pr</span></td><td><span class="btn sm">Change</span></td></tr>
+                <tr class="exp"><td colspan="6">
+                  <div class="row" style="align-items:flex-start;gap:24px">
+                    <div class="stack" style="gap:6px;min-width:300px"><div class="lbl">github.comment-on-pr@1 · accepts <span class="pin">2</span></div>
+                      <div class="cfg" style="grid-template-columns:90px minmax(0,1fr)"><div class="k mono">repo</div><div class="v">string · required</div><div class="k mono">number</div><div class="v">integer · required</div><div class="k mono">body</div><div class="v">string · required</div></div></div>
+                    <div class="stack" style="gap:6px"><div class="lbl">Called by</div><div class="row"><span class="chip acc">pr-review › post</span><span class="chip ok">guarded</span></div><div class="row"><span class="chip acc">issue-investigation › post</span><span class="chip">after approval</span></div><div class="mut sm">Comment on a pull request (GitHub). A write: every call is recorded in the run's action ledger.</div></div>
+                  </div>
+                </td></tr>
+                <tr><td><div class="mono2">github.comment-on-pr@1</div><div class="mut sm">Comment on a pull request</div></td><td><span class="chip warn">write</span></td><td class="mono2">github-comment-token <span class="chip warn">missing</span></td><td class="mono2">acme/payments</td><td><span class="chip acc">2 steps</span></td><td><span class="btn sm">Change</span></td></tr>
+                <tr><td><div class="mono2">slack.post-message@1</div><div class="mut sm">Built in</div></td><td><span class="chip warn">write</span></td><td class="mono2">slack-bot-token <span class="chip ok">set</span></td><td class="mut">configured channel</td><td><span class="chip acc">3 steps</span></td><td><span class="mut sm">built in</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div></div></div>
+      <ul class="notes">
+        <li><span class="pin">1</span><span>"Used by" turns the registry into an impact view: who breaks if this tool or its credential changes.</span></li>
+        <li><span class="pin">2</span><span>Accepted fields come from the tool's <code>input_schema</code>, so step arguments can be checked against them.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================ COMPARE ============================ -->
+  <section class="doc" id="compare">
+    <div class="eyebrow">Compare</div>
+    <h2 class="doc-h2">How the three directions compare</h2>
+    <div class="tw">
+      <table class="plan">
+        <thead><tr><th>Criterion</th><th>A · Guided recipe</th><th>B · Blueprint canvas</th><th>C · Spec sheet</th></tr></thead>
+        <tbody>
+          <tr><td>New user understands a workflow</td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td></tr>
+          <tr><td>Branching and data flow are clear</td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td></tr>
+          <tr><td>Auditing every setting and effect</td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span></td></tr>
+          <tr><td>Install success on first try</td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span></td></tr>
+          <tr><td>Works on narrow screens</td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i></i><i></i><i></i></span></td><td><span class="score"><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i></span></td></tr>
+          <tr><td>Reuses existing code</td><td>High: stepHelp, SchemaFields, Table</td><td>Highest: WorkflowCanvas and editor StepForm already exist</td><td>High: Table, Coverage, keySettings</td></tr>
+          <tr><td>Build effort</td><td>Medium</td><td>Medium to high (inspector, canvas pins)</td><td>Low to medium</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="rec">
+      <h3>Recommendation</h3>
+      <p class="prose" style="margin:0 0 8px">Build <b>Direction A as the default experience</b>, and make the workflow page switchable between A's stage view and B's canvas with inspector, since the canvas already exists and authors will want it. Use C's table pattern for Tools, Datasets and the marketplace's optional table view, where scanning matters more than storytelling.</p>
+      <p class="prose" style="margin:0">All three rest on the same two new components, <code>StepCard</code> and <code>ConfigRow</code>, so starting with A does not close off B or C later.</p>
+    </div>
+  </section>
+
+  <!-- ============================ BUILD PLAN ============================ -->
+  <section class="doc" id="build">
+    <div class="eyebrow">Build plan</div>
+    <h2 class="doc-h2">Data gaps and phases</h2>
+    <p class="prose">Most of what the mockups show is already in the client. Four things need a small server change; everything else is front-end work.</p>
+    <div class="gap">
+      <div><b>Marketplace steps are hard-coded</b>Step count, category and "works with" live in a <code>META</code> map in <code>Examples.tsx</code>. <code>GET /v1/examples</code> should return <code>nodes: [{ id, type, description, deps }]</code> from the workflow it already parses in <code>src/api/examples.ts</code>, plus a <code>category</code> field in the workflow file.</div>
+      <div><b>Secrets have no description or "used by"</b>The API returns only <code>{ name, set }</code>; the explanations sit in YAML comments. Add <code>description</code> to <code>secrets:</code> in <code>azhi.config.yaml</code>, and compute <code>used_by</code> from each tool's <code>credential</code> and each agent's <code>workspace.credential</code>.</div>
+      <div><b>Settings do not say where they are used</b>Compute which step settings reference each <code>{{setting}}</code> (for example <code>slack_channel</code> → <code>config.channel</code> → <code>notify.destination</code>) and return it with the setting.</div>
+      <div><b>No reverse index for datasets and tools</b>"Used by" needs a lookup over published versions: <code>GET /v1/datasets/:name/usage</code> and a <code>used_by</code> field on <code>GET /v1/tools</code>.</div>
+    </div>
+    <div class="phases">
+      <div class="phase"><div class="when">Phase 1<span>Foundations</span></div><div>Add <code>StepCard</code>, <code>ConfigRow</code>, <code>StepStrip</code>, <code>EffectChip</code> and <code>ReadinessList</code> to <code>web/src/ui.tsx</code>, built on <code>stepHelp.ts</code>. Add a <code>stagesOf(nodes)</code> helper that reuses the canvas's longest-path layering and names stages. Make the server changes above.</div></div>
+      <div class="phase"><div class="when">Phase 2<span>Marketplace</span></div><div>Rebuild <code>Examples.tsx</code>: cards with step strips and setup cost (A1), a "how it works" page using stages, and the set-up wizard (A3) that reuses <code>AllowedRepos</code>, <code>SecretRow</code> and <code>CopilotLogin</code>. Remove <code>META</code>.</div></div>
+      <div class="phase"><div class="when">Phase 3<span>Workflow page</span></div><div>Restructure <code>WorkflowPage</code> in <code>Workflows.tsx</code> into the stage view with a side rail (A2), with a toggle to canvas plus inspector (B2). Move Files, Schedule and the run plan into tabs. Add description, step strip and readiness to the workflows list.</div></div>
+      <div class="phase"><div class="when">Phase 4<span>Editor and runs</span></div><div>Use <code>ConfigRow</code> inside <code>StepForm</code> in <code>Editor.tsx</code> and in the run page's step drawer, so a step reads identically when browsing, editing and debugging a run.</div></div>
+      <div class="phase"><div class="when">Phase 5<span>Catalog</span></div><div>Datasets with the lifecycle row and "used by" (A4), Tools as the C4 table with accepted fields, and kind-specific forms in <code>Assets.tsx</code> to replace the raw JSON textarea.</div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  // pr-review, as compiled: id, type glyph, subtitle, x, y (canvas units), what it needs at setup.
+  var G = { tool: '⚙', agent: '✦', report: '▤', condition: '◇', notify: '➤' };
+  var N = [
+    ['pr', 'tool', 'Tool · reads GitHub', 14, 145, { s: 'github-read-token', ok: true }],
+    ['correctness', 'agent', 'Agent · 15m · 10 calls', 140, 40, { s: 'checkout', ok: true }],
+    ['security', 'agent', 'Agent · 15m · 10 calls', 140, 110],
+    ['tests', 'agent', 'Agent · 15m · 10 calls', 140, 180],
+    ['quality', 'agent', 'Agent · 15m · 10 calls', 140, 250],
+    ['summarize', 'agent', 'Agent · 10m · 2 calls', 266, 145, { s: 'copilot', ok: true }],
+    ['report', 'report', 'Report · markdown', 392, 40],
+    ['slack_message', 'report', 'Report · markdown', 392, 110],
+    ['should_post', 'condition', 'Condition · post / skip', 392, 180],
+    ['should_notify', 'condition', 'Condition · notify / skip', 392, 250],
+    ['post', 'tool', 'Tool · writes GitHub', 518, 180, { s: 'comment-token', ok: false }, true],
+    ['notify', 'notify', 'Notify · Slack', 518, 250, { s: 'slack-bot-token', ok: false }, true]
+  ];
+  var E = [
+    ['pr', 'correctness'], ['pr', 'security'], ['pr', 'tests'], ['pr', 'quality'],
+    ['correctness', 'summarize'], ['security', 'summarize'], ['tests', 'summarize'], ['quality', 'summarize'],
+    ['summarize', 'report'], ['summarize', 'slack_message'], ['summarize', 'should_post'], ['summarize', 'should_notify'],
+    ['should_post', 'post', 'post'], ['should_notify', 'notify', 'notify'], ['slack_message', 'notify', '', true]
+  ];
+  var W = 108, H = 46, NS = 'http://www.w3.org/2000/svg';
+  var at = {}; N.forEach(function (n) { at[n[0]] = n; });
+  // Edges feeding the selected step, highlighted to show its data path.
+  var hotFor = { post: ['should_post>post', 'summarize>should_post'] };
+
+  document.querySelectorAll('[data-canvas]').forEach(function (host) {
+    var mode = host.getAttribute('data-canvas');
+    var sel = host.getAttribute('data-sel');
+    var hot = (hotFor[sel] || []);
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('width', '640'); svg.setAttribute('height', '316');
+    svg.setAttribute('aria-hidden', 'true');
+    E.forEach(function (e) {
+      var a = at[e[0]], b = at[e[1]];
+      var x1 = a[3] + W, y1 = a[4] + H / 2, x2 = b[3], y2 = b[4] + H / 2, dx = (x2 - x1) / 2;
+      var p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', 'M' + x1 + ' ' + y1 + ' C' + (x1 + dx) + ' ' + y1 + ',' + (x2 - dx) + ' ' + y2 + ',' + x2 + ' ' + y2);
+      var cls = [];
+      if (e[3]) cls.push('dash');
+      if (hot.indexOf(e[0] + '>' + e[1]) >= 0) cls.push('hot');
+      if (cls.length) p.setAttribute('class', cls.join(' '));
+      svg.appendChild(p);
+      if (e[2] && mode !== 'mini') {
+        var t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', String(x1 + 3)); t.setAttribute('y', String(y1 - 4));
+        t.textContent = e[2];
+        svg.appendChild(t);
+      }
+    });
+    host.appendChild(svg);
+    N.forEach(function (n) {
+      var d = document.createElement('div');
+      d.className = 'cn' + (n[0] === sel ? ' sel' : '') + (mode === 'setup' && n[5] ? ' need' : '');
+      d.style.left = n[3] + 'px'; d.style.top = n[4] + 'px';
+      var g = document.createElement('span'); g.className = 'g' + (n[0] === sel ? ' on' : ''); g.textContent = G[n[1]];
+      var b = document.createElement('b'); b.textContent = n[0];
+      var s = document.createElement('small'); s.textContent = n[2];
+      d.appendChild(g); d.appendChild(b); d.appendChild(s);
+      if (n[6]) { var fx = document.createElement('span'); fx.className = 'fx w'; fx.title = 'Changes something outside Azhi'; d.appendChild(fx); }
+      if (mode === 'setup' && n[5]) {
+        var l = document.createElement('span');
+        l.className = 'lock ' + (n[5].ok ? 'y' : 'n');
+        l.textContent = (n[5].ok ? '✓ ' : 'needs ') + n[5].s;
+        d.appendChild(l);
+      }
+      host.appendChild(d);
+    });
+  });
+})();
+</script>

@@ -59,9 +59,9 @@ describe.skipIf(!up)('authoring in mission control', () => {
     // Signed with this browser's publisher key (WebCrypto Ed25519), so workers will run it.
     expect(v).toMatchObject({ draft: true, signature: { package_hash: v.package_hash, publisher: 'usr_local', workflow: 'sdlc' } });
     expect(v.manifest.files.map((f: any) => f.path)).toContain('templates/retro.md');
+    // Version and files open from the settings dock beside the canvas.
+    await page.getByRole('button', { name: /Version and files/ }).click();
     await page.getByRole('button', { name: /^Publish v\d+$/ }).waitFor();
-
-    await page.getByText('Files in this version').click();
     expect(await page.getByLabel('Contents of workflow.yaml').innerText()).toContain('id: sdlc');
     await page.getByRole('button', { name: 'templates/retro.md' }).click();
     expect((await page.getByLabel('Contents of templates/retro.md').innerText()).trim()).toBe(readFileSync('examples/sdlc/templates/retro.md', 'utf8').trim());
@@ -82,11 +82,13 @@ describe.skipIf(!up)('authoring in mission control', () => {
     const draft = (await uploadDir(h.api, 'test/fixtures/approval')).version;
     expect(draft).toMatchObject({ draft: true, signed: true });
     const page = await open('/ui/workflows/approval-check');
+    await page.getByRole('button', { name: /Version and files/ }).click();
     await page.getByRole('button', { name: `Publish v${draft.version}` }).click();
     await page.getByText('published', { exact: true }).waitFor();
     expect((await h.api.get<any>(`/v1/versions/${draft.id}`)).draft).toBe(false);
 
-    await page.getByText('Schedule', { exact: true }).click();
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: /Trigger/ }).click();
     await page.getByLabel('Cron').fill('30 8 * * 1-5');
     await page.getByLabel('Timezone').fill('Asia/Kolkata');
     await page.locator('#s-team').fill('payments');
