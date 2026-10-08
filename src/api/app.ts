@@ -13,6 +13,8 @@ import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
+import { preflight } from '../plan/preflight.js';
+import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
@@ -160,6 +162,17 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
   });
 
+  // Checks the workflow against the systems it uses, before a run: tools, secrets, GitHub tokens
+  // for the repositories involved, Slack, workers. `inputs` are the values the run would start with.
+  app.post('/v1/versions/:ref/preflight', async (req) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    const b = z.object({ inputs: z.record(z.string(), z.unknown()).default({}) }).parse(req.body ?? {});
+    const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
+    if (!v) throw notFound('workflow version');
+    return preflight(ctx, p.workspaceId, v, { inputs: b.inputs, principal: { userId: p.userId, role: p.role } });
+  });
+
   app.get('/v1/workflows', async (req) => {
     const p = user(req);
     return (
@@ -241,6 +254,8 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         test: z.boolean().optional(),
         node: z.string().optional(),
         fixtures: z.record(z.string(), z.unknown()).optional(),
+        /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
+        preflight: z.boolean().optional(),
       })
       .parse(req.body);
     if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
@@ -253,6 +268,13 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
       if (!plan.ok) {
         const first = plan.blockers[0]!;
         throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
+      }
+      if (body.preflight) {
+        const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role } });
+        if (!pre.ok) {
+          const failed = pre.checks.filter((c) => c.status === 'fail');
+          throw new AzhiError(ErrorClass.unsupportedCapability, `preflight failed: ${failed.map((c) => (c.node ? `${c.node}: ` : '') + c.message).join('; ')}`, { checks: pre.checks });
+        }
       }
     }
     const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
@@ -450,6 +472,22 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'admin');
     const b = z.object({ add: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'repositories are owner/name')).optional(), remove: z.array(z.string()).optional() }).parse(req.body ?? {});
     return updateToolRepos(ctx, p.workspaceId, decodeURIComponent((req.params as { ref: string }).ref), b, p.userId);
+  });
+
+  // Asks GitHub, with the tool's own token, whether it can use these repositories (default: the
+  // ones the tool allows) for what the tool does: read, or change. Says what to fix when it cannot.
+  app.post('/v1/tools/:ref/repos/check', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const ref = decodeURIComponent((req.params as { ref: string }).ref);
+    const b = z.object({ repos: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'repositories are owner/name')).max(50).optional() }).parse(req.body ?? {});
+    const spec = (await loadCatalog(ctx, p.workspaceId)).get(ref);
+    const cfg = ((spec?.transport as { config?: GithubConfig } | undefined)?.config ?? {}) as GithubConfig;
+    if (!spec || !Array.isArray(cfg.repos)) throw new AzhiError(ErrorClass.invalidInput, `${ref} is not a registered tool with a repository list`);
+    const token = spec.credential ? (await resolveSecret(ctx, p.workspaceId, spec.credential))?.value : undefined;
+    const need = spec.effect === 'read' ? 'read' : 'write';
+    const results = await Promise.all((b.repos ?? cfg.repos).map((r) => checkRepoAccess(cfg, token, r, need)));
+    return { tool: ref, credential: spec.credential ?? null, results };
   });
 
   app.post('/v1/tools', async (req) => {

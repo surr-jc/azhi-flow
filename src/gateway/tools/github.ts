@@ -421,3 +421,85 @@ export async function createPullRequest(cfg: GithubConfig, args: { repo?: unknow
 export async function findPullRequest(cfg: GithubConfig, args: { repo?: unknown; head?: unknown }, token: string | undefined, _key: string, timeoutMs: number) {
   return openPullRequestFor(cfg, token, argRepo(cfg, args.repo), branchName(cfg, args.head), timeoutMs);
 }
+
+
+export type AccessStatus = 'ok' | 'unauthorized' | 'not_found' | 'sso' | 'forbidden' | 'insufficient' | 'error';
+export interface RepoAccess {
+  repo: string;
+  ok: boolean;
+  status: AccessStatus;
+  /** What the check was for: reading the repository, or changing something in it (a comment, a push). */
+  need: 'read' | 'write';
+  token_kind: 'classic' | 'fine-grained' | 'unknown';
+  /** A classic token's scopes, from GitHub; fine-grained tokens do not list theirs. */
+  scopes?: string[];
+  private?: boolean;
+  permissions?: Record<string, boolean>;
+  message: string;
+  fix?: string;
+  /** Something to double check when the token cannot be inspected further. */
+  warning?: string;
+}
+
+const tokenKind = (token: string, scopes: string | null): RepoAccess['token_kind'] => (token.startsWith('github_pat_') ? 'fine-grained' : token.startsWith('ghp_') || scopes !== null ? 'classic' : 'unknown');
+
+/**
+ * Asks GitHub whether this token can use a repository for what a step needs, and says what to
+ * change when it cannot: the token's resource owner and repository access (fine-grained), its
+ * scopes (classic), SSO authorization, or the account's own role on the repository.
+ */
+export async function checkRepoAccess(cfg: GithubConfig, token: string | undefined, repo: string, need: 'read' | 'write', timeoutMs = 10_000): Promise<RepoAccess> {
+  const base = { repo, need };
+  if (!token) return { ...base, ok: false, status: 'unauthorized', token_kind: 'unknown', message: 'No token is set for this tool.', fix: 'Set the secret the tool uses, then check again.' };
+  const api = (cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '');
+  let res: Response;
+  try {
+    const url = `${api}/repos/${repo}`;
+    await checkEgress(url);
+    res = await fetch(url, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    return { ...base, ok: false, status: 'error', token_kind: tokenKind(token, null), message: `Could not reach GitHub at ${api}: ${(err as Error).message}`, fix: 'Check the API address of the tool and that the server can reach it.' };
+  }
+  const header = res.headers.get('x-oauth-scopes');
+  const scopes = header === null ? undefined : header.split(',').map((x) => x.trim()).filter(Boolean);
+  const kind = tokenKind(token, header);
+  const common = { ...base, token_kind: kind, ...(scopes ? { scopes } : {}) };
+  if (res.status === 401) return { ...common, ok: false, status: 'unauthorized', message: 'GitHub does not accept this token. It is wrong, expired or revoked.', fix: 'Create a new token and save it as the tool\'s secret.' };
+  if (res.status === 403) {
+    const sso = res.headers.get('x-github-sso');
+    if (sso) return { ...common, ok: false, status: 'sso', message: 'The organization requires SSO and this token is not authorized for it.', fix: `Authorize the token for the organization: ${sso.replace(/^required;\s*url=/, '')}` };
+    const limited = res.headers.get('x-ratelimit-remaining') === '0';
+    return { ...common, ok: false, status: 'forbidden', message: limited ? 'GitHub is rate limiting this token. Try again in a few minutes.' : 'GitHub refuses this token for the repository.', fix: limited ? undefined : 'Check the organization\'s token policy and that the token is approved.' };
+  }
+  if (res.status === 404) {
+    return {
+      ...common,
+      ok: false,
+      status: 'not_found',
+      message: `GitHub cannot find ${repo} for this token. Either the name is wrong or the token cannot see the repository.`,
+      fix: kind === 'classic' ? 'Check the spelling, then that the token has the "repo" scope (private repositories) and is SSO-authorized.' : 'Check the spelling, then that the token\'s resource owner is the organization and that "Only select repositories" includes this one.',
+    };
+  }
+  if (!res.ok) return { ...common, ok: false, status: 'error', message: `GitHub answered HTTP ${res.status}.` };
+  let body: { private?: boolean; permissions?: Record<string, boolean> } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    return { ...common, ok: false, status: 'error', message: 'GitHub returned an answer that is not JSON. Check the API address.' };
+  }
+  const found = { ...common, ...(body.private !== undefined ? { private: body.private } : {}), ...(body.permissions ? { permissions: body.permissions } : {}) };
+  if (need === 'write') {
+    const p = body.permissions;
+    if (p && !(p.push || p.maintain || p.admin || p.triage)) {
+      return { ...found, ok: false, status: 'insufficient', message: 'The token can read this repository but not change it. Posting a comment needs write or triage access.', fix: kind === 'fine-grained' ? 'Grant the token "Pull requests: Read and write" (and "Contents: Read and write" to push) on this repository, and make sure your account has write or triage access to it.' : 'Use a token with the "repo" scope, from an account with write or triage access to the repository.' };
+    }
+    if (scopes && !scopes.includes('repo') && !(body.private === false && scopes.includes('public_repo'))) {
+      return { ...found, ok: false, status: 'insufficient', message: `This token's scopes (${scopes.join(', ') || 'none'}) do not allow changes to ${body.private ? 'a private repository' : 'this repository'}.`, fix: body.private ? 'Add the "repo" scope.' : 'Add the "public_repo" or "repo" scope.' };
+    }
+    if (kind === 'fine-grained') return { ...found, ok: true, status: 'ok', message: `The token can see ${repo} and your account may change it.`, warning: 'GitHub does not list a fine-grained token\'s permissions. Make sure "Pull requests: Read and write" is granted for this repository.' };
+    return { ...found, ok: true, status: 'ok', message: `The token can change ${repo}.` };
+  }
+  if (body.permissions && body.permissions.pull === false) return { ...found, ok: false, status: 'insufficient', message: 'The token cannot read this repository.', fix: 'Grant read access (Contents and Pull requests: Read).' };
+  if (scopes && body.private && !scopes.includes('repo')) return { ...found, ok: false, status: 'insufficient', message: `This token's scopes (${scopes.join(', ') || 'none'}) do not include "repo", which a private repository needs.`, fix: 'Add the "repo" scope.' };
+  return { ...found, ok: true, status: 'ok', message: `The token can read ${repo}.` };
+}

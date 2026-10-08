@@ -679,3 +679,27 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .quicklook-side { padding: 12px 14px; display: grid; gap: 12px; }
 .quicklook-todo { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
 @media (max-width: 1000px) { .quicklook { grid-template-columns: minmax(0, 1fr); } }
+
+/* marketplace detail: update notice, secrets as aligned rows, repository access */
+.update-note { border: 1px solid var(--attention); background: var(--warn-bg); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.example-steps { margin-bottom: 16px; }
+.secret-row { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 6px 16px; align-items: start; padding: 10px 0; border-top: 1px solid var(--line); margin: 0; }
+.secret-row:first-of-type { border-top: 0; }
+.secret-name { display: flex; gap: 8px; align-items: center; min-height: 32px; flex-wrap: wrap; }
+.secret-ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.secret-ctl .hint { flex-basis: 100%; }
+.reinstall { margin-top: 8px; }
+.update-review .update-list { margin: 4px 0 0; padding-left: 18px; }
+.update-list li { margin: 2px 0; }
+.repo-list { display: grid; gap: 8px; margin: 4px 0 8px; }
+.repo-chip.ok { background: var(--ok-bg); color: var(--ok); }
+.repo-chip.bad { background: var(--bad-bg); color: var(--bad); }
+.repo-chip.warn { background: var(--warn-bg); color: var(--warn); }
+.access-results { display: grid; gap: 8px; }
+.access-repo { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: grid; gap: 4px; background: var(--panel); }
+.access-repo.bad { border-color: var(--bad); }
+.access-repo.warn { border-color: var(--attention); }
+.access-line { font-size: 13px; }
+.preflight { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 12px 0; display: grid; gap: 6px; background: var(--bg); }
+.preflight h3 { font-size: 13px; margin: 0; }
+.pf-line { font-size: 13px; }
