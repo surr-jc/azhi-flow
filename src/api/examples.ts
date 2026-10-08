@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,9 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit, loadToolRevision, registerTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { listSecrets } from '../server/secrets.js';
-import { uploadPackage } from '../server/workflows.js';
+import { packageFile } from '../server/packages.js';
+import { checkPackage, getVersion, uploadPackage } from '../server/workflows.js';
+import { mergePackages, summarise } from './example-merge.js';
 import { requireRole } from './auth.js';
 
 /**
@@ -164,6 +167,40 @@ function fillWorkflowText(text: string, e: Example, values: Record<string, strin
   return text.replace(PLACEHOLDER, (all, name: string) => (names.has(name) && values[name] !== undefined ? JSON.stringify(values[name]).slice(1, -1) : all));
 }
 
+/** JSON with sorted keys, so two registrations compare equal whatever order the database returned. */
+function canon(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(',')}}`;
+  return JSON.stringify(v) ?? 'null';
+}
+
+/** Identifies the template as the marketplace has it now: its package and its tool registrations. */
+function templateHash(e: Example): string {
+  const pkg = packageFromDirectory(join(examplesDir(), e.id));
+  return createHash('sha256').update(pkg.hash).update(JSON.stringify(e.config.tools ?? [])).digest('hex');
+}
+
+interface InstallRecord { template_hash: string; base_files: Record<string, string>; options: { api_url?: string; git_url?: string; settings?: Record<string, string> }; updated_at: string }
+
+async function installRecord(ctx: AppContext, workspaceId: string, id: string): Promise<InstallRecord | undefined> {
+  return (await ctx.pool.query(`SELECT template_hash, base_files, options, updated_at FROM example_installs WHERE workspace_id=$1 AND example_id=$2`, [workspaceId, id])).rows[0];
+}
+
+async function saveInstallRecord(ctx: AppContext, workspaceId: string, e: Example, files: Record<string, string>, options: InstallRecord['options'], actor: string) {
+  await ctx.pool.query(
+    `INSERT INTO example_installs(workspace_id, example_id, workflow_slug, template_hash, base_files, options, installed_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (workspace_id, example_id) DO UPDATE SET workflow_slug=$3, template_hash=$4, base_files=$5, options=$6, updated_at=now()`,
+    [workspaceId, e.id, e.workflow.id, templateHash(e), JSON.stringify(files), JSON.stringify(options), actor],
+  );
+}
+
+/** The newest version of the workflow this example installs, draft or published. */
+async function latestLocal(ctx: AppContext, workspaceId: string, slug: string) {
+  const row = (await ctx.pool.query(`SELECT v.id FROM workflow_versions v JOIN workflows w ON w.id = v.workflow_id WHERE v.workspace_id=$1 AND w.slug=$2 ORDER BY v.version DESC LIMIT 1`, [workspaceId, slug])).rows[0] as { id: string } | undefined;
+  return row ? getVersion(ctx, workspaceId, row.id) : undefined;
+}
+
 export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/examples', async (req) => {
     const p = user(req);
@@ -174,10 +211,16 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
       const e = loadExample(id);
       if (!e) continue;
       const known = await registeredSettings(ctx, p.workspaceId, e);
+      const local = await latestLocal(ctx, p.workspaceId, e.workflow.id);
+      const rec = local ? await installRecord(ctx, p.workspaceId, e.id) : undefined;
       out.push({
+        /** Set once the workflow is in this workspace: whether the marketplace has changed since it was installed or last updated. */
+        update: local ? { available: !rec || rec.template_hash !== templateHash(e), tracked: Boolean(rec), version: local.version, draft: local.draft, updated_at: rec?.updated_at ?? null } : null,
         id: e.id,
         name: e.name,
         description: e.description,
+        /** The workflow this example installs, to tell which workflow page it belongs to. */
+        workflow: e.workflow.id,
         nodes: e.nodes,
         inputs: e.inputs ?? null,
         tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect, description: t.description, needs_repos: needsRepos(t) })),
@@ -257,6 +300,7 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
     if (gitHost && files[wfPath]) files[wfPath] = Buffer.from(withGitHost(Buffer.from(files[wfPath], 'base64').toString('utf8'), gitHost.replace(/\/+$/, ''), Boolean(b.git_url))).toString('base64');
     const up = await uploadPackage(ctx, p.workspaceId, { workflow: pkg.manifest.workflow, files }, p.userId);
     if (!up.ok) return { ok: false, diagnostics: up.diagnostics, tools: registered };
+    await saveInstallRecord(ctx, p.workspaceId, e, files, { ...(b.api_url ? { api_url: b.api_url } : {}), ...(gitHost && b.git_url ? { git_url: b.git_url } : {}), settings: values }, p.userId);
     await audit(ctx, p.workspaceId, p.userId, 'example.installed', { example: id, version: up.version.id, tools: registered.map((t) => t.ref), repos: b.repos ?? [], settings: Object.keys(given) });
     const set = new Set((await listSecrets(ctx, p.workspaceId)).map((s) => s.name));
     return {
@@ -266,6 +310,96 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
       tools: registered,
       secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
       settings: settingsOf(e).map((s) => ({ ...s, value: values[s.name] ?? null })),
+    };
+  });
+
+  // Brings the marketplace's changes into the installed workflow without undoing local edits:
+  // a three-way merge against the package as it was installed. `dry_run` only reports.
+  app.post('/v1/examples/:id/update', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const id = (req.params as { id: string }).id;
+    const e = loadExample(id);
+    if (!e) throw new AzhiError(ErrorClass.invalidInput, `no example named '${id}'`);
+    const b = z
+      .object({
+        dry_run: z.boolean().optional(),
+        /** Values for settings the template has gained since the install. */
+        settings: z.record(z.string().regex(SETTING_NAME), z.string().max(500).regex(/^[^\u0000-\u001f\u007f{}]*$/)).optional(),
+      })
+      .parse(req.body ?? {});
+    const local = await latestLocal(ctx, p.workspaceId, e.workflow.id);
+    if (!local) throw new AzhiError(ErrorClass.invalidInput, `'${id}' is not installed yet; install it first`);
+    const rec = await installRecord(ctx, p.workspaceId, id);
+    const opts = rec?.options ?? {};
+    const given = Object.fromEntries(Object.entries(b.settings ?? {}).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+    const defaults = Object.fromEntries(settingsOf(e).flatMap((s) => ('default' in s && typeof s.default === 'string' && s.default ? [[s.name, s.default]] : [])));
+    const values = { ...defaults, ...(await registeredSettings(ctx, p.workspaceId, e)), ...(opts.settings ?? {}), ...given };
+
+    // The marketplace's package, filled in the way the install filled it.
+    const pkg = packageFromDirectory(join(examplesDir(), id));
+    const wfPath = pkg.manifest.workflow;
+    const gitHost = opts.git_url ?? (opts.api_url ? gitHostFor(opts.api_url) : undefined);
+    const upFiles = new Map<string, Buffer>();
+    for (const f of pkg.manifest.files) {
+      let data = pkg.read(f.path)!;
+      if (f.path === wfPath) {
+        let text = fillWorkflowText(data.toString('utf8'), e, values);
+        if (gitHost) text = withGitHost(text, gitHost.replace(/\/+$/, ''), Boolean(opts.git_url));
+        data = Buffer.from(text);
+      }
+      upFiles.set(f.path, data);
+    }
+    const baseFiles = rec ? new Map(Object.entries(rec.base_files).map(([path, b64]) => [path, Buffer.from(b64, 'base64')])) : undefined;
+    const localFiles = new Map<string, Buffer>();
+    for (const f of local.manifest.files) localFiles.set(f.path, await packageFile(ctx, p.workspaceId, local.package_hash, f.path));
+    const merged = mergePackages(baseFiles, localFiles, upFiles, wfPath);
+
+    // Tools: the marketplace's description and schemas, with the repositories and API address kept as they are here.
+    const toolPlan: Array<{ ref: string; kind: 'added' | 'updated' | 'unchanged'; spec: ToolSpec }> = [];
+    for (const t of e.config.tools ?? []) {
+      const spec = fill(structuredClone(t), values);
+      const ref = `${spec.id}@${spec.version}`;
+      const installed = await loadToolRevision(ctx, p.workspaceId, ref, undefined);
+      if (installed) {
+        const mine = (installed.transport as { config?: Record<string, unknown> }).config ?? {};
+        const keep = Object.fromEntries(['repos', 'api_url'].filter((k) => k in mine).map((k) => [k, mine[k]]));
+        (spec.transport as { config?: Record<string, unknown> }).config = { ...((spec.transport as { config?: Record<string, unknown> }).config ?? {}), ...keep };
+        if (installed.credential) spec.credential = installed.credential;
+      }
+      const { revision: _r, ...cur } = installed ?? ({} as ToolSpec);
+      toolPlan.push({ ref, kind: !installed ? 'added' : canon(cur) === canon(spec) ? 'unchanged' : 'updated', spec });
+    }
+    const toolsChanged = toolPlan.filter((t) => t.kind !== 'unchanged');
+    const wanted = settingsOf(e).map((s) => ({ ...s, value: values[s.name] ?? null }));
+    const missingSettings = wanted.filter((s) => s.value === null);
+    const summary = summarise(merged.report);
+    const nothing = merged.report.changes.length === 0 && toolsChanged.length === 0;
+    const report = { ...merged.report, summary, tools: toolsChanged.map((t) => ({ ref: t.ref, kind: t.kind })), tracked: Boolean(rec), nothing_to_update: nothing };
+
+    // A dry run cannot compile against tools it has not registered yet.
+    const checked = b.dry_run && toolPlan.some((t) => t.kind === 'added') ? undefined : await checkPackage(ctx, p.workspaceId, wfPath, merged.files);
+    if (b.dry_run) return { ok: !checked || checked.ok, dry_run: true, report, diagnostics: checked && !checked.ok ? checked.diagnostics : [], settings: wanted };
+    if (nothing) {
+      if (rec) await saveInstallRecord(ctx, p.workspaceId, e, Object.fromEntries([...upFiles].map(([k, v]) => [k, v.toString('base64')])), opts, p.userId);
+      return { ok: true, updated: false, report, version: { id: local.id, workflow: local.slug, version: local.version, draft: local.draft }, settings: wanted };
+    }
+
+    for (const t of toolsChanged) await registerTool(ctx, p.workspaceId, t.spec, p.userId);
+    const up = await uploadPackage(ctx, p.workspaceId, { workflow: wfPath, files: Object.fromEntries([...merged.files].map(([k, v]) => [k, v.toString('base64')])) }, p.userId);
+    if (!up.ok) return { ok: false, diagnostics: up.diagnostics, report };
+    await saveInstallRecord(ctx, p.workspaceId, e, Object.fromEntries([...upFiles].map(([k, v]) => [k, v.toString('base64')])), opts, p.userId);
+    await audit(ctx, p.workspaceId, p.userId, 'example.updated', { example: id, version: up.version.id, from: local.id, ...summary, tools: toolsChanged.map((t) => t.ref) });
+    const set = new Set((await listSecrets(ctx, p.workspaceId)).map((s) => s.name));
+    return {
+      ok: true,
+      updated: true,
+      report,
+      diagnostics: up.diagnostics,
+      version: { id: up.version.id, workflow: up.version.slug, version: up.version.version, draft: up.version.draft },
+      secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
+      settings: wanted,
+      settings_missing: missingSettings.map((s) => s.name),
     };
   });
 }

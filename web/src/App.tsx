@@ -6,6 +6,7 @@ import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
 import { Audit } from './pages/Audit';
 import { Datasets, Tools } from './pages/Catalog';
+import { Connections } from './pages/Connections';
 import { Examples } from './pages/Examples';
 import { Health } from './pages/Health';
 import { Overview } from './pages/Overview';
@@ -90,7 +91,7 @@ type Section = { label: string; to: string; items: NavItem[]; count?: 'approvals
 const SECTIONS: Section[] = [
   { label: 'Today', to: '/ui', count: 'approvals', items: [] },
   { label: 'Runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
-  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Portable assets' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }] },
+  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Portable assets' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }, { to: '/ui/connections', label: 'Connections' }] },
   { label: 'Governance', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
   { label: 'System', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
@@ -179,6 +180,8 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/datasets') return <Datasets />;
   if ((m = match('/ui/datasets/:name', path))) return <DatasetRoute name={m.name!} />;
   if (path === '/ui/tools') return <Tools />;
+  if (path === '/ui/connections') return <Connections />;
+  if ((m = match('/ui/connections/:system', path))) return <Connections system={m.system!} />;
   if (path === '/ui/audit') return <Audit />;
   if (path === '/ui/health') return <Health />;
   return (

@@ -1,11 +1,13 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import type { JsonSchema, RunPlan, ScheduleRow } from '../api';
 import { api, atLeast } from '../api';
-import { PublishDraft, ScheduleForm, WorkflowFiles } from '../pages/Authoring';
+import { ScheduleForm, WorkflowFiles } from '../pages/Authoring';
 import { Link } from '../router';
 import { Badge, Loading, Table, when } from '../ui';
 import type { ToolInfo } from '../stepHelp';
 import { ConfigRow } from './ConfigRow';
+import { RepoList } from './RepoAccess';
 import type { PlanNode } from './WorkflowCanvas';
 
 /**
@@ -186,32 +188,8 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
         </>
       );
     }
-    case 'connections': {
-      const used = d.nodes.filter((n) => n.type === 'tool');
-      const byRef = new Map<string, string[]>();
-      for (const n of used) if (typeof n.def?.tool === 'string') byRef.set(n.def.tool, [...(byRef.get(n.def.tool) ?? []), n.id]);
-      return (
-        <>
-          <p className="muted">Every external call goes through the gateway as one of these tools. Writes are recorded in each run's action ledger.</p>
-          {byRef.size ? (
-            <Table head={['Tool', 'Effect', 'Allowed repositories', 'Used by']}>
-              {[...byRef].map(([ref, steps]) => {
-                const t = toolOf(d.tools, ref);
-                return (
-                  <tr key={ref}>
-                    <td><span className="mono">{ref}</span>{t?.description ? <div className="muted small">{t.description}</div> : null}</td>
-                    <td>{t ? <Badge tone={t.effect === 'read' ? 'ok' : t.effect === 'write-unsafe' ? 'bad' : 'warn'}>{t.effect}</Badge> : <span className="muted">unknown</span>}</td>
-                    <td>{t?.transport?.config?.repos?.length ? t.transport.config.repos.map((r) => <div key={r} className="mono small">{r}</div>) : <span className="muted">—</span>}</td>
-                    <td>{steps.join(', ')}</td>
-                  </tr>
-                );
-              })}
-            </Table>
-          ) : <p className="muted">No step of this workflow calls a tool.</p>}
-          <p><Link to="/ui/tools">All tools</Link></p>
-        </>
-      );
-    }
+    case 'connections':
+      return <Connections d={d} admin={admin} />;
     case 'datasets': {
       const sets = datasetsUsed(d.nodes);
       return (
@@ -250,13 +228,66 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
           <ConfigRow label="Signature" value={d.plan ? (d.plan.signer.verified ? `verified, ${d.plan.signer.publisher}` : `not verified${d.plan.signer.error ? `: ${d.plan.signer.error}` : ''}`) : '…'} help="Workers run signed packages only." />
           <ConfigRow label="Uploaded" value={when(d.version.created_at)} />
           <ConfigRow label="Package" value={<span className="mono">{d.version.package_hash.slice(0, 19)}</span>} />
-          {author ? <PublishDraft version={d.version} slug={d.slug} /> : null}
+          {d.version.draft ? <p className={author ? 'muted' : 'warn-note'}>This version is a draft. {author ? 'Sign and publish it from the buttons at the top of the page.' : 'An author publishes it.'}</p> : null}
           <h3 className="section">Files in this version</h3>
           <WorkflowFiles versionId={d.version.id} />
           <p className="small"><button type="button" className="linkish" onClick={onClose}>Close</button></p>
         </>
       );
   }
+}
+
+/**
+ * The tools the workflow calls and the repositories its GitHub tools may use. A repository added
+ * here is checked straight away against each tool's token, so a token that lacks access (or the
+ * scope the tool needs) is reported before a run fails on it.
+ */
+function Connections({ d, admin }: { d: SettingsData; admin: boolean }) {
+  const qc = useQueryClient();
+  const byRef = new Map<string, string[]>();
+  for (const n of d.nodes) if (n.type === 'tool' && typeof n.def?.tool === 'string') byRef.set(n.def.tool, [...(byRef.get(n.def.tool) ?? []), n.id]);
+  const rows = [...byRef].map(([ref, steps]) => ({ ref, steps, tool: toolOf(d.tools, ref) }));
+  const gh = rows.filter((r) => Array.isArray(r.tool?.transport?.config?.repos));
+  const refs = gh.map((r) => r.ref);
+  const repos = [...new Map(gh.flatMap((r) => r.tool!.transport!.config!.repos!).map((x) => [x.toLowerCase(), x])).values()];
+  const secrets = missingSecrets(d);
+  return (
+    <>
+      <p className="muted">Every external call goes through the gateway as one of these tools. Writes are recorded in each run's action ledger.</p>
+      {rows.length ? (
+        <Table head={['Tool', 'Effect', 'Token', 'Used by']}>
+          {rows.map(({ ref, steps, tool: t }) => (
+            <tr key={ref}>
+              <td><span className="mono">{ref}</span>{t?.description ? <div className="muted small">{t.description}</div> : null}</td>
+              <td>{t ? <Badge tone={t.effect === 'read' ? 'ok' : t.effect === 'write-unsafe' ? 'bad' : 'warn'}>{t.effect}</Badge> : <Badge tone="bad">not registered</Badge>}</td>
+              <td>{t?.credential ? <><span className="mono small">{t.credential}</span> <Badge tone={secrets.has(t.credential) ? 'bad' : 'ok'}>{secrets.has(t.credential) ? 'missing' : 'set'}</Badge></> : <span className="muted">none</span>}</td>
+              <td>{steps.join(', ')}</td>
+            </tr>
+          ))}
+        </Table>
+      ) : <p className="muted">No step of this workflow calls a tool.</p>}
+      {gh.length ? (
+        <div className="sd-group">
+          <h3>Allowed repositories</h3>
+          <p className="muted small">The GitHub tools above refuse any other repository. To use this workflow on another one, add it here: no reinstall from the Marketplace is needed.</p>
+          <RepoList
+            refs={refs}
+            repos={repos}
+            canEdit={admin}
+            change={async (c) => {
+              for (const ref of refs) await api(`/v1/tools/${encodeURIComponent(ref)}/repos`, { method: 'POST', body: c });
+            }}
+            onChanged={() => {
+              void qc.invalidateQueries({ queryKey: ['tools'] });
+              void qc.invalidateQueries({ queryKey: ['plan'] });
+            }}
+          />
+          {admin ? null : <p className="muted small">Changing repositories needs the admin role.</p>}
+        </div>
+      ) : null}
+      <p><Link to="/ui/tools">All tools</Link></p>
+    </>
+  );
 }
 
 export function PortableAssets({ slug, assets }: { slug: string; assets?: PortableAsset[] }) {
