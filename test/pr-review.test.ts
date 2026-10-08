@@ -835,7 +835,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
   });
 
   it('is set up from the Examples page: installed, signed in the browser, secrets set, and run', async () => {
-    const page = await open('/ui/examples');
+    const page = await open('/ui/examples/pr-review');
     const card = page.locator('section.panel', { hasText: 'pr-review' });
     await card.getByLabel('Repositories it may use').fill('acme/payments');
     await card.getByText('GitHub Enterprise', { exact: true }).click();

@@ -227,7 +227,7 @@ describe.skipIf(!up)('SDLC example', () => {
     expect(r.out).toContain('secret jira-api-token: set');
 
     const page = await browser.newPage();
-    await page.goto(`${h.server.url}/ui/examples#token=${encodeURIComponent(token)}`);
+    await page.goto(`${h.server.url}/ui/examples/sdlc#token=${encodeURIComponent(token)}`);
     const card = page.locator('section.panel', { hasText: 'Feature delivery (SDLC)' });
     await card.getByLabel(/Jira site/).fill('https://acme.atlassian.net');
     await card.getByLabel('Repositories it may use').fill('acme/payments');

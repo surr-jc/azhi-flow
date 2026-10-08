@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { effectsOf, helpFor, sentenceOf } from '../web/src/stepHelp';
+import { effectsOf, helpFor, sentenceOf } from '../web/src/stepHelp.js';
 
 const tools = [
   { id: 'github.comment-on-pr', version: 1, effect: 'write-dedupable', description: 'Post a comment on a pull request (GitHub)' },

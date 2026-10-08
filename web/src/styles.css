@@ -462,3 +462,14 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 button.info { all: unset; cursor: pointer; margin-left: 6px; color: var(--accent); font-size: 13px; line-height: 1; padding: 4px; border-radius: 4px; }
 button.info:focus-visible { outline: 2px solid var(--accent); }
 .info-text { display: block; margin-top: 4px; padding: 8px 10px; border-radius: 6px; background: var(--accent-bg); color: var(--ink); font-weight: 400; font-size: 13px; }
+
+/* Marketplace */
+.market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.market-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.market-card h3 { margin: 0; font-size: 16px; }
+.market-card p { margin: 0; }
+.market-card .row:last-child { margin-top: auto; }
+.market-card.featured { margin-bottom: 16px; border-color: var(--accent); box-shadow: var(--shadow); }
+.market-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0 16px; }
+.market-facts .panel { margin: 0; }
+.ok-text { color: var(--ok); font-weight: 600; }
