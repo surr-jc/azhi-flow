@@ -12,6 +12,7 @@ import { MAX_REPAIRS } from '../agents/model-agent.js';
 import { SUBMIT_TOOL } from '../agents/providers.js';
 import { chatgptAuth, type ChatgptAuth } from '../agents/chatgpt-auth.js';
 import { CLAUDE_PLAN_ONLY_SDK, isClaudePlanToken } from '../executors/capabilities.js';
+import { cleanCopilotToken } from '../lib/copilot-token.js';
 import { ErrorClass } from '../lib/errors.js';
 import { killTree, windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
@@ -93,7 +94,8 @@ export function copilotAuth(value: string): { type: 'oauth'; refresh: string; ac
     }
     throw ApplicationFailure.create({ type: ErrorClass.authorization, message: 'the GitHub Copilot credential is JSON but has no github-copilot sign-in in it', nonRetryable: true });
   }
-  return { type: 'oauth', refresh: v, access: v, expires: 0 };
+  const t = cleanCopilotToken(v);
+  return { type: 'oauth', refresh: t, access: t, expires: 0 };
 }
 
 export function harnessActivities(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }) {

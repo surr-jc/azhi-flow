@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { cleanCopilotToken } from '../lib/copilot-token.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
@@ -75,7 +76,7 @@ const hostUrl = (host: string) => (host.startsWith('http://') ? host : `https://
  */
 export function copilotSignIn(value: string): { entry?: Record<string, unknown>; token: string; enterprise?: string } {
   const v = value.trim();
-  if (!v.startsWith('{')) return { token: v };
+  if (!v.startsWith('{')) return { token: cleanCopilotToken(v) };
   let j: any;
   try {
     j = JSON.parse(v);
