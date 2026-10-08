@@ -51,6 +51,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
   const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
   const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
+  const portableAssets = useQuery({ queryKey: ['workflow-assets', slug], queryFn: () => api<Array<{ id: string; kind: string; slug: string; name: string; version: number }>>(`/v1/workflows/${encodeURIComponent(slug)}/assets`) });
   if (versions.error) return <ErrorNote error={versions.error} />;
   if (!versions.data) return <Loading />;
   if (!current) return <p>No versions of {slug}.</p>;
@@ -84,6 +85,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
           {atLeast(me.data?.role, 'author') ? <PublishDraft version={current} slug={slug} /> : null}
         </Panel>
       </div>
+      <PortableAssets slug={slug} assets={portableAssets.data} />
       <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} /> : <Loading />}</Panel>
       <details className="panel">
         <summary>Files in this version</summary>
@@ -102,6 +104,22 @@ export function WorkflowPage({ slug }: { slug: string }) {
       </Panel>
     </>
   );
+}
+
+function PortableAssets({ slug, assets }: { slug: string; assets?: Array<{ id: string; kind: string; slug: string; name: string; version: number }> }) {
+  const [error, setError] = useState<string>();
+  const download = async () => {
+    try {
+      const bundle = await api<{ files: Record<string, string> }>(`/v1/workflows/${encodeURIComponent(slug)}/opencode-export`);
+      const blob = new Blob([JSON.stringify(bundle.files, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob); const link = document.createElement('a');
+      link.href = url; link.download = `${slug}-opencode-assets.json`; link.click(); URL.revokeObjectURL(url);
+    } catch (e) { setError((e as Error).message); }
+  };
+  return <Panel title="Portable assets" action={assets?.length ? <button onClick={download}>Download OpenCode bundle</button> : undefined}>
+    {!assets ? <Loading /> : assets.length ? <div className="asset-attached">{assets.map((a) => <span className="badge" key={a.id}>{a.kind}: {a.name} <span className="mono">v{a.version}</span></span>)}</div> : <p className="muted">No portable assets are attached. Add published MCP servers, agents, skills, or commands from the Portable assets library.</p>}
+    {error ? <div className="error">{error}</div> : null}
+  </Panel>;
 }
 
 function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan }) {

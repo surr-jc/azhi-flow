@@ -36,6 +36,7 @@ import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
 import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
+import { registerAssetRoutes } from './assets.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -93,6 +94,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   registerMcpRoutes(app, ctx);
+  registerAssetRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
