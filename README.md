@@ -106,7 +106,9 @@ In another terminal, `npx azhi` commands find the local server without `azhi log
 in bash, `$env:AZHI_URL = "http://127.0.0.1:7410"` in PowerShell). Set the model the same way
 (`AZHI_ANTHROPIC_MODEL`) before `azhi up`. Limits: a single-writer database, no second server
 process on the same data, and script memory limits only on Linux. macOS is not yet tested; see
-[docs/local-mode-plan.md](docs/local-mode-plan.md).
+[docs/local-mode-plan.md](docs/local-mode-plan.md). OpenCode steps also run on native Windows
+(`npm ci` installs OpenCode; add ripgrep with `winget install BurntSushi.ripgrep.MSVC`, then
+`npx azhi setup` checks both); this is new and not yet checked by a live run on Windows.
 
 ### Linux
 

@@ -780,7 +780,6 @@ program
     if (rt.opencode) line(Boolean(rt.ripgrep), 'ripgrep', rt.ripgrep ? `${rt.ripgrep.version} (${rt.ripgrep.path})` : ripgrepInstallHint());
     else console.log(dim(`ripgrep is checked once OpenCode is present. Tools folder: ${toolsDir()} (AZHI_TOOLS_DIR to change it)`));
     if (rt.opencode) console.log(`${rt.dcp ? green('ok  ') : dim('--  ')} dcp (optional): ${rt.dcp ? `${rt.dcp.version} (used when token saving is on)` : `not installed; run azhi setup --dcp`}`);
-    if (process.platform === 'win32') console.log(dim('Native Windows workers cannot run OpenCode steps yet; use WSL for those.'));
     process.exitCode = rt.git && rt.opencode && rt.ripgrep ? 0 : 1;
   });
 

@@ -13,7 +13,7 @@ import { SUBMIT_TOOL } from '../agents/providers.js';
 import { chatgptAuth, type ChatgptAuth } from '../agents/chatgpt-auth.js';
 import { CLAUDE_PLAN_ONLY_SDK, isClaudePlanToken } from '../executors/capabilities.js';
 import { ErrorClass } from '../lib/errors.js';
-import { killTree } from '../lib/process.js';
+import { killTree, windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
 import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
@@ -199,6 +199,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         );
 
         const password = randomBytes(24).toString('base64url');
+        const win = process.platform === 'win32';
+        if (win) mkdirSync(join(root, 'tmp'));
         const env: NodeJS.ProcessEnv = {
           // ripgrep's folder is added when rg is not on PATH, so OpenCode finds it instead of downloading a copy on every step.
           PATH: pathWithRipgrep(process.env.PATH, o.capabilities.runtimes.ripgrep?.path),
@@ -207,6 +209,11 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           XDG_DATA_HOME: join(home, '.local/share'),
           XDG_CACHE_HOME: join(home, '.cache'),
           XDG_STATE_HOME: join(home, '.local/state'),
+          // Windows: the home folder comes from USERPROFILE and app data from APPDATA and LOCALAPPDATA, so those point
+          // into the step's folder too; the system variables a Windows program needs to start are kept.
+          ...(win
+            ? { ...windowsSystemEnv(), USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'), TEMP: join(root, 'tmp'), TMP: join(root, 'tmp') }
+            : {}),
           // Configuration comes only from the step's own folder: the project's opencode.json, .opencode/,
           // AGENTS.md, CLAUDE.md and .claude/skills (repository content when there is a workspace) are ignored.
           OPENCODE_CONFIG: join(configDir, 'opencode.json'),
@@ -228,7 +235,10 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
         sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
         if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
-        proc = spawn(oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        // On Windows there are no process groups (killTree walks the tree instead) and a detached child would open a
+        // console window; an AZHI_OPENCODE_BIN that is a .cmd wrapper starts only through the shell (fixed arguments).
+        const shell = win && /\.(cmd|bat)$/i.test(oc.path);
+        proc = spawn(shell ? `"${oc.path}"` : oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: !win, shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
         let logs = '';
         // The whole OpenCode log (up to 4 MB) is kept so a failed step can save it: the step folder is deleted.
         const full: string[] = [];

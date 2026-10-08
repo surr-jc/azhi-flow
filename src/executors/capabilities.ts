@@ -54,8 +54,10 @@ export const EXECUTORS: Record<string, ExecutorDeclaration> = {
       ambientTools: 'restrictable',
       structuredOutput: 'validated',
       usage: 'partial',
-      platforms: ['linux', 'macos'],
-      unverified: ['usage', 'structuredOutput', 'cancellation'],
+      // Native Windows: the worker starts OpenCode's own program with a Windows-isolated home; checked by
+      // unit tests only, not yet by a live run on a Windows worker.
+      platforms: ['linux', 'macos', 'windows'],
+      unverified: ['usage', 'structuredOutput', 'cancellation', 'platforms'],
       compacts: true,
     },
     notes: ['Built-in tools restricted by deny-all permission rules; OpenCode still lists them', 'Runs with an isolated HOME so host skills and config do not leak in'],

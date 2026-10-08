@@ -46,7 +46,7 @@ export function pathWithRipgrep(path: string | undefined, rg: string | undefined
 /** Install commands per platform, for `azhi setup` and doctor messages. */
 export function ripgrepInstallHint(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   if (platform === 'darwin') return 'brew install ripgrep';
-  if (platform === 'win32') return 'winget install BurntSushi.ripgrep.MSVC (OpenCode steps run on Linux, macOS or WSL workers; install it there with apt)';
+  if (platform === 'win32') return `winget install BurntSushi.ripgrep.MSVC, then open a new terminal; or put rg.exe in ${join(toolsDir(env), 'bin')} or set AZHI_RG_BIN`;
   const wsl = Boolean(env.WSL_DISTRO_NAME);
   return `sudo apt install ripgrep (Debian, Ubuntu${wsl ? ', WSL' : ''}) or sudo dnf install ripgrep (Fedora, RHEL); without root, download the release from github.com/BurntSushi/ripgrep and put rg in ${join(toolsDir(env), 'bin')} or set AZHI_RG_BIN`;
 }

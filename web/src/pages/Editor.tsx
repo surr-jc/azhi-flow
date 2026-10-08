@@ -782,7 +782,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
       {executor ? (
         <ul className="muted small harness-caps" aria-label="Capabilities">
           {CAPABILITY_LABELS.map(([k, label, words]) => <li key={k}>{label}: {words[executor.capabilities[k]] ?? executor.capabilities[k]}{executor.capabilities.unverified?.includes(k) ? ' (not yet verified)' : ''}</li>)}
-          <li>Runs on: {executor.capabilities.platforms.join(', ')}</li>
+          <li>Runs on: {executor.capabilities.platforms.join(', ')}{executor.capabilities.unverified?.includes('platforms') ? ' (Windows not yet verified)' : ''}</li>
           {executor.notes.map((n) => <li key={n}>{n}</li>)}
         </ul>
       ) : step.executor ? <p className="warn-note small">No executor named {step.executor} is declared on this server.</p> : null}
