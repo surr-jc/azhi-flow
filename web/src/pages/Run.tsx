@@ -5,6 +5,7 @@ import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
+import { Formatted, plainText } from '../components/Rich';
 import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 import { duration } from './Overview';
 import { AgentActivityPanel } from './AgentActivity';
@@ -157,7 +158,7 @@ const short = (v: unknown, n = 140) => {
 
 /** A step's output in a few words: short text as is, otherwise its size or its field names. */
 function outputSummary(v: unknown): string {
-  if (typeof v === 'string') return short(v);
+  if (typeof v === 'string') return short(plainText(v));
   if (typeof v === 'number' || typeof v === 'boolean') return `Returned ${String(v)}`;
   if (Array.isArray(v)) return `Returned ${v.length} item${v.length === 1 ? '' : 's'}`;
   const o = v as Record<string, unknown>;
@@ -220,7 +221,7 @@ function DecisionPop({ a }: { a: Approval }) {
   const details = () => document.getElementById('decision')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
     <div className="atlas-pop" role="group" aria-label={`Decision on ${a.node_id}`}>
-      <b>{approvalQuestion(a)}</b>
+      <b>{plainText(approvalQuestion(a))}</b>
       {facts.length ? <span className="muted small">{facts.join(' · ')}</span> : null}
       <span className="muted small">{whoCanDecide(a.role)} can decide{a.expires_at ? ` · expires ${ago(a.expires_at)}` : ''}</span>
       {decide.isSuccess ? (
@@ -438,13 +439,13 @@ function Timeline({ events }: { events: RunEvent[] }) {
 function InputsTab({ detail: d }: { detail: any }) {
   return (
     <>
-      <Panel title="Inputs"><Json value={d.run.inputs ?? {}} /></Panel>
+      <Panel title="Inputs"><Formatted value={d.run.inputs ?? {}} /></Panel>
       <Panel title="Node attempts">
         <Table head={['Node', 'Attempt', 'State', 'Worker', 'Output or error']} empty="No node has run yet.">
           {d.attempts.map((a: any) => (
             <tr key={`${a.node_id}/${a.attempt}`}>
               <td>{a.node_id}</td><td>{a.attempt}</td><td><StateBadge state={a.state} /></td><td className="mono">{a.worker_id ?? '—'}</td>
-              <td>{a.error ? <Json value={a.error} /> : a.output !== null && a.output !== undefined ? <details><summary>output</summary><Json value={a.output} /></details> : '—'}</td>
+              <td>{a.error ? <Json value={a.error} /> : a.output !== null && a.output !== undefined ? <details><summary>output</summary><Formatted value={a.output} /></details> : '—'}</td>
             </tr>
           ))}
         </Table>

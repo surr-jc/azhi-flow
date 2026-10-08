@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { api } from '../api';
 import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
+import { Markdown } from '../components/Rich';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
 /**
@@ -239,7 +240,7 @@ function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, sho
   return (
     <>
       {m.content.map((b, i) => {
-        if (b.type === 'text') return b.text.trim() ? <div key={i} className="bubble assistant">{b.text}</div> : null;
+        if (b.type === 'text') return b.text.trim() ? <Markdown key={i} className="bubble assistant" text={b.text} /> : null;
         if (b.type !== 'tool_use') return null;
         if (b.name === 'ask_user') return <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />;
         if (b.name === 'propose_tool') {

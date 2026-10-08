@@ -3,7 +3,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, atLeast, type Approval } from '../api';
 import { useMe } from '../App';
 import { Link } from '../router';
-import { ago, ErrorNote, formValues, Json, Loading, PageHead, Panel, RunLink, SchemaFields, when } from '../ui';
+import { Formatted, Markdown } from '../components/Rich';
+import { ago, ErrorNote, formValues, Loading, PageHead, Panel, RunLink, SchemaFields, when } from '../ui';
 
 export function Approvals() {
   const me = useMe();
@@ -75,15 +76,9 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
             <Link to={`/ui/workflows/${encodeURIComponent(a.workflow)}`}>{a.workflow}</Link> · step {a.node_id} · requested {ago(a.requested_at)} · <RunLink id={a.run_id} />
           </div>
         ) : null}
-        <div className="question">{approvalQuestion(a)}</div>
+        <div className="question"><Markdown text={approvalQuestion(a)} inline={!approvalQuestion(a).includes('\n')} /></div>
         {payload !== undefined && payload !== null ? (
-          <>
-            <Facts value={payload} />
-            <details>
-              <summary className="small">Show the full payload</summary>
-              <Json value={payload} />
-            </details>
-          </>
+          <div className="payload"><Formatted value={payload} rawLabel="the full payload as JSON" /></div>
         ) : (
           <p className="muted small">The workflow shows the approver no details for this step.</p>
         )}
@@ -108,57 +103,6 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
       </div>
     </section>
   );
-}
-
-const label = (k: string) => {
-  const t = k.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-};
-const isScalar = (v: unknown) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
-const scalar = (v: unknown) => (v === null ? '—' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
-
-/** A readable summary of an approval payload; anything too deep falls back to JSON. */
-function Facts({ value }: { value: unknown }) {
-  if (isScalar(value)) return <p>{scalar(value)}</p>;
-  if (Array.isArray(value)) return <FactValue value={value} />;
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (!entries.length) return null;
-  return (
-    <div className="table-wrap">
-      <table className="facts">
-        <tbody>
-          {entries.map(([k, v]) => (
-            <tr key={k}><th scope="row">{label(k)}</th><td><FactValue value={v} /></td></tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function FactValue({ value }: { value: unknown }) {
-  if (isScalar(value)) return <>{scalar(value)}</>;
-  if (Array.isArray(value)) {
-    if (!value.length) return <span className="muted">none</span>;
-    if (value.every(isScalar)) return <>{value.map(scalar).join(', ')}</>;
-    const rows = value as Array<Record<string, unknown>>;
-    const cols = [...new Set(rows.flatMap((r) => (r && typeof r === 'object' && !Array.isArray(r) ? Object.keys(r) : [])))];
-    const flat = rows.every((r) => r && typeof r === 'object' && !Array.isArray(r) && Object.values(r).every(isScalar));
-    if (flat && cols.length && cols.length <= 6 && rows.length <= 50) {
-      return (
-        <div className="table-wrap">
-          <table>
-            <thead><tr>{cols.map((c) => <th key={c}>{label(c)}</th>)}</tr></thead>
-            <tbody>{rows.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c}>{scalar(r[c] ?? null)}</td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      );
-    }
-    return <span className="muted">{value.length} items, see the full payload</span>;
-  }
-  const o = value as Record<string, unknown>;
-  if (Object.values(o).every(isScalar)) return <>{Object.entries(o).map(([k, v]) => `${label(k)}: ${scalar(v)}`).join(' · ')}</>;
-  return <span className="muted">see the full payload</span>;
 }
 
 interface ApprovalSettings { slack_channel: string | null; slack_token_set: boolean; signing_secret_set: boolean; interactivity_url: string }

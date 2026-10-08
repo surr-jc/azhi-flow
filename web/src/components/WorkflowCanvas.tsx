@@ -5,6 +5,7 @@ import type { RunPlan } from '../api';
 import { stringify } from 'yaml';
 import { keySettings, type KeySetting } from '../stepHelp';
 import { Badge, Json, StateBadge } from '../ui';
+import { Formatted } from './Rich';
 
 /**
  * The workflow canvas (React Flow): a workflow's nodes laid out left to right in dependency
@@ -485,7 +486,7 @@ function NodeDetails({ node, run, plan, onClose }: { node: PlanNode; run?: NodeR
             </div>
           </section>
         ) : null}
-        {run?.error ? <section className="set-group"><h3>Error</h3><Json value={run.error} /></section> : run?.output !== undefined && run.output !== null ? <details><summary>Output</summary><Json value={run.output} /></details> : null}
+        {run?.error ? <section className="set-group"><h3>Error</h3><Json value={run.error} /></section> : run?.output !== undefined && run.output !== null ? <details><summary>Output</summary><Formatted value={run.output} /></details> : null}
       </div>
     </section>
   );
