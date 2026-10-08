@@ -1,6 +1,6 @@
 import { Context } from '@temporalio/activity';
 import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
-import { COPILOT_PRICING_REVISION, copilotCredits, copilotRate } from '../agents/copilot-pricing.js';
+import { COPILOT_CREDIT_USD, COPILOT_PRICING_REVISION, configuredCopilotRate, copilotCredits, copilotRate, round } from '../agents/copilot-pricing.js';
 import type { AgentProfile } from '../agents/profile.js';
 import type { HarnessResult } from '../worker/harness-activity.js';
 import { retrieve } from '../knowledge/datasets.js';
@@ -388,15 +388,24 @@ async function withChunksFor(ctx: AppContext, input: AgentBeginInput): Promise<A
 }
 
 /**
- * A harness step's estimated cost. Copilot steps are counted in AI Credits (tokens at the model's
- * Copilot rate); other providers by the profile's token prices.
+ * A harness step's estimated cost. Copilot steps are counted in AI Credits: tokens at a rate someone
+ * set (profile, AZHI_COPILOT_RATES); else the cost OpenCode reports from its model catalog, which
+ * covers every model its Copilot provider offers and prices each request; else the built-in table.
+ * Other providers by the profile's token prices.
  */
-export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentProfile, model: string | null, r: Pick<HarnessResult, 'usage'>) {
+export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentProfile, model: string | null, r: Pick<HarnessResult, 'usage' | 'reported_cost'>) {
   if (profile.model.provider === 'github-copilot') {
-    const rate = model ? copilotRate(model, profile.pricing, ctx.settings) : undefined;
+    const at = ` at ${ctx.settings.copilotCreditUsd} USD/credit`;
+    const configured = model ? configuredCopilotRate(model, profile.pricing, ctx.settings) : undefined;
+    const known = r.usage.input_tokens !== null && r.usage.output_tokens !== null;
+    if (!configured && known && typeof r.reported_cost === 'number' && r.reported_cost > 0) {
+      const credits = round(r.reported_cost / COPILOT_CREDIT_USD, 3);
+      return { cost: round(credits * ctx.settings.copilotCreditUsd, 6), currency: 'USD', credits, revision: `OpenCode model catalog${at}` };
+    }
+    const rate = configured ?? (model ? copilotRate(model, profile.pricing, ctx.settings) : undefined);
     const c = rate ? copilotCredits(r.usage, rate, ctx.settings.copilotCreditUsd) : null;
     if (!c) return null;
-    return { cost: c.cost, currency: 'USD', credits: c.credits, revision: `${profile.pricing?.revision ?? COPILOT_PRICING_REVISION} at ${ctx.settings.copilotCreditUsd} USD/credit` };
+    return { cost: c.cost, currency: 'USD', credits: c.credits, revision: `${profile.pricing?.revision ?? (configured ? 'configured rate' : COPILOT_PRICING_REVISION)}${at}` };
   }
   // A ChatGPT plan has no per-token charge: the step uses the plan's usage limits, so its cost is 0.
   if (profile.model.provider === 'openai-chatgpt') return { cost: 0, currency: 'USD', credits: null, revision: 'ChatGPT plan (no per-token charge)' };

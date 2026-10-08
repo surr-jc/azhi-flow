@@ -24,28 +24,55 @@ export interface CopilotRate {
 }
 
 /**
- * Per-model rates as GitHub published them for usage-based billing (June 2026), read from search
- * excerpts of docs.github.com because the page itself could not be fetched; check them against
- * the docs and override with AZHI_COPILOT_RATES. A model missing here has no cost (unavailable).
+ * Fallback per-model rates: GitHub's published usage-based rates as carried in OpenCode 1.18.34's
+ * model catalog for its github-copilot provider (`opencode models github-copilot --verbose`), which
+ * agree with the rates on docs.github.com "Models and pricing for GitHub Copilot" where checked.
+ * A Copilot step normally uses the cost OpenCode itself reports from its current catalog (see
+ * harnessCost); this table is for steps where OpenCode reports none. Override with AZHI_COPILOT_RATES.
+ * No `cache_write` means cache writes are billed at the input rate.
  */
 export const COPILOT_RATES: Record<string, CopilotRate> = {
+  'claude-fable-5': { input: 10, cached: 1, cache_write: 12.5, output: 50 },
+  'claude-fable-5.1': { input: 10, cached: 0.25, cache_write: 12.5, output: 50 },
   'claude-haiku-4.5': { input: 1, cached: 0.1, cache_write: 1.25, output: 5 },
-  'claude-sonnet-4': { input: 3, cached: 0.3, cache_write: 3.75, output: 15 },
-  'claude-sonnet-4.5': { input: 3, cached: 0.3, cache_write: 3.75, output: 15 },
+  'claude-opus-4.7': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
+  'claude-opus-4.7-fast': { input: 30, cached: 3, cache_write: 37.5, output: 150 },
+  'claude-opus-4.8': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
+  'claude-opus-4.8-fast': { input: 10, cached: 1, cache_write: 12.5, output: 50 },
+  'claude-opus-5': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
+  'claude-opus-5.5': { input: 4, cached: 0.2, cache_write: 5, output: 20 },
   'claude-sonnet-4.6': { input: 3, cached: 0.3, cache_write: 3.75, output: 15 },
   'claude-sonnet-5': { input: 2, cached: 0.2, cache_write: 2.5, output: 10 },
+  'claude-sonnet-5.5': { input: 2, cached: 0.2, cache_write: 2.5, output: 10 },
+  'gemini-3.5-flash': { input: 1.5, cached: 0.15, output: 9 },
+  'gemini-3.6-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gemini-3.7-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gemini-3.8-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gpt-5-mini': { input: 0.25, cached: 0.025, output: 2 },
+  'gpt-5.3-codex': { input: 1.75, cached: 0.175, output: 14 },
+  'gpt-5.4': { input: 2.5, cached: 0.25, output: 15 },
+  'gpt-5.4-mini': { input: 0.75, cached: 0.075, output: 4.5 },
+  'gpt-5.4-nano': { input: 0.2, cached: 0.02, output: 1.25 },
+  'gpt-5.5': { input: 5, cached: 0.5, output: 30 },
+  'gpt-5.6-luna': { input: 0.2, cached: 0.02, cache_write: 0.25, output: 1.2 },
+  'gpt-5.6-sol': { input: 4, cached: 0.4, cache_write: 5, output: 20 },
+  'gpt-5.6-terra': { input: 2, cached: 0.2, cache_write: 2.5, output: 12 },
+  'gpt-6-astra': { input: 10, cached: 1, cache_write: 12.5, output: 50 },
+  'gpt-6-luna': { input: 0.1, cached: 0.01, cache_write: 0.125, output: 0.5 },
+  'gpt-6-sol': { input: 2, cached: 0.2, cache_write: 2.5, output: 10 },
+  'gpt-6.1-sol': { input: 2, cached: 0.1, cache_write: 2.5, output: 10 },
+  'grok-4.5': { input: 2, cached: 0.5, output: 6 },
+  'grok-4.6': { input: 2, cached: 0.5, output: 6 },
+  'grok-4.7': { input: 2, cached: 0.5, output: 6 },
+  'kimi-k2.7-code': { input: 0.95, cached: 0.19, output: 4 },
+  'kimi-k3': { input: 3, cached: 0.3, output: 15 },
+  'mai-code-1-flash-picker': { input: 0.75, cached: 0.075, output: 4.5 },
+  'mai-code-1.1-flash': { input: 0.2, cached: 0.02, output: 1.2 },
+  // Older models no longer in OpenCode's catalog.
+  'claude-sonnet-4': { input: 3, cached: 0.3, cache_write: 3.75, output: 15 },
+  'claude-sonnet-4.5': { input: 3, cached: 0.3, cache_write: 3.75, output: 15 },
   'claude-opus-4.5': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
   'claude-opus-4.6': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
-  'claude-opus-4.7': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
-  'claude-opus-5': { input: 5, cached: 0.5, cache_write: 6.25, output: 25 },
-  'gpt-5-mini': { input: 0.25, cached: 0.025, output: 2 },
-  'gpt-5.5': { input: 5, cached: 0.5, output: 30 },
-  // GPT-5.6 at the default tier; GitHub charges about twice that for a request over 200K input tokens,
-  // which Azhi cannot tell apart because OpenCode reports a step's tokens in total.
-  'gpt-5.6-luna': { input: 0.2, cached: 0.02, cache_write: 0.25, output: 1.2 },
-  'gpt-5.6-terra': { input: 2, cached: 0.2, cache_write: 2.5, output: 12 },
-  'gpt-5.6-sol': { input: 4, cached: 0.4, cache_write: 5, output: 20 },
-  'gemini-3.8-flash': { input: 0.75, cached: 0.075, output: 3.75 },
 };
 
 export const COPILOT_PRICING_REVISION = 'copilot-ai-credits-2026-06';
@@ -77,12 +104,17 @@ export interface CopilotSettings {
   copilotCreditPool?: number;
 }
 
-/** The rate for a model: the profile's token prices, then AZHI_COPILOT_RATES, then GitHub's table. */
-export function copilotRate(model: string, profile: AgentProfile['pricing'], s: CopilotSettings): CopilotRate | undefined {
+/** A rate someone set for the model: the profile's token prices, then AZHI_COPILOT_RATES. */
+export function configuredCopilotRate(model: string, profile: AgentProfile['pricing'], s: CopilotSettings): CopilotRate | undefined {
   if (profile?.input_per_mtok !== undefined && profile.output_per_mtok !== undefined) {
     return { input: profile.input_per_mtok, output: profile.output_per_mtok, ...(profile.cache_read_per_mtok !== undefined ? { cached: profile.cache_read_per_mtok } : {}), ...(profile.cache_write_per_mtok !== undefined ? { cache_write: profile.cache_write_per_mtok } : {}) };
   }
-  return lookup(s.copilotRates, model) ?? lookup(COPILOT_RATES, model);
+  return lookup(s.copilotRates, model);
+}
+
+/** The rate for a model: one someone set, then the built-in table. */
+export function copilotRate(model: string, profile: AgentProfile['pricing'], s: CopilotSettings): CopilotRate | undefined {
+  return configuredCopilotRate(model, profile, s) ?? lookup(COPILOT_RATES, model);
 }
 
 /** Model names compared loosely: case, a provider prefix, and `.`/`_`/space against `-` (gpt-5.6-luna = GPT 5.6 Luna = gpt-5-6-luna). */

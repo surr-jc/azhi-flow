@@ -205,10 +205,14 @@ is the documented route but needs an organization admin or billing manager.
 | `AZHI_COPILOT_CREDIT_USD` | `0.01` | USD per credit, if a contract prices it differently |
 | profile `pricing.input_per_mtok` etc. | unset | per-profile rates |
 
-The built-in table (claude-haiku-4.5, claude-sonnet-4/4.5/4.6/5, claude-opus-4.5/4.6/4.7/5,
-gpt-5-mini, gpt-5.5, gpt-5.6-luna/terra/sol at the default tier, gemini-3.8-flash; names match
-loosely and dated or preview builds take their model's rate) was taken from search excerpts of GitHub's "Models and pricing for GitHub Copilot"
-page; check it there. A model without a rate has no cost (unavailable) and is named in the run's
+Where the rate comes from, in order: a rate you set (profile, `AZHI_COPILOT_RATES`); else the cost
+OpenCode reports for the step, from the rates in its model catalog for the github-copilot provider
+(every model OpenCode offers there, priced per request, so long-context requests get their own
+rate where the catalog has one); else the built-in table in `src/agents/copilot-pricing.ts`, a copy
+of that catalog from OpenCode 1.18.34 (36 models, from claude-sonnet-5.5 to gpt-6-luna) that agreed
+with GitHub's "Models and pricing for GitHub Copilot" page where checked. Names match loosely, and
+dated or preview builds take their model's rate. The usage record's pricing revision says which
+source priced it. A model without a rate has no cost (unavailable) and is named in the run's
 usage. The budget `max_cost_usd` is not enforced inside a Copilot step (tokens are known when it
 ends); the run plan says so.
 

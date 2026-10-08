@@ -67,6 +67,8 @@ export interface HarnessResult {
   error?: { class: string; message: string };
   usage: { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null };
   model_calls: number;
+  /** OpenCode's own cost for the step in USD, summed over its messages from its model catalog's rates (OpenCode only). */
+  reported_cost?: number | null;
   tool_calls: number;
   repairs: number;
   duration_ms: number;
@@ -368,7 +370,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
 
         async function finish(client: ReturnType<typeof createOpencodeClient>, sessionId: string, r: Pick<HarnessResult, 'output' | 'error'>, state: BridgeState): Promise<HarnessResult> {
           // OpenCode reports tokens per assistant message; sum every message of the session.
-          const messages = ((await step('messages', () => client.session.messages({ path: { id: sessionId } }), true)).data ?? []) as Array<{ info: { role: string; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } } }>;
+          const messages = ((await step('messages', () => client.session.messages({ path: { id: sessionId } }), true)).data ?? []) as Array<{ info: { role: string; cost?: number; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } } }>;
           transcript?.backfill(messages as never);
           if (r.error) sink?.put({ id: 'azhi-result', kind: 'error', text: `${r.error.class}: ${r.error.message}`, at: Date.now() });
           const assistant = messages.filter((m) => m.info.role === 'assistant' && m.info.tokens);
@@ -383,6 +385,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               reasoning_tokens: sum((t) => t.reasoning),
             },
             model_calls: assistant.length,
+            reported_cost: assistant.length ? assistant.reduce((n, m) => n + (typeof m.info.cost === 'number' ? m.info.cost : 0), 0) : null,
             tool_calls: state.toolCalls,
             repairs: state.repairs,
             duration_ms: Date.now() - started,
