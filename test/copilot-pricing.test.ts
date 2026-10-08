@@ -24,6 +24,8 @@ describe('GitHub Copilot AI credit pricing', () => {
     expect(copilotRate('dummy-big', undefined, S)).toEqual({ input: 10, cached: 1, cache_write: 12.5, output: 50 });
     expect(copilotRate('github-copilot/claude-sonnet-5', undefined, S)).toEqual({ input: 2, cached: 0.2, cache_write: 2.5, output: 10 });
     expect(copilotRate('dummy-unknown', undefined, S)).toBeUndefined();
+    expect(copilotRate('claude-sonnet-5.5', undefined, S)).toEqual({ input: 2, cached: 0.2, cache_write: 2.5, output: 10 });
+    expect(copilotRate('gpt-5.4', undefined, S)).toEqual({ input: 2.5, cached: 0.25, output: 15 });
     // Names are matched loosely, and a dated or preview build takes its model's rate, but a new version does not.
     const luna = { input: 0.2, cached: 0.02, cache_write: 0.25, output: 1.2 };
     for (const m of ['gpt-5.6-luna', 'GPT 5.6 Luna', 'gpt-5-6-luna', 'github-copilot/gpt-5.6-luna', 'gpt-5.6-luna-2026-09-01', 'gpt-5.6-luna-preview']) expect(copilotRate(m, undefined, S)).toEqual(luna);
@@ -44,8 +46,16 @@ describe('GitHub Copilot AI credit pricing', () => {
   });
 
   it('prices a Copilot step in credits, and leaves a model without a rate unavailable', () => {
-    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage })).toEqual({ cost: 1.625, currency: 'USD', credits: 162.5, revision: 'copilot-ai-credits-2026-06 at 0.01 USD/credit' });
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage })).toEqual({ cost: 1.625, currency: 'USD', credits: 162.5, revision: 'configured rate at 0.01 USD/credit' });
     expect(harnessCost({ settings: S as any }, copilot(), 'dummy-unknown', { usage })).toBeNull();
+    // OpenCode's own cost (from its model catalog, which lists every model its Copilot provider offers) prices a model nobody set.
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-unknown', { usage, reported_cost: 0.4321 })).toEqual({ cost: 0.4321, currency: 'USD', credits: 43.21, revision: 'OpenCode model catalog at 0.01 USD/credit' });
+    expect(harnessCost({ settings: { ...S, copilotCreditUsd: 0.008 } as any }, copilot(), 'dummy-unknown', { usage, reported_cost: 0.5 })).toMatchObject({ credits: 50, cost: 0.4 });
+    // A rate someone set wins over OpenCode's.
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-big', { usage, reported_cost: 99 })).toMatchObject({ credits: 162.5 });
+    // OpenCode reports 0 for a model missing from its catalog: then the built-in table, else unavailable.
+    expect(harnessCost({ settings: S as any }, copilot(), 'claude-sonnet-5.5', { usage, reported_cost: 0 })).toMatchObject({ revision: 'copilot-ai-credits-2026-06 at 0.01 USD/credit' });
+    expect(harnessCost({ settings: S as any }, copilot(), 'dummy-unknown', { usage, reported_cost: 0 })).toBeNull();
     const p: AgentProfile = { model: { provider: 'anthropic', name: 'm' }, instructions: 'x', pricing: { currency: 'USD', input_per_mtok: 3, output_per_mtok: 15, revision: 'r1' } };
     expect(harnessCost({ settings: S as any }, p, 'm', { usage })).toMatchObject({ credits: null, revision: 'r1' });
   });
