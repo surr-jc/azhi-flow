@@ -168,6 +168,17 @@ export interface RunPlan {
   missing_grants: Array<{ kind: string; name: string; node: string }>;
 }
 
+export interface PreflightCheck {
+  id: string;
+  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  status: 'ok' | 'warn' | 'fail' | 'skipped';
+  target: string;
+  node?: string;
+  message: string;
+  fix?: string;
+}
+export interface PreflightReport { ok: boolean; checks: PreflightCheck[] }
+
 export type Theme = 'system' | 'light' | 'dark';
 const THEME_KEY = 'azhi-theme';
 

@@ -38,7 +38,11 @@ export function WorkflowFiles({ versionId }: { versionId: string }) {
   );
 }
 
-export function PublishDraft({ version, slug }: { version: { id: string; version: number; draft: boolean; signed: boolean }; slug: string }) {
+/**
+ * Publishing a draft, in the page header: a draft is signed in this browser first (workers run
+ * signed packages only), then published, after which schedules and runs use it.
+ */
+export function PublishAction({ version, slug }: { version: { id: string; version: number; draft: boolean; signed: boolean }; slug: string }) {
   const qc = useQueryClient();
   const publish = useMutation({
     mutationFn: () => api(`/v1/versions/${version.id}/publish`, { method: 'POST', body: {} }),
@@ -56,22 +60,16 @@ export function PublishDraft({ version, slug }: { version: { id: string; version
     },
   });
   if (!version.draft) return null;
+  const err = (sign.error ?? publish.error) as Error | null;
   return (
-    <div className="publish">
+    <>
       {version.signed ? (
-        <>
-          <button type="button" className="primary" disabled={publish.isPending} onClick={() => publish.mutate()}>Publish v{version.version}</button>
-          <span className="muted small"> Schedules and runs of {slug} then use this version.</span>
-        </>
+        <button type="button" className="primary" disabled={publish.isPending} onClick={() => publish.mutate()} title={`Schedules and runs of ${slug} then use this version.`}>{publish.isPending ? 'Publishing…' : `Publish v${version.version}`}</button>
       ) : (
-        <>
-          <button type="button" className="primary" disabled={sign.isPending} onClick={() => sign.mutate()}>{sign.isPending ? 'Signing…' : `Sign v${version.version}`}</button>
-          <span className="muted small"> Workers run signed packages only. This signs the draft with a key kept in this browser (or run <code>azhi publish</code> in the package folder).</span>
-        </>
+        <button type="button" className="primary" disabled={sign.isPending} onClick={() => sign.mutate()} title="Workers run signed packages only. This signs the draft with a key kept in this browser (or run azhi publish in the package folder).">{sign.isPending ? 'Signing…' : `Sign v${version.version}`}</button>
       )}
-      <ErrorNote error={sign.error} />
-      <ErrorNote error={publish.error} />
-    </div>
+      {err ? <span className="error small" role="alert">{err.message}</span> : null}
+    </>
   );
 }
 

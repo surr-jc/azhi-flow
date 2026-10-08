@@ -43,7 +43,7 @@ export interface FakeComment {
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }> } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string } = {}) {
   const requests: string[] = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
@@ -56,6 +56,8 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     let raw = '';
     for await (const c of req) raw += c;
     const url = new URL(req.url ?? '/', 'http://localhost');
+    // GitHub Enterprise Server serves the same API under /api/v3.
+    url.pathname = url.pathname.replace(/^\/api\/v3(?=\/)/, '');
     requests.push(`${req.method} ${url.pathname}${url.search}`);
     const send = (status: number, body: unknown) => {
       res.statusCode = status;
@@ -92,7 +94,13 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     }
     const body = () => JSON.parse(raw || '{}');
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
-    if (m && req.method === 'GET') return send(200, { full_name: m[1], default_branch: opts.defaultBranch ?? 'main' });
+    if (m && req.method === 'GET') {
+      // `repos` lists the repositories this token can see, with what it may do there; without it every repository exists.
+      const known = opts.repos?.[m[1]!];
+      if (opts.repos && !known) return send(404, { message: 'Not Found' });
+      if (opts.scopes !== undefined) res.setHeader('x-oauth-scopes', opts.scopes);
+      return send(200, { full_name: m[1], default_branch: opts.defaultBranch ?? 'main', ...(known?.private !== undefined ? { private: known.private } : {}), ...(known?.permissions ? { permissions: known.permissions } : {}) });
+    }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/(.+)$/);
     if (m && req.method === 'GET') {
       const at = git.refs.get(decodeURIComponent(m[2]!));
