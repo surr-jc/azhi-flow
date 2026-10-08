@@ -194,12 +194,14 @@ function Card({ data }: NodeProps<Node<CardData>>) {
 
 const nodeTypes = { card: Card };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, states: override, toolbar, controls = 'top-right', inset, children, chips, settings, details }: {
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, toolbar, controls = 'top-right', inset, children, chips, settings, details }: {
   nodes: PlanNode[];
   detail?: any;
   plan?: RunPlan | null;
   height?: number | string;
   edit?: CanvasEdit;
+  /** Read-only, with the selected step owned by the page (which shows its details itself). */
+  select?: { selected: string | null; onSelect: (id: string | null) => void };
   /** Node states to show instead of the run's current ones (a replay). */
   states?: Record<string, NodeRunState>;
   /** Content pinned under one step, such as the decision on a waiting approval. */
@@ -220,8 +222,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   children?: ReactNode;
 }) {
   const [ownSelected, setOwnSelected] = useState<string | null>(null);
-  const selected = edit ? edit.selected : ownSelected;
-  const setSelected = (f: (s: string | null) => string | null) => (edit ? edit.onSelect(f(edit.selected)) : setOwnSelected(f));
+  const owner = edit ?? select;
+  const selected = owner ? owner.selected : ownSelected;
+  const setSelected = (f: (s: string | null) => string | null) => (owner ? owner.onSelect(f(owner.selected)) : setOwnSelected(f));
   const [edgeSel, setEdgeSel] = useState<string | null>(null);
   const live = Boolean(detail);
   const current = useMemo(() => (detail ? nodeStates(detail) : {}), [detail]);
@@ -328,7 +331,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   useEffect(() => {
     const f = flow.current;
     const el = box.current;
-    const at = edit?.selected ? pos[edit.selected] : undefined;
+    const at = owner?.selected ? pos[owner.selected] : undefined;
     if (!f || !el || !at) return;
     const { x, y, zoom } = f.getViewport();
     const sx = at.x * zoom + x;
@@ -336,7 +339,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth && sy + H * zoom <= el.clientHeight) return;
     void f.setCenter(at.x + W / 2, at.y + H / 2, { zoom, duration: 200 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edit?.selected, pos]);
+  }, [owner?.selected, pos]);
 
   // Tall enough for the graph's widest layer at a readable zoom, and no taller.
   const height: number | string = fixed ?? Math.round(Math.min(settings ? 620 : 560, Math.max(260, (Math.max(0, ...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
@@ -408,7 +411,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
         {children}
       </div>
       {edit ? null : <Legend live={live} />}
-      {edit ? null : sel ? (details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
+      {edit || select ? null : sel ? (details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
     </div>
   );
 }

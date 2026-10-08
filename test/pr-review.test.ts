@@ -865,7 +865,8 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await card.getByRole('link', { name: /Open it to check the run plan/ }).click();
     await page.waitForURL(/\/ui\/workflows\/pr-review\?version=wfv_/);
     const id = new URL(page.url()).searchParams.get('version')!;
-    await page.getByText(/verified, usr_/).waitFor();
+    await page.getByText('signed', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Run…' }).click();
     await page.locator('#f-repo').fill('acme/payments');
     await page.locator('#f-pr').fill('7');
     await page.getByRole('button', { name: 'Start run', exact: true }).click();

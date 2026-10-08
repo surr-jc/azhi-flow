@@ -123,6 +123,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('link', { name: 'Workflows', exact: true }).click();
     await page.getByRole('link', { name: 'approval-check' }).click();
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
+    await page.getByRole('button', { name: 'Run…' }).click();
     await page.getByLabel('team').fill('search');
     await page.getByRole('button', { name: 'Test run' }).click();
     await page.waitForURL(/\/ui\/runs\/run_/);
