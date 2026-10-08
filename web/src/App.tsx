@@ -20,6 +20,7 @@ import { UploadPackage } from './pages/Upload';
 import { WorkflowBuilder } from './pages/Builder';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
+import { Assets } from './pages/Assets';
 
 // The editor (and its YAML library) loads only when someone opens it.
 const WorkflowEditor = lazy(() => import('./pages/Editor').then((m) => ({ default: m.WorkflowEditor })));
@@ -89,7 +90,7 @@ type Section = { label: string; to: string; items: NavItem[]; count?: 'approvals
 const SECTIONS: Section[] = [
   { label: 'Today', to: '/ui', count: 'approvals', items: [] },
   { label: 'Runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
-  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }] },
+  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Portable assets' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }] },
   { label: 'Governance', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
   { label: 'System', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
@@ -164,6 +165,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/approvals') return <Approvals />;
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
+  if (path === '/ui/assets') return <Assets />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;

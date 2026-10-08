@@ -95,6 +95,11 @@ export const mcpConnections = pgTable('mcp_connections', {
   updatedAt: ts('updated_at').notNull().defaultNow(),
 });
 
+export const portableAssets = pgTable('portable_assets', {
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull(), kind: text('kind').notNull(), slug: text('slug').notNull(), name: text('name').notNull(), description: text('description').notNull(), status: text('status').notNull(), currentVersion: integer('current_version').notNull(), createdBy: text('created_by'), createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+export const portableAssetVersions = pgTable('portable_asset_versions', { id: text('id').primaryKey(), assetId: text('asset_id').notNull(), version: integer('version').notNull(), definition: jsonb('definition').notNull(), published: boolean('published').notNull(), createdBy: text('created_by'), createdAt: ts('created_at').notNull().defaultNow() });
+
 export const workflows = pgTable('workflows', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
