@@ -1,6 +1,7 @@
 import { ApplicationFailure } from '@temporalio/common';
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 import { opencodeHarnessProblems, parseProfile, type OpencodeHarness } from '../agents/profile.js';
 import { ErrorClass } from '../lib/errors.js';
@@ -58,8 +59,9 @@ const markdown = (meta: Record<string, unknown>, body: string) => `---\n${string
 
 /** OpenCode's own secrets in its environment, never passed on to a package's MCP servers. */
 export const OPENCODE_PRIVATE_ENV = ['OPENCODE_AUTH_CONTENT', 'OPENCODE_SERVER_PASSWORD'];
+export const MCP_LAUNCHER = fileURLToPath(new URL('../../bin/azhi-mcp-launch.js', import.meta.url));
 
-export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; configDir: string; system: string; gitEnv: NodeJS.ProcessEnv; workspace?: string }): OpencodeSetup {
+export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; configDir: string; system: string; gitEnv: NodeJS.ProcessEnv; workspace?: string; platform?: NodeJS.Platform }): OpencodeSetup {
   const read = (p: string) => readFileSync(inside(o.pkgDir, p)!, 'utf8');
   for (const d of ['agent', 'command', 'skill']) mkdirSync(join(o.configDir, d), { recursive: true });
 
@@ -89,8 +91,11 @@ export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; conf
     // Same isolation as the checkout: no host config, credentials or tokens, only what the profile declares.
     const env = Object.fromEntries(Object.entries(o.gitEnv).filter((e): e is [string, string] => typeof e[1] === 'string'));
     // OpenCode starts MCP servers with its own environment added, which holds the model sign-in (OPENCODE_AUTH_CONTENT)
-    // and its server password; `env -u` takes them out before the package's server starts (Linux and macOS).
-    const scrubbed = ['/usr/bin/env', ...OPENCODE_PRIVATE_ENV.flatMap((k) => ['-u', k]), ...resolved];
+    // and its server password; `env -u` takes them out before the package's server starts. Windows has no `env`,
+    // so there a small Node launcher does the same.
+    const scrubbed = (o.platform ?? process.platform) === 'win32'
+      ? [process.execPath, MCP_LAUNCHER, OPENCODE_PRIVATE_ENV.join(','), '--', ...resolved]
+      : ['/usr/bin/env', ...OPENCODE_PRIVATE_ENV.flatMap((k) => ['-u', k]), ...resolved];
     mcp[name] = { type: 'local', command: scrubbed, environment: { ...env, ...(m.environment ?? {}), ...(o.workspace ? { AZHI_WORKSPACE: o.workspace } : {}) }, timeout: 120_000, enabled: true };
     tools[`${name}_*`] = true;
   }

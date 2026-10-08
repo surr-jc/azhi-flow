@@ -36,7 +36,7 @@ offer fails the step with the list it does offer.
 - Cost: a ChatGPT plan has no per-token charge, so these steps record a cost of 0 (`reported`,
   "ChatGPT plan"). Token counts are still recorded. When the plan's usage limit is reached the
   step fails and says so; it resets on OpenAI's schedule.
-- OpenCode steps need a Linux or macOS worker (on Windows, WSL).
+- OpenCode steps run on Linux, macOS and native Windows workers (Windows is new and not yet checked by a live run; WSL also works).
 - **Build with chat:** once signed in, the builder's Provider list has **OpenCode (ChatGPT plan)**.
   The builder calls OpenAI's Codex endpoint the way OpenCode does (no OpenCode process needed), and
   the profiles it drafts use `provider: openai-chatgpt` on `executor: opencode` steps. Its model list

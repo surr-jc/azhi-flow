@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ErrorClass } from '../lib/errors.js';
+import { windowsSystemEnv } from '../lib/process.js';
 
 /**
  * Workspace checkouts for harness steps. Each step clones into a fresh directory under its own
@@ -39,6 +40,8 @@ export function isolatedGitEnv(home: string): NodeJS.ProcessEnv {
     PATH: process.env.PATH,
     HOME: home,
     XDG_CONFIG_HOME: join(home, '.config'),
+    // Windows: git and an MCP server need the system variables to start and reach the network; the home folder is the step's.
+    ...(process.platform === 'win32' ? { ...windowsSystemEnv(), USERPROFILE: home } : {}),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_TERMINAL_PROMPT: '0',

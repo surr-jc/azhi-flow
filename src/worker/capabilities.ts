@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dcpPlugin, ripgrepBinary, ripgrepVersion } from './tools.js';
 
@@ -13,8 +14,10 @@ export interface WorkerCapabilities {
 
 function tryRun(cmd: string, args: string[]): string | undefined {
   try {
-    // Probing must never trigger a Python download.
-    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000, env: { ...process.env, UV_PYTHON_DOWNLOADS: 'never' } }).trim();
+    // Probing must never trigger a Python download. Node starts a Windows .cmd or .bat only through the shell
+    // (the arguments here are fixed, never user text).
+    const shell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd);
+    return execFileSync(shell ? `"${cmd}"` : cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000, env: { ...process.env, UV_PYTHON_DOWNLOADS: 'never' }, shell, windowsHide: true }).trim();
   } catch {
     return undefined;
   }
@@ -65,13 +68,23 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
   };
 }
 
-/** AZHI_OPENCODE_BIN, the pinned copy in node_modules, or `opencode` on PATH. */
+/**
+ * AZHI_OPENCODE_BIN, the pinned copy in node_modules, or `opencode` on PATH. The pinned copy is the program
+ * itself: npm's install step puts the platform's binary at opencode-ai/bin/opencode.exe (that name on every OS).
+ * On Windows the program is preferred over npm's opencode.cmd wrapper, which Node cannot start without a shell.
+ */
 export function opencodeBinary(): string | undefined {
   if (process.env.AZHI_OPENCODE_BIN) return process.env.AZHI_OPENCODE_BIN;
-  const win = process.platform === 'win32';
-  const pinned = fileURLToPath(new URL(`../../node_modules/.bin/opencode${win ? '.cmd' : ''}`, import.meta.url));
+  const pinned = fileURLToPath(new URL('../../node_modules/opencode-ai/bin/opencode.exe', import.meta.url));
   if (existsSync(pinned)) return pinned;
-  return tryRun(win ? 'where' : 'which', ['opencode'])?.split(/\r?\n/)[0] || undefined;
+  const win = process.platform === 'win32';
+  const found = (tryRun(win ? 'where' : 'which', ['opencode']) ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!win) return found[0];
+  const shimTarget = (p: string) => {
+    const exe = join(dirname(p), 'node_modules', 'opencode-ai', 'bin', 'opencode.exe');
+    return /\.cmd$/i.test(p) && existsSync(exe) ? exe : undefined;
+  };
+  return found.find((p) => /\.exe$/i.test(p)) ?? found.map(shimTarget).find(Boolean) ?? found[0];
 }
 
 /**

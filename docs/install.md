@@ -98,7 +98,7 @@ install command that fits the platform.
 | Debian, Ubuntu, WSL | `sudo apt install ripgrep` |
 | Fedora, RHEL | `sudo dnf install ripgrep` |
 | macOS | `brew install ripgrep` |
-| Native Windows | `winget install BurntSushi.ripgrep.MSVC` (OpenCode steps still need a Linux, macOS or WSL worker) |
+| Native Windows | `winget install BurntSushi.ripgrep.MSVC` (then open a new PowerShell window) |
 
 Without root, put `rg` in `~/.azhi/tools/bin` (or `$AZHI_TOOLS_DIR/bin`, for a small system drive) or set
 `AZHI_RG_BIN`. The worker adds that folder to the step's PATH and `azhi doctor` flags OpenCode workers
