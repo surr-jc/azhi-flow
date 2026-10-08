@@ -150,13 +150,22 @@ describe.skipIf(!up)('workflow editor', () => {
     await region.getByRole('button', { name: 'New profile' }).click();
     await region.getByLabel('Instructions').fill('Triage the ticket and say how urgent it is.');
     await region.getByLabel('Max turns').fill('4');
+    // A populated credential remains untouched when changing providers.
+    await region.getByLabel('Provider').selectOption('github-copilot');
+    await expect.poll(() => region.getByLabel('Key secret').inputValue()).toBe('anthropic-api-key');
+    // An empty credential receives the selected provider's default secret.
+    await region.getByLabel('Key secret').fill('');
+    await region.getByLabel('Provider').selectOption('openai-chatgpt');
+    await expect.poll(() => region.getByLabel('Key secret').inputValue()).toBe('openai-chatgpt-auth');
+    await expect.poll(() => region.getByLabel('Model').locator('option').allTextContents()).toContain('gpt-5.5');
+    await region.getByLabel('Model').selectOption('gpt-5.5');
     await page.getByText('compiles').waitFor();
     await page.getByRole('button', { name: 'Save draft' }).click();
     await page.waitForURL(/\/ui\/workflows\/sdlc\?version=wfv_/);
     const id = new URL(page.url()).searchParams.get('version')!;
     const files = (await h.api.get<any>(`/v1/versions/${id}/source`)).files;
     const text = files.find((f: any) => f.path === 'profiles/triage@1.yaml').text as string;
-    expect(parse(text)).toMatchObject({ instructions: 'Triage the ticket and say how urgent it is.', max_turns: 4, model: { provider: 'anthropic' } });
+    expect(parse(text)).toMatchObject({ instructions: 'Triage the ticket and say how urgent it is.', max_turns: 4, model: { provider: 'openai-chatgpt', name: 'gpt-5.5', credential: 'openai-chatgpt-auth' } });
     const v = await h.api.get<any>(`/v1/versions/${id}`);
     expect(v.definition.nodes.find((n: any) => n.profile === 'triage@1')).toMatchObject({ type: 'agent', executor: 'opencode' });
     await page.close();

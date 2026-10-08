@@ -23,9 +23,12 @@ interface Check { ok: boolean; diagnostics: Diagnostic[]; yaml?: string; plan?: 
 interface Source { workflow: string; files: Array<{ path: string; size: number; text?: string }> }
 interface Tool { id: string; version: number; description: string; effect: string; transport?: { kind?: string } }
 interface ExecutorInfo { id: string; version: string; capabilities: Record<string, any>; notes: string[]; providers: string[] }
+interface ProviderModelList { models: Array<{ id: string; label: string }> }
 
 const STEP_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ADDABLE = ['tool', 'agent', 'script', 'retrieve', 'condition', 'approval', 'parallel', 'loop', 'subworkflow', 'report', 'notify'];
+const PROFILE_PROVIDER_MODELS: Record<string, string> = { anthropic: 'anthropic', openai: 'openai', 'github-copilot': 'opencode', 'openai-chatgpt': 'chatgpt' };
+const PROFILE_PROVIDER_CREDENTIALS: Record<string, string> = { anthropic: 'anthropic-api-key', openai: 'openai-api-key', 'github-copilot': 'github-copilot-token', 'openai-chatgpt': 'openai-chatgpt-auth' };
 
 type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string; help?: string };
 const COMMON: Field[] = [
@@ -744,6 +747,25 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
     set('budget', Object.keys(b).length ? b : undefined);
   };
   const provider = doc?.model?.provider;
+  const modelProvider = PROFILE_PROVIDER_MODELS[provider ?? ''];
+  const modelList = useQuery({
+    queryKey: ['profile-models', modelProvider],
+    queryFn: () => api<ProviderModelList>(`/v1/builder/models?provider=${encodeURIComponent(modelProvider!)}`),
+    enabled: Boolean(modelProvider),
+    staleTime: 5 * 60_000,
+  });
+  const models = modelList.data?.models ?? [];
+  const modelName = doc?.model?.name ?? 'default';
+  const hasListedModel = models.some((model) => model.id === modelName);
+  const changeProvider = (nextProvider: string) => writeProfile((d) => ({
+    ...d,
+    model: {
+      ...(d.model ?? {}),
+      provider: nextProvider,
+      name: 'default',
+      credential: d.model?.credential || PROFILE_PROVIDER_CREDENTIALS[nextProvider],
+    },
+  }));
   const providerOk = !executor || !provider || provider === 'scripted' || executor.providers.includes(provider);
 
   return (
@@ -780,16 +802,20 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
         <>
           <div className="row wrap">
             <label>Provider
-              <select value={provider ?? 'anthropic'} onChange={(e) => setModel('provider', e.target.value)}>
+              <select value={provider ?? 'anthropic'} onChange={(e) => changeProvider(e.target.value)}>
                 {['anthropic', 'openai', 'github-copilot', 'openai-chatgpt', ...(provider === 'scripted' ? ['scripted'] : [])].map((p) => <option key={p} value={p}>{p === 'github-copilot' ? 'GitHub Copilot (OpenCode)' : p === 'openai-chatgpt' ? 'ChatGPT plan (OpenCode)' : p}</option>)}
               </select>
             </label>
             <label>Model
-              <input value={doc.model?.name ?? ''} spellCheck={false} onChange={(e) => setModel('name', e.target.value)} />
-              <span className="muted small">default uses the server's model setting</span>
+              <select value={modelName} disabled={Boolean(modelProvider) && modelList.isLoading} onChange={(e) => setModel('name', e.target.value)}>
+                <option value="default">default</option>
+                {!hasListedModel && modelName !== 'default' ? <option value={modelName}>{modelName} (saved)</option> : null}
+                {models.map((model) => <option key={model.id} value={model.id} title={model.id}>{model.label}</option>)}
+              </select>
+              <span className="muted small">default uses the server's model setting{modelList.error ? '; model list unavailable' : ''}</span>
             </label>
             <label>Key secret
-              <input value={doc.model?.credential ?? ''} spellCheck={false} placeholder={provider === 'github-copilot' ? 'github-copilot-token' : provider === 'openai-chatgpt' ? 'openai-chatgpt-auth' : provider === 'openai' ? 'openai-api-key' : 'anthropic-api-key'} onChange={(e) => setModel('credential', e.target.value)} />
+              <input value={doc.model?.credential ?? ''} spellCheck={false} placeholder={PROFILE_PROVIDER_CREDENTIALS[provider ?? ''] ?? 'anthropic-api-key'} onChange={(e) => setModel('credential', e.target.value)} />
             </label>
           </div>
           {!providerOk ? <p className="warn-note small">{executor!.id} supports {executor!.providers.join(', ')} only; this profile uses {provider}.</p> : null}
