@@ -11,6 +11,7 @@ import { Popup } from '../components/Popup';
 import { StepPanel } from '../components/StepDrawer';
 import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
 import { nodeStates, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
+import { LENSES, lensRows, lensSummary, type Lens } from '../lenses';
 import { keySettings } from '../stepHelp';
 
 export function Workflows() {
@@ -53,6 +54,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const [expanded, setExpanded] = useState(false);
   const [starting, setStarting] = useState(false);
   const [mode, setMode] = useState<'plan' | 'run'>('plan');
+  const [lens, setLens] = useState<Lens>('flow');
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<ToolRow[]>('/v1/tools') });
@@ -65,7 +67,13 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const lastRun = useQuery({ queryKey: ['run', lastId], queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(lastId!)}`), enabled: Boolean(lastId) });
   const nodes: PlanNode[] | undefined = version.data?.plan?.nodes;
   const toolList = tools.data ?? [];
-  const settings = useCallback((n: PlanNode) => keySettings({ type: n.type, ...(n.def ?? {}) }, toolList), [toolList]);
+  const missing = new Set((plan.data?.missing_grants ?? []).filter((g) => g.kind === 'secret').map((g) => g.name));
+  const missingKey = [...missing].sort().join(',');
+  const settings = useCallback(
+    (n: PlanNode) => (lens === 'flow' ? keySettings({ type: n.type, ...(n.def ?? {}) }, toolList) : lensRows(lens, n, version.data?.plan?.nodes ?? [], { tools: toolList, missing: new Set(missingKey ? missingKey.split(',') : []) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [toolList, lens, missingKey, version.data],
+  );
   if (versions.error) return <ErrorNote error={versions.error} />;
   if (!versions.data) return <Loading />;
   if (!current) return <p>No versions of {slug}.</p>;
@@ -111,9 +119,24 @@ export function WorkflowPage({ slug }: { slug: string }) {
               <button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}>Plan</button>
               <button type="button" aria-pressed={mode === 'run'} disabled={!lastId} onClick={() => setMode('run')} title={lastId ? undefined : 'This workflow has not run yet'}>Last run{lastLabel ? ` · ${lastLabel}` : ''}</button>
             </div>
-            <span className="muted small">{mode === 'run' ? 'Each step shows what happened in the latest run.' : 'Select a step to read what it does and every setting.'}</span>
+            {mode === 'plan' ? (
+              <div className="seg" role="group" aria-label="Lens">
+                {LENSES.map((l) => <button key={l.id} type="button" aria-pressed={lens === l.id} title={l.hint} onClick={() => setLens(l.id)}>{l.label}</button>)}
+              </div>
+            ) : null}
+            <span className="muted small">{mode === 'run' ? 'Each step shows what happened in the latest run.' : lens === 'flow' ? 'Select a step to read what it does and every setting.' : LENSES.find((l) => l.id === lens)!.hint}</span>
           </div>
           {nodes ? <WorkflowCanvas nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined} /> : <Loading />}
+          {mode === 'plan' && lens !== 'flow' && nodes ? (
+            <div className="lens-cards" aria-label={`${lens} summary`}>
+              {lensSummary(lens, nodes, { tools: toolList, missing }).map((c) => (
+                <div key={c.title} className={`lens-card${c.tone ? ` ${c.tone}` : ''}`}>
+                  <span className="label">{c.title}</span>
+                  {c.lines.map((l) => <p key={l} className="small">{l}</p>)}
+                </div>
+              ))}
+            </div>
+          ) : null}
           {plan.data ? (
             <div className="runplan-strip">
               <Badge tone={blockers ? 'bad' : 'ok'}>{blockers ? `${blockers} blocker${blockers === 1 ? '' : 's'}` : '0 blockers'}</Badge>

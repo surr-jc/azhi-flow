@@ -1,4 +1,11 @@
-import type { PlanNode } from './components/WorkflowCanvas';
+/** The shape the canvas takes (components/WorkflowCanvas.PlanNode), kept here so this file stands alone. */
+export interface PlanNode {
+  id: string;
+  type: string;
+  deps: string[];
+  route?: { condition: string; route: string };
+  def?: Record<string, any>;
+}
 
 type Definition = Record<string, any> & { id?: string; nodes: Array<Record<string, any> & { id: string; type: string }> };
 
