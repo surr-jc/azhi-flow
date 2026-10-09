@@ -6,3 +6,4 @@ dist/
 coverage/
 .scratch/
 package-lock.json
+docs/demo/out/raw/
