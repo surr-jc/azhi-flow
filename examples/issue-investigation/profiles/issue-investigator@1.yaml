@@ -11,7 +11,7 @@ harness:
   opencode:
     agent: harness/agents/investigator.md
     command: harness/commands/investigate.md
-    skills: [harness/skills/root-cause-analysis]
+    skills: [harness/skills/root-cause-analysis, harness/skills/systematic-debugging, harness/skills/evidence-before-claims]
     tools: [read, grep, glob, skill]
     mcp:
       repo-history: {command: [node, harness/mcp/repo-history.mjs]}

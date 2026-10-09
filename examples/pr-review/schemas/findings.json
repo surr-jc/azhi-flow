@@ -1,8 +1,14 @@
 {
   "type": "object",
   "properties": {
-    "reviewer": {"type": "string"},
-    "summary": {"type": "string", "maxLength": 1000, "description": "Two or three plain sentences, at most 1000 characters. Put detail in findings, not here."},
+    "reviewer": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Two or three plain sentences, at most 1000 characters. Put detail in findings, not here."
+    },
     "findings": {
       "description": "Always include this field; use [] when there is nothing to report.",
       "type": "array",
@@ -10,17 +16,56 @@
       "items": {
         "type": "object",
         "properties": {
-          "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
-          "path": {"type": "string"},
-          "line": {"type": "integer", "minimum": 0},
-          "title": {"type": "string", "maxLength": 120},
-          "detail": {"type": "string", "maxLength": 1000}
+          "id": {
+            "type": "string",
+            "pattern": "^[CSTQ][0-9]{1,2}$",
+            "description": "Your reviewer prefix and a running number, such as C1 (correctness), S2 (security), T1 (tests), Q3 (quality)"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "scenario": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The concrete input or caller that reaches this line and what goes wrong. A finding you cannot write this for does not belong in the list."
+          }
         },
-        "required": ["severity", "path", "title", "detail"],
+        "required": [
+          "id",
+          "severity",
+          "path",
+          "title",
+          "detail",
+          "scenario"
+        ],
         "additionalProperties": false
       }
     }
   },
-  "required": ["reviewer", "summary", "findings"],
+  "required": [
+    "reviewer",
+    "summary",
+    "findings"
+  ],
   "additionalProperties": false
 }

@@ -81,10 +81,20 @@ function makeRepo(root: string, secretFile: string) {
 }
 
 const FINDINGS = {
-  correctness: { reviewer: 'correctness', summary: 'charge() builds code with a template string.', findings: [{ severity: 'major', path: 'src/payments.js', line: 3, title: 'Amount is interpolated into evaluated code', detail: 'A non-numeric amount changes the evaluated expression.' }] },
-  security: { reviewer: 'security', summary: 'eval on input.', findings: [{ severity: 'blocker', path: 'src/payments.js', line: 3, title: 'eval of caller input', detail: 'Call processor.charge(amount) directly.' }] },
-  quality: { reviewer: 'quality', summary: 'charge() mixes string-built code into a plain call.', findings: [{ severity: 'major', path: 'src/payments.js', line: 3, title: 'The direct call became an eval branch', detail: 'Keep the direct call; delete the eval path instead of guarding it.' }] },
-  tests: { reviewer: 'tests', summary: 'No tests for the new note argument.', findings: [{ severity: 'minor', path: 'src/payments.js', line: 1, title: 'note is untested', detail: 'Add a test that passes a note.' }] },
+  correctness: { reviewer: 'correctness', summary: 'charge() builds code with a template string.', findings: [{ id: 'C1', severity: 'major', path: 'src/payments.js', line: 3, title: 'Amount is interpolated into evaluated code', detail: 'A non-numeric amount changes the evaluated expression.', scenario: 'charge("1); x(") evaluates attacker text.' }] },
+  security: { reviewer: 'security', summary: 'eval on input.', findings: [{ id: 'S1', severity: 'blocker', path: 'src/payments.js', line: 3, title: 'eval of caller input', detail: 'Call processor.charge(amount) directly.', scenario: 'A caller passes a string amount and runs code.' }] },
+  quality: { reviewer: 'quality', summary: 'charge() mixes string-built code into a plain call.', findings: [{ id: 'Q1', severity: 'major', path: 'src/payments.js', line: 3, title: 'The direct call became an eval branch', detail: 'Keep the direct call; delete the eval path instead of guarding it.', scenario: 'Every charge now goes through eval.' }] },
+  tests: { reviewer: 'tests', summary: 'No tests for the new note argument.', findings: [{ id: 'T1', severity: 'minor', path: 'src/payments.js', line: 1, title: 'note is untested', detail: 'Add a test that passes a note.', scenario: 'A change to note formatting breaks nothing in the suite.' }] },
+};
+/** The verifier confirms the eval findings, refutes the quality one and cannot settle the test one. */
+const VERIFICATION = {
+  summary: 'Walked each finding in the checkout.',
+  checks: [
+    { id: 'C1', verdict: 'confirmed', confidence: 91, evidence: 'src/payments.js:3 builds the call as a string passed to eval.' },
+    { id: 'S1', verdict: 'confirmed', confidence: 95, evidence: 'src/payments.js:3 evals a template string with the amount.' },
+    { id: 'Q1', verdict: 'refuted', confidence: 85, evidence: 'The branch is the only path; there is no guarded eval to delete.' },
+    { id: 'T1', verdict: 'unverifiable', confidence: 40, evidence: 'The test layout is not visible in this checkout.' },
+  ],
 };
 const REVIEW = {
   verdict: 'request_changes',
@@ -97,12 +107,13 @@ const REVIEW = {
 };
 
 /** Which agent a request belongs to, from the agent prompt OpenCode puts in the system prompt. */
-function agentOf(r: FakeRequest): keyof typeof FINDINGS | 'summarizer' | undefined {
+function agentOf(r: FakeRequest): keyof typeof FINDINGS | 'verifier' | 'summarizer' | undefined {
   if (r.model !== MODEL) return undefined;
   if (r.system.includes('You are the correctness reviewer')) return 'correctness';
   if (r.system.includes('You are the security reviewer')) return 'security';
   if (r.system.includes('You are the tests and style reviewer')) return 'tests';
   if (r.system.includes('You are the code quality reviewer')) return 'quality';
+  if (r.system.includes('You are the finding verifier')) return 'verifier';
   if (r.system.includes('You write the final review')) return 'summarizer';
   return undefined;
 }
@@ -127,6 +138,7 @@ function script(r: FakeRequest): FakeStep[] {
   if (who === 'security') return [{ tool: 'skill', input: { name: 'security-checklist' } }, { tool: 'file-diff', input: { path: 'src/payments.js' } }, { tool: 'submit_output', input: FINDINGS.security }, { text: 'done' }];
   if (who === 'tests') return [{ tool: 'skill', input: { name: 'fresh-eyes-review' } }, { tool: 'skill', input: { name: 'test-review' } }, { tool: 'submit_output', input: FINDINGS.tests }, { text: 'done' }];
   if (who === 'quality') return [{ tool: 'skill', input: { name: 'thermo-nuclear-code-quality-review' } }, { tool: 'file-diff', input: { path: 'src/payments.js' } }, { tool: 'submit_output', input: FINDINGS.quality }, { text: 'done' }];
+  if (who === 'verifier') return [{ tool: 'skill', input: { name: 'finding-verification' } }, { tool: 'file-diff', input: { path: 'src/payments.js' } }, { tool: 'submit_output', input: VERIFICATION }, { text: 'done' }];
   if (who === 'summarizer') return [{ tool: 'skill', input: { name: 'review-format' } }, { tool: 'submit_output', input: REVIEW }, { text: 'done' }];
   return [{ text: 'PR review' }];
 }
@@ -138,6 +150,11 @@ function packageFor(gitUrl: string): string {
   const wf = join(dir, 'workflow.yaml');
   writeFileSync(wf, readFileSync(wf, 'utf8').replace('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${gitUrl}\n`).replace('{{slack_channel}}', 'C-REVIEW'));
   cpSync('test/fixtures/pr-review/probe.mjs', join(dir, 'harness/mcp/probe.mjs'));
+  // The security reviewer and the verifier name other models on purpose; the scripted endpoint serves one, so use the server's default.
+  for (const f of ['security-reviewer@1.yaml', 'finding-verifier@1.yaml']) {
+    const p = join(dir, 'profiles', f);
+    writeFileSync(p, readFileSync(p, 'utf8').replace(/name: (claude-opus-5\.5|gpt-5\.4)/, 'name: default'));
+  }
   const pf = join(dir, 'profiles/correctness-reviewer@1.yaml');
   const profile = parse(readFileSync(pf, 'utf8'));
   profile.harness.opencode.mcp.probe = { command: ['node', 'harness/mcp/probe.mjs'] };
@@ -216,7 +233,7 @@ describe('PR review example: definition checks', () => {
   it('compiles, with the reviewers tainted by their checkout and the comment gated', () => {
     const r = load(PKG);
     expect(r.ok).toBe(true);
-    for (const id of ['correctness', 'security', 'tests', 'quality']) expect(r.plan!.taint.tainted[id]).toBe('reads a cloned repository (its files are untrusted)');
+    for (const id of ['correctness', 'security', 'tests', 'quality', 'verify']) expect(r.plan!.taint.tainted[id]).toBe('reads a cloned repository (its files are untrusted)');
     expect(r.plan!.taint.paths).toContainEqual(expect.objectContaining({ write: 'post', gate: 'guard' }));
   });
 
@@ -257,9 +274,9 @@ describe('GitHub Enterprise at install', () => {
     expect(gitHostFor('https://api.github.com')).toBe('https://github.com');
     const yaml = readFileSync(`${PKG}/workflow.yaml`, 'utf8');
     const hosts = (y: string) => parse(y).nodes.filter((n: any) => n.workspace).map((n: any) => n.workspace.host);
-    expect(hosts(yaml)).toEqual([undefined, undefined, undefined, undefined]);
+    expect(hosts(yaml)).toEqual(Array(5).fill(undefined));
     const set = withGitHost(yaml, 'https://ghe.example.com', false);
-    expect(hosts(set)).toEqual(Array(4).fill('https://ghe.example.com'));
+    expect(hosts(set)).toEqual(Array(5).fill('https://ghe.example.com'));
     // A derived host keeps one the workflow names; an explicit one replaces it.
     expect(hosts(withGitHost(set, 'https://other.example.com', false))[0]).toBe('https://ghe.example.com');
     expect(hosts(withGitHost(set, 'https://other.example.com', true))[0]).toBe('https://other.example.com');
@@ -371,6 +388,12 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const out = (id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.output;
     expect(out('summarize')).toEqual(REVIEW);
     for (const id of ['correctness', 'security', 'tests', 'quality'] as const) expect(out(id)).toEqual(FINDINGS[id]);
+    // The verifier's checks decide what reaches the summarizer: confirmed at 80+ is kept, refuted is dropped,
+    // unverifiable is set aside for a manual check.
+    expect(out('verify')).toEqual(VERIFICATION);
+    expect(out('triage').stats).toEqual({ found: 4, kept: 2, unverified: 1, dropped: 1, min_confidence: 80 });
+    expect(out('triage').dropped.map((f: any) => f.id)).toEqual(['Q1']);
+    expect(out('triage').unverified.map((f: any) => f.id)).toEqual(['T1']);
     // The run artifact groups the findings by triage (fix now, follow-up issue, check by hand).
     const md: string = out('report').markdown;
     expect(md).toMatch(/Fix now:\n– blocker \(security\) src\/payments\.js:3: eval of caller input/);
@@ -414,7 +437,9 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(toolResults(q[1]!)).toContain('Thermo-Nuclear Code Quality Review');
     expect(toolResults(q[1]!)).toContain('code judo');
     expect([...q[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'read', 'repo-facts_changed-files', 'repo-facts_file-diff', 'skill']);
-    expect(JSON.stringify(reqs('summarizer')[0]!.messages)).toContain('The direct call became an eval branch');
+    // The verifier refuted this finding, so the summarizer never sees it.
+    expect(JSON.stringify(reqs('summarizer')[0]!.messages)).not.toContain('The direct call became an eval branch');
+    expect(JSON.stringify(reqs('summarizer')[0]!.messages)).toContain('eval of caller input');
 
     // The checkout is the PR head; repo-facts diffs it against the base branch.
     expect(toolResults(c[2]!)).toMatch(/M\\+tsrc\/payments\.js/);
@@ -470,7 +495,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const cp = d.usage.copilot;
     const tokens = (k: string) => d.usage.records.reduce((n: number, r: any) => n + (r[k] ?? 0), 0);
     const want = (tokens('input_tokens') * 2 + tokens('cache_read_tokens') * 0.2 + tokens('cache_write_tokens') * 2.5 + tokens('output_tokens') * 10) / 1_000_000 / 0.01;
-    expect(d.usage.records.filter((r: any) => r.provider === 'github-copilot')).toHaveLength(5);
+    expect(d.usage.records.filter((r: any) => r.provider === 'github-copilot')).toHaveLength(6);
     expect(cp.credits).toBeGreaterThan(0);
     expect(cp.credits).toBeCloseTo(want, 2);
     expect(cp).toMatchObject({ currency: 'USD', credit_usd: 0.01, unpriced_models: [], models: [{ model: MODEL }] });

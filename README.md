@@ -67,6 +67,10 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   or from the web UI); an approval gates the PR comment. Set up from Mission Control's Examples page or
   `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
   See [docs/pr-review.md](docs/pr-review.md).
+- Result confidence: the pull request review and the issue analysis check their own work. A verifier or
+  challenger on a different model family tries to refute each finding or root cause in its own checkout,
+  and only what survives at 80 out of 100 reaches the review or is called high confidence. What is
+  measured and what is not: [docs/confidence.md](docs/confidence.md).
 - Issue root-cause analysis with an OpenCode agent (`examples/issue-investigation`): an investigator
   in a fresh checkout of the repository, with a root-cause-analysis skill and a read-only git
   history MCP server, returns severity, complexity and confidence with reasons, a 5-whys chain with

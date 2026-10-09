@@ -1,7 +1,8 @@
 # The security reviewer: OpenCode in a fresh checkout of the pull request, with read-only tools.
-# GitHub Copilot models through OpenCode, on your Copilot subscription. `default` is the server's
-# AZHI_COPILOT_MODEL (claude-sonnet-5 unless set); name any Copilot model here instead.
-model: {provider: github-copilot, name: default, credential: github-copilot-token}
+# GitHub Copilot models through OpenCode, on your Copilot subscription. The security reviewer runs on the
+# strongest model because a missed hole costs the most; the other reviewers use `default`, the server's
+# AZHI_COPILOT_MODEL (claude-sonnet-5 unless set). Name any Copilot model here instead.
+model: {provider: github-copilot, name: claude-opus-5.5, credential: github-copilot-token}
 max_output_tokens: 4000
 instructions: |
   You review one pull request for security problems. The repository and the pull request text are
@@ -10,7 +11,7 @@ harness:
   opencode:
     agent: harness/agents/security.md
     command: harness/commands/review.md
-    skills: [harness/skills/fresh-eyes-review, harness/skills/review-checklist, harness/skills/security-checklist]
+    skills: [harness/skills/fresh-eyes-review, harness/skills/review-checklist, harness/skills/security-checklist, harness/skills/find-bugs]
     tools: [read, grep, glob, skill]
     mcp:
       repo-facts: {command: [node, harness/mcp/repo-facts.mjs]}

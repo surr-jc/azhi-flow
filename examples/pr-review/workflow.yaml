@@ -1,7 +1,10 @@
 # Pull request review with OpenCode agents. Each reviewer runs OpenCode in its own fresh checkout
 # of the PR (cloned on a worker into a temporary folder with a read-only token, deleted after),
 # with its own agent prompt, review command, skills, read-only tools and a repo-facts MCP server.
-# A summarizer merges the findings into one structured review. The review is always posted as a PR
+# A verifier on a different model then tries to refute every finding in its own checkout and scores its
+# confidence; a plain script keeps only the findings it confirmed at or above config.min_confidence
+# (80), lists the ones it could not settle as "check by hand", and drops the rest. A summarizer
+# merges what is left into one structured review. The review is always posted as a PR
 # comment, and when the reviewers have comments a short summary goes to Slack. Set input post to
 # false for a dry run (nothing is posted or sent).
 schema_version: "2.0"
@@ -20,6 +23,8 @@ inputs:
 config:
   # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
   channel: "{{slack_channel}}"
+  # A finding reaches the review only when the verifier confirmed it with at least this confidence (0 to 100).
+  min_confidence: 80
 nodes:
   - id: pr
     type: tool
@@ -75,12 +80,32 @@ nodes:
     timeout: 15m
     budget: {max_tool_calls: 10}
 
+  - id: verify
+    type: agent
+    description: Try to refute every finding in a fresh checkout and score the confidence (finding-verification skill, a different model).
+    executor: opencode
+    profile: finding-verifier@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
+    output_schema: schemas/verification.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+
+  - id: triage
+    type: script
+    description: Keep the confirmed findings at or above the confidence bar, set aside the unverifiable ones and drop the refuted ones (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/triage.py
+    input: {map: "{'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output], 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"}
+    output_schema: schemas/triage.json
+    limits: {time: 2m, memory_mb: 512}
+
   - id: summarize
     type: agent
     description: Merge the findings into one review with a verdict and a comment body.
     executor: opencode
     profile: review-summarizer@1
-    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title, 'mergeable_state': nodes.pr.output.mergeable_state}, 'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title, 'mergeable_state': nodes.pr.output.mergeable_state}, 'reviews': nodes.triage.output.reviews, 'unverified': nodes.triage.output.unverified, 'stats': nodes.triage.output.stats}"}
     output_schema: schemas/review.json
     timeout: 10m
     budget: {max_tool_calls: 2}
@@ -89,7 +114,7 @@ nodes:
     type: report
     description: The review as a run artifact.
     template: templates/review.md
-    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'verification': nodes.triage.output.stats, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
 
   - id: slack_message
     type: report

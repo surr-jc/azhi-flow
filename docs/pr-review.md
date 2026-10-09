@@ -6,15 +6,23 @@ summarizer, and can post the review as a PR comment after a person approves it.
 ```
 pr (GitHub PR + files) ─┬─ correctness ─┐
                         ├─ security ────┤
-                        ├─ tests ───────┼─ summarize ─ report
-                        └─ quality ─────┘      ├─ should_post ─ post (PR comment)
-                                                 └─ should_notify ─ notify (Slack)
+                        ├─ tests ───────┼─ verify ─ triage ─ summarize ─ report
+                        └─ quality ─────┘                        ├─ should_post ─ post (PR comment)
+                                                                   └─ should_notify ─ notify (Slack)
 ```
+
+Reviewers only propose findings. `verify` (a different model family, in its own checkout) tries to
+refute each one, and `triage` (a plain script, no model) keeps only the findings it confirmed with a
+confidence of at least `config.min_confidence` (80). Findings it could not settle go to "check by hand"
+and never decide the verdict; refuted ones are dropped and counted. See
+[docs/confidence.md](confidence.md).
 
 | Node | What it does |
 |---|---|
 | `pr` | `github.get-pull-request@1`: title, body, author, base and head refs and SHAs, changed files with line counts |
 | `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
+| `verify` | OpenCode agent (`finding-verifier@1`, `gpt-5.4`) in its own checkout: re-derives every finding, walks its scenario, looks for the reason it is fine, and returns `confirmed`/`refuted`/`unverifiable` with a 0 to 100 confidence and quoted evidence (`schemas/verification.json`, skill `finding-verification`) |
+| `triage` | Script (`scripts/triage.py`): kept = confirmed at or above `config.min_confidence`; unverified = unverifiable or unchecked; dropped = refuted or confirmed below the bar |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |
 | `report` | The review as a run artifact (`templates/review.md`) |
 | `should_post` → `post` | Always, unless the run input `post` is false (a dry run): `github.comment-on-pr@1` posts the review. No approval step. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
