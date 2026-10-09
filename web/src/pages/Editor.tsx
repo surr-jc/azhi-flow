@@ -10,7 +10,7 @@ import { graphOf } from '../graph';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
-import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
+import { Badge, ErrorNote, Loading, Panel } from '../ui';
 import { Coverage } from './Run';
 
 /**
@@ -175,6 +175,9 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   const [past, setPast] = useState<Definition[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
+  // Selecting a step opens its settings; clearing the selection goes back to the palette.
+  const [panel, setPanel] = useState<'steps' | 'settings'>('steps');
+  useEffect(() => setPanel(selected ? 'settings' : 'steps'), [selected]);
   useEffect(() => {
     if (base.data && !def) setDef(structuredClone(base.data.definition));
   }, [base.data, def]);
@@ -242,14 +245,15 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   for (const d of errors) if (d.node) problems[d.node] = (problems[d.node] ?? 0) + 1;
   const dirty = (past.length > 0 && JSON.stringify(def) !== JSON.stringify(base.data.definition)) || Object.keys(profileEdits).length > 0 || Object.keys(fileEdits).length > 0;
   const step = def.nodes.find((n) => n.id === selected);
+  const showSettings = panel === 'settings';
 
   const updateStep = (id: string, patch: (s: Step) => Step) => change({ ...def, nodes: def.nodes.map((n) => (n.id === id ? reorder(patch(n)) : n)) });
-  const addStep = (type: string) => {
+  const addStep = (type: string, extra: Record<string, unknown> = {}) => {
     let i = 1;
     while (def.nodes.some((n) => n.id === `${type}_${i}`)) i++;
     const id = `${type}_${i}`;
     const after = selected && def.nodes.some((n) => n.id === selected) ? [selected] : [];
-    const n = reorder({ id, type, ...(after.length ? { depends_on: after } : {}), ...starter(type, suggestions) });
+    const n = reorder({ id, type, ...(after.length ? { depends_on: after } : {}), ...starter(type, suggestions), ...extra });
     change({ ...def, nodes: [...def.nodes, n] });
     setSelected(id);
   };
@@ -299,68 +303,70 @@ export function WorkflowEditor({ slug }: { slug: string }) {
     return keySettings(s, tools.data ?? []).map((r) => ({ ...r, changed: r.keys.some((k) => changed.has(k)) }));
   };
 
+  const canSave = dirty && Boolean(current) && Boolean(check.data?.ok) && !save.isPending;
+  const stepPanel = step ? (
+    <StepForm
+      key={`${step.id}/${revision}`}
+      step={step}
+      saved={savedSteps.get(step.id)}
+      all={def.nodes.map((n) => n.id)}
+      stillLinked={stillLinked ?? []}
+      suggestions={suggestions}
+      harness={{
+        executors: executors.data?.executors ?? [],
+        tools: tools.data ?? [],
+        profileText: (path) => profileEdits[path] ?? source.data?.files.find((f) => f.path === path)?.text,
+        setProfile: (path, t) => setProfileEdits((p) => ({ ...p, [path]: t })),
+        files,
+        fileText: (path) => (path in fileEdits ? (fileEdits[path] ?? undefined) : source.data?.files.find((f) => f.path === path)?.text),
+        setFile: (path, t) => setFileEdits((p) => ({ ...p, [path]: t })),
+      }}
+      diagnostics={diagnostics.filter((d) => d.node === step.id)}
+      onChange={(s) => updateStep(step.id, () => s)}
+      onRename={(to) => {
+        change(renameStep(def, step.id, to));
+        setSelected(to);
+      }}
+      onRemove={() => removeStep(step.id)}
+      onClose={() => setSelected(null)}
+    />
+  ) : (
+    <WorkflowForm key={revision} def={def} onChange={change} plan={check.data?.plan} />
+  );
   return (
     <>
-      <PageHead
-        title={<>Edit {def.name ?? slug}</>}
-        sub={<>From v{base.data.version}{base.data.draft ? ' (draft)' : ''}. Saving makes a new draft version, signed with this browser's publisher key so workers can run it.</>}
-        actions={
-          <div className="row">
-            <button type="button" onClick={undo} disabled={!past.length}>Undo</button>
-            <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="button">Close</Link>
-            <button type="button" className="primary" disabled={!dirty || !current || !check.data?.ok || save.isPending} onClick={() => save.mutate()}>
-              Save draft
-            </button>
-          </div>
-        }
-      />
-      <ErrorNote error={save.error} />
-      {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.diagnostics.map((d) => d.message).join('; ')}</div> : null}
-      <div className="ed-palette" role="toolbar" aria-label="Add a step">
-        <span className="muted small">Add a step{selected ? ` after ${selected}` : ''}:</span>
-        {ADDABLE.map((t) => (
-          <button key={t} type="button" className={`small t-${t}`} onClick={() => addStep(t)} aria-label={`Add ${TYPE[t]?.label ?? t} step`}>
-            <span className="pal-ico"><Icon name={TYPE[t]?.icon ?? 'step'} size={16} /></span>{TYPE[t]?.label ?? t}
-          </button>
-        ))}
-      </div>
-      <div className="ed-grid">
-        <div className="ed-canvas">
-          <WorkflowCanvas nodes={graph} height={520} edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings} />
-          <CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} />
+      <div className="ed-shell">
+        <div className="ed-stage">
+          <WorkflowCanvas nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
+            <div className="ed-title">
+              <h1>{def.name ?? slug}</h1>
+              <span className="pill">v{base.data.version}{base.data.draft ? ' draft' : ''}{dirty ? ' · unsaved changes' : ''}</span>
+            </div>
+            {save.error || (save.data && !save.data.ok) ? (
+              <div className="ed-alerts">
+                <ErrorNote error={save.error} />
+                {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.diagnostics.map((d) => d.message).join('; ')}</div> : null}
+              </div>
+            ) : null}
+            <div className="ed-check-float"><CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} /></div>
+            <div className="ed-toolbar" role="toolbar" aria-label="Editor">
+              <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="tb-btn" title="Close the editor" aria-label="Close the editor"><Icon name="close" /></Link>
+              <button type="button" className="tb-btn" onClick={undo} disabled={!past.length} title="Undo" aria-label="Undo"><Icon name="undo" /></button>
+              <button type="button" className="tb-save" disabled={!canSave} onClick={() => save.mutate()} title="Saving makes a new draft version, signed with this browser's publisher key so workers can run it.">
+                <Icon name="save" size={18} />{save.isPending ? 'Saving…' : 'Save draft'}
+              </button>
+            </div>
+          </WorkflowCanvas>
         </div>
-        <aside className="ed-side">
-          {step ? (
-            <StepForm
-              key={`${step.id}/${revision}`}
-              step={step}
-              saved={savedSteps.get(step.id)}
-              all={def.nodes.map((n) => n.id)}
-              stillLinked={stillLinked ?? []}
-              suggestions={suggestions}
-              harness={{
-                executors: executors.data?.executors ?? [],
-                tools: tools.data ?? [],
-                profileText: (path) => profileEdits[path] ?? source.data?.files.find((f) => f.path === path)?.text,
-                setProfile: (path, t) => setProfileEdits((p) => ({ ...p, [path]: t })),
-                files,
-                fileText: (path) => (path in fileEdits ? (fileEdits[path] ?? undefined) : source.data?.files.find((f) => f.path === path)?.text),
-                setFile: (path, t) => setFileEdits((p) => ({ ...p, [path]: t })),
-              }}
-              diagnostics={diagnostics.filter((d) => d.node === step.id)}
-              onChange={(s) => updateStep(step.id, () => s)}
-              onRename={(to) => {
-                change(renameStep(def, step.id, to));
-                setSelected(to);
-              }}
-              onRemove={() => removeStep(step.id)}
-              onClose={() => setSelected(null)}
-            />
-          ) : (
-            <WorkflowForm key={revision} def={def} onChange={change} plan={check.data?.plan} />
-          )}
+        <aside className="ed-panel" aria-label="Steps and settings">
+          <div className="ed-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={!showSettings} onClick={() => setPanel('steps')}>Steps</button>
+            <button type="button" role="tab" aria-selected={showSettings} onClick={() => setPanel('settings')}>{step ? step.id : 'Workflow'}</button>
+          </div>
+          {showSettings ? <div className="ed-side">{stepPanel}</div> : <StepPalette tools={tools.data ?? []} after={selected} onAdd={addStep} />}
         </aside>
       </div>
+      <div className="ed-below">
       <datalist id="ed-tools">{(tools.data ?? []).map((t) => <option key={`${t.id}@${t.version}`} value={`${t.id}@${t.version}`} label={`${t.effect}${t.transport?.kind === 'mcp-streamable-http' ? ' · remote MCP' : ''} · ${t.description}`} />)}</datalist>
       <datalist id="ed-profiles">{suggestions.profiles.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="ed-schemas">{suggestions.schemas.map((t) => <option key={t} value={t} />)}</datalist>
@@ -374,7 +380,54 @@ export function WorkflowEditor({ slug }: { slug: string }) {
           <pre className="code">{check.data.yaml}</pre>
         </details>
       ) : null}
+      </div>
     </>
+  );
+}
+
+/** The right-hand step palette: step types grouped by what they do, and the tool catalog; search filters both. */
+const GROUPS: Array<{ name: string; types: string[] }> = [
+  { name: 'Actions', types: ['tool', 'script'] },
+  { name: 'Agents', types: ['agent', 'retrieve'] },
+  { name: 'Flow control', types: ['condition', 'approval', 'parallel', 'loop', 'subworkflow'] },
+  { name: 'Output', types: ['report', 'notify'] },
+];
+function StepPalette({ tools, after, onAdd }: { tools: Tool[]; after: string | null; onAdd: (type: string, extra?: Record<string, unknown>) => void }) {
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const groups = GROUPS.map((g) => ({ ...g, types: g.types.filter((t) => !needle || `${TYPE[t]?.label} ${TYPE_HELP[t]} ${g.name}`.toLowerCase().includes(needle)) })).filter((g) => g.types.length);
+  const found = tools.filter((t) => !needle || `${t.id} ${t.description}`.toLowerCase().includes(needle));
+  return (
+    <div className="ed-palette">
+      <label className="ed-search">
+        <Icon name="search" size={18} />
+        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search steps and tools" aria-label="Search steps and tools" autoComplete="off" />
+      </label>
+      <p className="muted small">{after ? <>New steps run after <b>{after}</b>.</> : 'Select a step first to add the next one after it.'}</p>
+      {groups.map((g) => (
+        <details key={g.name} className="ed-group" open>
+          <summary><Icon name="chev" size={16} />{g.name}<span className="n">{g.types.length}</span></summary>
+          {g.types.map((t) => (
+            <button key={t} type="button" className={`ed-item t-${t}`} onClick={() => onAdd(t)} aria-label={`Add ${TYPE[t]?.label ?? t} step`}>
+              <span className="bub"><Icon name={TYPE[t]?.icon ?? 'step'} size={22} /></span>
+              <span><b>{TYPE[t]?.label ?? t}</b><span className="d">{TYPE_HELP[t]}</span></span>
+            </button>
+          ))}
+        </details>
+      ))}
+      {found.length ? (
+        <details className="ed-group" open={Boolean(needle)}>
+          <summary><Icon name="chev" size={16} />Tools<span className="n">{found.length}</span></summary>
+          {found.map((t) => (
+            <button key={`${t.id}@${t.version}`} type="button" className="ed-item t-tool" onClick={() => onAdd('tool', { tool: `${t.id}@${t.version}` })} aria-label={`Add a step that calls ${t.id}`}>
+              <span className="bub"><Icon name="tool" size={22} /></span>
+              <span><b>{t.id}</b><span className="d">{t.effect} · {t.description}</span></span>
+            </button>
+          ))}
+        </details>
+      ) : null}
+      {!groups.length && !found.length ? <p className="muted">No steps match “{q}”.</p> : null}
+    </div>
   );
 }
 

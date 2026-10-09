@@ -158,7 +158,7 @@ function Shell() {
             {role ? <span className="role-pill">{role}</span> : null}
           </span>
         </header>
-        <main className="content">
+        <main className={`content${/^\/ui\/workflows\/[^/]+\/edit$/.test(path) ? ' wide' : ''}`}>
           <Page path={path} />
         </main>
       </div>

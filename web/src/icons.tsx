@@ -25,6 +25,9 @@ const PATHS: Record<string, ReactNode> = {
   report: <path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h7" />,
   notify: <path d="M21 3L3 10.5l7 3 3 7zM10 13.5L21 3" />,
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 018 0v3" /></>,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  undo: <path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" />,
+  save: <path d="M5 3h11l4 4v14H5zM8 3v6h8V3M8 21v-7h8v7" />,
   step: <circle cx="12" cy="12" r="4" />,
 };
 
