@@ -62,6 +62,14 @@ describe('AI-SDLC example: definition', () => {
     expect(def.nodes.find((n) => n.id === 'gate_3')).toBeUndefined();
   });
 
+  it('the join runs only when a build ran: it depends on nothing that runs before the definition-of-ready gate', () => {
+    // finalize merges alternative branches (merge: any), so it runs when any dependency got through.
+    // A dependency on intake would make it run, and fail, after a ticket was sent back as not ready.
+    const r = compile(def, { pkg, catalog: staticCatalog(tools) });
+    const finalize = r.plan!.nodes.find((n) => n.id === 'finalize')!;
+    for (const early of ['source', 'jira_issue', 'github_issue', 'intake', 'dor_check', 'dor_gate', 'dor_message', 'dor_send_back']) expect(finalize.deps, early).not.toContain(early);
+  });
+
   it('gives the three full reviewers different models and builds only after the design review', () => {
     const model = (p: string) => parse(readFileSync(`${PKG}/profiles/${p}@1.yaml`, 'utf8')).model.name;
     expect(new Set(['code-reviewer', 'test-reviewer', 'security-reviewer'].map(model)).size).toBe(3);
@@ -161,7 +169,7 @@ describe.skipIf(!hasPython)('AI-SDLC example: the join and the evidence record',
     workspace: { repo: 'acme/shop', base_sha: 'abc123', diff: `diff ${n}`, stats: { files: 1, additions: 2, deletions: 1 }, tests: { status: tests, command: 'npm test', exit_code: tests === 'passed' ? 0 : 1, attempts: 1 }, files: [{ path: 'src/cart.js', status: 'modified', mode: '100644', content: `v${n}` }] },
   });
   const scope = (nodes: Record<string, unknown>, finalWeight = 'full') => ({
-    inputs: { repo: 'acme/shop' },
+    inputs: { repo: 'acme/shop', ticket: 'acme/shop#12' },
     config,
     nodes: Object.fromEntries(Object.entries({ intake: { key: 'acme/shop#12' }, design_review: { by: 'ana', data: {} }, weight_proposal: { route: 'full' }, weight: { route: finalWeight }, ...nodes }).map(([k, v]) => [k, { output: v }])),
   });

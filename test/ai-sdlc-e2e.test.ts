@@ -100,6 +100,9 @@ const DOR = {
   gates: ['testable_criteria', 'no_placeholders', 'no_bare_references', 'one_pr_scope', 'specific_surface', 'done_state', 'stated_assumptions'].map((gate) => ({ gate, status: 'pass', confidence: 'high', finding: 'ok' })),
   dispatchable: true,
 };
+/** A ticket that fails the definition of ready: one failed gate with its question. */
+let dorFails = false;
+const dorResult = () => (dorFails ? { ...DOR, summary: 'Not ready: no testable criteria.', gates: DOR.gates.map((g, i) => (i === 0 ? { ...g, status: 'fail', finding: 'No criterion can be checked', question: 'What total should a 10% code give on two 10.00 items?' } : g)) } : DOR);
 const CHANGE = {
   summary: 'total() applies the discount',
   commit_message: 'fix(cart): apply the discount in total()\n\nTotals ignored the discount argument.',
@@ -136,7 +139,7 @@ function script(r: FakeRequest): FakeStep[] {
   const who = role(r);
   switch (who) {
     case 'dor':
-      return [{ tool: 'skill', input: { name: 'definition-of-ready' } }, { tool: 'submit_output', input: DOR }, { text: 'done' }];
+      return [{ tool: 'skill', input: { name: 'definition-of-ready' } }, { tool: 'submit_output', input: dorResult() }, { text: 'done' }];
     case 'analyst':
       return [{ tool: 'skill', input: { name: 'requirements-brief' } }, { tool: 'grep', input: { pattern: 'discount' } }, { tool: 'submit_output', input: REQUIREMENTS }, { text: 'done' }];
     case 'architect':
@@ -370,4 +373,24 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     expect(last(d, 'push_branch').state).toBe('succeeded');
     expect(gh.git.pulls.length).toBe(pulls);
   }, 400_000);
+
+  it('a ticket that is not ready is sent back with its questions: the run succeeds, nothing is built or pushed', async () => {
+    dorFails = true;
+    const commits = gh.git.commits.size;
+    const pulls = gh.git.pulls.length;
+    try {
+      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { source: 'github', ticket: 'acme/shop#12', repo: 'acme/shop' } });
+      const d = await waitForRun(h.api, run_id, 120_000);
+      expect(d.run.error).toBeNull();
+      expect(d.run.state).toBe('succeeded');
+      expect(last(d, 'dor_gate').output.route).toBe('refine');
+      expect(last(d, 'dor_send_back').state).toBe('succeeded');
+      for (const id of ['requirements', 'design', 'weight_proposal', 'design_review', 'weight', 'build', 'finalize', 'ship_gate', 'release_approval', 'push_branch', 'open_pr', 'send_back', 'retro']) expect(last(d, id)?.state ?? 'skipped', id).toBe('skipped');
+      expect(h.slack.messages.some((m) => m.text.includes('What total should a 10% code give'))).toBe(true);
+      expect(gh.git.commits.size).toBe(commits);
+      expect(gh.git.pulls.length).toBe(pulls);
+    } finally {
+      dorFails = false;
+    }
+  }, 200_000);
 });
