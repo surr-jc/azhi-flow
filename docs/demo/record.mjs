@@ -23,9 +23,9 @@ const W = 1920, H = 1080, PORT = 4396;
 const overlay = () => {
   const css = `
   #__d *{box-sizing:border-box}
-  #__cap{position:fixed;left:50%;bottom:34px;transform:translate(-50%,16px);z-index:99998;max-width:1400px;padding:18px 34px;border-radius:999px;background:rgba(12,18,27,.94);color:#fff;font:600 30px/1.3 system-ui,"Segoe UI",sans-serif;letter-spacing:-.01em;text-align:center;opacity:0;transition:opacity .35s,transform .35s;box-shadow:0 10px 40px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12)}
+  #__cap{pointer-events:none;position:fixed;left:50%;bottom:34px;transform:translate(-50%,16px);z-index:99998;max-width:1400px;padding:18px 34px;border-radius:999px;background:rgba(12,18,27,.94);color:#fff;font:600 30px/1.3 system-ui,"Segoe UI",sans-serif;letter-spacing:-.01em;text-align:center;opacity:0;transition:opacity .35s,transform .35s;box-shadow:0 10px 40px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12)}
   #__cap.on{opacity:1;transform:translate(-50%,0)} #__cap b{color:#5eead4}
-  #__tag{position:fixed;left:104px;top:20px;z-index:99998;padding:8px 18px;border-radius:999px;background:#0e6f6a;color:#fff;font:700 18px system-ui,sans-serif;letter-spacing:.02em;opacity:0;transition:opacity .3s}
+  #__tag{position:fixed;left:50%;top:22px;transform:translateX(-50%);pointer-events:none;z-index:99998;padding:8px 18px;border-radius:999px;background:#0e6f6a;color:#fff;font:700 18px system-ui,sans-serif;letter-spacing:.02em;opacity:0;transition:opacity .3s}
   #__tag.on{opacity:1}
   #__card{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:radial-gradient(1200px 700px at 20% 10%,#12303a,#0b1118 60%);color:#fff;font-family:system-ui,"Segoe UI",sans-serif;opacity:0;pointer-events:none;transition:opacity .5s}
   #__card.on{opacity:1}
