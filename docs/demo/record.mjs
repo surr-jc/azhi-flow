@@ -27,8 +27,8 @@ const overlay = () => {
   #__cap.on{opacity:1;transform:translate(-50%,0)} #__cap b{color:#5eead4}
   #__tag{position:fixed;left:50%;top:22px;transform:translateX(-50%);pointer-events:none;z-index:99998;padding:8px 18px;border-radius:999px;background:#0e6f6a;color:#fff;font:700 18px system-ui,sans-serif;letter-spacing:.02em;opacity:0;transition:opacity .3s}
   #__tag.on{opacity:1}
-  #__card{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:radial-gradient(1200px 700px at 20% 10%,#12303a,#0b1118 60%);color:#fff;font-family:system-ui,"Segoe UI",sans-serif;opacity:0;pointer-events:none;transition:opacity .5s}
-  #__card.on{opacity:1}
+  #__card{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:radial-gradient(1200px 700px at 20% 10%,#12303a,#0b1118 60%);color:#fff;font-family:system-ui,"Segoe UI",sans-serif;opacity:0;pointer-events:none;transition:opacity .6s}
+  #__card.on{opacity:1} #__card .in{transition:opacity .35s}
   #__card .in{max-width:1500px;padding:0 80px;text-align:center}
   #__card h1{font:800 104px/1.05 system-ui,sans-serif;margin:0 0 26px;letter-spacing:-.03em}
   #__card h2{font:700 70px/1.15 system-ui,sans-serif;margin:0;letter-spacing:-.02em}
@@ -52,7 +52,7 @@ const overlay = () => {
   const boot = () => {
     if (document.getElementById('__d')) return;
     const d = document.createElement('div'); d.id = '__d';
-    d.innerHTML = `<style>${css}</style><div id="__tag"></div><div id="__cap"></div><div id="__card"><div class="in"></div></div>
+    d.innerHTML = `<style>${css}</style><div id="__tag"></div><div id="__cap"></div><div id="__card" class="on"><div class="in"></div></div>
       <svg id="__cur" viewBox="0 0 24 24"><path d="M4 2l16 9-7 2-3 7z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
     document.documentElement.appendChild(d);
     addEventListener('mousemove', (e) => { document.getElementById('__cur').style.transform = `translate(${e.clientX - 6}px,${e.clientY - 3}px)`; }, true);
@@ -62,7 +62,7 @@ const overlay = () => {
   window.__demo = {
     caption(html) { const c = $('__cap'); if (!html) return c.classList.remove('on'); c.innerHTML = html; c.classList.add('on'); },
     tag(t) { const c = $('__tag'); if (!t) return c.classList.remove('on'); c.textContent = t; c.classList.add('on'); },
-    card(html) { const c = $('__card'); if (!html) return c.classList.remove('on'); c.querySelector('.in').innerHTML = html; c.classList.add('on'); },
+    card(html) { const c = $('__card'); if (!html) return c.classList.remove('on'); const i = c.querySelector('.in'); if (c.classList.contains('on') && i.innerHTML) { i.style.opacity = 0; setTimeout(() => { i.innerHTML = html; i.style.opacity = 1; }, 380); } else { i.innerHTML = html; i.style.opacity = 1; c.classList.add('on'); } },
     rings(boxes, cls = '') { document.querySelectorAll('.__ring').forEach((r) => r.remove()); for (const b of boxes) { const r = document.createElement('div'); r.className = `__ring ${cls}`; Object.assign(r.style, { left: b.x - 8 + 'px', top: b.y - 8 + 'px', width: b.w + 16 + 'px', height: b.h + 16 + 'px' }); document.documentElement.appendChild(r); } },
   };
   if (document.documentElement) boot(); else addEventListener('DOMContentLoaded', boot);
@@ -77,7 +77,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let page;
 const caption = async (html, plain) => { await page.evaluate((h) => window.__demo.caption(h), html); if (html) log.push({ at: now(), text: plain ?? html.replace(/<[^>]+>/g, '') }); };
 const tag = (t) => page.evaluate((x) => window.__demo.tag(x), t);
-const card = async (html, ms, plain) => { await page.evaluate((h) => window.__demo.card(h), html); if (plain) log.push({ at: now(), text: plain }); await sleep(ms); await page.evaluate(() => window.__demo.card('')); await sleep(550); };
+const card = async (html, ms, plain) => { await page.evaluate((h) => window.__demo.card(h), html); if (plain) log.push({ at: now(), text: plain }); await sleep(ms); };
+const hideCard = async () => { await page.evaluate(() => window.__demo.card('')); await sleep(800); };
 const box = async (loc) => { const b = await loc.boundingBox(); if (!b) throw new Error('no box'); return { x: b.x, y: b.y, w: b.width, h: b.height }; };
 const rings = async (locs, cls) => page.evaluate(([b, c]) => window.__demo.rings(b, c), [await Promise.all(locs.map(box)), cls]);
 const unring = () => page.evaluate(() => window.__demo.rings([]));
@@ -96,6 +97,7 @@ const scenes = {
     await card('<h2>Retries <span class="bad">post twice</span>.</h2>', 2300, 'Retries post twice.');
     await card('<h2>Nobody can say what it <span class="bad">cost</span>,<br>or what it was allowed to do.</h2>', 3300, 'Nobody can say what it cost, or what it was allowed to do.');
     await card('<h2>Azhi starts from the <span class="ok">workflow</span>,<br>not the agent.</h2>', 3600, 'Azhi starts from the workflow, not the agent.');
+    await hideCard();
   },
 
   async today() {
@@ -257,7 +259,7 @@ const scenes = {
   },
 
   async outro() {
-    await card(`${card_.logo}<h2>Try it</h2><p style="margin:30px 0 34px"><code>azhi init</code> &nbsp; <code>azhi up</code></p><p>Self-hosted. Open source. github.com/surr-jc/azhi-flow</p>`, 6500, 'Try it: azhi init, azhi up. Self-hosted. github.com/surr-jc/azhi-flow');
+    await card(`${card_.logo}<h2>Try it</h2><p style="margin:30px 0 34px"><code>azhi init</code> &nbsp; <code>azhi up</code></p><p>Self-hosted. Open source.</p><p style="margin-top:18px"><code style="font-size:34px">https://github.com/comcast-enterprise/azhi-flow</code></p>`, 8000, 'Try it: azhi init, azhi up. Self-hosted and open source: https://github.com/comcast-enterprise/azhi-flow');
   },
 };
 
