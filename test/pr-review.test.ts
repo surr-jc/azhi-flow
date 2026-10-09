@@ -861,12 +861,14 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
 
   it('is set up from the Examples page: installed, signed in the browser, secrets set, and run', async () => {
     const page = await open('/ui/examples/pr-review');
-    const card = page.locator('section.panel', { hasText: 'pr-review' });
-    await card.getByLabel('Repositories it may use').fill('acme/payments');
+    const card = page.locator('section.panel', { has: page.getByRole('heading', { name: /^(Install|Set up) pr-review$/ }) });
+    // The tools were registered with the repository above, so this is a set-up card (repositories are managed in
+    // place); installing again is a deliberate "start over" that saves the marketplace version as a signed draft.
+    await card.getByText('Start over from the marketplace version').click();
     await card.getByText('GitHub Enterprise', { exact: true }).click();
     await card.getByLabel('API address').fill(gh.url);
     await card.getByLabel('Git address').fill(git.url);
-    await card.getByRole('button', { name: 'Install' }).click();
+    await card.getByRole('button', { name: 'Reinstall' }).click();
     await card.getByText(/Installed pr-review v\d+ and signed it/).waitFor({ timeout: 30_000 });
     // Repositories can be added and removed in place afterwards.
     await card.getByLabel('Add a repository').fill('acme/extra');

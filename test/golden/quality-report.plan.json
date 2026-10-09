@@ -143,7 +143,12 @@
         }
       ],
       "tainted": "reads incidents, whose output of incidents.list-open@1 is not marked trusted",
-      "executor": "model-agent"
+      "executor": "model-agent",
+      "model": {
+        "provider": "anthropic",
+        "name": "server-default-model",
+        "source": "server_default"
+      }
     },
     {
       "id": "report",

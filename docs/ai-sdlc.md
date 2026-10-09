@@ -98,6 +98,10 @@ Run inputs are those of sdlc-implement: `source`, `ticket`, `repo` and an option
 
 ## Setup
 
+First see what it needs: `azhi example needs ai-sdlc` lists the required settings (`slack_channel`,
+`test_command`, the repository), the optional Jira ones, and the secrets, and `azhi example install`
+stops before changing anything when a required value is missing ([model-defaults.md](model-defaults.md)).
+
 ```bash
 azhi example install ai-sdlc --repo OWNER/REPO --set slack_channel=C0123ABCD \
   --set test_command="npm ci && npm run build && npm test && npm run lint"   # or Mission Control > Marketplace

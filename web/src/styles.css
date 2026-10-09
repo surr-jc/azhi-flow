@@ -725,3 +725,7 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .model-choice { margin: 14px 0; }
 .model-choice h3 { margin: 0 0 6px; }
 .model-choice details { margin-top: 8px; }
+
+/* What to have ready before installing an example */
+.before-install { border: 1px solid var(--line, #d0d7de); border-radius: 8px; padding: 10px 12px; margin: 8px 0 12px; }
+.before-install .needs { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }

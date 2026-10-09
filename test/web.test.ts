@@ -179,6 +179,25 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('tells you what an example needs before you install it, and holds the install until it is given', async () => {
+    const page = await open('/ui/examples/ai-sdlc');
+    const before = page.getByRole('region', { name: 'Before you install' });
+    await before.waitFor();
+    const text = await before.innerText();
+    expect(text).toContain('the install is refused without');
+    expect(text).toMatch(/required\s*Slack channel/i);
+    expect(text).toMatch(/optional\s*Jira site\s*only for Jira tickets/i);
+    expect(text).toMatch(/set\s*Secret github-read-token|later\s*Secret github-read-token/);
+    const install = page.getByRole('button', { name: 'Install', exact: true });
+    expect(await install.isDisabled()).toBe(true);
+    await page.getByLabel(/^Repositories it may use/).fill('acme/shop');
+    expect(await install.isDisabled()).toBe(true);
+    await page.getByLabel(/^Slack channel/).fill('C0DELIVER');
+    expect(await install.isDisabled()).toBe(false);
+    expect(await before.innerText()).toContain('Everything required is in place.');
+    await page.close();
+  });
+
   it('sets a secret without the value ever coming back, and audits it', async () => {
     const page = await open('/ui/secrets');
     await page.getByLabel('Name').fill('ui-test-key');

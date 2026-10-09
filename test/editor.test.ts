@@ -157,8 +157,8 @@ describe.skipIf(!up)('workflow editor', () => {
     await region.getByLabel('Key secret').fill('');
     await region.getByLabel('Provider').selectOption('openai-chatgpt');
     await expect.poll(() => region.getByLabel('Key secret').inputValue()).toBe('openai-chatgpt-auth');
-    await expect.poll(() => region.getByLabel('Model').locator('option').allTextContents()).toContain('gpt-5.5');
-    await region.getByLabel('Model').selectOption('gpt-5.5');
+    await expect.poll(() => region.locator('label').filter({ hasText: /^Model/ }).locator('select').locator('option').allTextContents()).toContain('gpt-5.5');
+    await region.locator('label').filter({ hasText: /^Model/ }).locator('select').selectOption('gpt-5.5');
     await page.getByText('compiles').waitFor();
     await page.getByRole('button', { name: 'Save draft' }).click();
     await page.waitForURL(/\/ui\/workflows\/sdlc\?version=wfv_/);

@@ -67,6 +67,9 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   or from the web UI); an approval gates the PR comment. Set up from Mission Control's Examples page or
   `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
   See [docs/pr-review.md](docs/pr-review.md).
+- Provider and model for the default-model steps, chosen per workflow (editor) or per run (runner, `azhi run
+  --provider/--model`); steps that name their own model keep it. Examples list what they need before you
+  install (`azhi example needs`, the marketplace's *Before you install*). See [docs/model-defaults.md](docs/model-defaults.md).
 - Result confidence: the pull request review and the issue analysis check their own work. A verifier or
   challenger on a different model family tries to refute each finding or root cause in its own checkout,
   and only what survives at 80 out of 100 reaches the review or is called high confidence. What is
@@ -247,7 +250,8 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 |---------|--------------|
 | `azhi init [dir] [-t template]` | Create a package from a template: `quality-report` (default), `ci-digest` or `sdlc` (feature delivery with design and release gates) |
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
-| `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
+| `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results; `--provider`/`--model` choose the model for default-model steps |
+| `azhi example needs <id>` | What an example needs before it can be installed: required and optional settings, repositories, secrets |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |
 | `azhi plan [path]` | The run plan: capability marks, policy coverage, taint paths, missing grants, blockers |
 | `azhi test-node <node> [path] -f fixture.json` | Run one node on fixture outputs with writes mocked (a test run) |

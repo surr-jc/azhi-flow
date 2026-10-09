@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -214,7 +214,7 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
       { token: [READ_TOKEN, WRITE_TOKEN] },
     );
     fake = await startFakeOpenAI({ script, models: [MODEL, CHOSEN, PINNED] });
-    h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL } });
+    h = await startHarness({ settings: { copilotApiUrl: `${fake.url}/v1`, copilotModel: MODEL, copilotEndpointModels: [CHOSEN, PINNED] } });
     await h.api.put('/v1/secrets/github-copilot-token', { value: COPILOT_TOKEN });
     await h.api.put('/v1/secrets/github-read-token', { value: READ_TOKEN });
     await h.api.put('/v1/secrets/github-write-token', { value: WRITE_TOKEN });
@@ -230,6 +230,36 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     await gh?.stop();
     await git?.stop();
   });
+
+  it('says what it needs before it is installed, and refuses an install without the required settings', async () => {
+    const need = (await h.api.get<any[]>('/v1/examples')).find((e) => e.id === 'ai-sdlc').requirements;
+    expect(need.ready).toBe(false);
+    expect(need.settings.map((x: any) => [x.name, x.required, x.ready])).toEqual([['slack_channel', true, false], ['test_command', true, true], ['jira_url', false, false], ['jira_username', false, false]]);
+    expect(need.settings.find((x: any) => x.name === 'jira_url').needed_for).toBe('Jira tickets');
+    expect(need.repos).toEqual({ needed: true, ready: false });
+    expect(need.secrets.map((x: any) => x.name)).toEqual(expect.arrayContaining(['github-read-token', 'github-write-token', 'github-copilot-token', 'slack-bot-token']));
+    // Nothing is registered or saved by the refused install.
+    await expect(h.api.post('/v1/examples/ai-sdlc/install', { repos: ['acme/shop'], api_url: gh.url, git_url: git.url, settings: { test_command: 'node check.mjs' } })).rejects.toThrow(/needs this setting before it can be installed: slack_channel/);
+    expect((await h.api.get<any[]>('/v1/tools')).some((t) => t.id === 'github.get-issue')).toBe(false);
+    // The CLI says the same, before it installs anything.
+    // Asynchronous: the server runs in this process, so a blocking call would stop it answering.
+    const cli = (...args: string[]) =>
+      new Promise<{ code: number; out: string }>((resolve) => {
+        execFile('npx', ['tsx', 'src/cli/main.ts', ...args], { env: { ...process.env, NO_PROXY: '127.0.0.1', AZHI_URL: h.server.url, AZHI_TOKEN: readFileSync(h.server.localTokenFile!, 'utf8').trim() } }, (e, stdout, stderr) =>
+          resolve({ code: e ? ((e as any).code as number) : 0, out: `${stdout}${stderr}` }),
+        );
+      });
+    const needs = await cli('example', 'needs', 'ai-sdlc');
+    expect(needs.code).toBe(1);
+    expect(needs.out).toContain('Before you install ai-sdlc, have ready:');
+    expect(needs.out).toMatch(/required\s+slack_channel .*needed/);
+    expect(needs.out).toMatch(/optional\s+jira_url .*only for Jira tickets/);
+    expect(needs.out).toContain('azhi example install ai-sdlc --set slack_channel=C0123ABCD --repo OWNER/NAME');
+    const refused = await cli('example', 'install', 'ai-sdlc', '--repo', 'acme/shop');
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain('not installed: a required value is missing');
+    expect((await h.api.get<any[]>('/v1/tools')).some((t) => t.id === 'github.get-issue')).toBe(false);
+  }, 120_000);
 
   it('is installed with its settings and plans with no blockers', async () => {
     const listed = (await h.api.get<any[]>('/v1/examples')).find((e) => e.id === 'ai-sdlc');
