@@ -172,6 +172,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+        ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
         ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
       });
       const queue = await selectWorker(node.id, executor, 1);
@@ -199,7 +200,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
-      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor, tainted: plan.taint.tainted[node.id], result: { ...r, ...(error ? { error } : {}) } });
+      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor, tainted: plan.taint.tainted[node.id], ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}), result: { ...r, ...(error ? { error } : {}) } });
       // Harnesses make side calls of their own (titles, compaction) that they may not report, so totals are partial.
       if (!status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
       if (error) throw ApplicationFailure.create({ type: error.class, message: error.message, nonRetryable: true });
@@ -231,6 +232,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+        ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
       });
       for (;;) {
         if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });

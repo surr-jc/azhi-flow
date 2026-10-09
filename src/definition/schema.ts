@@ -71,6 +71,11 @@ export const workflowSchema = {
     },
     inputs: { type: 'object' },
     config: { type: 'object' },
+    model_defaults: {
+      type: 'object',
+      properties: { provider: { enum: ['anthropic', 'openai', 'github-copilot', 'openai-chatgpt'] }, name: { type: 'string', minLength: 1, maxLength: 160 } },
+      additionalProperties: false,
+    },
     nodes: {
       type: 'array',
       minItems: 1,

@@ -26,19 +26,23 @@ settings:
     title: Slack channel
     description: The channel ID pull requests and send-backs are posted to (the bot must be in it).
     placeholder: C0123ABCD
+    required: true
   - name: test_command
     title: Test command
     description: Run in the checkout after the change (a shell command; it must exit 0 for the change to ship).
     placeholder: npm ci && npm test
     default: npm ci && npm test
+    required: true
   - name: jira_url
     title: Jira site
     description: Your Jira Cloud address (only for Jira tickets).
     placeholder: https://your-company.atlassian.net
+    needed_for: Jira tickets
   - name: jira_username
     title: Jira user
     description: The email of the Atlassian account the API token belongs to (only for Jira tickets).
     placeholder: you@example.com
+    needed_for: Jira tickets
 tools:
   - id: jira.get-issue
     version: 1

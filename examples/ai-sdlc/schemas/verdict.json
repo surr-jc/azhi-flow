@@ -13,6 +13,11 @@
       "items": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[CTSL][0-9]{1,2}$",
+            "description": "Your prefix and a running number: C1 (code), T1 (test), S1 (security), L1 (lite)"
+          },
           "severity": {
             "enum": [
               "critical",
@@ -32,6 +37,7 @@
           }
         },
         "required": [
+          "id",
           "severity",
           "message"
         ],

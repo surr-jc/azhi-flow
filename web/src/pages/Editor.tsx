@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { parse, stringify } from 'yaml';
 import { api, atLeast, type RunPlan } from '../api';
 import { useMe } from '../App';
+import { ModelChoice, ModelSteps } from '../components/ModelChoice';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { graphOf } from '../graph';
 import { Link, useRoute } from '../router';
@@ -355,7 +356,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
               onClose={() => setSelected(null)}
             />
           ) : (
-            <WorkflowForm key={revision} def={def} onChange={change} />
+            <WorkflowForm key={revision} def={def} onChange={change} plan={check.data?.plan} />
           )}
         </aside>
       </div>
@@ -634,7 +635,7 @@ function ValueInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
-function WorkflowForm({ def, onChange }: { def: Definition; onChange: (d: Definition) => void }) {
+function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: Definition) => void; plan?: RunPlan }) {
   const set = (key: string, value: unknown) => {
     const next: Definition = { ...def };
     if (value === undefined || value === '') delete next[key];
@@ -650,6 +651,10 @@ function WorkflowForm({ def, onChange }: { def: Definition; onChange: (d: Defini
         <SettingRow label="Description" help="What the workflow is for, in a sentence or two.">{(id) => <textarea id={id} rows={3} value={def.description ?? ''} onChange={(e) => set('description', e.target.value)} />}</SettingRow>
         <ValueInput row field={{ key: 'trigger', label: 'Trigger', kind: 'value', help: 'When it runs: by hand, on a schedule, or both.', hint: 'manual: true, or schedule: {cron, timezone}' }} value={def.trigger} onChange={(v) => set('trigger', v)} />
         <ValueInput row field={{ key: 'inputs', label: 'Inputs (JSON schema)', kind: 'value', help: 'What a run asks for. Steps read them as inputs.name.' }} value={def.inputs} onChange={(v) => set('inputs', v)} />
+        <SettingRow label="Default provider and model" help="For every agent step whose profile says name: default. Steps that name their own provider and model keep them. A run can choose differently when it starts.">
+          {() => <ModelChoice nameBase="workflow" value={def.model_defaults ?? {}} onChange={(v) => set('model_defaults', v.provider ? v : undefined)} />}
+        </SettingRow>
+        {plan ? <div className="set-row"><div className="set-label"><p>Model of each agent step, with this edit.</p></div><div className="set-control"><ModelSteps plan={plan} /></div></div> : null}
         <ValueInput row field={{ key: 'config', label: 'Config', kind: 'value', help: 'Fixed values such as the Slack channel. Steps read them as config.name.' }} value={def.config} onChange={(v) => set('config', v)} />
       </div>
     </section>

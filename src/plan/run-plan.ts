@@ -2,7 +2,7 @@ import { budgetStatus, describeBudget } from '../server/budgets.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
 import type { AgentNode, RetrieveNode, ScriptNode, SubworkflowNode } from '../definition/types.js';
-import { parseProfile, type AgentProfile } from '../agents/profile.js';
+import { applyModelDefaults, parseProfile, usesDefaultModel, type AgentProfile, type ModelDefaults } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
 import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS, isHarness } from '../executors/capabilities.js';
@@ -42,6 +42,8 @@ export interface NodePlan {
   requirements: Requirement[];
   coverage: Coverage[];
   tainted?: string;
+  /** An agent step's model: where the provider and model came from (its profile, the workflow's defaults, or this run's choice). */
+  model?: { provider: string; name: string | null; source: 'profile' | 'server_default' | 'workflow_default' | 'run_choice' };
 }
 
 export interface Blocker {
@@ -63,8 +65,10 @@ export interface RunPlanReport {
   blockers: Blocker[];
 }
 
-export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }): Promise<RunPlanReport> {
+export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }, runChoice?: ModelDefaults | null): Promise<RunPlanReport> {
   const plan = version.plan;
+  // The run's choice wins over the workflow's defaults; both apply only to steps that say `name: default`.
+  const modelDefaults: { value?: ModelDefaults; from: 'workflow_default' | 'run_choice' } = runChoice?.provider ? { value: runChoice, from: 'run_choice' } : { value: version.definition.model_defaults, from: 'workflow_default' };
   const catalog = await loadCatalog(ctx, workspaceId);
   const secrets = new Set((await ctx.pool.query(`SELECT DISTINCT name FROM secrets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const workers = (
@@ -207,7 +211,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           { name: 'usage reporting', mark: mark('usage', c.usage !== 'unavailable'), detail: c.usage },
           { name: 'cancellation', mark: mark('cancellation', c.cancellation !== 'none'), detail: c.cancellation },
         );
-        if (executor === 'model-agent' || isHarness(executor)) np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor)));
+        if (executor === 'model-agent' || isHarness(executor)) np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor, modelDefaults.value, modelDefaults.from, np)));
         if (isHarness(executor)) np.requirements.push(...workerRequirements(executor));
         if (def.tools?.length) np.requirements.push({ name: 'gateway tools', mark: mark('gatewayTools', c.gatewayTools !== 'none', c.gatewayTools === 'bridged'), detail: c.gatewayTools });
         for (const t of def.tools ?? []) np.requirements.push(toolRequirement(n, t));
@@ -308,6 +312,13 @@ export function datasetAllows(acl: { roles?: string[]; users?: string[] }, p: { 
   return (acl.roles ?? []).some((r) => RANK[p.role]! >= RANK[r]!);
 }
 
+/** Where a step's model came from, for the plan: nothing for a model the profile names itself. */
+function modelOrigin(explicit: boolean, chosen: 'workflow_default' | 'run_choice' | undefined, defaultName?: string): string {
+  if (!chosen) return explicit ? '' : ' (server default)';
+  const who = chosen === 'run_choice' ? 'chosen for this run' : 'workflow default';
+  return defaultName ? ` (${who})` : ` (${who} provider, its server default model)`;
+}
+
 /** The model binding, credential and budget enforceability of a model-agent node. */
 async function modelRequirements(
   ctx: AppContext,
@@ -318,6 +329,9 @@ async function modelRequirements(
   secrets: Set<string>,
   missing: RunPlanReport['missing_grants'],
   executor: string,
+  defaults?: ModelDefaults,
+  defaultsFrom: 'workflow_default' | 'run_choice' = 'workflow_default',
+  np?: NodePlan,
 ): Promise<Requirement[]> {
   const path = profilePath(def.profile);
   let profile;
@@ -326,7 +340,13 @@ async function modelRequirements(
   } catch (e) {
     return [{ name: `profile ${def.profile}`, mark: 'unsupported', detail: (e as Error).message }];
   }
+  const chosen = usesDefaultModel(profile) && defaults?.provider ? defaultsFrom : undefined;
+  profile = applyModelDefaults(profile, defaults);
   const reqs: Requirement[] = [];
+  if (np && profile.model.provider !== 'scripted') {
+    const explicit = Boolean(profile.model.name && profile.model.name !== 'default');
+    np.model = { provider: profile.model.provider, name: explicit ? profile.model.name! : PROVIDER_DEFAULTS[profile.model.provider].model(ctx.settings) ?? null, source: chosen ?? (explicit ? 'profile' : 'server_default') };
+  }
   if (profile.model.provider === 'scripted') {
     reqs.push({ name: 'model binding', mark: 'native', detail: 'scripted provider (fixtures and tests only)' });
   } else {
@@ -342,7 +362,7 @@ async function modelRequirements(
         : !isHarness(executor) && provider === 'openai-chatgpt'
           ? { name: 'model binding', mark: 'unsupported', detail: 'ChatGPT plan models run through OpenCode only (executor: opencode)' }
         : model
-          ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${explicit ? '' : ' (server default)'}` }
+          ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${modelOrigin(Boolean(explicit), chosen, defaults?.name)}` }
           : { name: 'model binding', mark: 'unsupported', detail: `the profile uses the default ${provider} model and ${d.modelEnv} is not set` },
     );
     const credential = profile.model.credential ?? d.credential;

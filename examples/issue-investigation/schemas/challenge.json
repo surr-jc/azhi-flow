@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["supported", "partly_supported", "refuted"]},
+    "confidence": {"type": "integer", "minimum": 0, "maximum": 100, "description": "How sure you are of this verdict, 0 to 100"},
+    "evidence_checks": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "status": {"type": "string", "enum": ["holds", "misread", "missing"]},
+          "note": {"type": "string", "maxLength": 300}
+        },
+        "required": ["path", "status", "note"],
+        "additionalProperties": false
+      }
+    },
+    "competing_explanation": {"type": "string", "maxLength": 500, "description": "The most plausible other cause you looked for, and what you found"},
+    "corrections": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 300}},
+    "notes": {"type": "string", "maxLength": 800}
+  },
+  "required": ["verdict", "confidence", "evidence_checks", "competing_explanation", "corrections"],
+  "additionalProperties": false
+}

@@ -13,6 +13,8 @@ import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
+import { registerModelOptionRoutes } from './model-options.js';
+import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
 import { preflight } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
@@ -91,6 +93,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
   registerBuilderRoutes(app, ctx);
+  registerModelOptionRoutes(app, ctx);
   registerExampleRoutes(app, ctx);
   registerCopilotRoutes(app, ctx);
   registerChatgptRoutes(app, ctx);
@@ -161,7 +164,10 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const p = user(req);
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
-    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
+    // `provider` and `model` show the plan as it would be for a run that chooses them.
+    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional() }).parse(req.query ?? {});
+    if (q.model && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model needs provider');
+    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}) } : undefined);
   });
 
   // Checks the workflow against the systems it uses, before a run: tools, secrets, GitHub tokens
@@ -258,14 +264,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         fixtures: z.record(z.string(), z.unknown()).optional(),
         /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
         preflight: z.boolean().optional(),
+        /** Provider and model for steps whose profile says `name: default`; steps that name a model keep it. Overrides the workflow's model_defaults. */
+        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional() }).strict().optional(),
       })
       .parse(req.body);
+    if (body.model_defaults) {
+      const problems = modelDefaultsProblems(body.model_defaults);
+      if (problems.length) throw new AzhiError(ErrorClass.invalidInput, problems.join('; '));
+    }
     if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
     const v = await resolveVersion(ctx, p.workspaceId, body.version);
     if (!v) throw notFound(`workflow version ${body.version}`);
     // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
     // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
-    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
+    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, body.model_defaults);
     if (!body.test) {
       if (!plan.ok) {
         const first = plan.blockers[0]!;
@@ -279,7 +291,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         }
       }
     }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
+    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.model_defaults ? { modelDefaults: body.model_defaults } : {}), ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
     return reply.status(202).send({ run_id: r.runId });
   });
 

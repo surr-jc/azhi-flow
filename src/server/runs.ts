@@ -32,6 +32,8 @@ export interface CreateRunOptions {
   plan?: RunPlanReport;
   /** A subworkflow run: its parent, and no outbox entry (the parent's workflow starts it as a child). */
   parent?: NonNullable<RunSnapshot['parent']>;
+  /** Provider and model chosen for this run, for steps whose profile says `name: default`; overrides the workflow's model_defaults. */
+  modelDefaults?: NonNullable<RunSnapshot['model_defaults']>;
 }
 
 /**
@@ -83,7 +85,8 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
 
   // The plan as it stood when the run was created is kept with the run, so the run page shows
   // the coverage this run actually had, not whatever the workers look like later.
-  const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal));
+  const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal, o.modelDefaults));
+  const modelDefaults = o.modelDefaults?.provider ? o.modelDefaults : o.version.definition.model_defaults?.provider ? o.version.definition.model_defaults : undefined;
 
   // Spend limits hold back every trigger, scheduled runs included; test runs are exempt like
   // other plan blockers, since `azhi test-node` is how authors debug.
@@ -102,6 +105,8 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     ...(o.testNode ? { test_node: o.testNode } : {}),
     ...(datasetRevisions ? { dataset_revisions: datasetRevisions } : {}),
     ...(principal ? { principal } : {}),
+    ...(modelDefaults ? { model_defaults: modelDefaults } : {}),
+    ...(o.modelDefaults?.provider ? { model_defaults_chosen: true } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
     ...(o.parent ? { parent: o.parent } : {}),
   };

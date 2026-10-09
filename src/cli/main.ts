@@ -135,11 +135,14 @@ program
   .option('-i, --input <key=value>', 'input value (JSON or string); repeatable', collect)
   .option('--inputs <file>', 'JSON file with inputs')
   .option('--published', 'run a published version (workflow, workflow@3) instead of uploading')
+  .option('--provider <provider>', 'provider for steps whose profile says `name: default` (anthropic, openai, github-copilot or openai-chatgpt); steps that name a model keep it')
+  .option('--model <id>', 'model for those steps (needs --provider); without it the provider\'s server default model')
   .option('-w, --wait', 'wait for the run to finish and print the result')
-  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean }) => {
+  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
     const api = client();
-    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs) });
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
     console.log(`run ${bold(run_id)} queued`);
     if (!opts.wait) return;
     let cursor = 0;
@@ -203,10 +206,14 @@ program
   .description('Show the run plan: capability marks, policy coverage, taint paths, missing grants and blockers')
   .argument('[path]', 'package directory, or workflow@version with --published', '.')
   .option('--published', 'plan a published version instead of uploading')
+  .option('--provider <provider>', 'show the plan for a run that chooses this provider for `name: default` steps')
+  .option('--model <id>', 'and this model (needs --provider)')
   .option('--json', 'print raw JSON')
-  .action(async (path: string, opts: { published?: boolean; json?: boolean }) => {
+  .action(async (path: string, opts: { published?: boolean; json?: boolean; provider?: string; model?: string }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
-    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan`);
+    const qs = opts.provider ? `?provider=${encodeURIComponent(opts.provider)}${opts.model ? `&model=${encodeURIComponent(opts.model)}` : ''}` : '';
+    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan${qs}`);
     if (opts.json) console.log(JSON.stringify(plan, null, 2));
     else printPlan(plan);
     process.exitCode = plan.ok ? 0 : 1;
@@ -298,6 +305,51 @@ program
   });
 
 const example = program.command('example').description('Set up the example workflows that ship with the server');
+
+interface ExampleNeeds {
+  id: string;
+  name: string;
+  needs_repos: boolean;
+  requirements: {
+    settings: Array<{ name: string; title: string; description?: string; placeholder?: string; required: boolean; needed_for?: string; value: string | null; default: string | null; ready: boolean }>;
+    secrets: Array<{ name: string; set: boolean }>;
+    repos: { needed: boolean; ready: boolean };
+    ready: boolean;
+  };
+}
+
+/** What an example needs before it can be installed, as a checklist; `given` are the --set values of this command. */
+function printNeeds(e: ExampleNeeds, given: Record<string, string> = {}, haveRepos = false): string[] {
+  const r = e.requirements;
+  const lacking: string[] = [];
+  console.log(bold(`Before you install ${e.id}, have ready:`));
+  for (const s of r.settings) {
+    const have = given[s.name] ?? s.value ?? s.default;
+    const state = have ? green(`${given[s.name] ? 'given' : s.value ? 'set' : 'default'}: ${have}`) : s.required ? red('needed') : dim('optional');
+    console.log(`  ${s.required ? 'required' : 'optional'}  ${bold(s.name)} (${s.title}) ${state}${!s.required && s.needed_for ? dim(` - only for ${s.needed_for}`) : ''}`);
+    if (!have && s.description) console.log(dim(`            ${s.description}`));
+    if (s.required && !have) lacking.push(`--set ${s.name}=${s.placeholder ?? '...'}`);
+  }
+  if (r.repos.needed) {
+    const ok = r.repos.ready || haveRepos;
+    console.log(`  required  ${bold('repositories')} its GitHub tools may use ${ok ? green('given') : red('needed')}`);
+    if (!ok) lacking.push('--repo OWNER/NAME');
+  }
+  for (const s of r.secrets) console.log(`  secret    ${bold(s.name)} ${s.set ? green('set') : yellow(`not set yet (azhi secret set ${s.name}); needed to run, not to install`)}`);
+  return lacking;
+}
+
+example
+  .command('needs')
+  .description('Show what an example needs before it can be installed: settings (required or optional), repositories and secrets')
+  .argument('<id>', 'example id, for example ai-sdlc')
+  .action(async (id: string) => {
+    const e = (await client().get<ExampleNeeds[]>('/v1/examples')).find((x) => x.id === id);
+    if (!e) throw new Error(`no example named '${id}'`);
+    const lacking = printNeeds(e);
+    if (lacking.length) console.log(`\ninstall with: ${bold(`azhi example install ${id} ${lacking.join(' ')}`)}`);
+    process.exitCode = lacking.length ? 1 : 0;
+  });
 example
   .command('list')
   .description('List the examples, the tools they register and the secrets they need')
@@ -321,6 +373,17 @@ example
       if (at < 1) throw new Error(`--set takes name=value, got '${kv}'`);
       settings[kv.slice(0, at).trim()] = kv.slice(at + 1).trim();
     }
+    // Say what is needed first, and stop before anything is registered when a required value is missing.
+    const needs = (await api.get<ExampleNeeds[]>('/v1/examples')).find((x) => x.id === id);
+    if (!needs) throw new Error(`no example named '${id}'`);
+    const lacking = printNeeds(needs, settings, Boolean(opts.repo?.length));
+    if (lacking.length) {
+      console.error(red(`\nnot installed: ${lacking.length === 1 ? 'a required value is' : 'required values are'} missing`));
+      console.error(`run again with: ${bold(`azhi example install ${id} ${[...(opts.repo ?? []).map((r) => `--repo ${r}`), ...(opts.set ?? []).map((s) => `--set ${s}`), ...lacking].join(' ')}`)}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log('');
     const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }>; settings?: Array<{ name: string; value: string | null }> }>(
       `/v1/examples/${encodeURIComponent(id)}/install`,
       { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}), ...(opts.gitUrl ? { git_url: opts.gitUrl } : {}), ...(opts.set?.length ? { settings } : {}) },

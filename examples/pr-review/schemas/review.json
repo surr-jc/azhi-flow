@@ -1,8 +1,19 @@
 {
   "type": "object",
   "properties": {
-    "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
-    "summary": {"type": "string", "maxLength": 1000, "description": "Two or three plain sentences, at most 1000 characters. Put detail in findings, not here."},
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "comment",
+        "request_changes"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Two or three plain sentences, at most 1000 characters. Put detail in findings, not here."
+    },
     "findings": {
       "description": "Always include this field; use [] when there is nothing to report.",
       "type": "array",
@@ -10,20 +21,69 @@
       "items": {
         "type": "object",
         "properties": {
-          "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
-          "triage": {"type": "string", "enum": ["fix_now", "follow_up", "check_by_hand"]},
-          "reviewer": {"type": "string"},
-          "path": {"type": "string"},
-          "line": {"type": "integer", "minimum": 0},
-          "title": {"type": "string", "maxLength": 120},
-          "detail": {"type": "string", "maxLength": 1000}
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "triage": {
+            "type": "string",
+            "enum": [
+              "fix_now",
+              "follow_up",
+              "check_by_hand"
+            ]
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "The verifier's confidence for this finding, copied from the input; leave out when none was given"
+          }
         },
-        "required": ["severity", "triage", "reviewer", "path", "title", "detail"],
+        "required": [
+          "severity",
+          "triage",
+          "reviewer",
+          "path",
+          "title",
+          "detail"
+        ],
         "additionalProperties": false
       }
     },
-    "body": {"type": "string", "minLength": 1, "maxLength": 20000}
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    }
   },
-  "required": ["verdict", "summary", "findings", "body"],
+  "required": [
+    "verdict",
+    "summary",
+    "findings",
+    "body"
+  ],
   "additionalProperties": false
 }

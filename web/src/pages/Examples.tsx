@@ -19,7 +19,13 @@ import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
  * its package is saved as a draft and signed in this browser, and its secrets are set below.
  */
 interface Secret { name: string; set: boolean }
-interface Setting { name: string; title?: string; description?: string; placeholder?: string; value: string | null }
+interface Setting { name: string; title?: string; description?: string; placeholder?: string; value: string | null; default?: string; required?: boolean; needed_for?: string }
+interface Needs {
+  settings: Array<{ name: string; title: string; description?: string; required: boolean; needed_for?: string; value: string | null; default: string | null; ready: boolean }>;
+  secrets: Secret[];
+  repos: { needed: boolean; ready: boolean };
+  ready: boolean;
+}
 interface Example {
   id: string;
   name: string;
@@ -30,6 +36,8 @@ interface Example {
   /** Repositories the installed tools allow now; empty before install. */
   repos: string[];
   settings?: Setting[];
+  /** What to have ready before installing, and what is already in place. */
+  requirements?: Needs;
   /** The workflow's steps as written, for looking at it before installing. */
   nodes?: Array<Record<string, any> & { id: string; type: string }>;
   /** The workflow this installs, and whether the marketplace has changed since it was installed or last updated. */
@@ -146,6 +154,7 @@ function MarketCard({ example: e, featured, onLook }: { example: Example; featur
         {m.works_with.length ? <span className="chip-effect">{m.works_with.join(' · ')}</span> : null}
         <span className={`chip-effect ${c.tone}`}>{c.label}</span>
         {e.secrets.length === 0 ? <span className="chip-effect ok">no secrets needed</span> : null}
+        {!installed(e) && e.requirements && !e.requirements.ready ? <span className="chip-effect warn">needs {e.requirements.settings.filter((s) => s.required && !s.ready).length + (e.requirements.repos.needed && !e.requirements.repos.ready ? 1 : 0)} things before install</span> : null}
       </div>
       <div className="row">
         <Link to={`/ui/examples/${encodeURIComponent(e.id)}`} className="button primary small">{installed(e) ? 'Open' : 'Install'}</Link>
@@ -165,10 +174,10 @@ function ExampleSteps({ example: e, height = 380 }: { example: Example; height?:
   const [selected, setSelected] = useState<string | null>(null);
   const step = nodes.find((n) => n.id === selected);
   const c = changes(e);
-  const todo = [
+  const todo: Array<{ label: string; ok: boolean; optional?: boolean }> = [
     ...(e.needs_repos && !e.repos.length ? [{ label: 'Repositories to allow', ok: false }] : []),
-    ...(e.settings ?? []).map((s) => ({ label: s.title ?? s.name, ok: Boolean(s.value) })),
-    ...e.secrets.map((s) => ({ label: s.name, ok: s.set })),
+    ...(e.requirements?.settings ?? (e.settings ?? []).map((s) => ({ ...s, title: s.title ?? s.name, required: false, ready: Boolean(s.value) }))).map((s) => ({ label: `${s.title}${s.required ? '' : s.needed_for ? ` (optional, only for ${s.needed_for})` : ' (optional)'}`, ok: s.ready, optional: !s.required })),
+    ...e.secrets.map((s) => ({ label: `${s.name} (needed to run)`, ok: s.set, optional: true })),
   ];
   return (
     <div className="quicklook">
@@ -182,7 +191,7 @@ function ExampleSteps({ example: e, height = 380 }: { example: Example; height?:
           <div><span className="label">It changes</span><p className="small"><Badge tone={c.tone}>{c.label}</Badge></p></div>
           <div>
             <span className="label">{installed(e) ? 'Set up' : 'Before you install'}</span>
-            {todo.length ? <ul className="small quicklook-todo">{todo.map((t) => <li key={t.label}><Badge tone={t.ok ? 'ok' : 'warn'}>{t.ok ? 'set' : 'needed'}</Badge> {t.label}</li>)}</ul> : <p className="muted small">Nothing to set up.</p>}
+            {todo.length ? <ul className="small quicklook-todo">{todo.map((t) => <li key={t.label}><Badge tone={t.ok ? 'ok' : t.optional ? 'idle' : 'warn'}>{t.ok ? 'set' : t.optional ? 'later' : 'needed'}</Badge> {t.label}</li>)}</ul> : <p className="muted small">Nothing to set up.</p>}
           </div>
           <p className="muted small">Select a step on the canvas to read what it does and every setting.</p>
         </aside>
@@ -370,8 +379,25 @@ function ExampleCard({ example: e }: { example: Example }) {
   };
   const r = install.data;
   const secrets = r?.secrets ?? e.secrets;
+  // Required settings with no value yet (typed here, filled by an earlier install, or a default).
+  const lacking = (e.requirements?.settings ?? []).filter((s) => s.required && !s.ready && !filled[s.name]);
   // Once installed, repositories are managed below with their token checked; installing again is a reset.
   const isInstalled = e.repos.length > 0 || Boolean(e.update);
+  const enterprise = (
+        <details>
+          <summary className="small">GitHub Enterprise</summary>
+          <span className="hint">Leave empty for github.com, including organization repositories there.</span>
+          <div className="field">
+            <label htmlFor={`api-${e.id}`}>API address</label>
+            <input id={`api-${e.id}`} className="mono" placeholder="https://ghe.example.com/api/v3" value={apiUrl} spellCheck={false} onChange={(x) => setApiUrl(x.target.value)} />
+          </div>
+          <div className="field">
+            <label htmlFor={`git-${e.id}`}>Git address</label>
+            <input id={`git-${e.id}`} className="mono" placeholder="https://ghe.example.com" value={gitUrl} spellCheck={false} onChange={(x) => setGitUrl(x.target.value)} />
+            <span className="hint">Where the review clones from. Empty: the host of the API address.</span>
+          </div>
+        </details>
+  );
   return (
     <Panel title={<>{isInstalled ? 'Set up' : 'Install'} <span className="muted small mono">{e.id}</span></>}>
       <div className="example-card">
@@ -382,6 +408,7 @@ function ExampleCard({ example: e }: { example: Example }) {
             {e.tools.map((t) => <li key={t.ref}><span className="mono">{t.ref}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge> <span className="muted">{t.description}</span></li>)}
           </ul>
         </div>
+        {!isInstalled && e.requirements ? <BeforeInstall needs={e.requirements} given={filled} haveRepos={list.length > 0} /> : null}
         {e.needs_repos && e.repos.length ? <AllowedRepos example={e} /> : null}
         <form onSubmit={submit} className="fields">
           {e.needs_repos && !e.repos.length ? (
@@ -391,24 +418,12 @@ function ExampleCard({ example: e }: { example: Example }) {
                 <input id={`repos-${e.id}`} className="mono" placeholder="owner/name, owner/other" value={repos} spellCheck={false} onChange={(x) => setRepos(x.target.value)} />
                 {badRepo ? <span className="hint warn-text">{badRepo} is not owner/name.</span> : <span className="hint">Its GitHub tools refuse any other repository. Separate with commas. You can add more later, and each is checked against the token.</span>}
               </div>
-              <details>
-                <summary className="small">GitHub Enterprise</summary>
-                <span className="hint">Leave empty for github.com, including organization repositories there.</span>
-                <div className="field">
-                  <label htmlFor={`api-${e.id}`}>API address</label>
-                  <input id={`api-${e.id}`} className="mono" placeholder="https://ghe.example.com/api/v3" value={apiUrl} spellCheck={false} onChange={(x) => setApiUrl(x.target.value)} />
-                </div>
-                <div className="field">
-                  <label htmlFor={`git-${e.id}`}>Git address</label>
-                  <input id={`git-${e.id}`} className="mono" placeholder="https://ghe.example.com" value={gitUrl} spellCheck={false} onChange={(x) => setGitUrl(x.target.value)} />
-                  <span className="hint">Where the review clones from. Empty: the host of the API address.</span>
-                </div>
-              </details>
+              {enterprise}
             </>
           ) : null}
           {(r?.settings ?? e.settings ?? []).map((st) => (
             <div className="field" key={st.name}>
-              <label htmlFor={`setting-${e.id}-${st.name}`}>{st.title ?? st.name} {st.value ? <Badge tone="ok">set</Badge> : <Badge tone="warn">not set</Badge>}</label>
+              <label htmlFor={`setting-${e.id}-${st.name}`}>{st.title ?? st.name}{st.required ? <span className="req"> *</span> : <span className="muted small"> (optional{st.needed_for ? `, only for ${st.needed_for}` : ''})</span>} {st.value ? <Badge tone="ok">set</Badge> : st.default ? <Badge tone="idle">default</Badge> : st.required ? <Badge tone="warn">needed</Badge> : <Badge tone="idle">not set</Badge>}</label>
               <input id={`setting-${e.id}-${st.name}`} className="mono" spellCheck={false} placeholder={st.value ?? st.placeholder ?? ''} value={settings[st.name] ?? ''} onChange={(x) => setSettings({ ...settings, [st.name]: x.target.value })} />
               <span className="hint">{st.description ?? ''}{st.value ? ' Leave blank to keep the current value.' : ''}</span>
             </div>
@@ -416,12 +431,13 @@ function ExampleCard({ example: e }: { example: Example }) {
           {isInstalled && !install.isPending && !r ? (
             <details className="reinstall">
               <summary className="small">Start over from the marketplace version</summary>
+              {e.needs_repos ? enterprise : null}
               <p className="warn-note">This saves the marketplace's version as a new draft and leaves the workflow's own changes behind in the earlier versions. To bring in what the marketplace changed and keep your edits, use Review the update at the top of this page.</p>
               <button type="submit" disabled={install.isPending}>Reinstall</button>
             </details>
           ) : (
             <div className="row">
-              <button type="submit" className="primary" disabled={install.isPending || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)))}>
+              <button type="submit" className="primary" disabled={install.isPending || lacking.length > 0 || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)))}>
                 {install.isPending ? 'Installing…' : r?.ok ? 'Install again' : 'Install'}
               </button>
             </div>
@@ -447,6 +463,42 @@ function ExampleCard({ example: e }: { example: Example }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+/**
+ * What to have ready before installing: the required settings (the install is refused without them), the
+ * optional ones and what they are for, the repositories, and the secrets to set before the first run.
+ */
+function BeforeInstall({ needs, given, haveRepos }: { needs: Needs; given: Record<string, string>; haveRepos: boolean }) {
+  const required = needs.settings.filter((s) => s.required);
+  const optional = needs.settings.filter((s) => !s.required);
+  const have = (s: Needs['settings'][number]) => Boolean(given[s.name] || s.value || s.default);
+  const reposOk = !needs.repos.needed || needs.repos.ready || haveRepos;
+  const todo = required.filter((s) => !have(s)).length + (reposOk ? 0 : 1);
+  return (
+    <section className="before-install" aria-label="Before you install">
+      <span className="label">Before you install</span>
+      <p className="small muted">{todo ? `Have ${todo === 1 ? 'this' : 'these'} ready: the install is refused without ${todo === 1 ? 'it' : 'them'}.` : 'Everything required is in place.'}</p>
+      <ul className="small needs">
+        {needs.repos.needed ? <li><Badge tone={reposOk ? 'ok' : 'warn'}>{reposOk ? 'ready' : 'required'}</Badge> Repositories its GitHub tools may use</li> : null}
+        {required.map((s) => (
+          <li key={s.name}>
+            <Badge tone={have(s) ? 'ok' : 'warn'}>{have(s) ? (given[s.name] ? 'given' : s.value ? 'set' : 'default') : 'required'}</Badge> <b>{s.title}</b>{!have(s) && s.description ? <span className="muted"> {s.description}</span> : null}
+          </li>
+        ))}
+        {optional.map((s) => (
+          <li key={s.name}>
+            <Badge tone="idle">optional</Badge> <b>{s.title}</b>{s.needed_for ? <span className="muted"> only for {s.needed_for}</span> : null}
+          </li>
+        ))}
+        {needs.secrets.map((s) => (
+          <li key={s.name}>
+            <Badge tone={s.set ? 'ok' : 'idle'}>{s.set ? 'set' : 'later'}</Badge> Secret <span className="mono">{s.name}</span>{s.set ? null : <span className="muted"> needed to run, not to install</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

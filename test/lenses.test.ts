@@ -48,7 +48,7 @@ describe('workflow lenses', () => {
     expect(access[0]!.lines.join(' ')).toContain('slack: notify (guarded)');
     expect(access[2]!.lines[0]).toContain('missing: github-comment-token');
     const limits = lensSummary('limits', nodes, ctx);
-    expect(limits[0]!.lines[0]).toContain('Up to 42 tool calls');
+    expect(limits[0]!.lines[0]).toContain('Up to 52 tool calls');
     expect(lensSummary('data', nodes, ctx)[0]!.lines.join(' ')).toContain('input repo');
   });
 });

@@ -156,7 +156,7 @@ describe.skipIf(!up)('SDLC example', () => {
 
     // Selecting a node opens its details. The canvas re-renders as statuses arrive, which can
     // swallow a click on a busy machine, so click again until the details show.
-    const details = page.getByRole('region', { name: 'Node quality_gate' }).getByText("nodes.tests.output.status == 'passed'");
+    const details = page.getByRole('region', { name: 'Step quality_gate' }).getByText("nodes.tests.output.status == 'passed'");
     for (let i = 0; i < 10 && !(await details.isVisible()); i++) {
       await page.locator('.react-flow__node[data-id="quality_gate"]').click();
       await details.waitFor({ timeout: 3000 }).catch(() => {});
@@ -228,12 +228,13 @@ describe.skipIf(!up)('SDLC example', () => {
 
     const page = await browser.newPage();
     await page.goto(`${h.server.url}/ui/examples/sdlc#token=${encodeURIComponent(token)}`);
-    const card = page.locator('section.panel', { hasText: 'Feature delivery (SDLC)' });
+    const card = page.locator('section.panel', { has: page.getByRole('heading', { name: /^(Install|Set up) sdlc$/ }) });
     await card.getByLabel(/Jira site/).fill('https://acme.atlassian.net');
-    await card.getByLabel('Repositories it may use').fill('acme/payments');
-    await card.getByText('GitHub Enterprise', { exact: true }).click();
-    await card.getByLabel('API address').fill(gh.url);
-    await card.getByRole('button', { name: 'Install' }).click();
+    // The CLI install above already allowed the repository, so the card is a set-up card: its repositories are
+    // managed in place, and installing again is a deliberate "start over".
+    await card.getByText('Allowed repositories').waitFor();
+    await card.getByText('Start over from the marketplace version').click();
+    await card.getByRole('button', { name: 'Reinstall' }).click();
     await card.getByText(/Installed sdlc v\d+ and signed it/).waitFor({ timeout: 30_000 });
     const after = (await h.api.get<any[]>('/v1/examples')).find((e) => e.id === 'sdlc');
     expect(after.settings.map((s: any) => s.value)).toEqual(['C0DELIVER', 'https://acme.atlassian.net', 'dev@acme.test']);

@@ -46,6 +46,9 @@ config:
   # confidence is at least this. High risk, a sensitive area or a migration is always full.
   lite_max_files: 5
   lite_min_confidence: 6
+  # A critical or major finding sends the change back for a fix round only when the verifier confirmed it
+  # with at least this confidence (0 to 100).
+  min_confidence: 80
 nodes:
   - id: source
     type: condition
@@ -212,10 +215,25 @@ nodes:
     timeout: 20m
     budget: {max_tool_calls: 10}
 
+  - id: lite_verify_1
+    type: agent
+    description: "Try to refute the critical and major findings of lite review 1 in a fresh checkout (finding-verification skill, a different model)."
+    executor: opencode
+    profile: finding-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"}
+    output_schema: schemas/verification.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
   - id: lite_gate_1
     type: condition
-    description: "Approved when the reviewer approves with no critical or major finding and no prompt injection; otherwise one fix round."
-    expression: "[nodes.lite_review_1.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    description: "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence; otherwise a fix round."
+    expression: "[nodes.lite_review_1.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'"
     routes: {ok: [], fix: [lite_fix]}
     default: fix
 
@@ -234,7 +252,7 @@ nodes:
         command: "{{test_command}}"
         timeout: 15m
         attempts: 3
-    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output]}}"}
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"}
     output_schema: schemas/change.json
     timeout: 60m
     budget: {max_tool_calls: 10}
@@ -251,6 +269,22 @@ nodes:
       depth: 1
     input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.lite_fix.output.summary, 'deviations': nodes.lite_fix.output.deviations, 'tests_added': nodes.lite_fix.output.tests_added, 'stats': nodes.lite_fix.output.workspace.stats, 'diff': nodes.lite_fix.output.workspace.diff, 'diff_truncated': nodes.lite_fix.output.workspace.diff_truncated, 'tests': nodes.lite_fix.output.workspace.tests}}"}
     output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+
+  - id: lite_verify_2
+    type: agent
+    description: "Try to refute the critical and major findings of the last lite review in a fresh checkout (finding-verification skill, a different model)."
+    executor: opencode
+    profile: finding-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.lite_fix.output.summary, 'deviations': nodes.lite_fix.output.deviations, 'tests_added': nodes.lite_fix.output.tests_added, 'stats': nodes.lite_fix.output.workspace.stats, 'diff': nodes.lite_fix.output.workspace.diff, 'diff_truncated': nodes.lite_fix.output.workspace.diff_truncated, 'tests': nodes.lite_fix.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"}
+    output_schema: schemas/verification.json
     timeout: 20m
     budget: {max_tool_calls: 10}
 
@@ -300,10 +334,25 @@ nodes:
     timeout: 20m
     budget: {max_tool_calls: 10}
 
+  - id: verify_1
+    type: agent
+    description: "Try to refute the critical and major findings of round 1 in a fresh checkout (finding-verification skill, a different model)."
+    executor: opencode
+    profile: finding-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}, 'findings': [{'reviewer': 'code', 'findings': nodes.code_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'test', 'findings': nodes.test_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'security', 'findings': nodes.security_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"}
+    output_schema: schemas/verification.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
   - id: gate_1
     type: condition
-    description: "Approved when every reviewer approves with no critical or major finding and no prompt injection; otherwise fix round 1."
-    expression: "[nodes.code_1.output, nodes.test_1.output, nodes.security_1.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    description: "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence; otherwise a fix round."
+    expression: "[nodes.code_1.output, nodes.test_1.output, nodes.security_1.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'"
     routes: {ok: [], fix: [fix_1]}
     default: fix
 
@@ -322,7 +371,7 @@ nodes:
         command: "{{test_command}}"
         timeout: 15m
         attempts: 3
-    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.code_1.output, nodes.test_1.output, nodes.security_1.output]}}"}
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.code_1.output, nodes.test_1.output, nodes.security_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"}
     output_schema: schemas/change.json
     timeout: 60m
     budget: {max_tool_calls: 10}
@@ -372,10 +421,25 @@ nodes:
     timeout: 20m
     budget: {max_tool_calls: 10}
 
+  - id: verify_2
+    type: agent
+    description: "Try to refute the critical and major findings of round 2 in a fresh checkout (finding-verification skill, a different model)."
+    executor: opencode
+    profile: finding-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_1.output.summary, 'deviations': nodes.fix_1.output.deviations, 'tests_added': nodes.fix_1.output.tests_added, 'stats': nodes.fix_1.output.workspace.stats, 'diff': nodes.fix_1.output.workspace.diff, 'diff_truncated': nodes.fix_1.output.workspace.diff_truncated, 'tests': nodes.fix_1.output.workspace.tests}, 'findings': [{'reviewer': 'code', 'findings': nodes.code_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'test', 'findings': nodes.test_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'security', 'findings': nodes.security_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"}
+    output_schema: schemas/verification.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
   - id: gate_2
     type: condition
-    description: "Approved when every reviewer approves with no critical or major finding and no prompt injection; otherwise fix round 2."
-    expression: "[nodes.code_2.output, nodes.test_2.output, nodes.security_2.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    description: "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence; otherwise a fix round."
+    expression: "[nodes.code_2.output, nodes.test_2.output, nodes.security_2.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.verify_2.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'"
     routes: {ok: [], fix: [fix_2]}
     default: fix
 
@@ -394,7 +458,7 @@ nodes:
         command: "{{test_command}}"
         timeout: 15m
         attempts: 3
-    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 2, 'previous_summary': nodes.fix_1.output.summary, 'previous_diff': nodes.fix_1.output.workspace.diff, 'verdicts': [nodes.code_2.output, nodes.test_2.output, nodes.security_2.output]}}"}
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 2, 'previous_summary': nodes.fix_1.output.summary, 'previous_diff': nodes.fix_1.output.workspace.diff, 'verdicts': [nodes.code_2.output, nodes.test_2.output, nodes.security_2.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.verify_2.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"}
     output_schema: schemas/change.json
     timeout: 60m
     budget: {max_tool_calls: 10}
@@ -444,14 +508,30 @@ nodes:
     timeout: 20m
     budget: {max_tool_calls: 10}
 
+
+  - id: verify_3
+    type: agent
+    description: "Try to refute the critical and major findings of the last full review in a fresh checkout (finding-verification skill, a different model)."
+    executor: opencode
+    profile: finding-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_2.output.summary, 'deviations': nodes.fix_2.output.deviations, 'tests_added': nodes.fix_2.output.tests_added, 'stats': nodes.fix_2.output.workspace.stats, 'diff': nodes.fix_2.output.workspace.diff, 'diff_truncated': nodes.fix_2.output.workspace.diff_truncated, 'tests': nodes.fix_2.output.workspace.tests}, 'findings': [{'reviewer': 'code', 'findings': nodes.code_3.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'test', 'findings': nodes.test_3.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}, {'reviewer': 'security', 'findings': nodes.security_3.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"}
+    output_schema: schemas/verification.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
   # ---- Join: the last round that ran, its verdict and the evidence record -------------------------
   - id: finalize
     type: script
-    description: Pick the last build that ran, aggregate its verdicts (approved only if all approve, no critical or major finding, no injection) and write the evidence record.
+    description: Pick the last build that ran, aggregate its verdicts (approved only if no critical or major finding survived the verifier, no injection) and write the evidence record.
     runtime: python
     entrypoint: scripts/finalize.py
     merge: any
-    input: {map: "{'ticket': nodes.intake.output.key, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': nodes.weight.output.route, 'overridden_by': nodes.weight.output.route != nodes.weight_proposal.output.route ? nodes.design_review.output.by : null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}}, {'change': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}}], 'full': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'code': has(nodes.code_1) ? nodes.code_1.output : null, 'test': has(nodes.test_1) ? nodes.test_1.output : null, 'security': has(nodes.security_1) ? nodes.security_1.output : null}}, {'change': has(nodes.fix_1) ? nodes.fix_1.output : null, 'verdicts': {'code': has(nodes.code_2) ? nodes.code_2.output : null, 'test': has(nodes.test_2) ? nodes.test_2.output : null, 'security': has(nodes.security_2) ? nodes.security_2.output : null}}, {'change': has(nodes.fix_2) ? nodes.fix_2.output : null, 'verdicts': {'code': has(nodes.code_3) ? nodes.code_3.output : null, 'test': has(nodes.test_3) ? nodes.test_3.output : null, 'security': has(nodes.security_3) ? nodes.security_3.output : null}}]}"}
+    input: {map: "{'min_confidence': config.min_confidence, 'ticket': nodes.intake.output.key, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': nodes.weight.output.route, 'overridden_by': nodes.weight.output.route != nodes.weight_proposal.output.route ? nodes.design_review.output.by : null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'code': has(nodes.code_1) ? nodes.code_1.output : null, 'test': has(nodes.test_1) ? nodes.test_1.output : null, 'security': has(nodes.security_1) ? nodes.security_1.output : null}, 'checks': has(nodes.verify_1) ? nodes.verify_1.output.checks : []}, {'change': has(nodes.fix_1) ? nodes.fix_1.output : null, 'verdicts': {'code': has(nodes.code_2) ? nodes.code_2.output : null, 'test': has(nodes.test_2) ? nodes.test_2.output : null, 'security': has(nodes.security_2) ? nodes.security_2.output : null}, 'checks': has(nodes.verify_2) ? nodes.verify_2.output.checks : []}, {'change': has(nodes.fix_2) ? nodes.fix_2.output : null, 'verdicts': {'code': has(nodes.code_3) ? nodes.code_3.output : null, 'test': has(nodes.test_3) ? nodes.test_3.output : null, 'security': has(nodes.security_3) ? nodes.security_3.output : null}, 'checks': has(nodes.verify_3) ? nodes.verify_3.output.checks : []}]}"}
     output_schema: schemas/finalize.json
     limits: {time: 2m, memory_mb: 512}
 

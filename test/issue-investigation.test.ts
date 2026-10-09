@@ -71,9 +71,20 @@ const RCA = {
   comment: '## Root-cause analysis\n\nCart totals ignore the discount since the rounding change.\n\n| Severity | Complexity | Confidence |\n|---|---|---|\n| high | low | high |',
 };
 
+const CHALLENGE = {
+  verdict: 'supported',
+  confidence: 90,
+  evidence_checks: [{ path: 'src/cart.js', line: 3, status: 'holds', note: 'total() returns Math.round(sum) and never reads discount.' }],
+  competing_explanation: 'A caller that forgets to pass the discount: every caller in src/ passes it.',
+  corrections: [],
+};
+const FOOTER = '\n\n---\nIndependent check: supported (90/100). Confidence to trust: high.';
+
+const isChallenger = (r: FakeRequest) => r.model === MODEL && r.system.includes('You are the root-cause challenger');
 const isInvestigator = (r: FakeRequest) => r.model === MODEL && r.system.includes('You are the issue investigator');
 
 function script(r: FakeRequest): FakeStep[] {
+  if (isChallenger(r)) return [{ tool: 'skill', input: { name: 'root-cause-challenge' } }, { tool: 'read', input: { filePath: 'src/cart.js' } }, { tool: 'submit_output', input: CHALLENGE }, { text: 'done' }];
   if (!isInvestigator(r)) return [{ text: 'Issue analysis' }];
   return [
     { tool: 'skill', input: { name: 'root-cause-analysis' } },
@@ -98,6 +109,7 @@ describe('Issue root-cause analysis example: definition checks', () => {
     expect(r.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(r.ok).toBe(true);
     expect(r.plan!.taint.tainted.investigate).toBe('reads a cloned repository (its files are untrusted)');
+    expect(r.plan!.taint.tainted.challenge).toBe('reads a cloned repository (its files are untrusted)');
     expect(r.plan!.taint.paths).toContainEqual(expect.objectContaining({ write: 'post', gate: 'guard' }));
   });
 });
@@ -132,8 +144,11 @@ describe.skipIf(!up)('Issue root-cause analysis example with OpenCode', () => {
     await h.api.put('/v1/secrets/github-comment-token', { value: COMMENT_TOKEN });
     const dir = mkdtempSync(join(tmpdir(), 'azhi-rca-'));
     cpSync(PKG, dir, { recursive: true });
+    // The challenger names a different model family on purpose; the scripted endpoint serves one model, so use the server's default.
+    const pf = join(dir, 'profiles/root-cause-challenger@1.yaml');
+    writeFileSync(pf, readFileSync(pf, 'utf8').replace('name: gpt-5.4', 'name: default'));
     const wf = join(dir, 'workflow.yaml');
-    writeFileSync(wf, readFileSync(wf, 'utf8').replace('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${git.url}\n`));
+    writeFileSync(wf, readFileSync(wf, 'utf8').replaceAll('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${git.url}\n`));
     const res = await uploadDir(h.api, dir);
     expect(res.diagnostics.filter((d: any) => d.severity === 'error')).toEqual([]);
     version = res.version.id;
@@ -158,8 +173,9 @@ describe.skipIf(!up)('Issue root-cause analysis example with OpenCode', () => {
       else if (['succeeded', 'failed', 'cancelled'].includes(d.run.state)) throw new Error(`run ended ${d.run.state}: ${JSON.stringify(d.run.error)}`);
       else await new Promise((r) => setTimeout(r, 300));
     }
-    expect(waiting.approvals[0].request.message).toBe('Post this root-cause analysis (confidence high) on acme/shop#12?');
-    expect(waiting.approvals[0].request.payload.body).toBe(RCA.comment);
+    expect(waiting.approvals[0].request.message).toBe('Post this root-cause analysis (high confidence after an independent check: supported) on acme/shop#12?');
+    expect(waiting.approvals[0].request.payload.body).toBe(RCA.comment + FOOTER);
+    expect(waiting.approvals[0].request.payload.challenge).toEqual(CHALLENGE);
     expect(gh.comments).toEqual([]);
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'approve_post', decision: 'approved' });
     const d = await waitForRun(h.api, run_id, 120_000);
@@ -168,7 +184,8 @@ describe.skipIf(!up)('Issue root-cause analysis example with OpenCode', () => {
     expect(d.attempts.filter((a: any) => a.node_id === 'investigate').at(-1).output).toEqual(RCA);
     expect(gh.comments).toHaveLength(1);
     expect(gh.comments[0]).toMatchObject({ repo: 'acme/shop', number: 12 });
-    expect(gh.comments[0]!.body).toContain(RCA.comment);
+    expect(gh.comments[0]!.body).toContain(RCA.comment + FOOTER);
+    expect(d.attempts.filter((a: any) => a.node_id === 'challenge').at(-1).output).toEqual(CHALLENGE);
 
     const c = fake.requests.filter(isInvestigator);
     expect(c.length).toBe(9);
@@ -193,6 +210,7 @@ describe.skipIf(!up)('Issue root-cause analysis example with OpenCode', () => {
     const report = d.attempts.filter((a: any) => a.node_id === 'report').at(-1).output;
     expect(report.markdown).toContain('Root-cause analysis of acme/shop#12: Discount not applied at checkout');
     expect(report.markdown).toContain('Confidence: high (Blame and the commit diff show the discount line removed.)');
+    expect(report.markdown).toContain('Confidence to trust: high. An independent check by a second investigator: supported, 90/100.');
     expect(report.markdown).toContain('– src/cart.js: return Math.round(sum - sum * discount);');
     const m = d.context_manifests.find((x: any) => x.node_id === 'investigate');
     expect(m.items).toContainEqual(expect.objectContaining({ kind: 'input', source: 'workspace acme/shop@HEAD' }));

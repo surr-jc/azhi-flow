@@ -68,6 +68,16 @@ closes anything), and DSSE attestations. The **evidence record** stands in for t
 reviewer's verdict and the design approver. It goes in the pull request body and the approval. It is a
 digest of what was reviewed, not a signature, and it does not prove who wrote the code.
 
+## Verified findings
+
+Each review round is followed by a verifier on a different model family. A critical or major finding
+sends the change back for a fix round only when the verifier confirmed it with at least
+`config.min_confidence` (80 out of 100); the engineer is given only those. Refuted findings, or ones
+confirmed below the bar, are dropped and listed in the evidence record. Findings the verifier could not
+settle do not trigger a fix round, but they keep the change from counting as approved, so the pull
+request opens as a draft marked `[needs-human-attention]`. Reviewers number their findings (`C1`, `T1`,
+`S1`, `L1`) so each can be matched to its check. See [confidence.md](confidence.md).
+
 ## Nodes
 
 | Node | What it does |
@@ -77,15 +87,20 @@ digest of what was reviewed, not a signature, and it does not prove who wrote th
 | `requirements`, `design` | Read-only checkout; open questions in the rubric format; `design` adds the weight signals |
 | `weight_proposal`, `design_review`, `weight` | Rules propose lite or full; a person answers every open question and may override; the final path routes the reviews |
 | `build` | Writable checkout; the worker runs the test command and returns failures to the agent (3 attempts) |
-| `lite_review_1`, `lite_gate_1`, `lite_fix`, `lite_review_2` | The lite path |
-| `code_N`, `test_N`, `security_N`, `gate_N`, `fix_N` | The full path, rounds 1 to 3 |
-| `finalize` | Python script: the last round that ran, its aggregated verdict, the evidence record |
+| `lite_review_1`, `lite_verify_1`, `lite_gate_1`, `lite_fix`, `lite_review_2`, `lite_verify_2` | The lite path |
+| `code_N`, `test_N`, `security_N`, `verify_N`, `gate_N`, `fix_N` | The full path, rounds 1 to 3 |
+| `*verify*` | A verifier (`finding-verifier@1`, `gpt-5.4`) in a fresh checkout tries to refute each critical and major finding and scores its confidence (`schemas/verification.json`) |
+| `finalize` | Python script: the last round that ran, its aggregated verdict, the evidence record. Critical and major findings count only when confirmed at `config.min_confidence` (80); refuted ones are dropped and listed, unverifiable ones flag the change for a person |
 | `ship_gate` | `ship` only when the tests passed and something changed; open findings do not block (they flag), a failing test run does |
 | `release_approval`, `push_branch`, `open_pr`, `release`, `send_back`, `retro` | As in sdlc-implement, with the evidence in the approval, the pull request body and the retro; a flagged change opens a draft |
 
 Run inputs are those of sdlc-implement: `source`, `ticket`, `repo` and an optional `base_branch`.
 
 ## Setup
+
+First see what it needs: `azhi example needs ai-sdlc` lists the required settings (`slack_channel`,
+`test_command`, the repository), the optional Jira ones, and the secrets, and `azhi example install`
+stops before changing anything when a required value is missing ([model-defaults.md](model-defaults.md)).
 
 ```bash
 azhi example install ai-sdlc --repo OWNER/REPO --set slack_channel=C0123ABCD \

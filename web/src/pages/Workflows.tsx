@@ -7,6 +7,7 @@ import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
 import { RunTable } from './Overview';
 import { Coverage } from './Run';
+import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { Popup } from '../components/Popup';
 import { StepPanel } from '../components/StepDrawer';
 import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
@@ -163,7 +164,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
       ) : null}
       {starting ? (
         <Popup title="Start a run" sub={`${def?.name ?? slug} · v${current.version}`} size="narrow" onClose={() => setStarting(false)}>
-          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} />
+          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
         </Popup>
       ) : null}
       <h2 className="section" id="run-plan">Run plan</h2>
@@ -175,8 +176,37 @@ export function WorkflowPage({ slug }: { slug: string }) {
   );
 }
 
-function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan }) {
+const CHOICE_KEY = 'azhi-run-model';
+function loadChoice(): ModelValue {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}');
+    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}) } : {};
+  } catch {
+    return {};
+  }
+}
+
+function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
   const { navigate } = useRoute();
+  // The provider and model for this run's default-model steps; empty keeps the workflow's own default.
+  const [choice, setChoice] = useState<ModelValue>(loadChoice);
+  const pick = (v: ModelValue) => {
+    setChoice(v);
+    try {
+      localStorage.setItem(CHOICE_KEY, JSON.stringify(v));
+    } catch {
+      /* the choice just is not remembered */
+    }
+  };
+  const chosenPlan = useQuery({
+    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? ''],
+    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}`),
+    enabled: Boolean(choice.provider),
+    staleTime: 0,
+  });
+  // With a choice the plan is the one under that choice (its blockers included).
+  const plan = choice.provider ? chosenPlan.data ?? workflowPlan : workflowPlan;
+  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}) } } : {};
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [formError, setFormError] = useState<string>();
   // The inputs the checks use settle half a second after typing stops.
@@ -198,7 +228,7 @@ function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft
     refetchOnWindowFocus: false,
   });
   const start = useMutation({
-    mutationFn: (test: boolean) => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: versionId, inputs: formValues(schema, values), ...(test ? { test: true } : { preflight: true }) } }),
+    mutationFn: (test: boolean) => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: versionId, inputs: formValues(schema, values), ...modelBody, ...(test ? { test: true } : { preflight: true }) } }),
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
   const go = (test: boolean) => {
@@ -217,6 +247,19 @@ function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft
   return (
     <form onSubmit={(e) => { e.preventDefault(); go(false); }}>
       <SchemaFields schema={schema} values={values} onChange={setValues} />
+      <section className="model-choice" aria-label="Choice for this run">
+        <h3>Model for this run</h3>
+        <ModelChoice
+          nameBase="run"
+          value={choice}
+          onChange={pick}
+          noneLabel={workflowDefault?.provider ? `The workflow's default (${workflowDefault.provider}${workflowDefault.name ? `, ${workflowDefault.name}` : ''})` : 'Each step\'s own default (set on the server)'}
+        />
+        <details className="small">
+          <summary>Which model each step will use</summary>
+          <ModelSteps plan={plan} />
+        </details>
+      </section>
       <section className="preflight" aria-label="Checks before the run" aria-live="polite">
         <h3>Before it starts</h3>
         {pre.isFetching && !pre.data ? <p className="muted small">Checking tools, tokens and repositories…</p> : null}

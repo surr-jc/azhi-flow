@@ -5,6 +5,7 @@
 Severity: {{rca.assessment.severity}} ({{rca.assessment.severity_reason}})
 Complexity: {{rca.assessment.complexity}} ({{rca.assessment.complexity_reason}})
 Confidence: {{rca.assessment.confidence}} ({{rca.assessment.confidence_reason}})
+Confidence to trust: {{trusted}}. An independent check by a second investigator: {{challenge.verdict}}, {{challenge.confidence}}/100. {{challenge.competing_explanation}}
 Origin: {{rca.origin}}{{#rca.origin_detail}}. {{rca.origin_detail}}{{/rca.origin_detail}}
 
 Root cause: {{rca.root_cause}}
@@ -32,3 +33,6 @@ Tests to add:
 {{#rca.out_of_scope}}
 – Out of scope: {{.}}
 {{/rca.out_of_scope}}
+{{#challenge.corrections}}
+– Correction from the check: {{.}}
+{{/challenge.corrections}}

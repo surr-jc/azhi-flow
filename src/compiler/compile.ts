@@ -7,7 +7,7 @@ import { isValueExpr, type JsonSchema, type NodeDef, type ParallelNode, type Val
 import type { ToolCatalog } from '../gateway/types.js';
 import { parseDuration } from '../lib/duration.js';
 import { contentHash } from '../lib/hash.js';
-import { opencodeHarnessProblems, parseProfile, type AgentProfile } from '../agents/profile.js';
+import { modelDefaultsProblems, opencodeHarnessProblems, parseProfile, type AgentProfile } from '../agents/profile.js';
 import {
   APPROVAL_OUTPUT_SCHEMA,
   COMPILER_VERSION,
@@ -120,6 +120,8 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       }
     }
   }
+
+  for (const m of modelDefaultsProblems(def.model_defaults)) err('invalid_model_defaults', m, undefined, '/model_defaults');
 
   // Node identity
   const byId = new Map<string, NodeDef>();

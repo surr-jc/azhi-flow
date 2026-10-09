@@ -38,6 +38,8 @@ export function settings() {
     copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5',
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
+    /** With a stand-in Copilot endpoint (tests), the models besides the default it serves; any other model is refused at start. */
+    copilotEndpointModels: (process.env.AZHI_COPILOT_ENDPOINT_MODELS ?? '').split(',').map((m) => m.trim()).filter(Boolean),
     /**
      * Copilot bills GitHub AI Credits for tokens at per-model rates (src/agents/copilot-pricing.ts).
      * USD per credit: 0.01 unless your contract says otherwise.

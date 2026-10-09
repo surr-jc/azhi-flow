@@ -239,7 +239,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
 
     async harnessRecord(input) {
       const r = input.result;
-      const { profile } = await loadProfile(ctx, input.workspaceId, input.packageHash, input.profile);
+      const { profile } = await loadProfile(ctx, input.workspaceId, input.packageHash, input.profile, input.modelDefaults);
       const model = resolveModelName(ctx, profile);
       const priced = harnessCost(ctx, profile, model, r);
       const cost = priced?.cost ?? null;
@@ -307,6 +307,8 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           interpreterBuild: parent.snapshot.interpreter_build,
           test: input.mock,
           parent: { run_id: input.runId, node_id: input.nodeId, chain },
+          // A provider and model chosen for the run apply to the whole run, subworkflows included.
+          ...(parent.snapshot.model_defaults_chosen && parent.snapshot.model_defaults ? { modelDefaults: parent.snapshot.model_defaults } : {}),
         });
         return { run: await loadRunInput(ctx, input.workspaceId, runId), workflow: target.slug, version: target.version };
       } catch (err) {

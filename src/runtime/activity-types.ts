@@ -155,5 +155,7 @@ export interface HarnessRecordInput {
   profile: string;
   executor: string;
   tainted?: string;
+  /** The run's provider and model for profiles that say `name: default`. */
+  modelDefaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
   result: HarnessResult;
 }

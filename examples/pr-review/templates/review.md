@@ -14,6 +14,7 @@ Merge status: UNKNOWN - GitHub had not computed mergeability, so conflicts were 
 {{/merge.unknown}}
 
 Verdict: {{review.verdict}}. {{review.summary}}
+Verified findings: {{verification.kept}} of {{verification.found}} reported by the reviewers were confirmed by an independent verifier (confidence {{verification.min_confidence}} or more); {{verification.unverified}} could not be settled from the code and {{verification.dropped}} were dropped.
 Head {{pr.head_sha}} against {{pr.base_ref}} ({{pr.base_sha}}), {{pr.additions}} additions and {{pr.deletions}} deletions.
 
 {{#triage.fix_now.length}}

@@ -34,7 +34,7 @@ describe('connection usage', () => {
   it('lists the steps that use each tool, secret and dataset', async () => {
     const u = (await app.inject({ method: 'GET', url: '/v1/connections/usage' })).json() as any;
     expect(u.tools['github.comment-on-pr@1']).toEqual([expect.objectContaining({ workflow: 'pr-review', node: 'post' })]);
-    expect(u.secrets['github-read-token'].map((x: any) => x.node).sort()).toEqual(['correctness', 'pr', 'quality', 'security', 'tests']);
+    expect(u.secrets['github-read-token'].map((x: any) => x.node).sort()).toEqual(['correctness', 'pr', 'quality', 'security', 'tests', 'verify']);
     expect(u.secrets['github-comment-token']).toEqual([expect.objectContaining({ node: 'post' })]);
     expect(u.tools['slack.post-message@1'].map((x: any) => x.workflow).sort()).toEqual(['pr-review', 'quality-report']);
     expect(Object.keys(u.datasets)).toContain('quality-guidelines');

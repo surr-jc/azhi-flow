@@ -121,6 +121,47 @@ function settingsOf(e: Example) {
   return [...out.values()];
 }
 
+interface Requirements {
+  /** Everything the person should have ready before installing, with what is already in place. */
+  settings: Array<{ name: string; title: string; description?: string; placeholder?: string; required: boolean; needed_for?: string; value: string | null; default: string | null; ready: boolean }>;
+  secrets: Array<{ name: string; set: boolean }>;
+  repos: { needed: boolean; ready: boolean };
+  /** What stops the install, one line each. */
+  missing: string[];
+  ready: boolean;
+}
+
+/**
+ * What an install needs from the person, reported before it starts: the settings it asks for (marked
+ * required or optional, and what an optional one is for), the secrets it will use, and the repositories.
+ * `values` are what is already known (an earlier install, or this request); a required setting is ready
+ * when it has one or a default.
+ */
+function requirementsOf(e: Example, values: Record<string, string>, secretsSet: Set<string>, repos: string[]): Requirements {
+  const settings = settingsOf(e).map((s) => {
+    const def = 'default' in s && typeof s.default === 'string' && s.default ? s.default : null;
+    const value = values[s.name] ?? null;
+    const required = 'required' in s && s.required === true;
+    return {
+      name: s.name,
+      title: ('title' in s && s.title) || s.name,
+      ...('description' in s && s.description ? { description: s.description } : {}),
+      ...('placeholder' in s && s.placeholder ? { placeholder: s.placeholder } : {}),
+      required,
+      ...('needed_for' in s && s.needed_for ? { needed_for: s.needed_for } : {}),
+      value,
+      default: def,
+      ready: Boolean(value) || Boolean(def),
+    };
+  });
+  const needsRepo = (e.config.tools ?? []).some(needsRepos);
+  const missing = [
+    ...settings.filter((s) => s.required && !s.ready).map((s) => `setting ${s.name} (${s.title})`),
+    ...(needsRepo && !repos.length ? ['the repositories its GitHub tools may use (owner/name)'] : []),
+  ];
+  return { settings, secrets: secretsOf(e).map((name) => ({ name, set: secretsSet.has(name) })), repos: { needed: needsRepo, ready: !needsRepo || repos.length > 0 }, missing, ready: missing.length === 0 };
+}
+
 /** Replaces `{{name}}` in every string of a tool registration; unknown names are left in place. */
 function fill<T>(v: T, values: Record<string, string>): T {
   if (typeof v === 'string') return v.replace(PLACEHOLDER, (all, name: string) => values[name] ?? all) as T;
@@ -230,6 +271,8 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
         repos: await installedRepos(ctx, p.workspaceId, e),
         // Which settings an earlier install filled in (the values are configuration, not secrets).
         settings: settingsOf(e).map((s) => ({ ...s, value: known[s.name] ?? null })),
+        /** What to have ready before installing, and what is missing. */
+        requirements: requirementsOf(e, known, set, await installedRepos(ctx, p.workspaceId, e)),
       });
     }
     return out;
@@ -278,6 +321,15 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
     const defaults = Object.fromEntries(settingsOf(e).flatMap((s) => ('default' in s && typeof s.default === 'string' && s.default ? [[s.name, s.default]] : [])));
     const values = { ...defaults, ...(await registeredSettings(ctx, p.workspaceId, e)), ...given };
     const tools = e.config.tools ?? [];
+    // Required settings are checked before anything is registered, so a refused install changes nothing.
+    const lacking = requirementsOf(e, values, new Set(), b.repos ?? []).settings.filter((s) => s.required && !s.ready);
+    if (lacking.length) {
+      throw new AzhiError(
+        ErrorClass.invalidInput,
+        `example '${id}' needs ${lacking.length === 1 ? 'this setting' : 'these settings'} before it can be installed: ${lacking.map((s) => `${s.name} (${s.title}${s.description ? `: ${s.description}` : ''})`).join('; ')}`,
+        { missing_settings: lacking.map((s) => s.name) },
+      );
+    }
     if (tools.some(needsRepos) && !b.repos?.length) throw new AzhiError(ErrorClass.invalidInput, `example '${id}' needs the repositories its GitHub tools may use (owner/name)`);
 
     const registered = [];

@@ -51,7 +51,7 @@ export function RunPage({ id }: { id: string }) {
 
   const cancel = useMutation({ mutationFn: () => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['run', id] }) });
   const rerun = useMutation({
-    mutationFn: () => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: detail.data.run.workflow_version_id, inputs: detail.data.run.inputs ?? {}, ...(detail.data.run.test ? { test: true } : {}) } }),
+    mutationFn: () => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: detail.data.run.workflow_version_id, inputs: detail.data.run.inputs ?? {}, ...(detail.data.run.test ? { test: true } : {}), ...(detail.data.run.snapshot?.model_defaults_chosen ? { model_defaults: detail.data.run.snapshot.model_defaults } : {}) } }),
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
 

@@ -119,6 +119,18 @@
         },
         "prompt_injection_detected": {
           "type": "boolean"
+        },
+        "dropped": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unverified": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       },
       "required": [
