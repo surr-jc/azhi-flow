@@ -269,9 +269,9 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? 
 const ctx = await browser.newContext({ viewport: { width: W, height: H }, colorScheme: 'light', recordVideo: { dir: path.join(out, 'raw'), size: { width: W, height: H } } });
 await ctx.addInitScript(overlay);
 await mockApi(ctx);
+t0 = Date.now(); // the video starts when the page is created
 page = await ctx.newPage();
 page.on('pageerror', (e) => console.log('page error:', e.message.slice(0, 200)));
-t0 = Date.now();
 await page.goto(`http://localhost:${PORT}/ui`);
 await page.waitForSelector('.rail');
 const order = ['intro', 'today', 'workflow', 'editor', 'run', 'approvals', 'usage', 'tokens', 'unique', 'outro'];
