@@ -292,9 +292,13 @@ fs.mkdirSync(out, { recursive: true });
 const mp4 = path.join(out, 'azhi-flow-demo.mp4');
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', raw, '-c:v', 'libx264', '-preset', 'slow', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', '30', '-movflags', '+faststart', mp4]);
 
-// Captions as SRT and as a narration script, for dubbing or translation.
+// Captions as SRT and as a narration script, for dubbing or translation. The recorder can run a little
+// slower than the script's own clock, so times are scaled to the encoded video's real length.
+const length = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp4]).toString());
+const k = length / total;
+for (const l of log) l.at *= k;
 const ts = (s) => { const ms = Math.round(s * 1000); const p = (n, w = 2) => String(n).padStart(w, '0'); return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`; };
-const srt = log.map((l, i) => `${i + 1}\n${ts(l.at)} --> ${ts(Math.min(log[i + 1]?.at ?? total, l.at + 6))}\n${l.text}\n`).join('\n');
+const srt = log.map((l, i) => `${i + 1}\n${ts(l.at)} --> ${ts(Math.min(log[i + 1]?.at ?? length, l.at + 6))}\n${l.text}\n`).join('\n');
 fs.writeFileSync(path.join(out, 'azhi-flow-demo.srt'), srt);
 fs.writeFileSync(path.join(out, 'narration.md'), `# Azhi Flow demo: narration script\n\nTimestamps are seconds into the video.\n\n${log.map((l) => `- **${l.at.toFixed(0)}s**: ${l.text}`).join('\n')}\n`);
 console.log(`done: ${mp4} (${total.toFixed(0)}s)`);
