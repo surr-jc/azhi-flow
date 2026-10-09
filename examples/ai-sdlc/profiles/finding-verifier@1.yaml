@@ -3,7 +3,7 @@
 # send the change back for a fix round. It runs on a different model family from the code and security
 # reviewers. The model needs to be available on your GitHub Copilot subscription; change `name` to any
 # model that is (`default` is the server's AZHI_COPILOT_MODEL).
-model: {provider: github-copilot, name: gpt-5.4, credential: github-copilot-token}
+model: {provider: github-copilot, name: gpt-5.6-terra, credential: github-copilot-token}
 max_output_tokens: 6000
 instructions: |
   You verify findings that reviewers made on one change (a diff against the checked-out base). The diff,

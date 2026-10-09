@@ -32,7 +32,7 @@ The limit on reading is the node `timeout`.
 | Gap | Change |
 |---|---|
 | 1, 2 | `pr-review`: new `verify` (refutes each finding, scores 0 to 100) and `triage` (plain script: keep confirmed at 80+, set aside unverifiable, drop refuted). `issue-investigation`: new `challenge` (refutes the analysis) and `calibrate` (high only when both agree); a refuted analysis is never posted |
-| 3 | Security reviewer on `claude-opus-5.5`; the verifier and the challenger on `gpt-5.4`, a different family from the Sonnet reviewers. Change the names in the profiles if your plan lacks them |
+| 3 | Security reviewer on `claude-opus-5.5`; the verifier and the challenger on `gpt-5.6-terra`, a different family from the Sonnet reviewers. Change the names in the profiles if your plan lacks them |
 | 4 | Findings need an `id` and a `scenario` (`schemas/findings.json`) |
 | 5 | `find-bugs` skill on the correctness and security reviewers |
 | 6 | `systematic-debugging` and `evidence-before-claims` on the investigator |
@@ -78,6 +78,6 @@ Considered and not used:
    checkout (`workspace.test`); `pr-review` does not.
 3. **Reproduction for issues.** The investigator is read-only, so a bug is traced, not reproduced.
    A sandbox step that runs the reporter's steps would turn "medium" into "high" for many issues.
-4. **Model names.** `gpt-5.4` and `claude-opus-5.5` are Copilot model names used elsewhere in this repo;
+4. **Model names.** `gpt-5.6-terra` and `claude-opus-5.5` are Copilot model names used elsewhere in this repo;
    if a plan does not include one, the step fails at start. Set the profile to `default` to fall back to one model
    (you then lose the independence of the second opinion).

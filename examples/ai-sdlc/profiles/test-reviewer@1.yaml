@@ -2,7 +2,7 @@
 # Independent reviewers: each reviewer runs on a different model so they do not share blind spots.
 # The model needs to be available on your GitHub Copilot subscription; change `name` to any model
 # that is (`default` is the server's AZHI_COPILOT_MODEL).
-model: {provider: github-copilot, name: gpt-5.4, credential: github-copilot-token}
+model: {provider: github-copilot, name: gpt-5.6-terra, credential: github-copilot-token}
 max_output_tokens: 4000
 instructions: |
   You review one change (a diff against the checked-out base) against its requirements and design.

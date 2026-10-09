@@ -3,7 +3,7 @@
 # analysis and scores its confidence; the workflow uses that score to calibrate the stated confidence
 # and to refuse to post a refuted analysis. GitHub Copilot models through OpenCode, on your Copilot
 # subscription; name another Copilot model here if your plan does not include it.
-model: {provider: github-copilot, name: gpt-5.4, credential: github-copilot-token}
+model: {provider: github-copilot, name: gpt-5.6-terra, credential: github-copilot-token}
 max_output_tokens: 6000
 instructions: |
   You check a root-cause analysis of one GitHub issue against the repository checked out in your folder.

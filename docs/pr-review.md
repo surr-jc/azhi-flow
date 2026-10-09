@@ -21,7 +21,7 @@ and never decide the verdict; refuted ones are dropped and counted. See
 |---|---|
 | `pr` | `github.get-pull-request@1`: title, body, author, base and head refs and SHAs, changed files with line counts |
 | `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
-| `verify` | OpenCode agent (`finding-verifier@1`, `gpt-5.4`) in its own checkout: re-derives every finding, walks its scenario, looks for the reason it is fine, and returns `confirmed`/`refuted`/`unverifiable` with a 0 to 100 confidence and quoted evidence (`schemas/verification.json`, skill `finding-verification`) |
+| `verify` | OpenCode agent (`finding-verifier@1`, `gpt-5.6-terra`) in its own checkout: re-derives every finding, walks its scenario, looks for the reason it is fine, and returns `confirmed`/`refuted`/`unverifiable` with a 0 to 100 confidence and quoted evidence (`schemas/verification.json`, skill `finding-verification`) |
 | `triage` | Script (`scripts/triage.py`): kept = confirmed at or above `config.min_confidence`; unverified = unverifiable or unchecked; dropped = refuted or confirmed below the bar |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |
 | `report` | The review as a run artifact (`templates/review.md`) |

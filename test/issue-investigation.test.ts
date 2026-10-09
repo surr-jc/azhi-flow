@@ -146,7 +146,7 @@ describe.skipIf(!up)('Issue root-cause analysis example with OpenCode', () => {
     cpSync(PKG, dir, { recursive: true });
     // The challenger names a different model family on purpose; the scripted endpoint serves one model, so use the server's default.
     const pf = join(dir, 'profiles/root-cause-challenger@1.yaml');
-    writeFileSync(pf, readFileSync(pf, 'utf8').replace('name: gpt-5.4', 'name: default'));
+    writeFileSync(pf, readFileSync(pf, 'utf8').replace('name: gpt-5.6-terra', 'name: default'));
     const wf = join(dir, 'workflow.yaml');
     writeFileSync(wf, readFileSync(wf, 'utf8').replaceAll('      credential: github-read-token\n', `      credential: github-read-token\n      host: ${git.url}\n`));
     const res = await uploadDir(h.api, dir);

@@ -13,7 +13,7 @@
 #   github-copilot-token  your GitHub Copilot sign-in; the agents run on Copilot models through
 #                         OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot).
 #                         The three full-path reviewers use different models (profiles/*-reviewer@1.yaml:
-#                         claude-sonnet-5, gpt-5.4, claude-opus-5.5); change them to models your
+#                         claude-sonnet-5, gpt-5.6-terra, claude-opus-5.5); change them to models your
 #                         subscription offers
 #   slack-bot-token       posts the pull request link, or the send-back, to the delivery channel
 #   jira-api-token        only for Jira tickets (Atlassian API token of jira_username)

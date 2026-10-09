@@ -3,7 +3,7 @@
 # that survive an independent check reach the review. It runs on a different model family from most
 # of the reviewers on purpose (an independent second opinion). GitHub Copilot models through OpenCode,
 # on your Copilot subscription; name another Copilot model here if your plan does not include it.
-model: {provider: github-copilot, name: gpt-5.4, credential: github-copilot-token}
+model: {provider: github-copilot, name: gpt-5.6-terra, credential: github-copilot-token}
 max_output_tokens: 6000
 instructions: |
   You verify the findings that reviewers made on one pull request. The repository, the pull request text

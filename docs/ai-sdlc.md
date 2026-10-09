@@ -89,7 +89,7 @@ request opens as a draft marked `[needs-human-attention]`. Reviewers number thei
 | `build` | Writable checkout; the worker runs the test command and returns failures to the agent (3 attempts) |
 | `lite_review_1`, `lite_verify_1`, `lite_gate_1`, `lite_fix`, `lite_review_2`, `lite_verify_2` | The lite path |
 | `code_N`, `test_N`, `security_N`, `verify_N`, `gate_N`, `fix_N` | The full path, rounds 1 to 3 |
-| `*verify*` | A verifier (`finding-verifier@1`, `gpt-5.4`) in a fresh checkout tries to refute each critical and major finding and scores its confidence (`schemas/verification.json`) |
+| `*verify*` | A verifier (`finding-verifier@1`, `gpt-5.6-terra`) in a fresh checkout tries to refute each critical and major finding and scores its confidence (`schemas/verification.json`) |
 | `finalize` | Python script: the last round that ran, its aggregated verdict, the evidence record. Critical and major findings count only when confirmed at `config.min_confidence` (80); refuted ones are dropped and listed, unverifiable ones flag the change for a person |
 | `ship_gate` | `ship` only when the tests passed and something changed; open findings do not block (they flag), a failing test run does |
 | `release_approval`, `push_branch`, `open_pr`, `release`, `send_back`, `retro` | As in sdlc-implement, with the evidence in the approval, the pull request body and the retro; a flagged change opens a draft |
@@ -115,7 +115,7 @@ azhi run <version-id> --published -i source=github -i ticket=OWNER/REPO#1 -i rep
 Agents cannot run commands, so AI-SDLC's pre-commit checklist (build, test, lint, format) is the
 `test_command`: put every check you want enforced in it. It runs on the worker with no secrets, so use a
 worker you would trust as a CI runner for the repository. The three full-path reviewers use
-`claude-sonnet-5`, `gpt-5.4` and `claude-opus-5.5` so they do not share blind spots; change `name` in
+`claude-sonnet-5`, `gpt-5.6-terra` and `claude-opus-5.5` so they do not share blind spots; change `name` in
 `profiles/*-reviewer@1.yaml` to models your Copilot subscription offers. Try it on a throwaway
 repository first: a successful run pushes a branch and opens a pull request. The `finalize` step needs
 Python (uv) on a worker.

@@ -19,7 +19,7 @@ the investigator is unsure. A refuted analysis is never posted. See [docs/confid
 |---|---|
 | `issue` | `github.read-issue@1`: title, body, labels, author and the first comments |
 | `investigate` | OpenCode agent in its own checkout of the default branch (or the run input `branch`), returning `schemas/rca.json` |
-| `challenge` | OpenCode agent (`root-cause-challenger@1`, `gpt-5.4`) in its own checkout: returns `supported`/`partly_supported`/`refuted`, a 0 to 100 confidence, an evidence check per cited line, the competing explanation and corrections (`schemas/challenge.json`) |
+| `challenge` | OpenCode agent (`root-cause-challenger@1`, `gpt-5.6-terra`) in its own checkout: returns `supported`/`partly_supported`/`refuted`, a 0 to 100 confidence, an evidence check per cited line, the competing explanation and corrections (`schemas/challenge.json`) |
 | `calibrate` | Condition: the confidence to trust (`high`, `medium`, `low`) from both agents; shown in the report, the approval and the posted comment |
 | `report` | The RCA as a run artifact (`templates/rca.md`) |
 | `should_post` → `approve_post` → `post` | Only when the run input `post` is true: a person approves the comment (the approval message shows the confidence), then `github.comment-on-issue@1` posts it. Ledgered and deduplicated; its CEL guard only allows the issue under investigation |
