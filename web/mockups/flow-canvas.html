@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azhi Flow canvas mockup</title>
+<!--
+  Static mock of the redesigned workflow canvas (Make-style: dark icon rail, pastel step cards on a
+  dot grid, floating step palette, bottom toolbar). Open the file directly in a browser; no build.
+  The graph is the real examples/pr-review workflow; the palette lists Azhi's real node types and
+  the tools the examples use. Nothing here calls the API. No external scripts or fonts (strict CSP).
+-->
+<style>
+:root {
+  --bg: #f4f5f7; --dot: #cfd5de; --panel: #eceff2; --card: #ffffff; --ink: #13213b; --muted: #5d6879; --line: #d9dee6;
+  --rail: #11161d; --rail-ink: #c9d1dc; --rail-on: #2a313b; --accent: #0e6f6a; --accent-ink: #fff; --attention: #d4900f;
+  --ok: #17743f; --bad: #b42318; --run: #2463a8;
+  --shadow: 0 1px 2px rgba(19,33,59,.06), 0 8px 24px -12px rgba(19,33,59,.22);
+  /* step type tints: [background, ink] */
+  --tool-bg: #e3eefa; --tool-ink: #2463a8;
+  --agent-bg: #ece6fa; --agent-ink: #5a3fb0;
+  --condition-bg: #fff1d6; --condition-ink: #8a5300;
+  --approval-bg: #fde8e6; --approval-ink: #b42318;
+  --report-bg: #e4f5ea; --report-ink: #17743f;
+  --notify-bg: #e1f2f0; --notify-ink: #0e6f6a;
+  --script-bg: #eef1f5; --script-ink: #4b5565;
+  --flow-bg: #fbeedd; --flow-ink: #9a5a14;
+  --trigger-bg: #f7e6f1; --trigger-ink: #9a2f73;
+  --f-ui: system-ui, -apple-system, "Segoe UI", "Public Sans", sans-serif;
+  --f-mono: ui-monospace, SFMono-Regular, Menlo, "IBM Plex Mono", monospace;
+  --ease: cubic-bezier(.2,.7,.2,1);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1218; --dot: #26303c; --panel: #151d27; --card: #1a2430; --ink: #e6ecf3; --muted: #9aa7b8; --line: #2a3644;
+    --rail: #080b0f; --rail-ink: #aab4c2; --rail-on: #202934; --accent: #3cc0b4; --accent-ink: #062421;
+    --ok: #5ccf8c; --bad: #ff8c80; --run: #79b4f2; --shadow: 0 0 0 1px rgba(255,255,255,.04);
+    --tool-bg: #16304d; --tool-ink: #79b4f2; --agent-bg: #2a2150; --agent-ink: #b5a3f5; --condition-bg: #3a2a0e; --condition-ink: #f2b75b;
+    --approval-bg: #3d1a17; --approval-ink: #ff8c80; --report-bg: #12301f; --report-ink: #5ccf8c; --notify-bg: #10302e; --notify-ink: #3cc0b4;
+    --script-bg: #232d3a; --script-ink: #aab4c2; --flow-bg: #3a2b16; --flow-ink: #f0b373; --trigger-bg: #3d1d31; --trigger-ink: #f08fcb;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1218; --dot: #26303c; --panel: #151d27; --card: #1a2430; --ink: #e6ecf3; --muted: #9aa7b8; --line: #2a3644;
+  --rail: #080b0f; --rail-ink: #aab4c2; --rail-on: #202934; --accent: #3cc0b4; --accent-ink: #062421;
+  --ok: #5ccf8c; --bad: #ff8c80; --run: #79b4f2; --shadow: 0 0 0 1px rgba(255,255,255,.04);
+  --tool-bg: #16304d; --tool-ink: #79b4f2; --agent-bg: #2a2150; --agent-ink: #b5a3f5; --condition-bg: #3a2a0e; --condition-ink: #f2b75b;
+  --approval-bg: #3d1a17; --approval-ink: #ff8c80; --report-bg: #12301f; --report-ink: #5ccf8c; --notify-bg: #10302e; --notify-ink: #3cc0b4;
+  --script-bg: #232d3a; --script-ink: #aab4c2; --flow-bg: #3a2b16; --flow-ink: #f0b373; --trigger-bg: #3d1d31; --trigger-ink: #f08fcb;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--f-ui); -webkit-font-smoothing: antialiased; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.app { display: grid; grid-template-columns: 76px 1fr 340px; height: 100dvh; padding: 0; gap: 0; }
+
+/* ---------- left rail ---------- */
+.rail { background: var(--rail); display: flex; flex-direction: column; align-items: center; padding: 14px 0; gap: 6px; z-index: 6; }
+.logo { width: 40px; height: 40px; margin-bottom: 14px; border-radius: 12px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 800; letter-spacing: -.04em; font-size: 18px; }
+.rail button { position: relative; width: 48px; height: 48px; border: 0; border-radius: 50%; background: transparent; color: var(--rail-ink); display: grid; place-items: center; transition: background .15s var(--ease), color .15s; }
+.rail button:hover { background: var(--rail-on); color: #fff; }
+.rail button[aria-current="page"] { background: var(--rail-on); color: #fff; }
+.rail .gap { flex: 1; }
+.rail .badge { position: absolute; top: 5px; right: 4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--attention); color: #1a1100; font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #3cc0b4, #2463a8); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 14px; margin-top: 6px; }
+
+/* ---------- stage ---------- */
+.stage { position: relative; overflow: hidden; background: var(--bg); touch-action: none; cursor: grab; }
+.stage.panning { cursor: grabbing; }
+.dots { position: absolute; inset: 0; background-image: radial-gradient(circle, var(--dot) 1.1px, transparent 1.3px); background-size: 24px 24px; }
+.world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.edge { fill: none; stroke-width: 1.8; stroke-linecap: round; }
+.edge.dashed { stroke-dasharray: 5 5; }
+.edge.run { stroke-dasharray: 6 6; animation: flow 1s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) { .edge.run { animation: none; } * { transition-duration: 0s !important; } }
+
+/* step cards: icon on top, name, action under it, like the reference */
+.node { position: absolute; width: 184px; height: 116px; border-radius: 26px; border: 2px solid transparent; background: var(--bg-t); color: var(--ink); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 8px 10px; text-align: center; cursor: grab; box-shadow: var(--shadow); transition: box-shadow .15s var(--ease), border-color .15s; user-select: none; }
+.node:hover { border-color: color-mix(in srgb, var(--ink-t) 35%, transparent); }
+.node.selected { border-color: var(--ink-t); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink-t) 18%, transparent), var(--shadow); }
+.node.dragging { cursor: grabbing; }
+.node .ico { width: 44px; height: 44px; display: grid; place-items: center; color: var(--ink-t); }
+.node .ico svg { width: 36px; height: 36px; stroke-width: 1.5; }
+.node .name { font-weight: 650; font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .sub { color: var(--muted); font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .port { position: absolute; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--card); border: 2px solid var(--ink-t); }
+.node .port.in { left: -6px; } .node .port.out { right: -6px; }
+.node .state { position: absolute; top: 10px; right: 14px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--card); }
+.state.succeeded { background: var(--ok); } .state.running { background: var(--run); } .state.waiting { background: var(--attention); } .state.skipped { background: var(--muted); opacity: .6; }
+.node .guard { position: absolute; top: 8px; left: 14px; color: var(--ink-t); opacity: .85; }
+.node .guard svg { width: 16px; height: 16px; }
+.node .add { position: absolute; bottom: -14px; left: 50%; margin-left: -13px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); display: none; place-items: center; box-shadow: var(--shadow); }
+.node.selected .add, .node:hover .add { display: grid; }
+.node .add svg { width: 14px; height: 14px; }
+.t-tool { --bg-t: var(--tool-bg); --ink-t: var(--tool-ink); } .t-agent { --bg-t: var(--agent-bg); --ink-t: var(--agent-ink); }
+.t-condition { --bg-t: var(--condition-bg); --ink-t: var(--condition-ink); } .t-approval { --bg-t: var(--approval-bg); --ink-t: var(--approval-ink); }
+.t-report { --bg-t: var(--report-bg); --ink-t: var(--report-ink); } .t-notify { --bg-t: var(--notify-bg); --ink-t: var(--notify-ink); }
+.t-script { --bg-t: var(--script-bg); --ink-t: var(--script-ink); } .t-flow { --bg-t: var(--flow-bg); --ink-t: var(--flow-ink); } .t-trigger { --bg-t: var(--trigger-bg); --ink-t: var(--trigger-ink); }
+
+.edge-btn { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); display: grid; place-items: center; box-shadow: var(--shadow); color: var(--muted); }
+.edge-btn:hover { color: var(--ink); }
+.edge-btn svg { width: 13px; height: 13px; }
+.edge-label { position: absolute; transform: translate(-50%, -150%); font-size: 11px; font-weight: 600; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+
+/* ---------- floating chrome ---------- */
+.float { position: absolute; z-index: 4; }
+.circle-btn { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); display: grid; place-items: center; box-shadow: var(--shadow); transition: background .15s, transform .15s var(--ease); }
+.circle-btn:hover { background: var(--panel); }
+.circle-btn:active { transform: scale(.96); }
+.quick { top: 18px; left: 18px; display: flex; flex-direction: column; gap: 10px; }
+.quick .circle-btn { width: 44px; height: 44px; }
+.quick .circle-btn svg { width: 20px; height: 20px; }
+.quick .circle-btn.main { background: var(--card); }
+.titlebar { top: 18px; left: 82px; display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 6px 8px 6px 18px; box-shadow: var(--shadow); max-width: calc(100% - 420px); }
+.titlebar h1 { font-size: 14px; font-weight: 650; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; font-size: 12px; font-weight: 600; padding: 3px 10px; background: var(--panel); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.pill.warn { background: color-mix(in srgb, var(--attention) 18%, transparent); color: var(--condition-ink); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+.runbar { left: 18px; bottom: 18px; display: flex; align-items: center; gap: 12px; }
+.run-btn { width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--ink); color: var(--bg); display: grid; place-items: center; box-shadow: var(--shadow); }
+.run-btn svg { width: 22px; height: 22px; fill: currentColor; stroke: none; margin-left: 2px; }
+.run-btn:hover { filter: brightness(1.15); }
+.runbar .lbl { font-weight: 600; }
+.runbar .meta { color: var(--muted); font-size: 12px; display: block; font-weight: 400; }
+
+.toolbar { left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 2px; align-items: center; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow); }
+.toolbar button { width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; color: var(--muted); position: relative; }
+.toolbar button:hover { background: var(--card); color: var(--ink); }
+.toolbar button.on { background: var(--ink); color: var(--bg); }
+.toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.zoom { right: 18px; bottom: 18px; display: flex; gap: 10px; align-items: center; }
+.zoom .pct { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+
+.tip { position: absolute; z-index: 20; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; transition: opacity .12s; }
+.tip.show { opacity: 1; }
+
+/* ---------- right panel ---------- */
+.side { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; z-index: 5; border-radius: 28px 0 0 28px; }
+.search { margin: 14px 16px 6px; position: relative; }
+.search svg { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); width: 18px; height: 18px; }
+.search input { width: 100%; height: 46px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 0 16px 0 44px; font: inherit; }
+.search input::placeholder { color: var(--muted); }
+.tabs { display: flex; gap: 4px; margin: 6px 16px 0; padding: 4px; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 999px; }
+.tabs button { flex: 1; border: 0; background: transparent; border-radius: 999px; padding: 6px 8px; font-weight: 600; font-size: 13px; color: var(--muted); }
+.tabs button[aria-selected="true"] { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px 12px; scrollbar-width: thin; }
+details.grp { border-radius: 14px; }
+details.grp > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 6px; font-weight: 650; font-size: 15px; cursor: pointer; border-radius: 10px; }
+details.grp > summary::-webkit-details-marker { display: none; }
+details.grp > summary svg { width: 16px; height: 16px; transition: transform .15s var(--ease); color: var(--muted); }
+details.grp[open] > summary svg { transform: rotate(90deg); }
+details.grp > summary .n { margin-left: auto; font-size: 12px; color: var(--muted); font-weight: 500; }
+.eyebrow { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 6px 6px 2px; font-weight: 600; }
+.item { width: 100%; display: flex; gap: 12px; align-items: center; text-align: left; border: 0; background: transparent; padding: 8px 6px; border-radius: 16px; }
+.item:hover { background: color-mix(in srgb, var(--card) 70%, transparent); }
+.item .bub { width: 46px; height: 46px; border-radius: 50%; background: var(--card); display: grid; place-items: center; flex: none; color: var(--ink-t); border: 1px solid var(--line); }
+.item .t { font-weight: 650; font-size: 14.5px; display: block; line-height: 1.25; }
+.item .d { color: var(--muted); font-size: 12.5px; display: block; line-height: 1.3; }
+.item code { font-family: var(--f-mono); font-size: 11.5px; }
+.empty { color: var(--muted); padding: 24px 8px; text-align: center; }
+.ai { margin: 8px 16px 16px; display: flex; align-items: center; gap: 10px; padding: 0 18px; height: 52px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-weight: 650; box-shadow: var(--shadow); }
+.ai .beta { margin-left: auto; font-size: 11px; background: var(--ink); color: var(--bg); border-radius: 999px; padding: 1px 9px; font-weight: 600; }
+.ai svg { color: var(--accent); }
+
+/* inspector */
+.insp-head { display: flex; gap: 12px; align-items: center; padding: 8px 4px 14px; }
+.insp-head .bub { width: 52px; height: 52px; border-radius: 18px; background: var(--bg-t); color: var(--ink-t); display: grid; place-items: center; }
+.insp-head h2 { margin: 0; font-size: 17px; line-height: 1.2; }
+.insp-head p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 4px 14px; margin-bottom: 12px; }
+.card dl { margin: 0; }
+.card .r { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.card .r:last-child { border-bottom: 0; }
+.card dt { color: var(--muted); } .card dd { margin: 0; text-align: right; font-family: var(--f-mono); font-size: 12px; overflow-wrap: anywhere; }
+.card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 2px; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 8px 14px; font-weight: 600; font-size: 13px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.danger { color: var(--bad); }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px 0 12px; }
+.hint { color: var(--muted); font-size: 12.5px; padding: 0 4px; }
+
+/* ---------- toast ---------- */
+.toast { position: absolute; left: 50%; top: 22px; transform: translate(-50%, -20px); z-index: 30; background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 999px; font-weight: 600; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s var(--ease); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ---------- small screens: the palette becomes a bottom sheet toggle ---------- */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 56px 1fr; }
+  .rail button { width: 40px; height: 40px; } .logo { width: 36px; height: 36px; }
+  .side { position: fixed; right: 0; left: 56px; bottom: 0; height: 58dvh; border-radius: 24px 24px 0 0; border-left: 0; border-top: 1px solid var(--line); transform: translateY(100%); transition: transform .25s var(--ease); z-index: 12; }
+  .side.open { transform: none; }
+  .titlebar { left: 70px; max-width: calc(100% - 90px); }
+  .quick { display: none; }
+  .titlebar .pill { display: none; } .titlebar { padding-right: 18px; }
+  .toolbar { left: 12px; right: 12px; transform: none; bottom: 88px; justify-content: space-between; overflow-x: auto; }
+  .toolbar .sep { display: none; }
+  .toolbar button { width: 40px; height: 40px; flex: none; }
+  .zoom { bottom: 18px; }
+  .runbar .txt { display: none; }
+  .sheet-toggle { display: grid !important; }
+}
+.sheet-toggle { display: none; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8M16 7.5l-3 8"/></symbol>
+    <symbol id="i-runs" viewBox="0 0 24 24"><path d="M5 4h14M5 12h14M5 20h14"/><circle cx="9" cy="4" r="0.6"/><circle cx="15" cy="12" r="0.6"/><circle cx="9" cy="20" r="0.6"/></symbol>
+    <symbol id="i-approval" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5L15.5 10"/></symbol>
+    <symbol id="i-data" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></symbol>
+    <symbol id="i-usage" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19V5M9 7h6"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 114 2c-.9.6-1.5 1-1.5 2M12 17h.01"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 005 5L21 13l-8 8-4-4 8-8zM3 21l5-5"/><path d="M14 4l6 6"/></symbol>
+    <symbol id="i-script" viewBox="0 0 24 24"><path d="M9 4C6 4 7 8 7 10s-1 2-3 2c2 0 3 0 3 2s-1 6 2 6M15 4c3 0 2 4 2 6s1 2 3 2c-2 0-3 0-3 2s1 6-2 6"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></symbol>
+    <symbol id="i-retrieve" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M20 20l-5.5-5.5M8 10h4"/></symbol>
+    <symbol id="i-condition" viewBox="0 0 24 24"><path d="M12 3l9 9-9 9-9-9z"/><path d="M9 12h6"/></symbol>
+    <symbol id="i-parallel" viewBox="0 0 24 24"><path d="M4 12h5M9 12c3 0 3-6 6-6h5M9 12c3 0 3 6 6 6h5"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0113.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 01-13.7 5.7L4 15.5M4 20v-4.5h4.5"/></symbol>
+    <symbol id="i-sub" viewBox="0 0 24 24"><rect x="8" y="3" width="13" height="13" rx="3"/><path d="M16 20H6a3 3 0 01-3-3V8"/></symbol>
+    <symbol id="i-gate" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L3 10.5l7 3 3 7zM10 13.5L21 3"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 001.5.9l12-7.5a1 1 0 000-1.8l-12-7.5A1 1 0 007 4.5z"/></symbol>
+    <symbol id="i-new" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l4 4v14H5zM8 3v6h8V3M8 21v-7h8v7"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></symbol>
+    <symbol id="i-plan" viewBox="0 0 24 24"><path d="M9 11l2.5 2.5L16 9M5 4h14v16H5z"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3"/></symbol>
+    <symbol id="i-align" viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h12"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.5c0-1 .1-1.6-.5-2.5 2.800-.3 5.500-1.400 5.500-6a4.600 4.600 0 00-1.300-3.200 4.300 4.300 0 00-.1-3.200s-1-.3-3.500 1.300a12 12 0 00-6.200 0C6.400 2.300 5.400 2.600 5.400 2.600a4.300 4.300 0 00-.1 3.200A4.600 4.600 0 004 9c0 4.600 2.700 5.700 5.500 6-.6.600-.6 1.200-.5 2.500V21"/></symbol>
+    <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M3 9a2 2 0 002-2h14a2 2 0 002 2v0a2 2 0 000 6 2 2 0 00-2 2H5a2 2 0 00-2-2 2 2 0 000-6z"/><path d="M13 7v10" stroke-dasharray="2 2"/></symbol>
+    <symbol id="i-ci" viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M9 12h3c3 0 3-6 3-6M12 12c3 0 3 6 3 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <!-- left rail: the real mission-control sections -->
+  <nav class="rail" aria-label="Main">
+    <div class="logo" aria-hidden="true">az</div>
+    <button data-tip="Today" aria-label="Today"><svg class="i"><use href="#i-home"/></svg></button>
+    <button data-tip="Runs" aria-label="Runs"><svg class="i"><use href="#i-runs"/></svg></button>
+    <button data-tip="Approvals" aria-label="Approvals, 2 waiting"><svg class="i"><use href="#i-approval"/></svg><span class="badge">2</span></button>
+    <button data-tip="Workflows" aria-label="Workflows" aria-current="page"><svg class="i"><use href="#i-flow"/></svg></button>
+    <button data-tip="Datasets" aria-label="Datasets"><svg class="i"><use href="#i-data"/></svg></button>
+    <button data-tip="Usage and limits" aria-label="Usage and limits"><svg class="i"><use href="#i-usage"/></svg></button>
+    <button data-tip="Workers" aria-label="Workers"><svg class="i"><use href="#i-server"/></svg></button>
+    <span class="gap"></span>
+    <button data-tip="Docs" aria-label="Docs"><svg class="i"><use href="#i-book"/></svg></button>
+    <button data-tip="Theme" aria-label="Switch theme" id="theme"><svg class="i"><use href="#i-help"/></svg></button>
+    <div class="avatar" title="Suresh">S</div>
+  </nav>
+
+  <main class="stage" id="stage" aria-label="Workflow canvas">
+    <div class="dots" id="dots"></div>
+    <div class="world" id="world">
+      <svg class="edges" id="edges" aria-hidden="true"></svg>
+    </div>
+
+    <div class="float quick" aria-label="Quick add">
+      <button class="circle-btn main" data-tip="Add a step" aria-label="Add a step" data-add="tool:github.get-pull-request@1"><svg class="i"><use href="#i-plus"/></svg></button>
+      <button class="circle-btn" data-tip="Add agent" aria-label="Add agent" data-add="agent"><svg class="i" style="color:var(--agent-ink)"><use href="#i-agent"/></svg></button>
+      <button class="circle-btn" data-tip="Add tool" aria-label="Add tool" data-add="tool"><svg class="i" style="color:var(--tool-ink)"><use href="#i-tool"/></svg></button>
+      <button class="circle-btn" data-tip="Add condition" aria-label="Add condition" data-add="condition"><svg class="i" style="color:var(--condition-ink)"><use href="#i-condition"/></svg></button>
+      <button class="circle-btn" data-tip="Add approval gate" aria-label="Add approval gate" data-add="approval"><svg class="i" style="color:var(--approval-ink)"><use href="#i-gate"/></svg></button>
+      <button class="circle-btn" data-tip="Add notify" aria-label="Add notify" data-add="notify"><svg class="i" style="color:var(--notify-ink)"><use href="#i-send"/></svg></button>
+    </div>
+
+    <div class="float titlebar">
+      <h1>Pull request review (OpenCode)</h1>
+      <span class="pill">pr-review · v4</span>
+      <span class="pill ok"><span class="dot"></span>Plan ready</span>
+      <span class="pill warn" title="Reviewers read untrusted code; posts are guarded to this PR only"><span class="dot"></span>Taint gate on 2 writes</span>
+    </div>
+
+    <div class="float runbar">
+      <button class="run-btn" id="run" aria-label="Run once" data-tip="Run once (R)"><svg class="i"><use href="#i-play"/></svg></button>
+      <span class="txt"><span class="lbl">Run once</span><span class="meta" id="runmeta">Last run 12 min ago · succeeded · $0.41</span></span>
+    </div>
+
+    <div class="float toolbar" role="toolbar" aria-label="Canvas tools">
+      <button data-tip="New workflow" aria-label="New workflow"><svg class="i"><use href="#i-new"/></svg></button>
+      <button data-tip="Save draft (Ctrl+S)" aria-label="Save draft" id="save"><svg class="i"><use href="#i-save"/></svg></button>
+      <button data-tip="Export YAML" aria-label="Export YAML"><svg class="i"><use href="#i-export"/></svg></button>
+      <button class="on" data-tip="Run plan" aria-label="Run plan"><svg class="i"><use href="#i-plan"/></svg></button>
+      <span class="sep"></span>
+      <button data-tip="Undo (Ctrl+Z)" aria-label="Undo" id="undo"><svg class="i"><use href="#i-undo"/></svg></button>
+      <button data-tip="Auto-align" aria-label="Auto-align" id="align"><svg class="i"><use href="#i-align"/></svg></button>
+      <button data-tip="Show last run" aria-label="Toggle last run states" id="states"><svg class="i"><use href="#i-clock"/></svg></button>
+      <button data-tip="More" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button>
+    </div>
+
+    <div class="float zoom">
+      <button class="sheet-toggle circle-btn" id="sheet" aria-label="Open step palette" data-tip="Steps"><svg class="i"><use href="#i-panel"/></svg></button>
+      <span class="pct" id="pct" aria-live="polite">100%</span>
+      <button class="circle-btn" id="zout" aria-label="Zoom out" data-tip="Zoom out"><svg class="i"><use href="#i-minus"/></svg></button>
+      <button class="circle-btn" id="zin" aria-label="Zoom in" data-tip="Zoom in"><svg class="i"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="toast" id="toast" role="status"></div>
+  </main>
+
+  <!-- right panel: step palette / inspector -->
+  <aside class="side" id="side" aria-label="Steps">
+    <div class="search">
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="q" type="search" placeholder="Search steps and tools" aria-label="Search steps and tools" autocomplete="off">
+    </div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-steps" aria-selected="true" aria-controls="p-steps">Steps</button>
+      <button role="tab" id="tab-insp" aria-selected="false" aria-controls="p-insp">Settings</button>
+    </div>
+    <div class="scroll" id="p-steps" role="tabpanel" aria-labelledby="tab-steps"></div>
+    <div class="scroll" id="p-insp" role="tabpanel" aria-labelledby="tab-insp" hidden></div>
+    <button class="ai" type="button"><svg class="i"><use href="#i-agent"/></svg>Build with AI<span class="beta">beta</span></button>
+  </aside>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+/* ---------------------------------------------------------------------------------------------
+   Data: examples/pr-review/workflow.yaml (ids, types, deps, routes, guards) plus a sample run.
+   --------------------------------------------------------------------------------------------- */
+const TYPES = {
+  trigger:     { label: 'Trigger',       icon: 'bolt',      cls: 't-trigger' },
+  tool:        { label: 'Tool',          icon: 'tool',      cls: 't-tool' },
+  script:      { label: 'Script',        icon: 'script',    cls: 't-script' },
+  agent:       { label: 'Agent',         icon: 'agent',     cls: 't-agent' },
+  retrieve:    { label: 'Retrieve',      icon: 'retrieve',  cls: 't-agent' },
+  condition:   { label: 'Condition',     icon: 'condition', cls: 't-condition' },
+  parallel:    { label: 'Parallel',      icon: 'parallel',  cls: 't-flow' },
+  loop:        { label: 'Loop',          icon: 'loop',      cls: 't-flow' },
+  subworkflow: { label: 'Subworkflow',   icon: 'sub',       cls: 't-flow' },
+  approval:    { label: 'Approval gate', icon: 'gate',      cls: 't-approval' },
+  report:      { label: 'Report',        icon: 'report',    cls: 't-report' },
+  notify:      { label: 'Notify',        icon: 'send',      cls: 't-notify' },
+};
+const COL = 270, ROW = 150, X0 = 110, Y0 = 70;
+let nodes = [
+  { id: 'pr',            type: 'tool',      sub: 'github.get-pull-request@1', col: 0, row: 1.5, desc: 'Read the pull request and its changed files from GitHub.', rows: { Tool: 'github.get-pull-request@1', Effect: 'read', Timeout: '30s' }, run: 'succeeded' },
+  { id: 'correctness',   type: 'agent',     sub: 'correctness-reviewer@1',    col: 1, row: 0,   desc: 'Look for bugs the change introduces.', rows: { Profile: 'correctness-reviewer@1', Executor: 'opencode', Workspace: 'refs/pull/{pr}/head', Budget: '10 tool calls', Timeout: '15m' }, run: 'succeeded' },
+  { id: 'security',      type: 'agent',     sub: 'security-reviewer@1',       col: 1, row: 1,   desc: 'Look for security problems in the change.', rows: { Profile: 'security-reviewer@1', Executor: 'opencode', Workspace: 'refs/pull/{pr}/head', Budget: '10 tool calls', Timeout: '15m' }, run: 'succeeded' },
+  { id: 'tests',         type: 'agent',     sub: 'tests-reviewer@1',          col: 1, row: 2,   desc: "Check the change's tests and style.", rows: { Profile: 'tests-reviewer@1', Executor: 'opencode', Workspace: 'refs/pull/{pr}/head', Budget: '10 tool calls', Timeout: '15m' }, run: 'succeeded' },
+  { id: 'quality',       type: 'agent',     sub: 'quality-reviewer@1',        col: 1, row: 3,   desc: "Check the change's code quality and maintainability.", rows: { Profile: 'quality-reviewer@1', Executor: 'opencode', Workspace: 'refs/pull/{pr}/head', Budget: '10 tool calls', Timeout: '15m' }, run: 'succeeded' },
+  { id: 'summarize',     type: 'agent',     sub: 'review-summarizer@1',       col: 2, row: 1.5, desc: 'Merge the findings into one review with a verdict and a comment body.', rows: { Profile: 'review-summarizer@1', Executor: 'opencode', 'Output schema': 'schemas/review.json', Budget: '2 tool calls', Timeout: '10m' }, run: 'succeeded' },
+  { id: 'report',        type: 'report',    sub: 'templates/review.md',       col: 3, row: 0,   desc: 'The review as a run artifact.', rows: { Template: 'templates/review.md' }, run: 'succeeded' },
+  { id: 'slack_message', type: 'report',    sub: 'templates/slack.md',        col: 3, row: 1,   desc: 'The short Slack message: verdict, summary and the findings.', rows: { Template: 'templates/slack.md' }, run: 'succeeded' },
+  { id: 'should_post',   type: 'condition', sub: 'post / skip',               col: 3, row: 2,   desc: 'Post the review unless this is a dry run (post set to false).', rows: { Routes: 'post, skip', Default: 'post' }, run: 'succeeded' },
+  { id: 'should_notify', type: 'condition', sub: 'notify / skip',             col: 3, row: 3,   desc: 'Tell Slack when the reviewers had comments, and only when posting.', rows: { Routes: 'notify, skip', Default: 'skip' }, run: 'succeeded' },
+  { id: 'post',          type: 'tool',      sub: 'github.comment-on-pr@1',    col: 4, row: 2,   desc: 'Post the review as a comment on the pull request.', rows: { Tool: 'github.comment-on-pr@1', Effect: 'write', Guard: 'args.repo == inputs.repo && args.number == inputs.pr' }, guard: true, run: 'succeeded' },
+  { id: 'notify',        type: 'notify',    sub: 'slack',                     col: 4, row: 3,   desc: 'Slack message with the verdict and the reviewers’ comments.', rows: { Channel: 'slack', Destination: 'config.channel', Guard: 'args.channel == config.channel' }, guard: true, run: 'succeeded' },
+];
+let edges = [
+  ['pr','correctness'],['pr','security'],['pr','tests'],['pr','quality'],
+  ['correctness','summarize'],['security','summarize'],['tests','summarize'],['quality','summarize'],
+  ['summarize','report'],['summarize','slack_message'],['summarize','should_post'],['summarize','should_notify'],
+  ['should_post','post','post'],['should_notify','notify','notify'],
+].map(([from,to,route]) => ({ from, to, route }));
+nodes.forEach(n => { n.x = X0 + n.col * COL; n.y = Y0 + n.row * ROW; });
+
+/* palette: Azhi's real step types plus the tools the examples use */
+const GROUPS = [
+  { name: 'Triggers', open: true, items: [
+    { type: 'trigger', title: 'Manual', desc: 'Start from the web app, CLI or API with the input form.' },
+    { type: 'trigger', title: 'Schedule', desc: 'Cron with an IANA timezone.', icon: 'clock' } ] },
+  { name: 'Flow control', open: true, items: [
+    { type: 'condition', title: 'Condition', desc: 'Route on a CEL expression.' },
+    { type: 'parallel', title: 'Parallel', desc: 'Run branches together, bounded.' },
+    { type: 'loop', title: 'Loop', desc: 'Repeat steps over a list or until done.' },
+    { type: 'subworkflow', title: 'Subworkflow', desc: 'Call another published workflow.' },
+    { type: 'approval', title: 'Approval gate', desc: 'Pause until a person decides.' } ] },
+  { name: 'Agents', open: true, items: [
+    { type: 'agent', title: 'Model agent', desc: 'Gateway-only tools, validated output, budgets.', sub: 'built-in' },
+    { type: 'agent', title: 'OpenCode agent', desc: 'Works in a fresh checkout of the repo.', sub: 'opencode' },
+    { type: 'retrieve', title: 'Retrieve', desc: 'Hybrid search over a dataset, with citations.' } ] },
+  { name: 'Tools', open: false, items: [
+    { type: 'tool', title: 'Get pull request', code: 'github.get-pull-request@1', desc: 'Read · GitHub', icon: 'github' },
+    { type: 'tool', title: 'Comment on PR', code: 'github.comment-on-pr@1', desc: 'Write · GitHub · guarded', icon: 'github' },
+    { type: 'tool', title: 'Get issue', code: 'github.get-issue@1', desc: 'Read · GitHub', icon: 'github' },
+    { type: 'tool', title: 'Create pull request', code: 'github.create-pull-request@1', desc: 'Write · GitHub · approval', icon: 'github' },
+    { type: 'tool', title: 'Get Jira issue', code: 'jira.get-issue@1', desc: 'Read · Jira', icon: 'ticket' },
+    { type: 'tool', title: 'List CI runs', code: 'ci.list-runs@1', desc: 'Read · CI', icon: 'ci' },
+    { type: 'tool', title: 'List open incidents', code: 'incidents.list-open@1', desc: 'Read · Incidents', icon: 'alert' } ] },
+  { name: 'Output', open: false, items: [
+    { type: 'report', title: 'Report', desc: 'Render a template into a run artifact.' },
+    { type: 'notify', title: 'Notify', desc: 'Send a Slack message, guarded.' },
+    { type: 'script', title: 'Script', desc: 'Python (uv) or Bun on a worker.' } ] },
+];
+
+/* ---------------------------------------------------------------------------------------------
+   Rendering
+   --------------------------------------------------------------------------------------------- */
+const $ = (s, r = document) => r.querySelector(s);
+const stage = $('#stage'), world = $('#world'), svg = $('#edges'), dots = $('#dots');
+const NW = 184, NH = 116;
+let view = { x: 0, y: 0, k: 1 };
+let selected = null, showStates = true, history = [];
+const el = {};
+const NS = 'http://www.w3.org/2000/svg';
+const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const byId = (id) => nodes.find(n => n.id === id);
+
+function applyView() {
+  world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.k})`;
+  dots.style.backgroundPosition = `${view.x}px ${view.y}px`;
+  dots.style.backgroundSize = `${24 * view.k}px ${24 * view.k}px`;
+  $('#pct').textContent = Math.round(view.k * 100) + '%';
+}
+function nodeEl(n) {
+  const t = TYPES[n.type];
+  const b = document.createElement('button');
+  b.className = `node ${t.cls}`; b.type = 'button'; b.dataset.id = n.id;
+  b.setAttribute('aria-label', `${n.id}, ${t.label}${n.sub ? ', ' + n.sub : ''}`);
+  b.innerHTML = `${n.guard ? `<span class="guard" title="Guard: write allowed only to the reviewed target">${icon('lock')}</span>` : ''}<span class="state"></span><span class="port in"></span><span class="ico">${icon(n.icon || t.icon)}</span><span class="name"></span><span class="sub"></span><span class="port out"></span><span class="add" title="Add a step after this one">${icon('plus')}</span>`;
+  $('.name', b).textContent = n.id; $('.sub', b).textContent = n.sub || t.label;
+  b.style.left = n.x + 'px'; b.style.top = n.y + 'px';
+  world.appendChild(b); el[n.id] = b; return b;
+}
+function paintStates() {
+  for (const n of nodes) {
+    const s = $('.state', el[n.id]);
+    s.className = 'state' + (showStates && n.run ? ' ' + n.run : '');
+    s.style.display = showStates && n.run ? '' : 'none';
+  }
+  svg.querySelectorAll('.edge').forEach(p => p.classList.toggle('run', false));
+}
+function edgeColor(e) { return `var(--${TYPES[byId(e.from).type].cls.slice(2) === 'flow' ? 'flow' : TYPES[byId(e.from).type].cls.slice(2)}-ink)`; }
+function drawEdges() {
+  svg.innerHTML = '';
+  world.querySelectorAll('.edge-btn, .edge-label').forEach(x => x.remove());
+  for (const e of edges) {
+    const a = byId(e.from), b = byId(e.to);
+    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+    const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`);
+    p.setAttribute('class', 'edge' + (e.route ? ' dashed' : ''));
+    p.style.stroke = edgeColor(e);
+    svg.appendChild(p);
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    const btn = document.createElement('button');
+    btn.className = 'edge-btn'; btn.type = 'button'; btn.style.left = mx + 'px'; btn.style.top = my + 'px';
+    btn.setAttribute('aria-label', `Edit connection ${e.from} to ${e.to}`); btn.dataset.tip = 'Edit connection';
+    btn.innerHTML = icon('edit');
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); toast(`${e.to} runs after ${e.from}${e.route ? ' on route “' + e.route + '”' : ''}`); });
+    world.appendChild(btn);
+    if (e.route) { const l = document.createElement('span'); l.className = 'edge-label'; l.textContent = e.route; l.style.left = mx + 'px'; l.style.top = my + 'px'; world.appendChild(l); }
+  }
+}
+function build() {
+  Object.values(el).forEach(x => x.remove()); for (const k in el) delete el[k];
+  nodes.forEach(nodeEl); drawEdges(); paintStates();
+  if (selected && el[selected]) el[selected].classList.add('selected');
+}
+function fit() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  const maxX = Math.max(...nodes.map(n => n.x + NW)), maxY = Math.max(...nodes.map(n => n.y + NH));
+  const minX = Math.min(...nodes.map(n => n.x)), minY = Math.min(...nodes.map(n => n.y));
+  const padL = w > 900 ? 140 : 30, padB = 130, padT = 100;
+  const k = Math.min(1, (w - padL - 40) / (maxX - minX), (h - padB - padT) / (maxY - minY));
+  view.k = Math.max(.35, k);
+  view.x = padL + ((w - padL - 40) - (maxX - minX) * view.k) / 2 - minX * view.k;
+  view.y = padT + ((h - padB - padT) - (maxY - minY) * view.k) / 2 - minY * view.k;
+  applyView();
+}
+
+/* pan, zoom, drag */
+let drag = null;
+stage.addEventListener('pointerdown', (ev) => {
+  if (ev.target.closest('.float, .edge-btn, .add')) return;
+  const nd = ev.target.closest('.node');
+  stage.setPointerCapture(ev.pointerId);
+  if (nd) { const n = byId(nd.dataset.id); drag = { kind: 'node', n, sx: ev.clientX, sy: ev.clientY, ox: n.x, oy: n.y, moved: false }; }
+  else { drag = { kind: 'pan', sx: ev.clientX, sy: ev.clientY, ox: view.x, oy: view.y }; stage.classList.add('panning'); select(null); }
+});
+stage.addEventListener('pointermove', (ev) => {
+  if (!drag) return;
+  const dx = ev.clientX - drag.sx, dy = ev.clientY - drag.sy;
+  if (drag.kind === 'pan') { view.x = drag.ox + dx; view.y = drag.oy + dy; applyView(); return; }
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!drag.moved) pushHistory();
+  drag.moved = true; el[drag.n.id].classList.add('dragging');
+  drag.n.x = drag.ox + dx / view.k; drag.n.y = drag.oy + dy / view.k;
+  el[drag.n.id].style.left = drag.n.x + 'px'; el[drag.n.id].style.top = drag.n.y + 'px'; drawEdges();
+});
+stage.addEventListener('pointerup', () => {
+  if (drag?.kind === 'node') { el[drag.n.id].classList.remove('dragging'); if (!drag.moved) select(drag.n.id); }
+  drag = null; stage.classList.remove('panning');
+});
+stage.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  if (ev.ctrlKey || ev.metaKey) zoomAt(ev.clientX, ev.clientY, Math.exp(-ev.deltaY * .01));
+  else { view.x -= ev.deltaX; view.y -= ev.deltaY; applyView(); }
+}, { passive: false });
+function zoomAt(cx, cy, f) {
+  const r = stage.getBoundingClientRect(), px = cx - r.left, py = cy - r.top;
+  const k = Math.min(2, Math.max(.3, view.k * f)), s = k / view.k;
+  view.x = px - (px - view.x) * s; view.y = py - (py - view.y) * s; view.k = k; applyView();
+}
+const mid = () => { const r = stage.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+$('#zin').onclick = () => zoomAt(...mid(), 1.2);
+$('#zout').onclick = () => zoomAt(...mid(), 1 / 1.2);
+stage.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' || ev.key === ' ') { const nd = ev.target.closest('.node'); if (nd) { select(nd.dataset.id); ev.preventDefault(); } }
+});
+world.addEventListener('click', (ev) => { const a = ev.target.closest('.add'); if (a) { const id = a.closest('.node').dataset.id; addNode({ type: 'tool', title: 'New step' }, id); } });
+
+/* selection and inspector */
+function select(id) {
+  if (selected && el[selected]) el[selected].classList.remove('selected');
+  selected = id; if (id) el[id].classList.add('selected');
+  renderInspector(); tab(id ? 'insp' : 'steps');
+}
+function tab(which) {
+  const insp = which === 'insp';
+  $('#tab-steps').setAttribute('aria-selected', String(!insp)); $('#tab-insp').setAttribute('aria-selected', String(insp));
+  $('#p-steps').hidden = insp; $('#p-insp').hidden = !insp;
+}
+$('#tab-steps').onclick = () => tab('steps'); $('#tab-insp').onclick = () => tab('insp');
+function renderInspector() {
+  const box = $('#p-insp');
+  const n = byId(selected);
+  if (!n) { box.innerHTML = `<p class="empty">Select a step on the canvas to see its settings.</p>`; return; }
+  const t = TYPES[n.type];
+  box.innerHTML = `
+    <div class="insp-head ${t.cls}"><span class="bub">${icon(n.icon || t.icon)}</span><div><h2></h2><p></p></div></div>
+    <div class="card"><dl id="rows"></dl></div>
+    <div class="card"><dl>
+      <div class="r"><dt>Runs after</dt><dd id="after"></dd></div>
+      <div class="r"><dt>Last run</dt><dd id="last"></dd></div>
+    </dl></div>
+    <div class="btns"><button class="btn primary" type="button" id="test">Test this step</button><button class="btn" type="button" id="dup">Duplicate</button><button class="btn danger" type="button" id="del">Delete</button></div>
+    <p class="hint">Test runs use fixtures and mock writes, as <code>azhi test-node</code> does.</p>`;
+  $('h2', box).textContent = n.id; $('.insp-head p', box).textContent = n.desc || t.label;
+  const dl = $('#rows', box); const entries = Object.entries(n.rows || {});
+  if (!entries.length) entries.push(['Settings', 'none yet']);
+  for (const [k, v] of entries) { const r = document.createElement('div'); r.className = 'r'; r.innerHTML = '<dt></dt><dd></dd>'; $('dt', r).textContent = k; $('dd', r).textContent = v; dl.appendChild(r); }
+  $('#after', box).textContent = edges.filter(e => e.to === n.id).map(e => e.from).join(', ') || 'start';
+  $('#last', box).textContent = n.run ? `${n.run}` : 'not run';
+  $('#test', box).onclick = () => toast(`Testing ${n.id} on fixtures (writes mocked)…`);
+  $('#dup', box).onclick = () => addNode({ type: n.type, title: n.id + '_copy', sub: n.sub });
+  $('#del', box).onclick = () => { pushHistory(); nodes = nodes.filter(x => x !== n); edges = edges.filter(e => e.from !== n.id && e.to !== n.id); selected = null; build(); renderInspector(); tab('steps'); toast(`Deleted ${n.id}`); };
+}
+
+/* palette */
+function renderPalette(filter = '') {
+  const q = filter.trim().toLowerCase(); const box = $('#p-steps'); box.innerHTML = '';
+  let any = false;
+  for (const g of GROUPS) {
+    const items = g.items.filter(i => !q || (i.title + ' ' + (i.code || '') + ' ' + i.desc + ' ' + g.name).toLowerCase().includes(q));
+    if (!items.length) continue; any = true;
+    const d = document.createElement('details'); d.className = 'grp'; d.open = q ? true : g.open;
+    d.innerHTML = `<summary>${icon('chev')}<span>${g.name}</span><span class="n">${items.length}</span></summary>`;
+    for (const it of items) {
+      const t = TYPES[it.type];
+      const b = document.createElement('button'); b.type = 'button'; b.className = `item ${t.cls}`;
+      b.innerHTML = `<span class="bub">${icon(it.icon || t.icon)}</span><span><span class="t"></span><span class="d"></span></span>`;
+      $('.t', b).textContent = it.title; $('.d', b).textContent = it.code ? it.code + ' · ' + it.desc : it.desc;
+      b.onclick = () => addNode(it); d.appendChild(b);
+    }
+    box.appendChild(d);
+  }
+  if (!any) box.innerHTML = `<p class="empty">No steps match “${q.replace(/[<>&]/g, '')}”.<br>Try a tool id such as <code>github</code> or a step type.</p>`;
+}
+$('#q').addEventListener('input', (e) => { renderPalette(e.target.value); tab('steps'); });
+
+function addNode(item, after) {
+  pushHistory();
+  const r = stage.getBoundingClientRect(); const type = TYPES[item.type] ? item.type : 'tool';
+  const base = after ? byId(after) : null;
+  let id = (item.code ? item.code.split('.')[1].split('@')[0].replace(/-/g, '_') : item.title.toLowerCase().replace(/[^a-z0-9]+/g, '_')); const root = id; let i = 2;
+  while (byId(id)) id = root + '_' + i++;
+  const n = { id, type, icon: item.icon, sub: item.code || item.sub || TYPES[type].label, desc: item.desc || '', rows: item.code ? { Tool: item.code } : {},
+    x: base ? base.x + COL : (r.width / 2 - view.x) / view.k - NW / 2 + (nodes.length % 4) * 14, y: base ? base.y + NH + 24 : (r.height / 2 - view.y) / view.k - NH / 2 + (nodes.length % 4) * 14 };
+  nodes.push(n); if (base) edges.push({ from: base.id, to: id });
+  build(); select(id); toast(`Added ${id}. Drag it into place.`);
+}
+document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => {
+  const [type, code] = b.dataset.add.split(':'); const hit = GROUPS.flatMap(g => g.items).find(i => code ? i.code === code : i.type === type);
+  addNode(hit || { type, title: type });
+  $('#side').classList.add('open');
+});
+
+/* history, align, states, run, theme */
+function pushHistory() { history.push(JSON.stringify({ nodes, edges })); if (history.length > 30) history.shift(); }
+function undo() { const s = history.pop(); if (!s) return toast('Nothing to undo'); ({ nodes, edges } = JSON.parse(s)); selected = null; build(); renderInspector(); }
+$('#undo').onclick = undo;
+$('#align').onclick = () => { pushHistory(); nodes.forEach(n => { if (n.col !== undefined) { n.x = X0 + n.col * COL; n.y = Y0 + n.row * ROW; } }); build(); fit(); toast('Aligned'); };
+$('#states').onclick = (e) => { showStates = !showStates; e.currentTarget.classList.toggle('on', showStates); paintStates(); toast(showStates ? 'Showing the last run' : 'Hiding run states'); };
+$('#states').classList.add('on');
+$('#save').onclick = () => toast('Draft saved (mock)');
+$('#run').onclick = async () => {
+  const order = ['pr','correctness','security','tests','quality','summarize','report','slack_message','should_post','should_notify','post','notify'];
+  showStates = true; nodes.forEach(n => n.run = undefined); paintStates();
+  $('#runmeta').textContent = 'Running…';
+  for (const id of order) { const n = byId(id); if (!n) continue; n.run = 'running'; paintStates(); svg.querySelectorAll('.edge').forEach(p => p.classList.add('run')); await new Promise(r => setTimeout(r, matchMedia('(prefers-reduced-motion: reduce)').matches ? 20 : 280)); n.run = id === 'should_notify' ? 'succeeded' : 'succeeded'; paintStates(); }
+  svg.querySelectorAll('.edge').forEach(p => p.classList.remove('run'));
+  $('#runmeta').textContent = 'Just now · succeeded · $0.41'; toast('Run succeeded (mock)');
+};
+$('#theme').onclick = () => { const r = document.documentElement; const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme = dark ? 'light' : 'dark'; build(); };
+$('#sheet').onclick = () => $('#side').classList.toggle('open');
+addEventListener('keydown', (e) => {
+  if (e.target.matches('input')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
+  if (e.key === 'r') $('#run').click();
+  if (e.key === 'Escape') { select(null); $('#side').classList.remove('open'); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected) $('#del')?.click();
+});
+
+/* tooltips (icon-only controls carry a label and a tooltip) and toast */
+const tip = $('#tip');
+document.addEventListener('pointerover', (e) => {
+  const t = e.target.closest('[data-tip]'); if (!t) return tip.classList.remove('show');
+  tip.textContent = t.dataset.tip; const r = t.getBoundingClientRect(); tip.classList.add('show');
+  const left = r.left + r.width / 2 - tip.offsetWidth / 2, rail = t.closest('.rail');
+  tip.style.left = (rail ? r.right + 8 : Math.max(8, left)) + 'px'; tip.style.top = (rail ? r.top + r.height / 2 - tip.offsetHeight / 2 : r.top - tip.offsetHeight - 8) + 'px';
+});
+let tt; function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), 2200); }
+
+renderPalette(); renderInspector(); build(); fit();
+addEventListener('resize', fit);
+</script>
+</body>
+</html>
