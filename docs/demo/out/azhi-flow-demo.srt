@@ -1,119 +1,119 @@
 1
-00:00:00,442 --> 00:00:06,656
+00:00:00,535 --> 00:00:06,138
 Azhi Flow: governed, durable agent workflows that say plainly what they can and cannot guarantee.
 
 2
-00:00:06,656 --> 00:00:09,739
+00:00:06,138 --> 00:00:08,616
 Agents die halfway.
 
 3
-00:00:09,739 --> 00:00:12,826
+00:00:08,616 --> 00:00:11,097
 Retries post twice.
 
 4
-00:00:12,826 --> 00:00:16,990
+00:00:11,097 --> 00:00:14,654
 Nobody can say what it cost, or what it was allowed to do.
 
 5
-00:00:16,990 --> 00:00:21,495
+00:00:14,654 --> 00:00:19,438
 Azhi starts from the workflow, not the agent.
 
 6
-00:00:21,495 --> 00:00:25,819
+00:00:19,438 --> 00:00:23,841
 One screen for what is running, what needs you, and what it cost.
 
 7
-00:00:25,819 --> 00:00:29,822
+00:00:23,841 --> 00:00:27,976
 Spend is measured, never guessed.
 
 8
-00:00:29,822 --> 00:00:36,297
+00:00:27,976 --> 00:00:33,976
 Risky steps wait for a person.
 
 9
-00:00:36,522 --> 00:00:39,358
+00:00:34,711 --> 00:00:37,543
 A workflow of nodes. An agent is just one kind.
 
 10
-00:00:39,358 --> 00:00:43,114
+00:00:37,543 --> 00:00:41,267
 Only these five steps call a model.
 
 11
-00:00:43,114 --> 00:00:48,866
+00:00:41,267 --> 00:00:47,011
 Fetch, route, report and post are plain code: zero tokens.
 
 12
-00:00:48,866 --> 00:00:55,341
+00:00:47,011 --> 00:00:53,011
 Select a step to read what it does and every setting.
 
 13
-00:00:55,395 --> 00:00:59,923
+00:00:53,531 --> 00:00:58,188
 Edit on the canvas. The server compiles and plans every change.
 
 14
-00:00:59,923 --> 00:01:06,398
+00:00:58,188 --> 00:01:04,188
 Per-agent harness: executor, prompt, skills, read-only tools, MCP server and budget.
 
 15
-00:01:11,575 --> 00:01:17,829
+00:01:09,903 --> 00:01:15,903
 Add a step from the palette. Tools come from the catalog.
 
 16
-00:01:17,829 --> 00:01:24,304
+00:01:16,350 --> 00:01:22,350
 Taint rule: a write after an agent that read untrusted code will not compile without a guard.
 
 17
-00:01:29,535 --> 00:01:36,010
+00:01:28,239 --> 00:01:34,239
 Pin the write to the reviewed pull request. It compiles with no blockers.
 
 18
-00:01:38,559 --> 00:01:42,416
+00:01:37,295 --> 00:01:41,249
 What it saw, what it was allowed to do, what it did, and what it cost.
 
 19
-00:01:42,416 --> 00:01:48,891
+00:01:41,249 --> 00:01:47,249
 Replay the run, step by step.
 
 20
-00:01:51,893 --> 00:01:58,203
+00:01:50,564 --> 00:01:56,564
 Action ledger: every external write with receipts. Exactly once, even after a crash.
 
 21
-00:01:58,203 --> 00:02:04,488
+00:01:56,893 --> 00:02:02,893
 Policy coverage: what Azhi enforces itself, and what it only trusts the harness for.
 
 22
-00:02:04,488 --> 00:02:10,852
+00:02:03,310 --> 00:02:09,310
 Context manifest: every source the model saw, with hashes. Untrusted data is flagged.
 
 23
-00:02:10,852 --> 00:02:17,327
+00:02:09,616 --> 00:02:15,616
 Cost per step: nine model calls, thirty-one cents, usage known for one hundred percent.
 
 24
-00:02:17,808 --> 00:02:24,283
+00:02:16,618 --> 00:02:22,618
 Approvals carry the payload and who may decide. The decision is kept in the ledger.
 
 25
-00:02:27,003 --> 00:02:32,189
+00:02:25,839 --> 00:02:31,013
 Spend per day and per workflow: tokens in, tokens out and dollars.
 
 26
-00:02:32,189 --> 00:02:36,940
+00:02:31,013 --> 00:02:35,753
 Spend limits per workflow, per day or month. At the limit new runs are refused.
 
 27
-00:02:36,940 --> 00:02:40,185
+00:02:35,753 --> 00:02:38,990
 Unpriced turns show as unknown, never as zero.
 
 28
-00:02:40,185 --> 00:02:46,660
+00:02:38,990 --> 00:02:44,990
 How Azhi saves tokens: no model for steps that do not need one, projected tool output, top_k retrieval, per-step budgets, heavy harness only where needed, and prompt caching.
 
 29
-00:02:53,208 --> 00:02:59,683
+00:02:51,379 --> 00:02:57,379
 What Azhi does that agent runners do not: run plan, taint gate, exactly-once writes, context manifest, durable runs, and your choice of harness with signed packages.
 
 30
-00:03:07,849 --> 00:03:14,324
-Try it: azhi init, azhi up. Self-hosted. github.com/surr-jc/azhi-flow
+00:03:05,381 --> 00:03:11,381
+Try it: azhi init, azhi up. Self-hosted and open source: https://github.com/comcast-enterprise/azhi-flow
