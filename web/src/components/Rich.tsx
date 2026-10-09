@@ -59,6 +59,7 @@ export const fieldLabel = (k: string) => {
 const isScalar = (v: unknown) => v === null || v === undefined || ['string', 'number', 'boolean'].includes(typeof v);
 const scalar = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
 const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+const STATUS_TONE: Record<string, string> = { pass: 'ok', passed: 'ok', ok: 'ok', fail: 'bad', failed: 'bad', error: 'bad', warn: 'warn', warning: 'warn' };
 const looksLikeId = (s: string) => /^\S+$/.test(s) && s.length < 80 && !/[*_`#[]/.test(s);
 
 /**
@@ -71,6 +72,8 @@ export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boo
     const parsed = depth < 6 ? parseJsonText(value) : undefined;
     if (parsed !== undefined && typeof parsed === 'object' && parsed !== null) return <Value value={parsed} plain={plain} depth={depth + 1} />;
     if (!value.trim()) return <span className="muted">empty</span>;
+    const pill = STATUS_TONE[value.trim().toLowerCase()];
+    if (pill) return <span className={`v-pill ${pill}`}>{value.trim()}</span>;
     if (plain) return value.includes('\n') || value.length > 120 ? <pre className="json">{value}</pre> : <span className="mono">{value}</span>;
     if (looksLikeId(value)) return <span className={/[/.:]/.test(value) ? 'mono' : undefined}>{value}</span>;
     return <Markdown text={value} inline={!value.includes('\n') && value.length < 200} />;
@@ -93,7 +96,7 @@ export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boo
       );
     }
     return (
-      <ol className="v-items">
+      <ol className={value.every(isRecord) ? 'v-items v-cards' : 'v-items'}>
         {value.map((v, i) => <li key={i}><Value value={v} plain={plain} depth={depth + 1} /></li>)}
       </ol>
     );
@@ -104,8 +107,9 @@ export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boo
     <dl className={`v-fields ${depth ? 'nested' : ''}`}>
       {entries.map(([k, v]) => {
         const big = !isScalar(v) && depth >= 2;
+        const block = !isScalar(v) || (typeof v === 'string' && (v.length > 90 || v.includes('\n')));
         return (
-          <div key={k} className="v-field">
+          <div key={k} className={block ? 'v-field block' : 'v-field'}>
             <dt>{fieldLabel(k)}</dt>
             <dd>
               {big ? (
