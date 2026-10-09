@@ -462,6 +462,13 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .transcript { display: flex; flex-direction: column; gap: 8px; }
 .tx { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel); min-width: 0; }
 .tx > summary { cursor: pointer; overflow-wrap: anywhere; }
+/* tool call header: name and status, a one-line argument preview that truncates, time pinned right */
+.tx-tool > summary { display: flex; align-items: baseline; gap: 8px; min-height: 28px; }
+.tx-tool > summary > .muted.small:not(.tx-time) { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-tool > summary > .tx-time { float: none; margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+.tx-tool > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.tx-tool[open] > summary { padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tx-tool .tx-label { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; margin-top: 10px; }
 .tx-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .tx-head .muted:last-child, .tx-time { margin-left: auto; float: right; }
 .tx-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
@@ -624,6 +631,8 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 640px) {
   .v-fields { grid-template-columns: minmax(0, 1fr); }
   .v-field > dt { border-bottom: 0; padding-bottom: 0; }
+  .v-cards > li { padding-left: 12px; padding-top: 34px; }
+  .v-cards > li > .v-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---- workflow workbench: settings dock, canvas, step drawer, popups ---- */
