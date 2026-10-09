@@ -232,9 +232,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const [level, setLevel] = useState<CardDetail>(() => {
     try {
       const v = localStorage.getItem(DETAIL_KEY);
-      return v === 'names' || v === 'all' ? v : 'key';
+      return v === 'key' || v === 'all' ? v : 'names';
     } catch {
-      return 'key';
+      return 'names';
     }
   });
   const pickLevel = (v: CardDetail) => {
@@ -306,7 +306,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     const right = inset && el.clientWidth > 860 ? inset.right : 0;
     const bottom = (inset?.bottom ?? 0) + (toolbar ? 200 : 0);
     const fit = Math.min((el.clientWidth - right - 48) / gw, (el.clientHeight - bottom - 48) / gh, 1.1);
-    if (fit >= 0.72) return void f.fitView({ padding: right || bottom ? { top: '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
+    if (fit >= 0.5) return void f.fitView({ padding: right || bottom ? { top: '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
     const zoom = Math.max(0.72, Math.min(0.9, (el.clientHeight - 48) / gh));
     const at = focus ? pos[focus]! : { x: 0, y: gh / 2 - H / 2 };
     const x = focus ? (el.clientWidth - right) / 2 - (at.x + W / 2) * zoom : 24;

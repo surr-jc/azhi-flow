@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, atLeast, type PreflightReport, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
 import { PublishAction } from './Authoring';
 import { useMe } from '../App';
+import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
 import { RunTable } from './Overview';
@@ -84,74 +85,81 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const lastLabel = runs.data?.[0] ? `#${runs.data[0].id.slice(-8)}` : undefined;
   const data: SettingsData = { slug, version: current, def, nodes: nodes ?? [], plan: plan.data, tools: toolList, role: me.data?.role, schedule: schedules.data?.find((s) => s.workflow === slug), schedulesLoaded: Boolean(schedules.data), hasPublished: versions.data.some((v) => !v.draft), assets: portableAssets.data };
   const blockers = plan.data?.blockers.length ?? 0;
+  const canAuthor = atLeast(me.data?.role, 'author');
+  const lastRunRow = runs.data?.[0];
+  const update = examples.data?.find((x) => x.workflow === slug && x.update?.available);
+  const showStep = Boolean(step && nodes);
   return (
     <>
-      <PageHead
-        title={def?.name ?? slug}
-        sub={def?.description ?? (def?.name && def.name !== slug ? <span className="mono">{slug}</span> : undefined)}
-        actions={
-          <div className="row">
-            <Badge tone={current.draft ? 'idle' : 'ok'}>{current.draft ? 'draft' : 'published'}</Badge>
-            {plan.data ? (blockers ? <Badge tone="bad">{blockers} blocker{blockers === 1 ? '' : 's'}</Badge> : <Badge tone="ok">ready to run</Badge>) : null}
-            {plan.data ? <Badge tone={plan.data.signer.verified ? 'ok' : 'warn'}>{plan.data.signer.verified ? 'signed' : 'not signed'}</Badge> : null}
-            <select aria-label="Version" value={current.id} onChange={(e) => { setPicked(e.target.value); setSelected(null); }}>
-              {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
-            </select>
-            {atLeast(me.data?.role, 'author') ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="button">Edit</Link> : null}
-            {atLeast(me.data?.role, 'author') ? <PublishAction version={current} slug={slug} /> : null}
-            {atLeast(me.data?.role, 'operator') ? <button type="button" className="primary" onClick={() => setStarting(true)}>Run…</button> : null}
-          </div>
-        }
-      />
-      {(() => {
-        const ex = examples.data?.find((x) => x.workflow === slug && x.update?.available);
-        return ex ? (
-          <div className="update-note" role="status">
-            <b>The marketplace has an update for this workflow.</b> Your changes stay; new steps and settings are loaded.{' '}
-            <Link to={`/ui/examples/${encodeURIComponent(ex.id)}`}>Review the update</Link>
-          </div>
-        ) : null;
-      })()}
-      <div className={`workbench${step ? ' with-step' : ''}`}>
-        <SettingsDock data={data} collapsed={Boolean(step)} active={section ?? undefined} onOpen={setSection} />
-        <div className="wb-canvas">
-          <div className="wb-modebar">
-            <div className="seg" role="group" aria-label="Show">
-              <button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}>Plan</button>
-              <button type="button" aria-pressed={mode === 'run'} disabled={!lastId} onClick={() => setMode('run')} title={lastId ? undefined : 'This workflow has not run yet'}>Last run{lastLabel ? ` · ${lastLabel}` : ''}</button>
-            </div>
-            {mode === 'plan' ? (
-              <div className="seg" role="group" aria-label="Lens">
-                {LENSES.map((l) => <button key={l.id} type="button" aria-pressed={lens === l.id} title={l.hint} onClick={() => setLens(l.id)}>{l.label}</button>)}
+      <div className="ed-shell">
+        <div className="ed-stage">
+          {nodes ? (
+            <WorkflowCanvas height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
+              <div className="ed-title">
+                <h1>{def?.name ?? slug}</h1>
+                <span className="pill">v{current.version}{current.draft ? ' draft' : ''}</span>
+                {plan.data ? <span className={`pill ${blockers ? 'bad' : 'ok'}`} title={blockers ? plan.data.blockers[0]!.message : 'The run plan compiles and every step can run.'}>{blockers ? `${blockers} blocker${blockers === 1 ? '' : 's'}` : 'ready to run'}</span> : null}
+                {plan.data ? <span className={`pill ${plan.data.signer.verified ? 'ok' : 'warn'}`}>{plan.data.signer.verified ? 'signed' : 'not signed'}</span> : null}
               </div>
-            ) : null}
-            <span className="muted small">{mode === 'run' ? 'Each step shows what happened in the latest run.' : lens === 'flow' ? 'Select a step to read what it does and every setting.' : LENSES.find((l) => l.id === lens)!.hint}</span>
-          </div>
-          {nodes ? <WorkflowCanvas nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined} /> : <Loading />}
-          {mode === 'plan' && lens !== 'flow' && nodes ? (
-            <div className="lens-cards" aria-label={`${lens} summary`}>
-              {lensSummary(lens, nodes, { tools: toolList, missing }).map((c) => (
-                <div key={c.title} className={`lens-card${c.tone ? ` ${c.tone}` : ''}`}>
-                  <span className="label">{c.title}</span>
-                  {c.lines.map((l) => <p key={l} className="small">{l}</p>)}
+              <div className="ed-modes">
+                <div className="seg" role="group" aria-label="Show">
+                  <button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}>Plan</button>
+                  <button type="button" aria-pressed={mode === 'run'} disabled={!lastId} onClick={() => setMode('run')} title={lastId ? undefined : 'This workflow has not run yet'}>Last run{lastLabel ? ` · ${lastLabel}` : ''}</button>
                 </div>
-              ))}
-            </div>
-          ) : null}
-          {plan.data ? (
-            <div className="runplan-strip">
-              <Badge tone={blockers ? 'bad' : 'ok'}>{blockers ? `${blockers} blocker${blockers === 1 ? '' : 's'}` : '0 blockers'}</Badge>
-              <span className="muted small">{blockers ? plan.data.blockers[0]!.message : 'The run plan compiles and every step can run.'}</span>
-              <a className="small" href="#run-plan" style={{ marginLeft: 'auto' }}>View run plan</a>
-            </div>
-          ) : null}
+                {mode === 'plan' ? (
+                  <div className="seg" role="group" aria-label="Lens">
+                    {LENSES.map((l) => <button key={l.id} type="button" aria-pressed={lens === l.id} title={l.hint} onClick={() => setLens(l.id)}>{l.label}</button>)}
+                  </div>
+                ) : null}
+              </div>
+              {update ? (
+                <div className="ed-alerts update-note" role="status">
+                  <span><b>The marketplace has an update.</b> Your changes stay; new steps and settings are loaded.</span>{' '}
+                  <Link to={`/ui/examples/${encodeURIComponent(update.id)}`}>Review the update</Link>
+                </div>
+              ) : null}
+              {atLeast(me.data?.role, 'operator') ? (
+                <div className="ed-runbar">
+                  <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Run…" title="Start a run"><Icon name="play" size={22} /></button>
+                  <span className="txt"><b>Run…</b><span className="muted small">{lastRunRow ? <>Last run {ago(lastRunRow.created_at)} · {lastRunRow.state.replaceAll('_', ' ')}</> : 'Not run yet'}</span></span>
+                </div>
+              ) : null}
+              <div className="ed-toolbar" role="toolbar" aria-label="Workflow">
+                <select aria-label="Version" value={current.id} onChange={(e) => { setPicked(e.target.value); setSelected(null); }}>
+                  {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
+                </select>
+                {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" title="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
+                {canAuthor ? <PublishAction version={current} slug={slug} /> : null}
+                <a className="tb-btn" href="#run-plan" title="View the run plan" aria-label="View the run plan"><Icon name="approval" /></a>
+              </div>
+            </WorkflowCanvas>
+          ) : <Loading />}
         </div>
-        {step && nodes ? (
-          <aside className="wb-drawer">
-            <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setSelected(null)} onExpand={() => setExpanded(true)} />
-          </aside>
-        ) : null}
+        <aside className="ed-panel" aria-label="Settings and step">
+          <div className="ed-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={!showStep} onClick={() => setSelected(null)}>Workflow</button>
+            <button type="button" role="tab" aria-selected={showStep} disabled={!showStep}>{step ? step.id : 'Step'}</button>
+          </div>
+          {showStep && nodes && step ? (
+            <div className="ed-side wb-drawer">
+              <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setSelected(null)} onExpand={() => setExpanded(true)} />
+            </div>
+          ) : (
+            <div className="ed-side"><SettingsDock data={data} collapsed={false} active={section ?? undefined} onOpen={setSection} /></div>
+          )}
+        </aside>
       </div>
+      <div className="ed-below">
+      {mode === 'plan' && lens !== 'flow' && nodes ? (
+        <div className="lens-cards" aria-label={`${lens} summary`}>
+          {lensSummary(lens, nodes, { tools: toolList, missing }).map((c) => (
+            <div key={c.title} className={`lens-card${c.tone ? ` ${c.tone}` : ''}`}>
+              <span className="label">{c.title}</span>
+              {c.lines.map((l) => <p key={l} className="small">{l}</p>)}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {section ? (
         <Popup title="Workflow settings" sub={`${def?.name ?? slug} · v${current.version}`} onClose={() => setSection(null)} footer={<span className="muted small">Changes apply to the next run. A run that has started keeps the version it began with.</span>}>
           <SettingsBody data={data} section={section} onSection={setSection} onClose={() => setSection(null)} />
@@ -172,6 +180,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
       <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>
         {runs.data ? <RunTable runs={runs.data} /> : <Loading />}
       </Panel>
+      </div>
     </>
   );
 }

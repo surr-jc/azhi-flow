@@ -841,3 +841,20 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
   .ed-stage .react-flow__panel.top.left, .ed-stage .wf-detailbar, .ed-check-float .ed-diags { display: none; }
   .ed-check-float { bottom: 80px; }
 }
+
+/* workflow page shares the editor's full-screen layout */
+.ed-modes { position: absolute; top: 14px; right: 12px; z-index: 6; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; max-width: 46%; }
+.ed-stage .ed-modes ~ * { }
+.ed-stage .wf-detailbar { top: 58px; }
+.ed-stage .wf-legend { position: absolute; z-index: 5; left: 86px; bottom: 82px; margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px; }
+.ed-stage .update-note { top: 64px; left: 14px; border-radius: 22px; margin: 0; }
+.ed-runbar { position: absolute; left: 14px; bottom: 14px; z-index: 6; display: flex; align-items: center; gap: 12px; }
+.ed-runbar .txt { display: grid; line-height: 1.25; }
+.run-btn { width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--ink); color: var(--bg); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; }
+.run-btn:hover { filter: brightness(1.15); }
+.ed-toolbar select { height: 40px; border-radius: 999px; border: 0; background: var(--idle-bg); padding: 0 12px; font-weight: 600; }
+.ed-toolbar > button:not(.tb-btn):not(.tb-save), .ed-toolbar > .button { border-radius: 999px; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
+.ed-side .dock { border: 0; background: transparent; }
+.ed-side.wb-drawer { border: 0; max-height: none; }
+@media (max-width: 900px) { .ed-modes { position: static; display: none; } .ed-stage .wf-legend { display: none; } .ed-runbar .txt { display: none; } .ed-stage .update-note { display: none; } }
