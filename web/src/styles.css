@@ -237,9 +237,18 @@ label.button:hover { border-color: var(--idle); }
 label.button:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .files { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 16px; margin-top: 10px; }
-.file-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
-.file-list li { padding: 3px 0; overflow-wrap: anywhere; }
-.file-list .current { font-weight: 600; color: var(--ink); }
+.file-list { font-size: 13px; max-height: 560px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.file-list ul { list-style: none; margin: 0; padding: 0; }
+.file-count { padding: 2px 8px 6px; }
+.file-dir { margin: 10px 0 2px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--idle); overflow-wrap: anywhere; }
+.file-item { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; padding: 4px 8px; border-radius: 4px; text-align: left; }
+.file-item:hover { background: var(--bg); }
+.file-item .file-name { overflow-wrap: anywhere; }
+.file-item .file-size { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.file-list .current { font-weight: 600; color: var(--ink); background: var(--bg); }
+.file-view { min-width: 0; }
+.file-head { padding: 6px 10px; border: 1px solid var(--line); border-bottom: 0; border-radius: 6px 6px 0 0; background: var(--bg); }
+.file-view .code { margin-top: 0; max-height: 560px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .publish { margin-top: 12px; }
 textarea.full { width: 100%; }
 details.panel > summary { font-weight: 600; }

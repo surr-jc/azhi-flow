@@ -13,25 +13,43 @@ import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFiel
 
 interface SourceFile { path: string; size: number; text?: string }
 
+const formatSize = (n: number) => (n >= 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} B`);
+
 export function WorkflowFiles({ versionId }: { versionId: string }) {
   const q = useQuery({ queryKey: ['source', versionId], queryFn: () => api<{ workflow: string; files: SourceFile[] }>(`/v1/versions/${versionId}/source`), staleTime: Infinity });
   const [open, setOpen] = useState<string>();
   if (q.error) return <ErrorNote error={q.error} />;
   if (!q.data) return <Loading />;
   const shown = q.data.files.find((f) => f.path === (open ?? q.data.workflow));
+  const groups = new Map<string, SourceFile[]>();
+  for (const f of [...q.data.files].sort((a, b) => a.path.localeCompare(b.path))) {
+    const i = f.path.lastIndexOf('/');
+    const dir = i < 0 ? '' : f.path.slice(0, i);
+    groups.set(dir, [...(groups.get(dir) ?? []), f]);
+  }
+  const dirs = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)));
   return (
     <div className="files">
-      <ul className="file-list" aria-label="Package files">
-        {q.data.files.map((f) => (
-          <li key={f.path}>
-            <button type="button" className={`linkish ${f.path === shown?.path ? 'current' : ''}`} onClick={() => setOpen(f.path)} aria-current={f.path === shown?.path}>
-              {f.path}
-            </button>{' '}
-            <span className="muted small">{f.size.toLocaleString()} B</span>
-          </li>
+      <nav className="file-list" aria-label="Package files">
+        <div className="file-count muted small">{q.data.files.length} files</div>
+        {dirs.map((dir) => (
+          <section key={dir} className="file-group">
+            {dir ? <h4 className="file-dir mono">{dir}/</h4> : null}
+            <ul>
+              {groups.get(dir)!.map((f) => (
+                <li key={f.path}>
+                  <button type="button" aria-label={f.path} title={f.path} className={`linkish file-item ${f.path === shown?.path ? 'current' : ''}`} onClick={() => setOpen(f.path)} aria-current={f.path === shown?.path}>
+                    <span className="file-name">{f.path.slice(dir ? dir.length + 1 : 0)}</span>
+                    <span className="file-size muted small">{formatSize(f.size)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
         ))}
-      </ul>
+      </nav>
       <div className="file-view">
+        {shown ? <div className="file-head mono small">{shown.path} <span className="muted">· {formatSize(shown.size)}</span></div> : null}
         {shown ? (shown.text !== undefined ? <pre className="code" aria-label={`Contents of ${shown.path}`}>{shown.text}</pre> : <p className="muted">{shown.path} is not shown here (binary or large).</p>) : null}
       </div>
     </div>
