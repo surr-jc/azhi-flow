@@ -20,7 +20,7 @@ it is the first remaining gap below.
 | 4 | Findings needed no reproducible scenario or stable id, so they could not be checked one by one. | `pr-review` schema | No way to join a finding to a verdict |
 | 5 | The bug-hunting method was a short checklist, with no coverage audit. | `pr-review` correctness and security | Files skipped silently |
 | 6 | The investigator's method had no "one hypothesis at a time" or "claim only what you read" rule. | `issue-investigation` | Plausible chains with an unchecked link |
-| 7 | `ai-sdlc` reviewers (code, test, security) are not verified before their findings send the change into a fix round. | `ai-sdlc` | A wrong finding costs a build round |
+| 7 | `ai-sdlc` reviewers (code, test, security) are not verified before their findings send the change into a fix round. | `ai-sdlc` | A wrong finding costs a build round (**fixed**, below) |
 | 8 | No labelled evaluation, so no workflow change can be shown to help. | `bench/` covers executors only | Quality changes are judged by feel |
 
 Not a gap: `max_tool_calls: 10`. It counts calls through the Azhi gateway bridge (for example
@@ -36,6 +36,7 @@ The limit on reading is the node `timeout`.
 | 4 | Findings need an `id` and a `scenario` (`schemas/findings.json`) |
 | 5 | `find-bugs` skill on the correctness and security reviewers |
 | 6 | `systematic-debugging` and `evidence-before-claims` on the investigator |
+| 7 | `ai-sdlc`: a verifier after every review round (5 nodes); only confirmed critical and major findings trigger a fix round or count in `finalize`. Unverifiable ones flag the change for a person |
 
 Cost: one extra agent step per review or investigation (plus a second checkout), and Opus for the
 security reviewer. In return, the verifier runs once for all findings, not once per finding.
@@ -75,10 +76,8 @@ Considered and not used:
    static analyzer (Semgrep, CodeQL) on the PR checkout as a script step and give the output to the
    reviewers and the verifier. `sdlc-implement` and `ai-sdlc` already run tests on the build
    checkout (`workspace.test`); `pr-review` does not.
-3. **Verify the `ai-sdlc` reviewers (gap 7).** Add a verifier between its reviewers and the fix-round
-   decision, the same way as here.
-4. **Reproduction for issues.** The investigator is read-only, so a bug is traced, not reproduced.
+3. **Reproduction for issues.** The investigator is read-only, so a bug is traced, not reproduced.
    A sandbox step that runs the reporter's steps would turn "medium" into "high" for many issues.
-5. **Model names.** `gpt-5.4` and `claude-opus-5.5` are Copilot model names used elsewhere in this repo;
+4. **Model names.** `gpt-5.4` and `claude-opus-5.5` are Copilot model names used elsewhere in this repo;
    if a plan does not include one, the step fails at start. Set the profile to `default` to fall back to one model
    (you then lose the independence of the second opinion).

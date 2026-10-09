@@ -20,7 +20,7 @@ const pkg = packageFromDirectory(PKG);
 const tools = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools;
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
 const node = (id: string) => def.nodes.find((n) => n.id === id) as any;
-const config = { lite_max_files: 5, lite_min_confidence: 6 };
+const config = { lite_max_files: 5, lite_min_confidence: 6, min_confidence: 80 };
 const hasPython = (() => {
   try {
     execFileSync('python3', ['--version']);
@@ -32,8 +32,10 @@ const hasPython = (() => {
 
 const design = (over: Record<string, unknown> = {}) => ({ risk: 'low', touches_sensitive: false, has_migration: false, files: [{}, {}], confidence: 8, ...over });
 const verdict = (over: Record<string, unknown> = {}) => ({ approved: true, summary: 'ok', findings: [], prompt_injection_detected: false, ...over });
-const finding = (severity: string) => ({ severity, message: 'm' });
-const gate = (id: string, nodes: Record<string, unknown>) => evaluateCel(node(id).expression, { nodes: Object.fromEntries(Object.entries(nodes).map(([k, v]) => [k, { output: v }])) });
+let seq = 0;
+const finding = (severity: string, id = `C${++seq}`) => ({ id, severity, message: 'm' });
+const check = (id: string, verdict: string, confidence = 90) => ({ id, verdict, confidence, evidence: 'e' });
+const gate = (id: string, nodes: Record<string, unknown>) => evaluateCel(node(id).expression, { config, nodes: Object.fromEntries(Object.entries(nodes).map(([k, v]) => [k, { output: v }])) });
 
 describe('AI-SDLC example: definition', () => {
   it('compiles, with every agent tainted and every write gated', () => {
@@ -115,16 +117,34 @@ describe('AI-SDLC example: routing expressions', () => {
     expect(w({ answers: 'x', weight: 'full' }, 'lite')).toBe('full');
   });
 
-  it('review gate: approved only when every reviewer approves with no critical or major finding and no injection', () => {
-    const g = (a: any, b: any, c: any) => gate('gate_1', { code_1: a, test_1: b, security_1: c });
+  it('review gate: a fix round only for findings the verifier confirmed, and for no-injection approval', () => {
+    const g = (a: any, b: any, c: any, checks: any[] = []) => gate('gate_1', { code_1: a, test_1: b, security_1: c, verify_1: { checks } });
     expect(g(verdict(), verdict(), verdict())).toBe('ok');
     expect(g(verdict({ findings: [finding('minor'), finding('suggestion')] }), verdict(), verdict())).toBe('ok');
+    // A reviewer who asks for changes without a critical or major finding still sends it back.
     expect(g(verdict(), verdict({ approved: false }), verdict())).toBe('fix');
-    expect(g(verdict(), verdict(), verdict({ findings: [finding('major')] }))).toBe('fix');
-    expect(g(verdict({ findings: [finding('critical')] }), verdict(), verdict())).toBe('fix');
     expect(g(verdict(), verdict(), verdict({ prompt_injection_detected: true }))).toBe('fix');
-    expect(gate('lite_gate_1', { lite_review_1: verdict() })).toBe('ok');
-    expect(gate('lite_gate_1', { lite_review_1: verdict({ findings: [finding('major')] }) })).toBe('fix');
+    // Critical and major findings count only when confirmed with enough confidence.
+    const major = (id: string) => verdict({ approved: false, findings: [finding('major', id)] });
+    expect(g(verdict(), verdict(), major('S1'), [check('S1', 'confirmed', 92)])).toBe('fix');
+    expect(g(major('C1'), verdict(), verdict(), [check('C1', 'confirmed', 80)])).toBe('fix');
+    expect(g(major('C1'), verdict(), verdict(), [check('C1', 'confirmed', 79)])).toBe('ok');
+    expect(g(major('C1'), verdict(), verdict(), [check('C1', 'refuted', 95)])).toBe('ok');
+    expect(g(major('C1'), verdict(), verdict(), [check('C1', 'unverifiable', 40)])).toBe('ok');
+    expect(g(major('C1'), verdict(), verdict(), [])).toBe('ok');
+    expect(g(verdict({ approved: false, findings: [finding('critical', 'C1')] }), verdict(), verdict(), [check('C1', 'confirmed', 90)])).toBe('fix');
+    const lite = (checks: any[]) => gate('lite_gate_1', { lite_review_1: verdict({ approved: false, findings: [finding('major', 'L1')] }), lite_verify_1: { checks } });
+    expect(lite([check('L1', 'confirmed')])).toBe('fix');
+    expect(lite([check('L1', 'refuted')])).toBe('ok');
+    expect(gate('lite_gate_1', { lite_review_1: verdict(), lite_verify_1: { checks: [] } })).toBe('ok');
+  });
+
+  it('the fix round gets only the findings that survived verification', () => {
+    const inp = (verdicts: any[], checks: any[]) =>
+      evaluateCel(node('fix_1').input.map, { config, inputs: {}, nodes: Object.fromEntries(Object.entries({ intake: {}, requirements: {}, design: {}, design_review: { data: {} }, build: { summary: 's', workspace: { diff: 'd' } }, code_1: verdicts[0], test_1: verdicts[1], security_1: verdicts[2], verify_1: { checks } }).map(([k, v]) => [k, { output: v }])) }) as any;
+    const bad = verdict({ approved: false, findings: [finding('major', 'C1'), finding('major', 'C2'), finding('minor', 'C3')] });
+    const o = inp([bad, verdict(), verdict()], [check('C1', 'confirmed', 90), check('C2', 'refuted', 90)]);
+    expect(o.feedback.verdicts[0].findings.map((f: any) => f.id)).toEqual(['C1', 'C3']);
   });
 });
 
@@ -142,12 +162,30 @@ describe.skipIf(!hasPython)('AI-SDLC example: the join and the evidence record',
   });
   const scope = (nodes: Record<string, unknown>, finalWeight = 'full') => ({
     inputs: { repo: 'acme/shop' },
+    config,
     nodes: Object.fromEntries(Object.entries({ intake: { key: 'acme/shop#12' }, design_review: { by: 'ana', data: {} }, weight_proposal: { route: 'full' }, weight: { route: finalWeight }, ...nodes }).map(([k, v]) => [k, { output: v }])),
   });
   const run = (nodes: Record<string, unknown>, finalWeight = 'full') => {
     const input = evaluateCel(node('finalize').input.map, scope(nodes, finalWeight));
     return JSON.parse(execFileSync('python3', [join(PKG, 'scripts/finalize.py')], { input: JSON.stringify(input) }).toString());
   };
+
+  it('verifier: refuted findings are dropped, confirmed ones flag the change, unverifiable ones flag it too', () => {
+    const base = { build: change(1), test_1: verdict(), security_1: verdict() };
+    const bad = (id: string) => verdict({ approved: false, findings: [finding('critical', id)] });
+    const refuted = run({ ...base, code_1: bad('C1'), verify_1: { checks: [check('C1', 'refuted')] } });
+    expect(refuted).toMatchObject({ ship: true, needs_human_attention: false, verdict: { approved: true, dropped: [expect.objectContaining({ id: 'C1', verdict: 'refuted' })] } });
+    expect(refuted.verdict.counts.critical).toBe(0);
+    expect(refuted.evidence_markdown).toContain('1 critical or major finding(s) refuted');
+    const confirmed = run({ ...base, code_1: bad('C1'), verify_1: { checks: [check('C1', 'confirmed', 91)] } });
+    expect(confirmed).toMatchObject({ needs_human_attention: true, verdict: { approved: false, counts: { critical: 1 } } });
+    expect(confirmed.verdict.findings[0]).toMatchObject({ id: 'C1', confidence: 91 });
+    const weak = run({ ...base, code_1: bad('C1'), verify_1: { checks: [check('C1', 'confirmed', 70)] } });
+    expect(weak).toMatchObject({ needs_human_attention: false, verdict: { dropped: [expect.objectContaining({ id: 'C1' })] } });
+    const unsure = run({ ...base, code_1: bad('C1'), verify_1: { checks: [check('C1', 'unverifiable', 30)] } });
+    expect(unsure).toMatchObject({ needs_human_attention: true, verdict: { approved: false, unverified: [expect.objectContaining({ id: 'C1' })] } });
+    expect(run({ ...base, code_1: bad('C1'), verify_1: { checks: [] } }).needs_human_attention).toBe(true);
+  });
 
   it('full path approved in round 1: the first build ships, with no fix rounds used', () => {
     const o = run({ build: change(1), code_1: verdict(), test_1: verdict(), security_1: verdict() });
@@ -159,14 +197,15 @@ describe.skipIf(!hasPython)('AI-SDLC example: the join and the evidence record',
   });
 
   it('full path: the last round that ran wins over the skipped ones', () => {
-    const o = run({ build: change(1), code_1: verdict(), test_1: verdict({ approved: false, findings: [finding('major')] }), security_1: verdict(), fix_1: change(2), code_2: verdict(), test_2: verdict(), security_2: verdict() });
+    const o = run({ build: change(1), code_1: verdict(), test_1: verdict({ approved: false, findings: [finding('major', 'T1')] }), security_1: verdict(), verify_1: { checks: [check('T1', 'confirmed')] }, fix_1: change(2), code_2: verdict(), test_2: verdict(), security_2: verdict() });
     expect(o).toMatchObject({ ship: true, needs_human_attention: false, round: 1, change: { summary: 'change 2' } });
     expect(o.change.files[0].content).toBe('v2');
   });
 
   it('full path: findings left after the second fix round flag the pull request instead of dropping it', () => {
-    const bad = verdict({ approved: false, findings: [finding('critical')] });
-    const o = run({ build: change(1), code_1: bad, test_1: verdict(), security_1: verdict(), fix_1: change(2), code_2: bad, test_2: verdict(), security_2: verdict(), fix_2: change(3), code_3: bad, test_3: verdict(), security_3: verdict() });
+    const bad = verdict({ approved: false, findings: [finding('critical', 'C1')] });
+    const ok = { verify_1: { checks: [check('C1', 'confirmed')] }, verify_2: { checks: [check('C1', 'confirmed')] }, verify_3: { checks: [check('C1', 'confirmed')] } };
+    const o = run({ build: change(1), code_1: bad, test_1: verdict(), security_1: verdict(), fix_1: change(2), code_2: bad, test_2: verdict(), security_2: verdict(), fix_2: change(3), code_3: bad, test_3: verdict(), security_3: verdict(), ...ok });
     expect(o).toMatchObject({ ship: true, needs_human_attention: true, round: 2 });
     expect(o.change.pr_title).toContain('[needs-human-attention]');
     expect(o.evidence_markdown).toContain('Needs human attention');
