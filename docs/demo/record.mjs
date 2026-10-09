@@ -103,7 +103,7 @@ const scenes = {
     await page.mouse.move(900, 400);
     await caption('One screen for what is <b>running</b>, what <b>needs you</b>, and what it <b>cost</b>', 'One screen for what is running, what needs you, and what it cost.');
     await sleep(2200);
-    await hover(page.locator('.stat, .stat-card, [class*="stat"]').nth(6), 1100).catch(() => sleep(1000));
+    await hover(page.getByText('Spend today').first(), 1100);
     await caption('Spend is measured, never guessed: <b>$3.42 today</b>', 'Spend is measured, never guessed.');
     await sleep(1600);
     await hover(page.getByText('Approve the diff for PAY-1182').first(), 1400);
@@ -182,7 +182,7 @@ const scenes = {
     await tag('4 · Every run is evidence');
     await click(page.getByRole('link', { name: 'Runs' }).first());
     await sleep(900);
-    await click(page.getByRole('link', { name: /pr-review/ }).nth(1).or(page.locator('a[href*="run_5d03ee19"]').first()));
+    await click(page.locator('a[href*="run_5d03ee19"]').first());
     await page.waitForSelector('.wf-card');
     await sleep(1200);
     await caption('What it <b>saw</b>, what it was <b>allowed</b> to do, what it <b>did</b>, what it <b>cost</b>', 'What it saw, what it was allowed to do, what it did, and what it cost.');
