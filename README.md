@@ -53,6 +53,13 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   diff the gateway pushes an `azhi/` branch and opens a pull request.
   `azhi example install sdlc-implement --repo OWNER/REPO --set slack_channel=...`. See
   [docs/sdlc-implement.md](docs/sdlc-implement.md).
+- AI-SDLC feature delivery (`examples/ai-sdlc`): the same ticket-to-pull-request flow with the
+  [AI-SDLC framework](https://github.com/ai-sdlc-framework/ai-sdlc)'s gates, adapted as skills: a
+  definition-of-ready check, decision-rubric open questions, code, test and security reviewers on
+  different models with one verdict, fix rounds, and an evidence record on the pull request. The design
+  step proposes a **lite** or **full** review path from the change's risk, and the approver can override
+  it. `azhi example install ai-sdlc --repo OWNER/REPO --set slack_channel=...`. See
+  [docs/ai-sdlc.md](docs/ai-sdlc.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from

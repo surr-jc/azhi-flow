@@ -1,0 +1,52 @@
+{
+  "type": "object",
+  "properties": {
+    "approved": {
+      "type": "boolean"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "enum": [
+              "critical",
+              "major",
+              "minor",
+              "suggestion"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "prompt_injection_detected": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "approved",
+    "summary",
+    "findings",
+    "prompt_injection_detected"
+  ],
+  "additionalProperties": false
+}

@@ -65,6 +65,7 @@ const META: Record<string, { category: string; steps: number; works_with: string
   'quality-report': { category: 'Reports', steps: 7, works_with: ['Slack'], featured: true },
   'pr-review': { category: 'Code review', steps: 12, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   sdlc: { category: 'Delivery', steps: 15, works_with: ['Jira or GitHub', 'Slack', 'OpenCode'] },
+  'ai-sdlc': { category: 'Delivery', steps: 39, works_with: ['Jira or GitHub', 'Slack', 'OpenCode'] },
   'issue-investigation': { category: 'Investigation', steps: 6, works_with: ['GitHub', 'OpenCode'] },
   'ci-digest': { category: 'Reports', steps: 4, works_with: [] },
   doubler: { category: 'Learn Azhi', steps: 1, works_with: [] },

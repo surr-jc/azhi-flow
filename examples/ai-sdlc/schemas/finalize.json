@@ -1,0 +1,146 @@
+{
+  "type": "object",
+  "properties": {
+    "ship": {
+      "type": "boolean"
+    },
+    "needs_human_attention": {
+      "type": "boolean"
+    },
+    "round": {
+      "type": "integer"
+    },
+    "change": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "commit_message": {
+          "type": "string"
+        },
+        "pr_title": {
+          "type": "string"
+        },
+        "pr_body": {
+          "type": "string"
+        },
+        "deviations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tests_added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base_sha": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "diff": {
+          "type": "string"
+        },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "integer"
+            },
+            "additions": {
+              "type": "integer"
+            },
+            "deletions": {
+              "type": "integer"
+            }
+          }
+        },
+        "tests": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "attempts": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "commit_message",
+        "pr_title",
+        "pr_body",
+        "base_sha",
+        "files",
+        "diff",
+        "stats",
+        "tests"
+      ]
+    },
+    "verdict": {
+      "type": "object",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "counts": {
+          "type": "object"
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "prompt_injection_detected": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approved",
+        "reviewers",
+        "findings"
+      ]
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "evidence_markdown": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ship",
+    "needs_human_attention",
+    "round",
+    "change",
+    "verdict",
+    "evidence",
+    "evidence_markdown"
+  ]
+}

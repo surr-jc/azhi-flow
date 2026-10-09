@@ -1,0 +1,523 @@
+# ai-sdlc: feature delivery to a pull request, with the AI-SDLC framework's gates and a lite or full
+# review path chosen from the size and risk of the change.
+#   intake        a Jira ticket (Jira MCP) or a GitHub issue as one plain ticket
+#   dor_check     definition of ready: seven gates (skill definition-of-ready, from AI-SDLC's
+#                 refinement-reviewer). A vague ticket goes back to Slack with its questions.
+#   requirements  requirements-brief + decision-rubric: open questions in the five-part rubric format
+#   design        implementation-plan + decision-rubric, plus risk signals (sensitive area,
+#                 migration, risk, file count)
+#   weight        proposed from the signals by rules, shown at design_review, which can override it:
+#                   lite  one combined reviewer, one fix round
+#                   full  code, test and security reviewers on different models, in parallel, up to
+#                         two fix rounds
+#   design_review a person answers every open question and confirms the review path
+#   build         implement-change + ai-sdlc-governance in a writable checkout; the worker runs the
+#                 test command and sends failures back to the agent
+#   reviews       reviewers return one shared verdict (reviewer-verdict skill). A round is approved only
+#                 when every reviewer approves, no finding is critical or major and nobody saw a prompt
+#                 injection. Findings send the change back to a fix round (the engineer gets the
+#                 findings); after the last round the change is flagged, not dropped.
+#   finalize      the last round's change, its aggregated verdict and an evidence record (hashes of
+#                 the diff and files, tests, reviewers, weight, approver; a digest, not a signature)
+#   release_approval  an admin approves the exact change; the gateway pushes an azhi/ branch and opens
+#                 a pull request (a draft when the reviewers still have findings), and Slack hears of it
+# Ticket and repository text are untrusted: every agent is tainted, writes happen only after an
+# approval, through ledgered gateway tools, behind CEL guards. Nothing here merges or closes anything.
+# The fix rounds are written out as nodes because a loop cannot run an agent.
+schema_version: "2.0"
+id: ai-sdlc
+name: AI-SDLC feature delivery (lite or full)
+description: Definition-of-ready gate, grounded requirements and design with decision-rubric questions, a lite or full review path chosen from the change's risk, parallel code, test and security reviewers with fix rounds, release approval with an evidence record, a pushed branch and a pull request.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source: {type: string, title: Source, enum: [jira, github], description: "Where the ticket lives"}
+    ticket: {type: string, title: Ticket, maxLength: 300, description: "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"}
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The repository to change, owner/name"}
+    base_branch: {type: string, title: Base branch, maxLength: 200, description: "Branch to build on and open the pull request against; leave empty for the default branch"}
+  required: [source, ticket, repo]
+config:
+  # Filled in by the example install (settings slack_channel and test_command).
+  channel: "{{slack_channel}}"
+  test_command: "{{test_command}}"
+  # The weight rules: a change is lite only if it has at most this many files and the design's
+  # confidence is at least this. High risk, a sensitive area or a migration is always full.
+  lite_max_files: 5
+  lite_min_confidence: 6
+nodes:
+  - id: source
+    type: condition
+    description: Read the ticket from Jira or from GitHub.
+    expression: inputs.source
+    routes: {jira: [jira_issue], github: [github_issue]}
+
+  - id: jira_issue
+    type: tool
+    description: Read the Jira ticket through the Jira MCP server.
+    tool: jira.get-issue@1
+    arguments: {issue_key: {ref: inputs.ticket}}
+
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {ref: inputs.ticket}}
+
+  - id: intake
+    type: tool
+    description: Turn the Jira ticket or GitHub issue into one plain ticket (key, title, description, priority, reporter).
+    tool: ticket.normalize@1
+    merge: any
+    arguments:
+      source: {ref: inputs.source}
+      issue: {cel: "inputs.source == 'jira' ? nodes.jira_issue.output : nodes.github_issue.output"}
+    project: [source, key, title, description, priority, reporter, status, labels, url]
+
+  - id: dor_check
+    type: agent
+    description: Score the ticket against the seven definition-of-ready gates (definition-of-ready skill).
+    executor: opencode
+    profile: dor-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.intake.output, 'repository': inputs.repo}"}
+    output_schema: schemas/dor.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: dor_gate
+    type: condition
+    description: Build only a ticket whose seven gates pass with no low-confidence gate and that can be built as code.
+    expression: "nodes.dor_check.output.gates.all(g, g.status == 'pass' && g.confidence != 'low') && nodes.dor_check.output.dispatchable ? 'ready' : 'refine'"
+    routes: {ready: [requirements], refine: [dor_message]}
+    default: refine
+
+  - id: dor_message
+    type: report
+    description: The questions that would make the ticket ready.
+    template: templates/dor.md
+    input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'failed': nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low')}"}
+
+  - id: dor_send_back
+    type: notify
+    description: Ask for what is missing instead of building from a vague ticket.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.dor_message.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: requirements
+    type: agent
+    description: Turn the ticket into testable requirements grounded in the code (requirements-brief and decision-rubric skills).
+    executor: opencode
+    profile: product-analyst@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.intake.output, 'repository': inputs.repo}"}
+    output_schema: schemas/requirements.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: design
+    type: agent
+    description: Weigh the approaches, plan the change file by file and report the risk signals (implementation-plan and decision-rubric skills).
+    executor: opencode
+    profile: architect@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output}"}
+    output_schema: schemas/design.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+
+  - id: weight_proposal
+    type: condition
+    description: "Propose the weight of the change from the design's signals: full when the risk is high, a sensitive area or a migration is touched, the change is wide, or confidence is low; otherwise lite."
+    expression: "nodes.design.output.risk == 'high' || nodes.design.output.touches_sensitive || nodes.design.output.has_migration || size(nodes.design.output.files) > config.lite_max_files || nodes.design.output.confidence < config.lite_min_confidence ? 'full' : 'lite'"
+    routes: {lite: [], full: []}
+    default: full
+
+  - id: design_review
+    type: approval
+    description: A senior engineer answers the open questions, confirms the design and the review path (lite or full) before any code is written.
+    role: author
+    message: {cel: "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.design.output.summary + '? Proposed review path: ' + nodes.weight_proposal.output.route + ' (risk ' + nodes.design.output.risk + ', ' + string(size(nodes.design.output.files)) + ' file(s)). Answer the ' + string(size(nodes.requirements.output.open_questions) + size(nodes.design.output.open_questions)) + ' open question(s) first.'"}
+    payload: {map: "{'open_questions': nodes.requirements.output.open_questions + nodes.design.output.open_questions, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'proposed_weight': {'path': nodes.weight_proposal.output.route, 'risk': nodes.design.output.risk, 'risk_reasons': nodes.design.output.risk_reasons, 'sensitive': nodes.design.output.touches_sensitive, 'migration': nodes.design.output.has_migration, 'files': size(nodes.design.output.files), 'confidence': nodes.design.output.confidence}}"}
+    # The answers are required, so the open questions cannot be waved through: write one answer per
+    # question, or "use the recommended defaults". The weight can be forced either way; the choice
+    # is recorded in the evidence record with the approver.
+    decision_schema:
+      type: object
+      properties:
+        answers: {type: string, minLength: 1, title: Answers to the open questions, description: "One answer per open question, or: use the recommended defaults"}
+        weight: {enum: [auto, lite, full], default: auto, title: Review path, description: "auto uses the proposed path; lite is one combined reviewer and one fix round; full is three reviewers and two fix rounds"}
+        notes: {type: string, title: Notes for the engineer}
+      required: [answers]
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: weight
+    type: condition
+    description: The review path for this change - the approver's choice, or the proposal when they left it on auto.
+    expression: "has(nodes.design_review.output.data.weight) && nodes.design_review.output.data.weight != 'auto' ? nodes.design_review.output.data.weight : nodes.weight_proposal.output.route"
+    routes: {lite: [lite_review_1], full: [code_1, test_1, security_1]}
+    default: full
+
+  - id: build
+    type: agent
+    description: Implement the approved plan in the checkout; the worker then runs the tests (implement-change and ai-sdlc-governance skills).
+    executor: opencode
+    profile: engineer@1
+    depends_on: [design_review]
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test:
+        command: "{{test_command}}"
+        timeout: 15m
+        attempts: 3
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data}"}
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget: {max_tool_calls: 10}
+
+  # ---- Lite path: one combined reviewer, one fix round ------------------------------------------
+  - id: lite_review_1
+    type: agent
+    description: "One pass over correctness, tests and security of the first build (lite path)."
+    executor: opencode
+    profile: lite-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: lite_gate_1
+    type: condition
+    description: "Approved when the reviewer approves with no critical or major finding and no prompt injection; otherwise one fix round."
+    expression: "[nodes.lite_review_1.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    routes: {ok: [], fix: [lite_fix]}
+    default: fix
+
+  - id: lite_fix
+    type: agent
+    description: "Fix the reviewer's critical and major findings (lite path, the only fix round)."
+    executor: opencode
+    profile: engineer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test:
+        command: "{{test_command}}"
+        timeout: 15m
+        attempts: 3
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output]}}"}
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget: {max_tool_calls: 10}
+
+  - id: lite_review_2
+    type: agent
+    description: "Review the fixed change (lite path)."
+    executor: opencode
+    profile: lite-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.lite_fix.output.summary, 'deviations': nodes.lite_fix.output.deviations, 'tests_added': nodes.lite_fix.output.tests_added, 'stats': nodes.lite_fix.output.workspace.stats, 'diff': nodes.lite_fix.output.workspace.diff, 'diff_truncated': nodes.lite_fix.output.workspace.diff_truncated, 'tests': nodes.lite_fix.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  # ---- Full path: code, test and security reviewers in parallel, up to two fix rounds -------------
+  - id: code_1
+    type: agent
+    description: "Code review of round 1: bugs, design fit, conventions, scope creep."
+    executor: opencode
+    profile: code-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: test_1
+    type: agent
+    description: "Test review of round 1: do the tests prove the criteria."
+    executor: opencode
+    profile: test-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: security_1
+    type: agent
+    description: "Security review of round 1."
+    executor: opencode
+    profile: security-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.build.output.summary, 'deviations': nodes.build.output.deviations, 'tests_added': nodes.build.output.tests_added, 'stats': nodes.build.output.workspace.stats, 'diff': nodes.build.output.workspace.diff, 'diff_truncated': nodes.build.output.workspace.diff_truncated, 'tests': nodes.build.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: gate_1
+    type: condition
+    description: "Approved when every reviewer approves with no critical or major finding and no prompt injection; otherwise fix round 1."
+    expression: "[nodes.code_1.output, nodes.test_1.output, nodes.security_1.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    routes: {ok: [], fix: [fix_1]}
+    default: fix
+
+  - id: fix_1
+    type: agent
+    description: "Fix the reviewers' critical and major findings (full path, fix round 1)."
+    executor: opencode
+    profile: engineer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test:
+        command: "{{test_command}}"
+        timeout: 15m
+        attempts: 3
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.build.output.summary, 'previous_diff': nodes.build.output.workspace.diff, 'verdicts': [nodes.code_1.output, nodes.test_1.output, nodes.security_1.output]}}"}
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget: {max_tool_calls: 10}
+
+  - id: code_2
+    type: agent
+    description: "Code review of round 2: bugs, design fit, conventions, scope creep."
+    executor: opencode
+    profile: code-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_1.output.summary, 'deviations': nodes.fix_1.output.deviations, 'tests_added': nodes.fix_1.output.tests_added, 'stats': nodes.fix_1.output.workspace.stats, 'diff': nodes.fix_1.output.workspace.diff, 'diff_truncated': nodes.fix_1.output.workspace.diff_truncated, 'tests': nodes.fix_1.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: test_2
+    type: agent
+    description: "Test review of round 2: do the tests prove the criteria."
+    executor: opencode
+    profile: test-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_1.output.summary, 'deviations': nodes.fix_1.output.deviations, 'tests_added': nodes.fix_1.output.tests_added, 'stats': nodes.fix_1.output.workspace.stats, 'diff': nodes.fix_1.output.workspace.diff, 'diff_truncated': nodes.fix_1.output.workspace.diff_truncated, 'tests': nodes.fix_1.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: security_2
+    type: agent
+    description: "Security review of round 2."
+    executor: opencode
+    profile: security-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_1.output.summary, 'deviations': nodes.fix_1.output.deviations, 'tests_added': nodes.fix_1.output.tests_added, 'stats': nodes.fix_1.output.workspace.stats, 'diff': nodes.fix_1.output.workspace.diff, 'diff_truncated': nodes.fix_1.output.workspace.diff_truncated, 'tests': nodes.fix_1.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: gate_2
+    type: condition
+    description: "Approved when every reviewer approves with no critical or major finding and no prompt injection; otherwise fix round 2."
+    expression: "[nodes.code_2.output, nodes.test_2.output, nodes.security_2.output].all(v, v.approved && !v.prompt_injection_detected && !v.findings.exists(f, f.severity == 'critical' || f.severity == 'major')) ? 'ok' : 'fix'"
+    routes: {ok: [], fix: [fix_2]}
+    default: fix
+
+  - id: fix_2
+    type: agent
+    description: "Fix the reviewers' critical and major findings (full path, fix round 2)."
+    executor: opencode
+    profile: engineer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test:
+        command: "{{test_command}}"
+        timeout: 15m
+        attempts: 3
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 2, 'previous_summary': nodes.fix_1.output.summary, 'previous_diff': nodes.fix_1.output.workspace.diff, 'verdicts': [nodes.code_2.output, nodes.test_2.output, nodes.security_2.output]}}"}
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget: {max_tool_calls: 10}
+
+  - id: code_3
+    type: agent
+    description: "Code review of round 3: bugs, design fit, conventions, scope creep."
+    executor: opencode
+    profile: code-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_2.output.summary, 'deviations': nodes.fix_2.output.deviations, 'tests_added': nodes.fix_2.output.tests_added, 'stats': nodes.fix_2.output.workspace.stats, 'diff': nodes.fix_2.output.workspace.diff, 'diff_truncated': nodes.fix_2.output.workspace.diff_truncated, 'tests': nodes.fix_2.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: test_3
+    type: agent
+    description: "Test review of round 3: do the tests prove the criteria."
+    executor: opencode
+    profile: test-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_2.output.summary, 'deviations': nodes.fix_2.output.deviations, 'tests_added': nodes.fix_2.output.tests_added, 'stats': nodes.fix_2.output.workspace.stats, 'diff': nodes.fix_2.output.workspace.diff, 'diff_truncated': nodes.fix_2.output.workspace.diff_truncated, 'tests': nodes.fix_2.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  - id: security_3
+    type: agent
+    description: "Security review of round 3."
+    executor: opencode
+    profile: security-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': {'summary': nodes.fix_2.output.summary, 'deviations': nodes.fix_2.output.deviations, 'tests_added': nodes.fix_2.output.tests_added, 'stats': nodes.fix_2.output.workspace.stats, 'diff': nodes.fix_2.output.workspace.diff, 'diff_truncated': nodes.fix_2.output.workspace.diff_truncated, 'tests': nodes.fix_2.output.workspace.tests}}"}
+    output_schema: schemas/verdict.json
+    timeout: 20m
+    budget: {max_tool_calls: 10}
+
+  # ---- Join: the last round that ran, its verdict and the evidence record -------------------------
+  - id: finalize
+    type: script
+    description: Pick the last build that ran, aggregate its verdicts (approved only if all approve, no critical or major finding, no injection) and write the evidence record.
+    runtime: python
+    entrypoint: scripts/finalize.py
+    merge: any
+    input: {map: "{'ticket': nodes.intake.output.key, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': nodes.weight.output.route, 'overridden_by': nodes.weight.output.route != nodes.weight_proposal.output.route ? nodes.design_review.output.by : null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}}, {'change': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}}], 'full': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'code': has(nodes.code_1) ? nodes.code_1.output : null, 'test': has(nodes.test_1) ? nodes.test_1.output : null, 'security': has(nodes.security_1) ? nodes.security_1.output : null}}, {'change': has(nodes.fix_1) ? nodes.fix_1.output : null, 'verdicts': {'code': has(nodes.code_2) ? nodes.code_2.output : null, 'test': has(nodes.test_2) ? nodes.test_2.output : null, 'security': has(nodes.security_2) ? nodes.security_2.output : null}}, {'change': has(nodes.fix_2) ? nodes.fix_2.output : null, 'verdicts': {'code': has(nodes.code_3) ? nodes.code_3.output : null, 'test': has(nodes.test_3) ? nodes.test_3.output : null, 'security': has(nodes.security_3) ? nodes.security_3.output : null}}]}"}
+    output_schema: schemas/finalize.json
+    limits: {time: 2m, memory_mb: 512}
+
+  - id: ship_gate
+    type: condition
+    description: Ship to approval only when the tests passed and there is a change. Open findings do not block; they flag the pull request for a person.
+    expression: "nodes.finalize.output.ship ? 'ship' : 'fix'"
+    routes: {ship: [release_approval], fix: [send_back]}
+    default: fix
+
+  - id: release_approval
+    type: approval
+    description: The release owner approves the exact change, its reviews and its evidence record before a branch is pushed.
+    role: admin
+    message: {cel: "'Push ' + string(nodes.finalize.output.change.stats.files) + ' changed file(s) for ' + nodes.intake.output.key + ' to ' + inputs.repo + ' and open a ' + (nodes.finalize.output.needs_human_attention ? 'draft ' : '') + 'pull request? Tests ' + nodes.finalize.output.change.tests.status + ', review path ' + nodes.weight.output.route + (nodes.finalize.output.needs_human_attention ? ', reviewers still have critical or major findings' : ', reviewers approve') + '.'"}
+    payload: {map: "{'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title': nodes.finalize.output.change.pr_title, 'stats': nodes.finalize.output.change.stats, 'diff': nodes.finalize.output.change.diff, 'tests': nodes.finalize.output.change.tests, 'review_path': nodes.weight.output.route, 'fix_rounds_used': nodes.finalize.output.round, 'needs_human_attention': nodes.finalize.output.needs_human_attention, 'verdict': nodes.finalize.output.verdict, 'evidence': nodes.finalize.output.evidence}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: push_branch
+    type: tool
+    description: Commit the change onto the base commit and push it as an azhi/ branch (Git Data API).
+    tool: github.push-branch@1
+    depends_on: [release_approval]
+    arguments:
+      repo: {ref: inputs.repo}
+      branch: {cel: "'azhi/' + nodes.intake.output.key"}
+      base_sha: {ref: nodes.finalize.output.change.base_sha}
+      message: {cel: "nodes.finalize.output.change.commit_message + '\\n\\nRefs: ' + nodes.intake.output.key"}
+      files: {ref: nodes.finalize.output.change.files}
+    # Taint gate (ADR-10): the change was written by an agent that read untrusted text, so it may only
+    # go to the repository named for this run, after the approval above.
+    guard: "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+
+  - id: open_pr
+    type: tool
+    description: Open a pull request for the branch (draft when reviewers still have findings), or return the one already open.
+    tool: github.create-pull-request@1
+    arguments:
+      repo: {ref: inputs.repo}
+      head: {ref: nodes.push_branch.output.branch}
+      base: {cel: "has(inputs.base_branch) ? inputs.base_branch : ''"}
+      title: {ref: nodes.finalize.output.change.pr_title}
+      body: {cel: "nodes.finalize.output.change.pr_body + '\\n\\n' + nodes.finalize.output.evidence_markdown + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (ai-sdlc) after a person approved this change._'"}
+      draft: {cel: "nodes.finalize.output.needs_human_attention"}
+    guard: "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
+
+  - id: release
+    type: notify
+    description: Announce the pull request.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "'Pull request for ' + nodes.intake.output.key + ': ' + nodes.open_pr.output.url + ' (' + nodes.finalize.output.change.summary + ')' + (nodes.finalize.output.needs_human_attention ? ' - needs human attention: reviewers still have findings' : '')"}
+    guard: "args.channel == config.channel"
+
+  - id: send_back
+    type: notify
+    description: Send the change back with the reasons (tests failed, or nothing changed).
+    channel: slack
+    destination: {ref: config.channel}
+    message: {cel: "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).'"}
+    guard: "args.channel == config.channel"
+
+  - id: retro
+    type: report
+    description: Write the delivery record and retro notes (planned vs actual).
+    depends_on: [release]
+    template: templates/retro.md
+    input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'weight': nodes.weight.output.route, 'final': nodes.finalize.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"}
