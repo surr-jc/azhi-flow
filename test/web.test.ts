@@ -133,6 +133,52 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('chooses the provider and model for default-model steps: in the runner, the workflow settings and the editor', async () => {
+    await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-ant-test' });
+    const models = (await uploadDir(h.api, 'test/fixtures/models')).version.id;
+    const page = await open('/ui/workflows/model-check');
+    await page.getByRole('heading', { name: 'Run plan' }).waitFor();
+
+    // The dock names who decides each step's model.
+    await page.getByRole('button', { name: /Models/ }).first().click();
+    await page.getByText('Workflow default').first().waitFor();
+    expect(await page.locator('.settings-main').innerText()).toContain('none: each default-model step uses the server');
+    await page.keyboard.press('Escape');
+
+    // The runner: pick OpenAI-less Anthropic with a model; only the default-model step follows it.
+    await page.getByRole('button', { name: 'Run…' }).click();
+    await page.getByLabel('Team').fill('search');
+    await page.locator('select[name="run-provider"]').selectOption('anthropic');
+    await page.locator('select[name="run-model"]').selectOption('__other__');
+    await page.getByRole('textbox', { name: 'Model id' }).fill('claude-sonnet-5-5');
+    await page.getByRole('button', { name: 'Use', exact: true }).click();
+    await page.getByText('Which model each step will use').click();
+    const rows = page.getByLabel('Model of each agent step').locator('tbody tr');
+    await rows.filter({ hasText: 'draft' }).getByText('chosen for this run').waitFor();
+    expect(await rows.filter({ hasText: 'pinned' }).innerText()).toContain('claude-opus-5-5');
+    expect(await rows.filter({ hasText: 'pinned' }).innerText()).toContain('named by the step');
+    await page.getByRole('button', { name: 'Test run' }).click();
+    await page.waitForURL(/\/ui\/runs\/run_/);
+    const id = decodeURIComponent(page.url().split('/').pop()!);
+    const d = await h.api.get<any>(`/v1/runs/${id}`);
+    expect(d.run.snapshot).toMatchObject({ model_defaults: { provider: 'anthropic', name: 'claude-sonnet-5-5' }, model_defaults_chosen: true });
+    await h.api.post(`/v1/runs/${id}/cancel`, {});
+
+    // The editor: set the workflow's default and save it as a draft.
+    await page.goto(`${h.server.url}/ui/workflows/model-check/edit?from=${models}`);
+    await page.getByRole('heading', { name: 'Workflow', exact: true }).waitFor();
+    await page.locator('select[name="workflow-provider"]').selectOption('anthropic');
+    await page.getByRole('button', { name: 'Save draft' }).waitFor();
+    await page.waitForFunction(() => !document.body.innerText.includes('Checking…'));
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.waitForURL(/\/ui\/workflows\/model-check\?version=/);
+    const draftId = decodeURIComponent(new URL(page.url()).searchParams.get('version')!);
+    const saved = await h.api.get<any>(`/v1/versions/${draftId}`);
+    expect(saved.definition.model_defaults).toEqual({ provider: 'anthropic' });
+    expect(saved.plan.nodes.find((n: any) => n.id === 'draft')).toBeDefined();
+    await page.close();
+  });
+
   it('sets a secret without the value ever coming back, and audits it', async () => {
     const page = await open('/ui/secrets');
     await page.getByLabel('Name').fill('ui-test-key');

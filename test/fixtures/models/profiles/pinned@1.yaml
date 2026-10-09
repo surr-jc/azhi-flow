@@ -1,0 +1,2 @@
+model: {provider: anthropic, name: claude-opus-5-5, credential: anthropic-api-key}
+instructions: Polish one sentence.

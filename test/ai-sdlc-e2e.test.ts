@@ -297,7 +297,7 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     await waitFor(run_id, 'design_review');
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'design_review', decision: 'approved', data: { answers: 'Clamp to 100%.' } });
     const d = await waitFor(run_id, 'release_approval');
-    expect(d.run.snapshot?.model_defaults ?? null).toBeDefined();
+    expect(d.run.snapshot).toMatchObject({ model_defaults: { provider: 'github-copilot', name: CHOSEN }, model_defaults_chosen: true });
     const seen = new Map<string, Set<string>>();
     for (const r of fake.requests.slice(before)) {
       const who = role(r);

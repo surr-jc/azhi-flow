@@ -1,0 +1,23 @@
+# Two agent steps: one leaves its model to the defaults, one names its own.
+schema_version: "2.0"
+id: model-check
+name: Model check
+trigger: {manual: true}
+inputs:
+  type: object
+  properties: {team: {type: string, title: Team}}
+  required: [team]
+nodes:
+  - id: draft
+    type: agent
+    description: Uses the default model.
+    profile: drafter@1
+    input: {map: "{'team': inputs.team}"}
+    output_schema: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
+  - id: pinned
+    type: agent
+    description: Names its own model.
+    profile: pinned@1
+    depends_on: [draft]
+    input: {map: "{'draft': nodes.draft.output}"}
+    output_schema: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}

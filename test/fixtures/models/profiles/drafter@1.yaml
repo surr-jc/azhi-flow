@@ -1,0 +1,2 @@
+model: {provider: anthropic, name: default, credential: anthropic-api-key}
+instructions: Draft one sentence.

@@ -7,6 +7,7 @@ import { Link } from '../router';
 import { Badge, Loading, Table, when } from '../ui';
 import type { ToolInfo } from '../stepHelp';
 import { ConfigRow } from './ConfigRow';
+import { ModelSteps } from './ModelChoice';
 import { RepoList } from './RepoAccess';
 import type { PlanNode } from './WorkflowCanvas';
 
@@ -32,7 +33,7 @@ export interface SettingsData {
   assets?: PortableAsset[];
 }
 
-export type SectionId = 'inputs' | 'config' | 'trigger' | 'secrets' | 'connections' | 'datasets' | 'limits' | 'assets' | 'files';
+export type SectionId = 'inputs' | 'config' | 'models' | 'trigger' | 'secrets' | 'connections' | 'datasets' | 'limits' | 'assets' | 'files';
 interface Section { id: SectionId; icon: string; title: string; summary: string; chip?: { label: string; tone?: string } }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -68,6 +69,15 @@ const inputsOf = (d: SettingsData): Array<[string, JsonSchema]> => Object.entrie
 const configOf = (d: SettingsData): Array<[string, unknown]> => Object.entries((d.def?.config ?? {}) as Record<string, unknown>);
 const unfilled = (v: unknown) => typeof v === 'string' && /\{\{[^}]+\}\}/.test(v);
 
+/** One line for the Models row: the workflow's default provider and model, or who decides. */
+function modelSummary(d: SettingsData): string {
+  const md = d.def?.model_defaults as { provider?: string; name?: string } | undefined;
+  const agents = (d.plan?.nodes ?? []).filter((n) => n.model);
+  const own = agents.filter((n) => n.model!.source === 'profile').length;
+  const base = md?.provider ? `${md.provider}${md.name ? `, ${md.name}` : ', server default model'}` : 'Each step\'s own default';
+  return agents.length ? `${base} · ${plural(agents.length - own, 'step')} follow it, ${own} keep their own` : base;
+}
+
 export function sectionsOf(d: SettingsData): Section[] {
   const inputs = inputsOf(d);
   const required = new Set((d.def?.inputs as JsonSchema | undefined)?.required ?? []);
@@ -84,6 +94,7 @@ export function sectionsOf(d: SettingsData): Section[] {
   return [
     { id: 'inputs', icon: '⇥', title: 'Inputs', summary: inputs.length ? inputs.map(([k]) => `${k}${required.has(k) ? '*' : ''}`).join(', ') : 'Takes no inputs', chip: { label: String(inputs.length) } },
     { id: 'config', icon: '⚙', title: 'Config', summary: config.length ? config.map(([k, v]) => `${k} = ${unfilled(v) ? 'not set' : String(v)}`).join(', ') : 'None', chip: config.length ? (config.some(([, v]) => unfilled(v)) ? { label: 'not set', tone: 'warn' } : { label: 'set', tone: 'ok' }) : undefined },
+    { id: 'models', icon: '✦', title: 'Models', summary: modelSummary(d), chip: d.def?.model_defaults?.provider ? { label: 'set', tone: 'ok' } : undefined },
     { id: 'trigger', icon: '◷', title: 'Trigger', summary: live ? `${live.cron} (${live.timezone})${live.enabled ? '' : ', off'}` : sched?.cron ? `${sched.cron} (${sched.timezone ?? 'UTC'})` : 'Manual only' },
     { id: 'secrets', icon: '⚿', title: 'Secrets', summary: secrets.size ? [...secrets.keys()].join(', ') : 'None used', chip: secrets.size ? { label: `${setCount} of ${secrets.size}`, tone: setCount === secrets.size ? 'ok' : 'warn' } : undefined },
     { id: 'connections', icon: '⛓', title: 'Connections', summary: tools.length ? [...new Set(tools.map((t) => t.id.split('.')[0]))].join(' · ') : 'No tools called', chip: { label: String(tools.length) } },
@@ -160,6 +171,17 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
         <>
           <p className="muted">Values fixed when the workflow was installed. Steps read them as <span className="mono">config.name</span>.</p>
           {rows.length ? rows.map(([k, v]) => <ConfigRow key={k} label={<span className="mono">{k}</span>} value={unfilled(v) ? 'not set' : typeof v === 'string' ? v : JSON.stringify(v)} tone={unfilled(v) ? 'warn' : undefined} help={unfilled(v) ? 'This was left blank when installed. Set it from the Marketplace page of this workflow, then publish again.' : undefined} />) : <p className="muted">This workflow has no config values.</p>}
+        </>
+      );
+    }
+    case 'models': {
+      const md = d.def?.model_defaults as { provider?: string; name?: string } | undefined;
+      return (
+        <>
+          <p className="muted">The provider and model for every agent step whose profile says <span className="mono">name: default</span>. A step that names its own provider and model keeps them. A person starting a run can choose another provider and model for that run.</p>
+          <ConfigRow label="Workflow default" value={md?.provider ? `${md.provider}${md.name ? `, ${md.name}` : ', the provider\'s server default model'}` : 'none: each default-model step uses the server\'s provider and model'} help={atLeast(d.role, 'author') ? undefined : 'Changing it needs the author role.'} />
+          <ModelSteps plan={d.plan} />
+          {atLeast(d.role, 'author') ? <p><Link to={`/ui/workflows/${encodeURIComponent(d.slug)}/edit?from=${encodeURIComponent(d.version.id)}`}>Change it in the editor</Link></p> : null}
         </>
       );
     }

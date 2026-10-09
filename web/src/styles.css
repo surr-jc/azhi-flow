@@ -720,3 +720,8 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .conn-detail { padding: 14px 18px; min-width: 0; }
 @media (max-width: 800px) { .conn { grid-template-columns: minmax(0, 1fr); } .conn-list { border-right: 0; border-bottom: 1px solid var(--line); flex-direction: row; flex-wrap: wrap; } }
 .conn-detail .cfg-row { grid-template-columns: 210px minmax(0, 1fr); }
+
+/* The provider and model chosen for a run */
+.model-choice { margin: 14px 0; }
+.model-choice h3 { margin: 0 0 6px; }
+.model-choice details { margin-top: 8px; }
