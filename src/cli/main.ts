@@ -135,11 +135,14 @@ program
   .option('-i, --input <key=value>', 'input value (JSON or string); repeatable', collect)
   .option('--inputs <file>', 'JSON file with inputs')
   .option('--published', 'run a published version (workflow, workflow@3) instead of uploading')
+  .option('--provider <provider>', 'provider for steps whose profile says `name: default` (anthropic, openai, github-copilot or openai-chatgpt); steps that name a model keep it')
+  .option('--model <id>', 'model for those steps (needs --provider); without it the provider\'s server default model')
   .option('-w, --wait', 'wait for the run to finish and print the result')
-  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean }) => {
+  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
     const api = client();
-    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs) });
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
     console.log(`run ${bold(run_id)} queued`);
     if (!opts.wait) return;
     let cursor = 0;
@@ -203,10 +206,14 @@ program
   .description('Show the run plan: capability marks, policy coverage, taint paths, missing grants and blockers')
   .argument('[path]', 'package directory, or workflow@version with --published', '.')
   .option('--published', 'plan a published version instead of uploading')
+  .option('--provider <provider>', 'show the plan for a run that chooses this provider for `name: default` steps')
+  .option('--model <id>', 'and this model (needs --provider)')
   .option('--json', 'print raw JSON')
-  .action(async (path: string, opts: { published?: boolean; json?: boolean }) => {
+  .action(async (path: string, opts: { published?: boolean; json?: boolean; provider?: string; model?: string }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
-    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan`);
+    const qs = opts.provider ? `?provider=${encodeURIComponent(opts.provider)}${opts.model ? `&model=${encodeURIComponent(opts.model)}` : ''}` : '';
+    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan${qs}`);
     if (opts.json) console.log(JSON.stringify(plan, null, 2));
     else printPlan(plan);
     process.exitCode = plan.ok ? 0 : 1;

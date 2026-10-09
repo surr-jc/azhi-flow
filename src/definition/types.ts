@@ -187,6 +187,8 @@ export interface WorkflowDefinition {
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;
+  /** Provider and model for every agent step whose profile says `name: default`; a run may override it. Steps that name a model keep it. */
+  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
   nodes: NodeDef[];
 }
 

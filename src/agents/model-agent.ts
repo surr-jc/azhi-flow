@@ -15,7 +15,7 @@ import { CLAUDE_PLAN_ONLY_SDK, EXECUTORS, isClaudePlanToken } from '../executors
 import { citationIds } from '../runtime/report.js';
 import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
-import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
+import { applyModelDefaults, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile, type ModelDefaults } from './profile.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
 /**
@@ -76,6 +76,8 @@ interface Transcript {
   items: ManifestItem[];
   /** Chunk IDs the agent was shown; citing anything else is a contract violation. */
   chunkIds?: string[];
+  /** The provider and model chosen for the run, applied to a profile that says `name: default`. */
+  modelDefaults?: ModelDefaults;
 }
 
 export interface AgentState {
@@ -105,6 +107,8 @@ export interface AgentBeginInput {
   /** Datasets the context builder retrieves from, pinned in the run snapshot. */
   datasets?: Array<{ ref: string; revision: number }>;
   principal?: { userId: string; role: string };
+  /** Run-level provider and model for profiles that say `name: default`. */
+  modelDefaults?: ModelDefaults;
 }
 
 export interface AgentTurnInput {
@@ -133,10 +137,10 @@ function item(kind: ManifestItem['kind'], source: string, reason: string, conten
   return { kind, source, reason, tokens: estimateTokens(content), content_hash: `sha256:${sha256(content)}`, ...(storeContent ? { content } : {}) };
 }
 
-async function loadProfile(ctx: AppContext, workspaceId: string, packageHash: string, profile: string): Promise<{ path: string; profile: AgentProfile; text: string }> {
+async function loadProfile(ctx: AppContext, workspaceId: string, packageHash: string, profile: string, defaults?: ModelDefaults | null): Promise<{ path: string; profile: AgentProfile; text: string }> {
   const path = profilePath(profile);
   const text = (await packageFile(ctx, workspaceId, packageHash, path)).toString('utf8');
-  return { path, profile: parseProfile(text, path), text };
+  return { path, profile: applyModelDefaults(parseProfile(text, path), defaults), text };
 }
 
 export function resolveModelName(ctx: AppContext, profile: AgentProfile): string {
@@ -190,7 +194,7 @@ function loadTranscript(ctx: AppContext, hash: string): Transcript {
 /** Assembles the context (stable parts first, for prefix caching) and the first manifest items. */
 export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { transcript?: boolean } = {}): Promise<AgentState> {
   const store = ctx.settings.storeContextContent;
-  const { path, profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
+  const { path, profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile, i.modelDefaults);
   const model = resolveModelName(ctx, profile);
   const items: ManifestItem[] = [item('instructions', 'platform', 'always included', PLATFORM_RULES, store), item('profile', path, `agent profile ${i.profile}`, profile.instructions, store)];
 
@@ -233,6 +237,7 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { tr
     messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
     items,
     chunkIds: (i.chunks ?? []).map((c) => c.id),
+    ...(i.modelDefaults?.provider ? { modelDefaults: i.modelDefaults } : {}),
   };
   // A harness step records its own transcript (its harness rewrites the prompt), so only the model agent's goes here.
   if (opts.transcript !== false) await showTranscript(ctx, i, [
@@ -246,7 +251,7 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { tr
 export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fence: number; signal?: AbortSignal }): Promise<AgentTurnResult> {
   const store = ctx.settings.storeContextContent;
   const t = loadTranscript(ctx, i.state.transcript);
-  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, t.profile);
+  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, t.profile, t.modelDefaults);
   const turn = i.state.turn + 1;
   const maxTurns = profile.max_turns ?? DEFAULT_MAX_TURNS;
   if (turn > maxTurns) throw new AzhiError(ErrorClass.contractViolation, `the agent produced no valid output within ${maxTurns} turns`);
@@ -454,7 +459,7 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
 export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string } }, executor: string) {
   const state = await agentBegin(ctx, i, { transcript: false });
   const t = loadTranscript(ctx, state.transcript);
-  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
+  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile, i.modelDefaults);
   // The run plan marks providers an adapter cannot drive as unsupported; this is the same check at run time.
   const provider = profile.model.provider;
   if (provider === 'scripted' || !EXECUTORS[executor]?.providers.includes(provider)) {
@@ -488,7 +493,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     credential: profile.model.credential ?? PROVIDER_DEFAULTS[provider].credential,
     providerUrl: PROVIDER_DEFAULTS[provider].apiUrl(ctx.settings),
     provider,
-    ...(provider === 'github-copilot' && ctx.settings.copilotApiUrl ? { endpointModels: [ctx.settings.copilotModel] } : {}),
+    ...(provider === 'github-copilot' && ctx.settings.copilotApiUrl ? { endpointModels: [...new Set([ctx.settings.copilotModel, t.model])] } : {}),
   };
 }
 

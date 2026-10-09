@@ -96,6 +96,50 @@ export function opencodeHarnessProblems(h: OpencodeHarness, read: (path: string)
   return out;
 }
 
+/** The providers a profile (or a workflow's model defaults) may name. */
+export const MODEL_PROVIDERS = ['anthropic', 'openai', 'github-copilot', 'openai-chatgpt'] as const;
+export type ModelProviderName = (typeof MODEL_PROVIDERS)[number];
+
+/**
+ * A provider and model chosen for a whole workflow or run. They apply only to steps whose profile says
+ * `name: default` (or leaves the name out); a step that names its own model keeps its provider and model.
+ * A model needs its provider, since model ids mean nothing across providers.
+ */
+export interface ModelDefaults {
+  provider?: ModelProviderName;
+  name?: string;
+}
+
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
+
+/** Problems with a model-defaults value, as messages. */
+export function modelDefaultsProblems(d: unknown): string[] {
+  if (d === undefined || d === null) return [];
+  if (typeof d !== 'object' || Array.isArray(d)) return ['model_defaults must be a mapping with provider and name'];
+  const { provider, name, ...rest } = d as Record<string, unknown>;
+  const out: string[] = Object.keys(rest).map((k) => `model_defaults.${k} is not a known field (use provider and name)`);
+  if (provider !== undefined && !MODEL_PROVIDERS.includes(provider as ModelProviderName)) out.push(`model_defaults.provider must be one of ${MODEL_PROVIDERS.join(', ')}`);
+  if (name !== undefined && (typeof name !== 'string' || !MODEL_ID.test(name))) out.push('model_defaults.name must be a model id such as claude-sonnet-5');
+  if (name !== undefined && provider === undefined) out.push('model_defaults.name needs model_defaults.provider (a model id only means something for its provider)');
+  return out;
+}
+
+/** Whether the profile leaves its model to the defaults (the server's choice for its provider). */
+export function usesDefaultModel(p: AgentProfile): boolean {
+  return p.model.provider !== 'scripted' && (!p.model.name || p.model.name === 'default');
+}
+
+/**
+ * The profile as it runs under the given defaults: a profile that says `name: default` takes the
+ * default provider (with that provider's own credential) and model; any other profile is untouched.
+ * A default provider without a model uses that provider's server default model.
+ */
+export function applyModelDefaults(p: AgentProfile, defaults?: ModelDefaults | null): AgentProfile {
+  if (!defaults?.provider || !usesDefaultModel(p)) return p;
+  const sameProvider = defaults.provider === p.model.provider;
+  return { ...p, model: { provider: defaults.provider, name: defaults.name?.trim() || 'default', ...(sameProvider && p.model.credential ? { credential: p.model.credential } : {}) } };
+}
+
 export type ScriptedTurn =
   | { tool: string; args: Record<string, unknown> }
   | { output: unknown }

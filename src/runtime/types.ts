@@ -33,6 +33,10 @@ export interface RunSnapshot {
   /** Whose access dataset reads are checked against. */
   principal?: { userId: string; role: string };
   settings?: Record<string, unknown>;
+  /** Provider and model for agent steps whose profile says `name: default`: the run's choice, else the workflow's. */
+  /** Set when the defaults were chosen for this run (not taken from the workflow), so subworkflows inherit them. */
+  model_defaults_chosen?: boolean;
+  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
 }
 
 export interface RunInput {
