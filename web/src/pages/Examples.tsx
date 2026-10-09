@@ -32,6 +32,8 @@ interface Example {
   description: string;
   tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean }>;
   needs_repos: boolean;
+  /** The workflow is saved in this workspace. */
+  installed: boolean;
   secrets: Secret[];
   /** Repositories the installed tools allow now; empty before install. */
   repos: string[];
@@ -91,7 +93,7 @@ function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
 /** The step count comes from the workflow itself; the table is only a fallback. */
 const stepCount = (e: Example) => e.nodes?.length || metaOf(e).steps;
 
-const installed = (e: Example) => e.repos.length > 0 || (e.settings ?? []).some((s) => s.value);
+const installed = (e: Example) => e.installed;
 
 export function Examples() {
   const { path } = useRoute();

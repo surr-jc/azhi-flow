@@ -258,6 +258,8 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
         /** Set once the workflow is in this workspace: whether the marketplace has changed since it was installed or last updated. */
         update: local ? { available: !rec || rec.template_hash !== templateHash(e), tracked: Boolean(rec), version: local.version, draft: local.draft, updated_at: rec?.updated_at ?? null } : null,
         id: e.id,
+        // Installed means the workflow itself is saved here; leftover tools or settings don't count.
+        installed: Boolean(local),
         name: e.name,
         description: e.description,
         /** The workflow this example installs, to tell which workflow page it belongs to. */
