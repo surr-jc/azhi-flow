@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
+import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
 import { Approvals } from './pages/Approvals';
@@ -84,16 +85,16 @@ function SignIn({ onDone }: { onDone: () => void }) {
 }
 
 type NavItem = { to: string; label: string; need?: 'admin'; count?: 'approvals' | 'alerts' };
-type Section = { label: string; to: string; items: NavItem[]; count?: 'approvals' };
+type Section = { label: string; to: string; icon: string; items: NavItem[]; count?: 'approvals' };
 
 // Pages grouped by what a person is doing: deciding today, watching runs, building workflows,
 // governing spend and access, and keeping the system running.
 const SECTIONS: Section[] = [
-  { label: 'Today', to: '/ui', count: 'approvals', items: [] },
-  { label: 'Runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
-  { label: 'Workflows', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Portable assets' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }, { to: '/ui/connections', label: 'Connections' }] },
-  { label: 'Governance', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
-  { label: 'System', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
+  { label: 'Today', icon: 'home', to: '/ui', count: 'approvals', items: [] },
+  { label: 'Runs', icon: 'runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
+  { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Portable assets' }, { to: '/ui/examples', label: 'Marketplace', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }, { to: '/ui/connections', label: 'Connections' }] },
+  { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
+  { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
 
 const isAt = (to: string, path: string) => (to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/'));
@@ -116,44 +117,51 @@ function Shell() {
   const items = current?.items.filter((i) => allowed(i.need)) ?? [];
   return (
     <div className="shell">
-      <header className="topbar">
-        <Link to="/ui" className="brand">Azhi Flow</Link>
-        <nav className="sections" aria-label="Main">
-          {SECTIONS.map((s) => {
-            const active = s === current;
-            const count = s.count ? counts[s.count] : 0;
-            return (
-              <Link key={s.label} to={s.to} className={active ? 'active' : ''} aria-current={active && s.to === path ? 'page' : undefined}>
-                {s.label}
-                {count ? <span className="count">{count}</span> : null}
-              </Link>
-            );
-          })}
-        </nav>
-        <span className="top-right">
-          <ThemeSwitch />
-          {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
-          {role ? <span className="muted small role">{role}</span> : null}
-          <button className="link small" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>Sign out</button>
-        </span>
-      </header>
-      {current && items.length > 1 ? (
-        <nav className="subnav" aria-label={current.label}>
-          {items.map((i) => {
-            const active = isAt(i.to, path);
-            const count = i.count ? counts[i.count] : 0;
-            return (
-              <Link key={i.to} to={i.to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
-                {i.label}
-                {count ? <span className="count">{count}</span> : null}
-              </Link>
-            );
-          })}
-        </nav>
-      ) : null}
-      <main className="content">
-        <Page path={path} />
-      </main>
+      <nav className="rail" aria-label="Main">
+        <Link to="/ui" className="rail-logo" aria-label="Azhi Flow home" title="Azhi Flow">az</Link>
+        {SECTIONS.map((s) => {
+          const active = s === current;
+          const count = s.count ? counts[s.count] : 0;
+          return (
+            <Link key={s.label} to={s.to} className={`rail-link ${active ? 'active' : ''}`} title={s.label} aria-label={count ? `${s.label}, ${count} waiting` : s.label} aria-current={active && s.to === path ? 'page' : undefined}>
+              <Icon name={s.icon} size={22} />
+              <span className="rail-label">{s.label}</span>
+              {count ? <span className="rail-badge" aria-hidden="true">{count}</span> : null}
+            </Link>
+          );
+        })}
+        <span className="rail-gap" />
+        <button type="button" className="rail-link" title="Sign out" aria-label="Sign out" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>
+          <Icon name="signout" size={22} />
+          <span className="rail-label">Sign out</span>
+        </button>
+      </nav>
+      <div className="main">
+        <header className="topbar">
+          {current && items.length > 1 ? (
+            <nav className="subnav" aria-label={current.label}>
+              {items.map((i) => {
+                const active = isAt(i.to, path);
+                const count = i.count ? counts[i.count] : 0;
+                return (
+                  <Link key={i.to} to={i.to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
+                    {i.label}
+                    {count ? <span className="count">{count}</span> : null}
+                  </Link>
+                );
+              })}
+            </nav>
+          ) : <span className="topbar-title">{current?.label ?? 'Azhi Flow'}</span>}
+          <span className="top-right">
+            <ThemeSwitch />
+            {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
+            {role ? <span className="role-pill">{role}</span> : null}
+          </span>
+        </header>
+        <main className="content">
+          <Page path={path} />
+        </main>
+      </div>
     </div>
   );
 }

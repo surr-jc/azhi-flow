@@ -1,8 +1,9 @@
-import { Background, Controls, Handle, MarkerType, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { Background, BackgroundVariant, Controls, Handle, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
 import { stringify } from 'yaml';
+import { Icon } from '../icons';
 import { keySettings, type KeySetting } from '../stepHelp';
 import { Badge, Json, StateBadge } from '../ui';
 import { Formatted } from './Rich';
@@ -31,18 +32,18 @@ export interface NodeRunState {
   route?: string;
 }
 
-export const TYPE: Record<string, { glyph: string; label: string }> = {
-  tool: { glyph: '⚙', label: 'Tool' },
-  script: { glyph: '{ }', label: 'Script' },
-  agent: { glyph: '✦', label: 'Agent' },
-  retrieve: { glyph: '⌕', label: 'Retrieve' },
-  condition: { glyph: '◇', label: 'Condition' },
-  parallel: { glyph: '⫴', label: 'Parallel' },
-  loop: { glyph: '↻', label: 'Loop' },
-  subworkflow: { glyph: '⧉', label: 'Subworkflow' },
-  approval: { glyph: '⛉', label: 'Approval gate' },
-  report: { glyph: '▤', label: 'Report' },
-  notify: { glyph: '➤', label: 'Notify' },
+export const TYPE: Record<string, { glyph: string; icon: string; label: string }> = {
+  tool: { glyph: '⚙', icon: 'tool', label: 'Tool' },
+  script: { glyph: '{ }', icon: 'script', label: 'Script' },
+  agent: { glyph: '✦', icon: 'agent', label: 'Agent' },
+  retrieve: { glyph: '⌕', icon: 'retrieve', label: 'Retrieve' },
+  condition: { glyph: '◇', icon: 'condition', label: 'Condition' },
+  parallel: { glyph: '⫴', icon: 'parallel', label: 'Parallel' },
+  loop: { glyph: '↻', icon: 'loop', label: 'Loop' },
+  subworkflow: { glyph: '⧉', icon: 'subworkflow', label: 'Subworkflow' },
+  approval: { glyph: '⛉', icon: 'gate', label: 'Approval gate' },
+  report: { glyph: '▤', icon: 'report', label: 'Report' },
+  notify: { glyph: '➤', icon: 'notify', label: 'Notify' },
 };
 
 /** Run details (from GET /v1/runs/:id) to a state per node. */
@@ -80,10 +81,10 @@ function reduce(nodes: PlanNode[]): Map<string, string[]> {
   return shown;
 }
 
-const W = 210;
-const H = 78;
-const GX = 70;
-const GY = 26;
+const W = 184;
+const H = 116;
+const GX = 86;
+const GY = 30;
 
 /** How much of each step's configuration the cards show. */
 export type CardDetail = 'names' | 'key' | 'all';
@@ -97,7 +98,7 @@ export type CardSetting = KeySetting & { changed?: boolean };
 function cardSize(detail: CardDetail, rows: number) {
   if (detail === 'names') return { w: W, h: H };
   const n = detail === 'key' ? Math.min(KEY_ROWS, rows) : rows;
-  return { w: 250, h: 64 + Math.max(1, n) * ROW_H };
+  return { w: 250, h: 72 + Math.max(1, n) * ROW_H };
 }
 
 /** Longest-path layers, ordered within each layer by the average position of their parents. */
@@ -150,20 +151,18 @@ export interface CanvasEdit {
 
 function Card({ data }: NodeProps<Node<CardData>>) {
   const { node, run, live, editing, problems, toolbar, chips, rows, size } = data;
-  const t = TYPE[node.type] ?? { glyph: '•', label: node.type };
+  const t = TYPE[node.type] ?? { glyph: '•', icon: 'step', label: node.type };
   const state = live ? (run?.state ?? 'pending') : undefined;
   const sub = node.type === 'agent' ? node.def?.profile : node.type === 'tool' ? node.def?.tool : node.type === 'approval' ? `role ${node.def?.role ?? 'operator'}` : node.type === 'condition' ? Object.keys(node.def?.routes ?? {}).join(' / ') : node.type === 'notify' ? node.def?.channel : node.type === 'script' ? node.def?.runtime : undefined;
   return (
     <div className={`wf-card t-${node.type} ${state ? `st-${state}` : ''} ${problems ? 'has-problem' : ''} ${rows ? 'with-rows' : ''}`} style={{ width: size.w, height: size.h }} title={node.def?.description ?? `${node.id} (${t.label})`}>
       <Handle type="target" position={Position.Left} isConnectable={Boolean(editing)} />
+      {node.def?.guard ? <span className="wf-guard" title="Guarded write: allowed only where the guard expression says" aria-label="Guarded"><Icon name="lock" size={14} /></span> : null}
       <div className="wf-head">
-        <span className="wf-glyph" aria-hidden="true">{t.glyph}</span>
+        <span className="wf-glyph" aria-hidden="true"><Icon name={t.icon} size={rows ? 22 : 34} /></span>
         <span className="wf-id">{node.id}</span>
         {rows?.some((r) => r.changed) ? <span className="wf-changed" title="Changed since the saved version">changed</span> : null}
         {problems ? <span className="wf-problem" title={`${problems} problem(s)`}>{problems}</span> : null}
-      </div>
-      <div className="wf-sub">
-        <span>{t.label}{sub && !rows ? ` · ${sub}` : ''}</span>
       </div>
       {rows ? (
         <dl className="wf-rows">
@@ -174,8 +173,7 @@ function Card({ data }: NodeProps<Node<CardData>>) {
             </div>
           )) : <div><dt>Settings</dt><dd>none yet</dd></div>}
         </dl>
-      ) : null}
-      {rows ? null : state ? (
+      ) : state ? (
         <div className="wf-state">
           <StateBadge state={state} />
           {run && run.attempts > 1 ? <span className="muted small"> ×{run.attempts}</span> : null}
@@ -183,9 +181,9 @@ function Card({ data }: NodeProps<Node<CardData>>) {
         </div>
       ) : chips?.length ? (
         <div className="wf-chips">{chips.map((c) => <span key={c.label} className={`chip-effect ${c.tone}`}>{c.label}</span>)}</div>
-      ) : node.def?.description ? (
-        <div className="wf-desc">{node.def.description}</div>
-      ) : null}
+      ) : (
+        <div className="wf-sub">{sub ?? t.label}</div>
+      )}
       <Handle type="source" position={Position.Right} isConnectable={Boolean(editing)} />
       {toolbar ? <NodeToolbar isVisible position={Position.Bottom} offset={14} className="wf-toolbar">{toolbar}</NodeToolbar> : null}
     </div>
@@ -280,10 +278,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
         selected: edgeSel === `${dep}->${n.id}`,
         source: dep,
         target: n.id,
-        type: 'smoothstep',
-        className: cls,
+        type: 'default',
+        className: cls || (live ? '' : `es-${planNodes.find((x) => x.id === dep)?.type ?? 'tool'}`),
         animated: live && (target === 'running' || target === 'waiting'),
-        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
         ...(routed ? { label: n.route!.route, labelBgPadding: [6, 2] as [number, number], labelBgBorderRadius: 4, labelClassName: 'e-label', labelBgClassName: 'e-label-bg' } : {}),
       };
     }),
@@ -405,7 +402,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
           }}
           aria-label="Workflow graph"
         >
-          <Background gap={20} size={1} />
+          <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
           <Controls showInteractive={false} position={controls} orientation="horizontal" />
         </ReactFlow>
         {children}

@@ -4,6 +4,7 @@ import { parse, stringify } from 'yaml';
 import { api, atLeast, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { ModelChoice, ModelSteps } from '../components/ModelChoice';
+import { Icon } from '../icons';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { graphOf } from '../graph';
 import { Link, useRoute } from '../router';
@@ -318,8 +319,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       <div className="ed-palette" role="toolbar" aria-label="Add a step">
         <span className="muted small">Add a step{selected ? ` after ${selected}` : ''}:</span>
         {ADDABLE.map((t) => (
-          <button key={t} type="button" className="small" onClick={() => addStep(t)} aria-label={`Add ${TYPE[t]?.label ?? t} step`}>
-            <span aria-hidden="true">{TYPE[t]?.glyph} </span>{TYPE[t]?.label ?? t}
+          <button key={t} type="button" className={`small t-${t}`} onClick={() => addStep(t)} aria-label={`Add ${TYPE[t]?.label ?? t} step`}>
+            <span className="pal-ico"><Icon name={TYPE[t]?.icon ?? 'step'} size={16} /></span>{TYPE[t]?.label ?? t}
           </button>
         ))}
       </div>
