@@ -299,10 +299,10 @@ interface RemoteConnection { id: string; name: string; url: string; auth_kind: '
 interface RemoteTool { name: string; description: string; input_schema: JsonSchema }
 
 /** Guided registration keeps endpoints and OAuth tokens out of free-form tool JSON. */
-export function McpForm() {
+export function McpForm({ initial }: { initial?: { name?: string; url?: string } } = {}) {
   const qc = useQueryClient();
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [url, setUrl] = useState(initial?.url ?? '');
   const [auth, setAuth] = useState<'none' | 'oauth'>('none');
   const [authorizationUrl, setAuthorizationUrl] = useState('');
   const [tokenUrl, setTokenUrl] = useState('');
