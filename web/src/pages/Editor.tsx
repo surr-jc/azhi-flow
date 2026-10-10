@@ -479,6 +479,13 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
     else next[key] = value;
     onChange(next);
   };
+  /** Script resource limits live under `limits`, unlike the common step timeout. */
+  const setScriptLimit = (key: 'time' | 'memory_mb', value: string | number | undefined) => {
+    const limits = { ...((step.limits ?? {}) as Record<string, unknown>) };
+    if (value === undefined || value === '') delete limits[key];
+    else limits[key] = value;
+    set('limits', Object.keys(limits).length ? limits : undefined);
+  };
   const deps: string[] = step.depends_on ?? [];
   const t = TYPE[step.type];
   // A setting differs from the saved version: the row is marked and says what it was.
@@ -560,6 +567,16 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
 
         <section className="set-group" aria-label="Limits">
           <h3>Limits</h3>
+          {step.type === 'script' ? (
+            <>
+              <SettingRow label="Script time limit" help="The maximum time for this script. It takes precedence over the general timeout.">
+                {(fid) => <input id={fid} value={(step.limits as Record<string, unknown> | undefined)?.time as string ?? ''} placeholder="For example 2m" onChange={(e) => setScriptLimit('time', e.target.value || undefined)} />}
+              </SettingRow>
+              <SettingRow label="Memory limit (MB)" help="Maximum memory for this script. This is enforced only by workers that advertise native memory-limit support (currently Linux workers with prlimit).">
+                {(fid) => <input id={fid} type="number" min="16" step="1" value={(step.limits as Record<string, unknown> | undefined)?.memory_mb as number ?? ''} placeholder="For example 512" onChange={(e) => setScriptLimit('memory_mb', e.target.value === '' ? undefined : Number(e.target.value))} />}
+              </SettingRow>
+            </>
+          ) : null}
           {COMMON.map(row)}
         </section>
       </div>
