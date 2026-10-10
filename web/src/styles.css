@@ -922,3 +922,17 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .wiz-card span { color: var(--muted); font-size: 13px; }
 .wiz-env .row { align-items: center; }
 .wiz-env > button { justify-self: start; }
+
+/* Datasets guide */
+.ds-details { padding: 12px 16px; }
+.ds-details > summary { cursor: pointer; }
+.ds-guide { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 24px; margin-top: 12px; }
+.ds-guide h4, .ds-starter h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.ds-guide p, .ds-guide ul, .ds-guide ol { margin: 4px 0; }
+.ds-guide ul, .ds-guide ol { padding-left: 18px; }
+.ds-starters { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 8px; }
+.ds-starter { border: 1px solid var(--line); border-radius: 18px; padding: 12px 14px; display: grid; gap: 4px; align-content: start; background: var(--bg); }
+.ds-starter h4 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.ds-starter p { margin: 0; }
+.ds-paste { margin-top: 10px; }
+.ds-paste summary { cursor: pointer; font-weight: 600; }

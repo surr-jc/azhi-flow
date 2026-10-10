@@ -187,6 +187,12 @@ export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean 
       refresh();
     },
   });
+  const [pastePath, setPastePath] = useState('');
+  const [pasteText, setPasteText] = useState('');
+  const paste = useMutation({
+    mutationFn: () => api(`/v1/datasets/${encodeURIComponent(name)}/documents`, { method: 'POST', body: { documents: [{ path: pastePath.trim(), content: pasteText }] } }),
+    onSuccess: () => { setPastePath(''); setPasteText(''); refresh(); },
+  });
   const revoke = useMutation({ mutationFn: (path: string) => api(`/v1/datasets/${encodeURIComponent(name)}/documents?path=${encodeURIComponent(path)}`, { method: 'DELETE' }), onSuccess: refresh });
   const publish = useMutation({
     mutationFn: () => api<{ revision: number; documents: number; chunks: number }>(`/v1/datasets/${encodeURIComponent(name)}/publish`, { method: 'POST', body: tag.trim() ? { tag: tag.trim() } : {} }),
@@ -206,10 +212,18 @@ export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean 
         <Panel title="Add documents">
           <div className="row">
             <input ref={input} type="file" multiple accept=".md,.markdown,.txt,.text" aria-label="Documents" onChange={(e) => e.target.files?.length && add.mutate([...e.target.files])} />
-            <span className="muted small">Markdown and plain text. A document with the same name is replaced.</span>
+            <span className="muted small">Markdown (.md) and plain text (.txt). A document with the same name is replaced.</span>
           </div>
+          <details className="ds-paste">
+            <summary>Or write or paste a document</summary>
+            <form className="lib-form" onSubmit={(e) => { e.preventDefault(); paste.mutate(); }}>
+              <label>File name<input required pattern=".+\.(md|markdown|txt|text)" value={pastePath} onChange={(e) => setPastePath(e.target.value)} placeholder="deploy-checklist.md" /><span className="muted small">Ends in .md or .txt.</span></label>
+              <label className="wide">Content<span className="muted small">Use headings (# Title, ## Section). Each section becomes a passage agents can cite.</span><textarea className="mono" rows={10} required value={pasteText} onChange={(e) => setPasteText(e.target.value)} /></label>
+              <div className="wide row"><button type="submit" disabled={paste.isPending}>Add document</button></div>
+            </form>
+          </details>
           {add.data ? <p className="ok-note">{add.data.documents.filter((x) => x.changed).length} of {add.data.documents.length} changed. Publish to index them.</p> : null}
-          <ErrorNote error={add.error ?? revoke.error} />
+          <ErrorNote error={add.error ?? paste.error ?? revoke.error} />
         </Panel>
       ) : null}
       <Panel title={`Documents (${d.documents.filter((x) => !x.revoked).length})`}>

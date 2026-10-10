@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ASSET_KINDS, archiveAsset, attachAsset, createAsset, getAsset, harnessGuides, listAssets, openCodeGuide, publishAsset, renderClaudeCode, renderOpenCode, updateAsset, workflowAssets } from '../server/assets.js';
+import { ASSET_KINDS, archiveAsset, attachAsset, createAsset, getAsset, harnessGuides, listAssets, openCodeGuide, publishAsset, renderClaudeCode, renderOpenCode, updateAsset, validateAsset, workflowAssets } from '../server/assets.js';
 import { BUILTIN_SOURCES, defaultDeps, importItem, marketConfig, resolve, saveMarketConfig, search, sourcesFor, type MarketDeps } from '../server/marketplace.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { requireRole } from './auth.js';
@@ -22,6 +22,14 @@ export function registerAssetRoutes(app: FastifyInstance, ctx: AppContext, deps:
   app.get('/v1/workflows/:slug/opencode-export', async (req) => { const p = user(req); const assets = await workflowAssets(ctx, p.workspaceId, (req.params as { slug: string }).slug); return { provider: 'opencode', files: renderOpenCode(assets) }; });
 
   app.get('/v1/workflows/:slug/claude-export', async (req) => { const p = user(req); const assets = await workflowAssets(ctx, p.workspaceId, (req.params as { slug: string }).slug); return { provider: 'claude-code', files: renderClaudeCode(assets) }; });
+  // The files and steps for a definition that is not saved yet (the Add MCP server wizard shows this as you type).
+  app.post('/v1/assets/preview-guides', async (req) => {
+    const p = user(req); requireRole(p, 'author');
+    const b = body.pick({ kind: true, slug: true, definition: true }).parse(req.body);
+    const errors = validateAsset(b.kind, b.slug, b.definition);
+    if (errors.length) return { ok: false, errors, guides: [] };
+    return { ok: true, errors: [], guides: harnessGuides(b) };
+  });
   app.get('/v1/assets/:id/harness-guides', async (req) => { const p = user(req); const a = await getAsset(ctx, p.workspaceId, (req.params as { id: string }).id); if (!a) throw new AzhiError(ErrorClass.invalidInput, 'portable asset not found'); const v = a.versions.find((x: any) => x.version === a.current_version); return harnessGuides({ kind: a.kind, slug: a.slug, definition: v.definition }); });
 
   // Live marketplaces: the official MCP Registry and GitHub plugin marketplaces.

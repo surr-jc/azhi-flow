@@ -36,7 +36,7 @@ export function Connections({ system }: { system?: string }) {
   const missing = (list: Tool[]) => [...new Set(list.map((t) => t.credential).filter((c): c is string => Boolean(c)))].filter((c) => known && !set.has(c));
   return (
     <>
-      <PageHead title="Connections" sub="The systems your workflows reach: their tokens, the repositories they may use, each tool and the steps that call it." />
+      <PageHead title="Connections" sub="The systems your workflows reach: their tokens, the repositories they may use, each tool and the steps that call it. To give a harness agent its own MCP server, use the Library." />
       <ErrorNote error={tools.error ?? usage.error} />
       {!tools.data ? <Loading /> : (
         <div className="conn">
