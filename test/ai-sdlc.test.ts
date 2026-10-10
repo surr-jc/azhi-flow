@@ -51,7 +51,9 @@ describe('AI-SDLC example: definition', () => {
   });
 
   it('routes through the definition-of-ready gate, the weight, and the fix gates', () => {
-    expect(node('dor_gate').routes).toEqual({ ready: ['requirements'], refine: ['dor_message'] });
+    expect(node('dor_gate').routes).toEqual({ ready: ['dor_pass'], clarify: ['dor_ask_message', 'clarification'], stop: ['dor_message'] });
+    expect(node('clarification')).toMatchObject({ type: 'approval', role: 'author', on_expiry: 'reject', decision_schema: { required: ['answers'] } });
+    expect(node('clarified')).toMatchObject({ merge: 'any', depends_on: ['dor_pass'] });
     expect(node('weight').routes).toEqual({ lite: ['lite_review_1'], full: ['code_1', 'test_1', 'security_1'] });
     expect(node('gate_1').routes.fix).toEqual(['fix_1']);
     expect(node('gate_2').routes.fix).toEqual(['fix_2']);
@@ -62,12 +64,20 @@ describe('AI-SDLC example: definition', () => {
     expect(def.nodes.find((n) => n.id === 'gate_3')).toBeUndefined();
   });
 
-  it('the join runs only when a build ran: it depends on nothing that runs before the definition-of-ready gate', () => {
-    // finalize merges alternative branches (merge: any), so it runs when any dependency got through.
-    // A dependency on intake would make it run, and fail, after a ticket was sent back as not ready.
+  it('every join runs only when its branches ran: none depends on a step that runs before the readiness gate', () => {
+    // A merge node (merge: any) runs when any dependency got through. A dependency on intake, say,
+    // would make it run, and fail, after a ticket was stopped at the gate.
     const r = compile(def, { pkg, catalog: staticCatalog(tools) });
-    const finalize = r.plan!.nodes.find((n) => n.id === 'finalize')!;
-    for (const early of ['source', 'jira_issue', 'github_issue', 'intake', 'dor_check', 'dor_gate', 'dor_message', 'dor_send_back']) expect(finalize.deps, early).not.toContain(early);
+    const merges = r.plan!.nodes.filter((n) => (n.def as { merge?: string }).merge === 'any' && n.id !== 'intake');
+    expect(merges.map((n) => n.id).sort()).toEqual(['clarified', 'finalize']);
+    for (const m of merges) for (const early of ['source', 'jira_issue', 'github_issue', 'intake', 'dor_check', 'dor_gate', 'dor_message', 'dor_send_back', 'dor_ask_message', 'dor_ask_notify']) expect(m.deps, `${m.id} -> ${early}`).not.toContain(early);
+    // The final join must also read nothing from before the design review: a rejected review ends the
+    // run, and any earlier step would let the join start anyway and fail.
+    const finalize = merges.find((m) => m.id === 'finalize')!;
+    for (const early of ['requirements', 'design', 'weight_proposal', 'clarification', 'clarified', 'dor_pass']) expect(finalize.deps, `finalize -> ${early}`).not.toContain(early);
+    expect(merges.find((m) => m.id === 'clarified')!.deps.sort()).toEqual(['clarification', 'dor_pass']);
+    // The agents after the join take their ticket from intake, so they run only when the join did.
+    for (const id of ['requirements', 'design']) expect(r.plan!.nodes.find((n) => n.id === id)!.deps).toContain('clarified');
   });
 
   it('gives the three full reviewers different models and builds only after the design review', () => {
@@ -95,13 +105,20 @@ describe('AI-SDLC example: definition', () => {
 
 describe('AI-SDLC example: routing expressions', () => {
   const dor = (gates: any[], dispatchable = true) => gate('dor_gate', { dor_check: { gates, dispatchable } });
-  const pass = { status: 'pass', confidence: 'high' };
+  const pass = { gate: 'testable_criteria', status: 'pass', confidence: 'high' };
+  const fail = (g = 'specific_surface', confidence = 'high') => ({ gate: g, status: 'fail', confidence });
 
-  it('definition of ready: ready only when every gate passes with confidence and the work is dispatchable', () => {
+  it('definition of ready: ready, a question a person can answer, or a stop that an answer cannot fix', () => {
     expect(dor([pass, pass, pass])).toBe('ready');
-    expect(dor([pass, { status: 'fail', confidence: 'high' }])).toBe('refine');
-    expect(dor([pass, { status: 'pass', confidence: 'low' }])).toBe('refine');
-    expect(dor([pass], false)).toBe('refine');
+    expect(dor([pass, fail()])).toBe('clarify');
+    expect(dor([pass, fail('stated_assumptions')])).toBe('clarify');
+    expect(dor([pass, { ...pass, confidence: 'low' }])).toBe('clarify');
+    expect(dor([pass, fail('one_pr_scope')])).toBe('stop');
+    expect(dor([pass, fail('one_pr_scope'), fail()])).toBe('stop');
+    expect(dor([pass, pass], false)).toBe('stop');
+    expect(dor([pass, fail()], false)).toBe('stop');
+    // Scope passing but unsure is still a question, not a stop.
+    expect(dor([{ gate: 'one_pr_scope', status: 'pass', confidence: 'low' }])).toBe('clarify');
   });
 
   it('weight: lite unless the risk, a sensitive area, a migration, the width or the confidence says full', () => {
@@ -171,7 +188,7 @@ describe.skipIf(!hasPython)('AI-SDLC example: the join and the evidence record',
   const scope = (nodes: Record<string, unknown>, finalWeight = 'full') => ({
     inputs: { repo: 'acme/shop', ticket: 'acme/shop#12' },
     config,
-    nodes: Object.fromEntries(Object.entries({ intake: { key: 'acme/shop#12' }, design_review: { by: 'ana', data: {} }, weight_proposal: { route: 'full' }, weight: { route: finalWeight }, ...nodes }).map(([k, v]) => [k, { output: v }])),
+    nodes: Object.fromEntries(Object.entries({ intake: { key: 'acme/shop#12' }, design_review: { by: 'ana', data: {} }, weight_record: { proposed: 'full', final: finalWeight, overridden_by: finalWeight === 'full' ? null : 'ana' }, ...nodes }).map(([k, v]) => [k, { output: v }])),
   });
   const run = (nodes: Record<string, unknown>, finalWeight = 'full') => {
     const input = evaluateCel(node('finalize').input.map, scope(nodes, finalWeight));

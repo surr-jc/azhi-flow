@@ -95,3 +95,92 @@ export async function postApprovalToSlack(ctx: AppContext, workspaceId: string, 
     await audit(ctx, workspaceId, null, 'approval.slack_failed', { run: runId, node: nodeId, error: (e as Error).message });
   }
 }
+
+// ---- Answering from Slack: a modal built from the decision schema ----------------------------
+
+export interface FormField {
+  name: string;
+  kind: 'text' | 'select' | 'number';
+  label: string;
+  hint?: string;
+  required: boolean;
+  options?: string[];
+  integer?: boolean;
+}
+
+/**
+ * The fields of a decision schema that Slack can collect in a modal: strings, enums, numbers and
+ * booleans (a Yes/No select). Null when there is nothing to ask, or when any property is something
+ * a modal cannot express (objects, arrays, composed schemas): then Slack points to mission control.
+ */
+export function formFields(schema: Record<string, any> | undefined): FormField[] | null {
+  const props = schema?.properties as Record<string, any> | undefined;
+  if (!props || !Object.keys(props).length || Object.keys(props).length > 20) return null;
+  const required = new Set<string>(Array.isArray(schema?.required) ? schema!.required : []);
+  const out: FormField[] = [];
+  for (const [name, p] of Object.entries(props)) {
+    if (!p || typeof p !== 'object') return null;
+    const base = { name, label: String(p.title ?? name), hint: typeof p.description === 'string' ? p.description : undefined, required: required.has(name) };
+    if (Array.isArray(p.enum) && p.enum.length && p.enum.length <= 100 && p.enum.every((v: unknown) => typeof v === 'string')) out.push({ ...base, kind: 'select', options: p.enum as string[] });
+    else if (p.type === 'boolean') out.push({ ...base, kind: 'select', options: ['yes', 'no'] });
+    else if (p.type === 'string' && !p.enum) out.push({ ...base, kind: 'text' });
+    else if (p.type === 'number' || p.type === 'integer') out.push({ ...base, kind: 'number', integer: p.type === 'integer' });
+    else return null;
+  }
+  return out;
+}
+
+const plain = (t: string, n = 150) => ({ type: 'plain_text', text: clip(t, n) });
+
+/** The modal Slack opens when someone presses Approve on an approval that needs answers. */
+export function approvalModal(a: { run: string; node: string; responseUrl?: string; fields: FormField[]; intro: string }) {
+  return {
+    type: 'modal',
+    callback_id: 'azhi_approval_form',
+    private_metadata: JSON.stringify({ run: a.run, node: a.node, ...(a.responseUrl ? { response_url: a.responseUrl } : {}) }),
+    title: plain(`Approve ${a.node}`, 24),
+    submit: plain('Approve', 24),
+    close: plain('Cancel', 24),
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: clip(a.intro, 2900) } },
+      ...a.fields.map((f) => ({
+        type: 'input',
+        block_id: `f_${f.name}`,
+        optional: !f.required,
+        label: plain(f.label, 2000),
+        ...(f.hint ? { hint: plain(f.hint, 2000) } : {}),
+        element:
+          f.kind === 'select'
+            ? { type: 'static_select', action_id: f.name, options: f.options!.map((o) => ({ text: plain(o, 75), value: o })) }
+            : { type: 'plain_text_input', action_id: f.name, multiline: f.kind === 'text' },
+      })),
+    ],
+  };
+}
+
+/** Reads the submitted modal back into decision data, typed by the schema. Throws with a field's message. */
+export function modalData(schema: Record<string, any> | undefined, fields: FormField[], values: Record<string, Record<string, any>> | undefined): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const f of fields) {
+    const v = values?.[`f_${f.name}`]?.[f.name];
+    const raw: string = f.kind === 'select' ? (v?.selected_option?.value ?? '') : String(v?.value ?? '').trim();
+    if (!raw) continue;
+    const type = schema?.properties?.[f.name]?.type;
+    if (f.kind === 'number') {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || (f.integer && !Number.isInteger(n))) throw Object.assign(new Error(f.integer ? 'Enter a whole number.' : 'Enter a number.'), { field: f.name });
+      data[f.name] = n;
+    } else if (type === 'boolean') data[f.name] = raw === 'yes';
+    else data[f.name] = raw;
+  }
+  return data;
+}
+
+/** What a waiting approval asked, for the modal: its message and payload, when stored inline. */
+export async function approvalAsk(ctx: AppContext, runId: string, nodeId: string): Promise<{ def: ApprovalNode; message: string; payload: string } | undefined> {
+  const row = (await ctx.pool.query(`SELECT v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1`, [runId])).rows[0];
+  const node = (row?.plan as ExecutionPlan | undefined)?.nodes.find((n) => n.id === nodeId);
+  if (!node || node.type !== 'approval') return undefined;
+  const ev = (await ctx.pool.query(`SELECT data FROM run_events WHERE run_id=$1 AND node_id=$2 AND kind='approval.requested' ORDER BY seq DESC LIMIT 1`, [runId, nodeId])).rows[0]?.data as { message?: unknown; payload?: unknown } | undefined;
+  return { def: node.def as ApprovalNode, message: text(ev?.message), payload: text(ev?.payload) };
+}

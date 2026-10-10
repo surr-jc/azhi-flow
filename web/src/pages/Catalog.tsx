@@ -4,6 +4,7 @@ import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Loading, PageHead, Panel, Table } from '../ui';
+import { DatasetGuide } from '../components/DatasetGuide';
 import { McpForm, NewDataset, ToolForm } from './Authoring';
 
 interface Dataset { name: string; trusted: boolean; latest_revision: number | null; tags: Record<string, number>; documents: number }
@@ -14,9 +15,10 @@ export function Datasets() {
   const q = useQuery({ queryKey: ['datasets'], queryFn: () => api<Dataset[]>('/v1/datasets') });
   return (
     <>
-      <PageHead title="Datasets" sub="Knowledge that agent and retrieve nodes read, pinned per run. Add documents, then publish a revision to index them." />
+      <PageHead title="Datasets" sub="Documents your agents can search and cite: guidelines, runbooks, decisions, postmortems. Add documents, then publish a revision to index them." />
       <ErrorNote error={q.error} />
-      {atLeast(me.data?.role, 'author') ? <Panel title="New dataset"><NewDataset onCreated={(n) => navigate(`/ui/datasets/${encodeURIComponent(n)}`)} /></Panel> : null}
+      {q.data ? <DatasetGuide existing={q.data.map((d) => d.name)} canEdit={atLeast(me.data?.role, 'author')} onCreated={(n) => navigate(`/ui/datasets/${encodeURIComponent(n)}`)} /> : null}
+      {atLeast(me.data?.role, 'author') ? <Panel title="Or create an empty dataset"><NewDataset onCreated={(n) => navigate(`/ui/datasets/${encodeURIComponent(n)}`)} /></Panel> : null}
       <Panel>
         {!q.data ? <Loading /> : (
           <Table head={['Dataset', 'Trust', 'Documents', 'Latest revision', 'Tags']} empty="No datasets yet.">
@@ -47,12 +49,12 @@ export function Tools() {
     <>
       <PageHead
         title="Tools"
-        sub="Every external call goes through the gateway as one of these tools. Writes are recorded in each run's action ledger."
-        actions={admin ? <div className="row"><button type="button" onClick={() => setEditing({ key: `mcp-${Date.now()}`, mode: 'mcp' })}>Add remote MCP</button><button type="button" onClick={() => setEditing({ key: `new-${Date.now()}`, mode: 'tool' })}>Register a tool</button></div> : undefined}
+        sub={<>Gateway tools: what tool steps and model agents call. Every call goes through the gateway, and writes are recorded in each run's action ledger. Harness agents (OpenCode, Claude Code) get their own MCP servers from the <Link to="/ui/assets">Library</Link> instead.</>}
+        actions={admin ? <div className="row"><button type="button" onClick={() => setEditing({ key: `mcp-${Date.now()}`, mode: 'mcp' })}>Add hosted MCP server</button><button type="button" onClick={() => setEditing({ key: `new-${Date.now()}`, mode: 'tool' })}>Register a tool</button></div> : undefined}
       />
       <ErrorNote error={q.error} />
       {editing ? (
-        <Panel title={editing.mode === 'mcp' ? 'Add remote MCP' : editing.spec ? `Change ${editing.spec.id}@${editing.spec.version}` : 'Register a tool'} action={<button type="button" className="small" onClick={() => setEditing(undefined)}>Close</button>}>
+        <Panel title={editing.mode === 'mcp' ? 'Add hosted MCP server' : editing.spec ? `Change ${editing.spec.id}@${editing.spec.version}` : 'Register a tool'} action={<button type="button" className="small" onClick={() => setEditing(undefined)}>Close</button>}>
           {editing.mode === 'mcp' ? <McpForm key={editing.key} /> : <ToolForm key={editing.key} from={editing.spec} />}
         </Panel>
       ) : null}

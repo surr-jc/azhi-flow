@@ -100,7 +100,7 @@ export function sectionsOf(d: SettingsData): Section[] {
     { id: 'connections', icon: '⛓', title: 'Connections', summary: tools.length ? [...new Set(tools.map((t) => t.id.split('.')[0]))].join(' · ') : 'No tools called', chip: { label: String(tools.length) } },
     { id: 'datasets', icon: '☰', title: 'Datasets', summary: datasets.size ? [...datasets.keys()].join(', ') : 'None used', chip: { label: String(datasets.size) } },
     { id: 'limits', icon: '◈', title: 'Limits', summary: limited.length ? `${plural(limited.length, 'step')} with a limit` : 'Defaults only', chip: { label: String(limited.length) } },
-    { id: 'assets', icon: '❖', title: 'Portable assets', summary: d.assets ? (d.assets.length ? d.assets.map((a) => a.name).join(', ') : 'None attached') : '…', chip: d.assets ? { label: String(d.assets.length) } : undefined },
+    { id: 'assets', icon: '❖', title: 'Library items', summary: d.assets ? (d.assets.length ? d.assets.map((a) => a.name).join(', ') : 'None attached') : '…', chip: d.assets ? { label: String(d.assets.length) } : undefined },
     { id: 'files', icon: '✎', title: 'Version and files', summary: `v${d.version.version}${d.version.draft ? ' draft' : ''} · ${plural(d.nodes.length, 'step')}` },
   ];
 }
@@ -170,7 +170,7 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
       return (
         <>
           <p className="muted">Values fixed when the workflow was installed. Steps read them as <span className="mono">config.name</span>.</p>
-          {rows.length ? rows.map(([k, v]) => <ConfigRow key={k} label={<span className="mono">{k}</span>} value={unfilled(v) ? 'not set' : typeof v === 'string' ? v : JSON.stringify(v)} tone={unfilled(v) ? 'warn' : undefined} help={unfilled(v) ? 'This was left blank when installed. Set it from the Marketplace page of this workflow, then publish again.' : undefined} />) : <p className="muted">This workflow has no config values.</p>}
+          {rows.length ? rows.map(([k, v]) => <ConfigRow key={k} label={<span className="mono">{k}</span>} value={unfilled(v) ? 'not set' : typeof v === 'string' ? v : JSON.stringify(v)} tone={unfilled(v) ? 'warn' : undefined} help={unfilled(v) ? 'This was left blank when installed. Set it from the template page of this workflow, then publish again.' : undefined} />) : <p className="muted">This workflow has no config values.</p>}
         </>
       );
     }
@@ -291,7 +291,7 @@ function Connections({ d, admin }: { d: SettingsData; admin: boolean }) {
       {gh.length ? (
         <div className="sd-group">
           <h3>Allowed repositories</h3>
-          <p className="muted small">The GitHub tools above refuse any other repository. To use this workflow on another one, add it here: no reinstall from the Marketplace is needed.</p>
+          <p className="muted small">The GitHub tools above refuse any other repository. To use this workflow on another one, add it here: no reinstall from the templates is needed.</p>
           <RepoList
             refs={refs}
             repos={repos}
@@ -336,7 +336,7 @@ export function PortableAssets({ slug, assets }: { slug: string; assets?: Portab
           <div className="asset-attached">{assets.map((a) => <span className="badge" key={a.id}>{a.kind}: {a.name} <span className="mono">v{a.version}</span></span>)}</div>
           <p><button type="button" onClick={download}>Download OpenCode bundle</button></p>
         </>
-      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/assets">Portable assets</Link> library.</p>}
+      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/assets">Library</Link>.</p>}
       {error ? <div className="error">{error}</div> : null}
     </>
   );

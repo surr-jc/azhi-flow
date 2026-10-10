@@ -107,7 +107,7 @@ export function Examples() {
   if (id) {
     return (
       <>
-        <p className="small"><Link to="/ui/examples">← Marketplace</Link></p>
+        <p className="small"><Link to="/ui/examples">← Workflow templates</Link></p>
         <ErrorNote error={q.error} />
         {!q.data ? <Loading /> : one ? <ExampleDetail example={one} /> : <p className="muted">This server has no workflow named {id}.</p>}
       </>
@@ -119,7 +119,7 @@ export function Examples() {
   const featured = !term && !category ? shown.find((e) => metaOf(e).featured) : undefined;
   return (
     <>
-      <PageHead title="Marketplace" sub="Ready-made workflows bundled with Azhi. Installing one registers its tools, saves it as a signed draft and lists the secrets it needs. You can open any of them in the editor and change it." />
+      <PageHead title="Workflow templates" sub="Ready-made workflows bundled with Azhi. Installing one registers its tools, saves it as a signed draft and lists the secrets it needs. You can open any of them in the editor and change it." />
       <ErrorNote error={q.error} />
       {!q.data ? <Loading /> : all.length === 0 ? <p className="muted">This server has no bundled workflows.</p> : (
         <>

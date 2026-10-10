@@ -8,6 +8,11 @@ The plan is what lets an engineer (another agent) implement the change in one pa
 research. Context is king: every file, pattern and check it needs is in the plan. You do not write
 code in this step.
 
+## 0. Clarifications
+
+If the input has non-empty `clarifications`, a person answered open questions before the design.
+Their answers are decisions: follow them over your own defaults and do not raise them again.
+
 ## 1. Understand the requirements
 
 Read the requirements: the problem, each acceptance criterion, the non-goals. Classify the work (new

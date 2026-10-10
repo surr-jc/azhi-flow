@@ -43,6 +43,11 @@ export async function postMessage(
   return { channel: String(r.channel), ts: String(r.ts) };
 }
 
+/** Opens a modal for a Slack interaction (the `trigger_id` of a button click expires after 3 seconds). */
+export async function openView(cfg: SlackConfig, args: { trigger_id: string; view: unknown }): Promise<void> {
+  await call(cfg, 'views.open', { trigger_id: args.trigger_id, view: args.view });
+}
+
 /** Looks back through recent channel history for a message carrying this dedupe key. */
 export async function findByDedupeKey(
   cfg: SlackConfig,
