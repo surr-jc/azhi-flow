@@ -95,24 +95,76 @@ nodes:
 
   - id: dor_gate
     type: condition
-    description: Build only a ticket whose seven gates pass with no low-confidence gate and that can be built as code.
-    expression: "nodes.dor_check.output.gates.all(g, g.status == 'pass' && g.confidence != 'low') && nodes.dor_check.output.dispatchable ? 'ready' : 'refine'"
-    routes: {ready: [requirements], refine: [dor_message]}
-    default: refine
+    description: "Three ways out of the readiness check: ready (all seven gates pass, none with low confidence), clarify (a person can answer what is missing), or stop (the ticket needs splitting or is not code, which an answer cannot fix)."
+    expression: "!nodes.dor_check.output.dispatchable || nodes.dor_check.output.gates.exists(g, g.gate == 'one_pr_scope' && g.status == 'fail') ? 'stop' : nodes.dor_check.output.gates.all(g, g.status == 'pass' && g.confidence != 'low') ? 'ready' : 'clarify'"
+    routes: {ready: [dor_pass], clarify: [dor_ask_message, clarification], stop: [dor_message]}
+    default: stop
 
+  - id: dor_pass
+    type: condition
+    description: Nothing to ask - the ticket is ready. Marks the ready branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  # ---- Stop: the ticket has to change first ------------------------------------------------------
   - id: dor_message
     type: report
-    description: The questions that would make the ticket ready.
+    description: Why the ticket cannot be built as written, and what to change.
     template: templates/dor.md
     input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'failed': nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low')}"}
 
   - id: dor_send_back
     type: notify
-    description: Ask for what is missing instead of building from a vague ticket.
+    description: Tell the channel the ticket needs to change before anything is built.
     channel: slack
     destination: {ref: config.channel}
     message: {ref: nodes.dor_message.output.markdown}
     guard: "args.channel == config.channel"
+
+  # ---- Clarify: pause the run until a person answers ---------------------------------------------
+  - id: dor_ask_message
+    type: report
+    description: The questions the run is waiting on.
+    template: templates/dor-ask.md
+    input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'failed': nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low')}"}
+
+  - id: dor_ask_notify
+    type: notify
+    description: Tell the channel the run is waiting for answers.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.dor_ask_message.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: clarification
+    type: approval
+    description: A person answers what the readiness check could not settle; the run continues with their answers, or stops if they reject. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: author
+    message: {cel: "nodes.intake.output.key + ' is not ready to build as written: ' + nodes.dor_check.output.summary + ' Answer the ' + string(size(nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low'))) + ' question(s) below to continue, or reject to stop.'"}
+    payload: {map: "{'ticket': nodes.intake.output.key, 'questions': nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low').map(g, {'gate': g.gate, 'finding': g.finding, 'question': has(g.question) ? g.question : ''})}"}
+    decision_schema:
+      type: object
+      properties:
+        answers: {type: string, minLength: 1, title: Answers, description: "One answer per question, in order. They are treated as decisions by the requirements and design steps."}
+      required: [answers]
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  # ---- Join: the ticket was ready, or a person answered ------------------------------------------
+  # Merges the two branches. It reads nothing from the steps that run before the gate: a merge node
+  # runs when any of its inputs got through, so such an input would make it run after a stop.
+  - id: clarified
+    type: script
+    description: Carry the answers (if any) to the requirements and design steps; skipped when the run stopped or the clarification was rejected.
+    runtime: python
+    entrypoint: scripts/clarified.py
+    merge: any
+    depends_on: [dor_pass]
+    input: {map: "{'answers': has(nodes.clarification) ? nodes.clarification.output.data.answers : ''}"}
+    output_schema: schemas/clarified.json
+    limits: {time: 1m, memory_mb: 256}
 
   - id: requirements
     type: agent
@@ -124,7 +176,7 @@ nodes:
       ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
       credential: github-read-token
       depth: 1
-    input: {map: "{'ticket': nodes.intake.output, 'repository': inputs.repo}"}
+    input: {map: "{'ticket': nodes.intake.output, 'repository': inputs.repo, 'clarifications': nodes.clarified.output.answers}"}
     output_schema: schemas/requirements.json
     timeout: 20m
     budget: {max_tool_calls: 10}
@@ -139,7 +191,7 @@ nodes:
       ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
       credential: github-read-token
       depth: 1
-    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output}"}
+    input: {map: "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'clarifications': nodes.clarified.output.answers}"}
     output_schema: schemas/design.json
     timeout: 25m
     budget: {max_tool_calls: 10}
@@ -177,6 +229,17 @@ nodes:
     expression: "has(nodes.design_review.output.data.weight) && nodes.design_review.output.data.weight != 'auto' ? nodes.design_review.output.data.weight : nodes.weight_proposal.output.route"
     routes: {lite: [lite_review_1], full: [code_1, test_1, security_1]}
     default: full
+
+  # Records the decision after the approval, so the join at the end reads nothing from before it: a
+  # merge node runs when any input got through, and a rejected design review must end the run cleanly.
+  - id: weight_record
+    type: script
+    description: Record the proposed path, the final path and who overrode it, for the evidence record.
+    runtime: python
+    entrypoint: scripts/weight_record.py
+    input: {map: "{'proposed': nodes.weight_proposal.output.route, 'final': nodes.weight.output.route, 'overridden_by': nodes.weight.output.route != nodes.weight_proposal.output.route ? nodes.design_review.output.by : ''}"}
+    output_schema: schemas/weight_record.json
+    limits: {time: 1m, memory_mb: 256}
 
   - id: build
     type: agent
@@ -531,7 +594,7 @@ nodes:
     runtime: python
     entrypoint: scripts/finalize.py
     merge: any
-    input: {map: "{'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': nodes.weight.output.route, 'overridden_by': nodes.weight.output.route != nodes.weight_proposal.output.route ? nodes.design_review.output.by : null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'code': has(nodes.code_1) ? nodes.code_1.output : null, 'test': has(nodes.test_1) ? nodes.test_1.output : null, 'security': has(nodes.security_1) ? nodes.security_1.output : null}, 'checks': has(nodes.verify_1) ? nodes.verify_1.output.checks : []}, {'change': has(nodes.fix_1) ? nodes.fix_1.output : null, 'verdicts': {'code': has(nodes.code_2) ? nodes.code_2.output : null, 'test': has(nodes.test_2) ? nodes.test_2.output : null, 'security': has(nodes.security_2) ? nodes.security_2.output : null}, 'checks': has(nodes.verify_2) ? nodes.verify_2.output.checks : []}, {'change': has(nodes.fix_2) ? nodes.fix_2.output : null, 'verdicts': {'code': has(nodes.code_3) ? nodes.code_3.output : null, 'test': has(nodes.test_3) ? nodes.test_3.output : null, 'security': has(nodes.security_3) ? nodes.security_3.output : null}, 'checks': has(nodes.verify_3) ? nodes.verify_3.output.checks : []}]}"}
+    input: {map: "{'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': nodes.weight_record.output, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': [{'change': has(nodes.build) ? nodes.build.output : null, 'verdicts': {'code': has(nodes.code_1) ? nodes.code_1.output : null, 'test': has(nodes.test_1) ? nodes.test_1.output : null, 'security': has(nodes.security_1) ? nodes.security_1.output : null}, 'checks': has(nodes.verify_1) ? nodes.verify_1.output.checks : []}, {'change': has(nodes.fix_1) ? nodes.fix_1.output : null, 'verdicts': {'code': has(nodes.code_2) ? nodes.code_2.output : null, 'test': has(nodes.test_2) ? nodes.test_2.output : null, 'security': has(nodes.security_2) ? nodes.security_2.output : null}, 'checks': has(nodes.verify_2) ? nodes.verify_2.output.checks : []}, {'change': has(nodes.fix_2) ? nodes.fix_2.output : null, 'verdicts': {'code': has(nodes.code_3) ? nodes.code_3.output : null, 'test': has(nodes.test_3) ? nodes.test_3.output : null, 'security': has(nodes.security_3) ? nodes.security_3.output : null}, 'checks': has(nodes.verify_3) ? nodes.verify_3.output.checks : []}]}"}
     output_schema: schemas/finalize.json
     limits: {time: 2m, memory_mb: 512}
 
@@ -600,4 +663,4 @@ nodes:
     description: Write the delivery record and retro notes (planned vs actual).
     depends_on: [release]
     template: templates/retro.md
-    input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'weight': nodes.weight.output.route, 'final': nodes.finalize.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"}
+    input: {map: "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'clarifications': nodes.clarified.output.answers, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'weight': nodes.weight.output.route, 'final': nodes.finalize.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"}

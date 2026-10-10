@@ -4,7 +4,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Role } from '../db/schema.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { approvalSettings, decideApproval } from '../server/approvals.js';
+import { approvalAsk, approvalModal, approvalSettings, decideApproval, formFields, modalData } from '../server/approvals.js';
+import { openView } from '../gateway/tools/slack.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
@@ -30,6 +31,9 @@ interface BlockAction {
   user?: { id: string; username?: string };
   actions?: Array<{ action_id: string; value?: string }>;
   response_url?: string;
+  trigger_id?: string;
+  /** A submitted modal (`view_submission`): the metadata we put on it and the values typed. */
+  view?: { callback_id?: string; private_metadata?: string; state?: { values?: Record<string, Record<string, any>> } };
 }
 
 export function verifySlackSignature(secret: string, timestamp: string | undefined, signature: string | undefined, body: string, now = Date.now()): boolean {
@@ -80,10 +84,11 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
       } catch {
         return reply.status(400).send({ error: 'invalid_input', message: 'no Slack payload' });
       }
+      const submitted = payload.type === 'view_submission' && payload.view?.callback_id === 'azhi_approval_form';
       const action = payload.actions?.[0];
-      let target: { run: string; node: string };
+      let target: { run: string; node: string; response_url?: string };
       try {
-        target = z.object({ run: z.string(), node: z.string() }).parse(JSON.parse(action?.value ?? ''));
+        target = z.object({ run: z.string(), node: z.string(), response_url: z.string().optional() }).parse(JSON.parse(submitted ? (payload.view?.private_metadata ?? '') : (action?.value ?? '')));
       } catch {
         return reply.status(200).send();
       }
@@ -99,19 +104,68 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
         ? ((await ctx.pool.query(`SELECT id, role FROM users WHERE workspace_id=$1 AND slack_user_id=$2 AND disabled_at IS NULL`, [ws, slackUser])).rows[0] as { id: string; role: Role } | undefined)
         : undefined;
       const link = `${ctx.settings.publicUrl.replace(/\/$/, '')}/ui/runs/${encodeURIComponent(target.run)}`;
-      if (!linked) {
-        await respond(payload.response_url, { response_type: 'ephemeral', replace_original: false, text: `Your Slack user is not linked to Azhi Flow, so this was not recorded. An admin can link it on the Users page, or decide in mission control: ${link}` });
+      const responseUrl = submitted ? target.response_url : payload.response_url;
+      const principal = linked ? ({ kind: 'user', workspaceId: ws, userId: linked.id, role: linked.role } as const) : undefined;
+
+      // A submitted answer form: validate it like the web form does, then record the approval.
+      if (submitted) {
+        const values = payload.view?.state?.values;
+        const firstBlock = Object.keys(values ?? {})[0];
+        const refuse = (message: string, block = firstBlock) => reply.status(200).send({ response_action: 'errors', errors: { [block ?? 'f_answers']: message } });
+        if (!principal) return refuse('Your Slack user is not linked to Azhi Flow. An admin can link it on the Users page.');
+        const ask = await approvalAsk(ctx, target.run, target.node);
+        const fields = formFields(ask?.def.decision_schema);
+        if (!ask || !fields) return refuse(`This approval cannot be answered here. Decide in mission control: ${link}`);
+        let data: Record<string, unknown>;
+        try {
+          data = modalData(ask.def.decision_schema, fields, values);
+        } catch (e) {
+          return refuse((e as Error).message, `f_${(e as { field?: string }).field ?? ''}`);
+        }
+        try {
+          await decideApproval(ctx, temporal, principal, target.run, { node: target.node, decision: 'approved', data }, 'slack');
+        } catch (e) {
+          return refuse((e as Error).message);
+        }
+        await respond(responseUrl, { replace_original: true, text: `:white_check_mark: Approved by <@${slackUser}> with their answers (${target.node} on ${target.run}).` });
+        return reply.status(200).send();
+      }
+
+      if (!principal) {
+        await respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text: `Your Slack user is not linked to Azhi Flow, so this was not recorded. An admin can link it on the Users page, or decide in mission control: ${link}` });
         return reply.status(200).send();
       }
       const decision = action!.action_id === 'approve' ? 'approved' : 'rejected';
+      const say = (text: string) => respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text });
+
+      // Approve on a step that needs answers opens a form (Slack gives three seconds to open it).
+      if (decision === 'approved') {
+        const ask = await approvalAsk(ctx, target.run, target.node);
+        const schema = ask?.def.decision_schema as { required?: string[] } | undefined;
+        if (ask && schema?.required?.length) {
+          const fields = formFields(ask.def.decision_schema);
+          try {
+            requireRole(principal, (ask.def.role ?? 'operator') as Role);
+            if (!fields?.length) throw new Error('this approval needs answers that Slack cannot collect');
+            if (!payload.trigger_id) throw new Error('Slack sent no trigger to open the form');
+            const token = await resolveSecret(ctx, ws, 'slack-bot-token');
+            if (!token) throw new Error("the secret 'slack-bot-token' is not set");
+            const intro = [ask.message || `Approve ${target.node}?`, ask.payload ? `\`\`\`${ask.payload.slice(0, 2000)}\`\`\`` : '', `<${link}|Open the run in mission control>`].filter(Boolean).join('\n');
+            await openView({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { trigger_id: payload.trigger_id, view: approvalModal({ run: target.run, node: target.node, responseUrl: payload.response_url, fields, intro }) });
+          } catch (e) {
+            await say(`Not recorded: ${(e as Error).message}. You can decide in mission control: ${link}`);
+          }
+          return reply.status(200).send();
+        }
+      }
       try {
-        await decideApproval(ctx, temporal, { kind: 'user', workspaceId: ws, userId: linked.id, role: linked.role }, target.run, { node: target.node, decision, data: {} }, 'slack');
-        await respond(payload.response_url, {
+        await decideApproval(ctx, temporal, principal, target.run, { node: target.node, decision, data: {} }, 'slack');
+        await respond(responseUrl, {
           replace_original: true,
           text: `${decision === 'approved' ? ':white_check_mark: Approved' : ':x: Rejected'} by <@${slackUser}> (${target.node} on ${target.run}).`,
         });
       } catch (e) {
-        await respond(payload.response_url, { response_type: 'ephemeral', replace_original: false, text: `Not recorded: ${(e as Error).message}. You can decide in mission control: ${link}` });
+        await say(`Not recorded: ${(e as Error).message}. You can decide in mission control: ${link}`);
       }
       return reply.status(200).send();
     });

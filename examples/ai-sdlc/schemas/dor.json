@@ -54,7 +54,8 @@
       }
     },
     "dispatchable": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "As written, deliverable as one code change in this repository; false stops the run"
     },
     "dispatch_reason": {
       "type": "string"

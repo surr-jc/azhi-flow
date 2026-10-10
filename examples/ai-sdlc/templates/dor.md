@@ -1,8 +1,8 @@
-*{{ticket.key}} is not ready to build: {{ticket.title}}*
+*{{ticket.key}} cannot be built as written: {{ticket.title}}*
 
 {{dor.summary}}
 {{#failed}}
 • {{gate}} ({{status}}, {{confidence}} confidence): {{finding}}{{#question}} Question: {{question}}{{/question}}
 {{/failed}}
 
-Nothing was built. Answer the questions on the ticket and start the run again.
+Nothing was built, and answering questions will not fix this: the ticket has to change first (split it into one-PR slices, or say what is code and what is not). Then start the run again.

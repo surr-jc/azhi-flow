@@ -4,7 +4,8 @@ Pull request: {{pr.url}} ({{branch.branch}}, commit {{branch.commit_sha}})
 
 Review path: {{weight}}; fix rounds used: {{final.round}}{{#final.needs_human_attention}}; flagged for human attention{{/final.needs_human_attention}}
 Definition of ready: {{dor.summary}}
-
+{{#clarifications}}Answers given at the readiness check: {{clarifications}}
+{{/clarifications}}
 Requirements: {{requirements.summary}}
 {{#requirements.acceptance_criteria}}
 • {{.}}

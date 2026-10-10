@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "proposed": {"enum": ["lite", "full"]},
+    "final": {"enum": ["lite", "full"]},
+    "overridden_by": {"type": ["string", "null"], "description": "Who set the path away from the proposal, or null"}
+  },
+  "required": ["proposed", "final", "overridden_by"],
+  "additionalProperties": false
+}

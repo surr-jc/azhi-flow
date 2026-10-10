@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,9 +101,14 @@ const DOR = {
   gates: ['testable_criteria', 'no_placeholders', 'no_bare_references', 'one_pr_scope', 'specific_surface', 'done_state', 'stated_assumptions'].map((gate) => ({ gate, status: 'pass', confidence: 'high', finding: 'ok' })),
   dispatchable: true,
 };
-/** A ticket that fails the definition of ready: one failed gate with its question. */
-let dorFails = false;
-const dorResult = () => (dorFails ? { ...DOR, summary: 'Not ready: no testable criteria.', gates: DOR.gates.map((g, i) => (i === 0 ? { ...g, status: 'fail', finding: 'No criterion can be checked', question: 'What total should a 10% code give on two 10.00 items?' } : g)) } : DOR);
+/** What the readiness check says: ready, a question a person can answer (clarify), or a ticket that must be split (stop). */
+let dorMode: 'ready' | 'clarify' | 'stop' = 'ready';
+const dorResult = () => {
+  if (dorMode === 'ready') return DOR;
+  const fail = dorMode === 'stop' ? 'one_pr_scope' : 'specific_surface';
+  const question = dorMode === 'stop' ? 'Which slice should come first?' : 'Which page holds the setting?';
+  return { ...DOR, summary: 'Not ready.', dispatchable: dorMode !== 'stop', gates: DOR.gates.map((g) => (g.gate === fail ? { ...g, status: 'fail', finding: 'Cannot tell', question } : g)) };
+};
 const CHANGE = {
   summary: 'total() applies the discount',
   commit_message: 'fix(cart): apply the discount in total()\n\nTotals ignored the discount argument.',
@@ -374,23 +380,124 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     expect(gh.git.pulls.length).toBe(pulls);
   }, 400_000);
 
-  it('a ticket that is not ready is sent back with its questions: the run succeeds, nothing is built or pushed', async () => {
-    dorFails = true;
+  const begin = async () => (await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { source: 'github', ticket: 'acme/shop#12', repo: 'acme/shop' } })).run_id;
+  const slackText = (needle: string) => h.slack.messages.some((m) => m.text.includes(needle));
+  const nothingBuilt = async (d: any, ids: string[]) => {
+    for (const id of ids) expect(last(d, id)?.state ?? 'skipped', id).toBe('skipped');
+  };
+  const BUILD_STEPS = ['design', 'weight_proposal', 'design_review', 'weight', 'build', 'finalize', 'ship_gate', 'release_approval', 'push_branch', 'open_pr', 'send_back', 'retro'];
+
+  it('a ticket that must be split stops the run: no question can fix it, so nothing waits and nothing is built', async () => {
+    dorMode = 'stop';
     const commits = gh.git.commits.size;
-    const pulls = gh.git.pulls.length;
     try {
-      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { source: 'github', ticket: 'acme/shop#12', repo: 'acme/shop' } });
+      const d = await waitForRun(h.api, await begin(), 120_000);
+      expect(d.run.error).toBeNull();
+      expect(d.run.state).toBe('succeeded');
+      expect(last(d, 'dor_gate').output.route).toBe('stop');
+      expect(last(d, 'dor_send_back').state).toBe('succeeded');
+      await nothingBuilt(d, ['clarification', 'dor_pass', 'clarified', 'requirements', ...BUILD_STEPS]);
+      expect(slackText('cannot be built as written')).toBe(true);
+      expect(gh.git.commits.size).toBe(commits);
+    } finally {
+      dorMode = 'ready';
+    }
+  }, 200_000);
+
+  it('a ticket with answerable gaps pauses for answers, then continues with them as decisions', async () => {
+    dorMode = 'clarify';
+    try {
+      const run_id = await begin();
+      const waiting = await waitFor(run_id, 'clarification');
+      const ask = waiting.approvals.find((a: any) => a.node_id === 'clarification').request;
+      expect(ask.payload.questions).toEqual([{ gate: 'specific_surface', finding: 'Cannot tell', question: 'Which page holds the setting?' }]);
+      expect(ask.message).toContain('Answer the 1 question(s) below to continue');
+      for (const id of ['requirements', 'design']) expect(last(waiting, id)?.state ?? 'pending', id).not.toBe('succeeded');
+      for (let i = 0; i < 50 && !slackText('waiting for your answers'); i++) await new Promise((r) => setTimeout(r, 100));
+      expect(slackText('waiting for your answers')).toBe(true);
+      // The answers are required.
+      await expect(h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'clarification', decision: 'approved', data: {} })).rejects.toThrow(/decision schema/);
+      await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'clarification', decision: 'approved', data: { answers: 'The setting is on /ui/tools.' } });
+
+      const next = await waitFor(run_id, 'design_review');
+      expect(last(next, 'clarified').output).toEqual({ answers: 'The setting is on /ui/tools.', asked: true });
+      for (const who of ['analyst', 'architect']) expect(fake.requests.filter((r) => role(r) === who).some((r) => text(r).includes('The setting is on /ui/tools.'))).toBe(true);
+      expect(last(next, 'dor_pass')?.state ?? 'skipped').toBe('skipped');
+      await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'design_review', decision: 'rejected' });
+      expect((await waitForRun(h.api, run_id, 120_000)).run.state).toBe('succeeded');
+    } finally {
+      dorMode = 'ready';
+    }
+  }, 300_000);
+
+  it('rejecting the clarification ends the run cleanly with nothing built', async () => {
+    dorMode = 'clarify';
+    try {
+      const run_id = await begin();
+      await waitFor(run_id, 'clarification');
+      await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'clarification', decision: 'rejected' });
       const d = await waitForRun(h.api, run_id, 120_000);
       expect(d.run.error).toBeNull();
       expect(d.run.state).toBe('succeeded');
-      expect(last(d, 'dor_gate').output.route).toBe('refine');
-      expect(last(d, 'dor_send_back').state).toBe('succeeded');
-      for (const id of ['requirements', 'design', 'weight_proposal', 'design_review', 'weight', 'build', 'finalize', 'ship_gate', 'release_approval', 'push_branch', 'open_pr', 'send_back', 'retro']) expect(last(d, id)?.state ?? 'skipped', id).toBe('skipped');
-      expect(h.slack.messages.some((m) => m.text.includes('What total should a 10% code give'))).toBe(true);
-      expect(gh.git.commits.size).toBe(commits);
-      expect(gh.git.pulls.length).toBe(pulls);
+      await nothingBuilt(d, ['clarified', 'requirements', ...BUILD_STEPS]);
     } finally {
-      dorFails = false;
+      dorMode = 'ready';
     }
   }, 200_000);
+
+  it('answers the clarification from Slack: Approve opens a form, the submitted form decides, and a bad submit is refused', async () => {
+    dorMode = 'clarify';
+    const secret = 'shh-signing';
+    await h.api.put('/v1/secrets/slack-signing-secret', { value: secret });
+    await h.api.put('/v1/settings/approvals', { slack_channel: 'C-APPROVALS' });
+    const who = await h.api.post<any>('/v1/users', { display_name: 'Away', role: 'author', token: false });
+    await h.api.patch(`/v1/users/${who.id}`, { slack_user_id: 'U0AWAY' });
+    const send = async (payload: Record<string, unknown>) => {
+      const body = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+      const ts = String(Math.floor(Date.now() / 1000));
+      const sig = `v0=${createHmac('sha256', secret).update(`v0:${ts}:${body}`).digest('hex')}`;
+      const res = await fetch(`${h.server.url}/v1/slack/interactions`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': ts, 'x-slack-signature': sig }, body });
+      const raw = await res.text();
+      return { status: res.status, json: raw ? JSON.parse(raw) : undefined };
+    };
+    try {
+      const run_id = await begin();
+      await waitFor(run_id, 'clarification');
+      let msg: any;
+      for (let i = 0; i < 100 && !msg; i++) {
+        msg = h.slack.messages.find((m) => m.channel === 'C-APPROVALS' && JSON.stringify(m.blocks ?? '').includes(run_id));
+        if (!msg) await new Promise((r) => setTimeout(r, 100));
+      }
+      const value = (msg.blocks as any[]).find((b) => b.type === 'actions').elements[0].value;
+      const opened = h.slack.views.length;
+      expect((await send({ type: 'block_actions', user: { id: 'U0AWAY' }, trigger_id: 'T-1', actions: [{ action_id: 'approve', value }], response_url: `${h.slack.url}/response/open` })).status).toBe(200);
+      // Approve did not decide: it opened the answer form, with the question above the input.
+      expect(h.slack.views).toHaveLength(opened + 1);
+      const view = h.slack.views.at(-1)!.view;
+      expect(view.callback_id).toBe('azhi_approval_form');
+      expect(JSON.stringify(view.blocks)).toContain('Which page holds the setting?');
+      expect(view.blocks.filter((b: any) => b.type === 'input').map((b: any) => [b.block_id, b.optional])).toEqual([['f_answers', false]]);
+      expect((await h.api.get<any>(`/v1/runs/${run_id}`)).approvals.find((a: any) => a.node_id === 'clarification').decision).toBeNull();
+
+      // An empty form is refused in the form itself, and nothing is decided.
+      const empty = await send({ type: 'view_submission', user: { id: 'U0AWAY' }, view: { callback_id: 'azhi_approval_form', private_metadata: view.private_metadata, state: { values: { f_answers: { answers: { value: '   ' } } } } } });
+      expect(empty.json).toMatchObject({ response_action: 'errors', errors: { f_answers: expect.stringContaining('decision schema') } });
+      // An unlinked Slack user cannot submit it.
+      const stranger = await send({ type: 'view_submission', user: { id: 'U0NOBODY' }, view: { callback_id: 'azhi_approval_form', private_metadata: view.private_metadata, state: { values: { f_answers: { answers: { value: 'x' } } } } } });
+      expect(stranger.json).toMatchObject({ response_action: 'errors', errors: { f_answers: expect.stringContaining('not linked') } });
+
+      const ok = await send({ type: 'view_submission', user: { id: 'U0AWAY' }, view: { callback_id: 'azhi_approval_form', private_metadata: view.private_metadata, state: { values: { f_answers: { answers: { value: 'From my phone: /ui/tools.' } } } } } });
+      expect(ok).toEqual({ status: 200, json: undefined });
+      expect(h.slack.responses.at(-1)).toMatchObject({ replace_original: true, text: expect.stringContaining('Approved by <@U0AWAY> with their answers') });
+      const next = await waitFor(run_id, 'design_review');
+      expect(last(next, 'clarified').output.answers).toBe('From my phone: /ui/tools.');
+      expect(next.approvals.find((a: any) => a.node_id === 'clarification')).toMatchObject({ decision: 'approved', decided_by: who.id });
+      expect((await h.api.get<any[]>('/v1/audit')).find((e) => e.kind === 'approval.submitted' && e.data.run === run_id && e.data.node === 'clarification')).toMatchObject({ actor: who.id, data: { via: 'slack' } });
+      await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'design_review', decision: 'rejected' });
+      expect((await waitForRun(h.api, run_id, 120_000)).run.state).toBe('succeeded');
+    } finally {
+      dorMode = 'ready';
+      await h.api.put('/v1/settings/approvals', { slack_channel: null });
+    }
+  }, 300_000);
 });

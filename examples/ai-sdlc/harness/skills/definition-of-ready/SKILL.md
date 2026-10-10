@@ -36,11 +36,21 @@ Score each gate `pass` or `fail`, with a `confidence` of `high`, `medium` or `lo
 `low` means you could not decide (the ticket is too short, the code too large to confirm). A low
 confidence gate sends the ticket to a person whatever its verdict, so use it honestly and rarely.
 
-## Dispatchability hint
+## What happens with your verdict
 
-If the ticket is mostly an investigation, a soak or monitoring task, an operator-only or manual
-step, or a decision with no code, set `dispatchable` false with a one-line `dispatch_reason`.
-Otherwise true. This is advice; it does not change the gate verdicts.
+- All gates pass with confidence: the work starts.
+- Some gates fail or are low confidence, and a person could answer them in a sentence: the run
+  pauses and asks them your `question`s. Write each question so it can be answered in a sentence.
+- `one_pr_scope` fails, or `dispatchable` is false: the run stops. An answer cannot split a ticket,
+  so the ticket has to change first.
+
+## Dispatchable
+
+`dispatchable` means: as written, this can be delivered as one code change in this repository. Set it
+false, with a one-line `dispatch_reason`, when the ticket is mostly an investigation, a soak or
+monitoring task, an operator-only or manual step, a decision with no code, or too large for one
+change. Your `summary` and `dispatchable` must agree: if you wrote that the ticket is not ready
+because it needs splitting, `dispatchable` is false.
 
 Return `summary` (one or two sentences, and the follow-ups you would ask first) and the gates with
 submit_output.
