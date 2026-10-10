@@ -858,3 +858,7 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .ed-side .dock { border: 0; background: transparent; }
 .ed-side.wb-drawer { border: 0; max-height: none; }
 @media (max-width: 900px) { .ed-modes { position: static; display: none; } .ed-stage .wf-legend { display: none; } .ed-runbar .txt { display: none; } .ed-stage .update-note { display: none; } }
+
+/* a link implied by a longer path: kept (it can still be selected and removed) but quiet, so the real flow reads */
+.wf .react-flow__edge.e-redundant .react-flow__edge-path { opacity: 0.3; stroke-dasharray: 3 5; }
+.wf .react-flow__edge.e-redundant.selected .react-flow__edge-path, .wf .react-flow__edge.e-redundant:hover .react-flow__edge-path { opacity: 1; stroke-dasharray: none; }

@@ -1,4 +1,4 @@
-import { Background, BackgroundVariant, Controls, Handle, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { Background, BackgroundVariant, Controls, Handle, MarkerType, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
@@ -228,7 +228,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const current = useMemo(() => (detail ? nodeStates(detail) : {}), [detail]);
   const states = override ?? current;
   // While editing every direct dependency is drawn, so each one can be seen and removed.
-  const shown = useMemo(() => (edit ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduce(planNodes)), [planNodes, Boolean(edit)]);
+  const reduced = useMemo(() => reduce(planNodes), [planNodes]);
+  const shown = useMemo(() => (edit ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduced), [planNodes, reduced, Boolean(edit)]);
   const [level, setLevel] = useState<CardDetail>(() => {
     try {
       const v = localStorage.getItem(DETAIL_KEY);
@@ -253,7 +254,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   }, [planNodes, settings, detailLevel]);
   const size = cardSize(detailLevel, Math.max(0, ...[...rowsOf.values()].map((r) => r.length)));
   const { w: W, h: H } = size;
-  const pos = useMemo(() => layout(planNodes, shown, W, H), [planNodes, shown, W, H]);
+  // Placement follows the reduced graph, so links implied by longer paths do not pull steps around.
+  const pos = useMemo(() => layout(planNodes, reduced, W, H), [planNodes, reduced, W, H]);
 
   const nodes: Node<CardData>[] = planNodes.map((n) => ({
     id: n.id,
@@ -279,7 +281,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
         source: dep,
         target: n.id,
         type: 'default',
-        className: cls || (live ? '' : `es-${planNodes.find((x) => x.id === dep)?.type ?? 'tool'}`),
+        className: [cls || (live ? '' : `es-${planNodes.find((x) => x.id === dep)?.type ?? 'tool'}`), edit && !reduced.get(n.id)?.includes(dep) ? 'e-redundant' : ''].filter(Boolean).join(' '),
+        // While editing, the direction of each link matters; a link implied by a longer path is drawn faint.
+        ...(edit ? { markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--idle)' } } : {}),
         animated: live && (target === 'running' || target === 'waiting'),
         ...(routed ? { label: n.route!.route, labelBgPadding: [6, 2] as [number, number], labelBgBorderRadius: 4, labelClassName: 'e-label', labelBgClassName: 'e-label-bg' } : {}),
       };
