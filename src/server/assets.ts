@@ -124,3 +124,41 @@ export function openCodeGuide(asset: { kind: AssetKind; slug: string; definition
   const auth = asset.definition.transport === 'remote' && asset.definition.oauth ? [`Run \`opencode mcp auth ${asset.slug}\` to complete OAuth.`] : [];
   return { title: `Install ${asset.slug} in OpenCode`, steps: ['Copy the generated mcp entry into `opencode.jsonc` in the project root (or `~/.config/opencode/opencode.json` for all projects).', 'Set every required environment variable before starting OpenCode.', ...auth, `Verify it with \`opencode mcp list\`; diagnose connection problems with \`opencode mcp debug ${asset.slug}\`.`], note: 'Use `{env:VARIABLE_NAME}` for API keys and other secrets; Azhi Flow never exports secret values.' };
 }
+
+// ---- Claude Code ------------------------------------------------------------------------------------------------
+const claudeValue = (v: string) => v.replace(/\{env:([A-Za-z0-9_]+)\}/g, '${$1}');
+export function renderClaudeCode(assets: Array<{ kind: AssetKind; slug: string; definition: any }>) {
+  const files: Record<string, string> = {};
+  const servers: Record<string, any> = {};
+  for (const a of assets) {
+    const d = a.definition;
+    if (a.kind === 'mcp') {
+      servers[a.slug] = d.transport === 'local'
+        ? { command: d.command[0], args: d.command.slice(1).map(claudeValue), ...(d.environment ? { env: Object.fromEntries(Object.entries(d.environment as Record<string, string>).map(([k, v]) => [k, claudeValue(v)])) } : {}) }
+        : { type: 'http', url: claudeValue(d.url), ...(d.headers ? { headers: Object.fromEntries(Object.entries(d.headers as Record<string, string>).map(([k, v]) => [k, claudeValue(v)])) } : {}) };
+    }
+    if (a.kind === 'agent') files[`.claude/agents/${a.slug}.md`] = frontmatter({ name: a.slug, description: d.description ?? a.slug }, d.prompt);
+    if (a.kind === 'skill') files[`.claude/skills/${a.slug}/SKILL.md`] = frontmatter({ name: a.slug, description: d.description ?? a.slug, license: d.license }, d.instructions);
+    if (a.kind === 'command') files[`.claude/commands/${a.slug}.md`] = frontmatter({ description: d.description ?? a.slug }, d.template);
+  }
+  if (Object.keys(servers).length) files['.mcp.json'] = `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;
+  return files;
+}
+
+export interface HarnessGuide { harness: 'opencode' | 'claude-code'; label: string; files: Record<string, string>; steps: string[] }
+/** How to use one asset in each supported harness: the files it becomes, and the steps to finish setting it up. */
+export function harnessGuides(asset: { kind: AssetKind; slug: string; definition: any }): HarnessGuide[] {
+  const d = asset.definition;
+  const opencode = openCodeGuide(asset).steps;
+  const claude: string[] = [];
+  if (asset.kind === 'mcp') {
+    const cli = d.transport === 'local' ? `claude mcp add ${asset.slug} -- ${(d.command as string[]).join(' ')}` : `claude mcp add --transport http ${asset.slug} ${d.url}`;
+    claude.push(`Either add the generated entry to \`.mcp.json\` in the project root, or run \`${cli}\`.`, 'Set every required environment variable before starting Claude Code.', 'Run `claude mcp list` to check the connection.');
+  } else {
+    claude.push('Copy the generated file into the project root, keeping its path, and commit it so the team gets it too.', 'Restart Claude Code to discover it.');
+  }
+  return [
+    { harness: 'opencode', label: 'OpenCode', files: renderOpenCode([asset]), steps: opencode },
+    { harness: 'claude-code', label: 'Claude Code', files: renderClaudeCode([asset]), steps: claude },
+  ];
+}
