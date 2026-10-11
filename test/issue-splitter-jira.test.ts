@@ -82,6 +82,8 @@ describe('Jira issue splitter: scripts', () => {
     expect(p.issues.map((i: any) => i.title)).toEqual(['Slice 1', 'Slice 2']);
     expect(p.issues[1].body).toContain('Depends on slice 1: Slice 1. Do not start it before those are done.');
     expect(JSON.parse(p.issues[0].fields_tail.replace(/^/, '{"parent":"X"') )).toEqual({ parent: 'X', labels: ['azhi-split', 'ready'] });
+    // Slice 2 waits for slice 1: not ready to start.
+    expect(JSON.parse('{"parent":"X"' + p.issues[1].fields_tail)).toEqual({ parent: 'X', labels: ['azhi-split'] });
     expect(plan({ drop: '2' }).issues).toHaveLength(1);
     expect(plan({ drop: '1 2' })).toMatchObject({ mode: 'none' });
   });

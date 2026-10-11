@@ -164,7 +164,8 @@ describe.skipIf(!up)('Issue splitter with OpenCode', () => {
     expect(d.run.state).toBe('succeeded');
     const made = gh.created.slice(created);
     expect(made.map((i) => i.title)).toEqual(['Slice 1: part 1', 'Slice 2: part 2', 'Slice 3: part 3']);
-    expect(made.every((i) => i.labels.join() === 'azhi-split,ready')).toBe(true);
+    // Slice 2 waits for slice 1, so only the independent slices are ready to start.
+    expect(made.map((i) => i.labels.join())).toEqual(['azhi-split,ready', 'azhi-split', 'azhi-split,ready']);
     expect(made[0]!.body).toContain('Part of #27');
     expect(made[1]!.body).toContain('Depends on slice 1: Slice 1: part 1. Do not start it before those are merged.');
     expect(made[2]!.body).toContain('Suggested review path: full.');

@@ -638,7 +638,7 @@ nodes:
       head: {ref: nodes.push_branch.output.branch}
       base: {cel: "has(inputs.base_branch) ? inputs.base_branch : ''"}
       title: {ref: nodes.finalize.output.change.pr_title}
-      body: {cel: "nodes.finalize.output.change.pr_body + '\\n\\n' + nodes.finalize.output.evidence_markdown + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (ai-sdlc) after a person approved this change._'"}
+      body: {cel: "nodes.finalize.output.change.pr_body + '\\n\\n' + nodes.finalize.output.evidence_markdown + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + (inputs.source == 'github' ? '\\n\\nCloses ' + nodes.intake.output.key : '') + '\\n\\n_Opened by Azhi Flow (ai-sdlc) after a person approved this change._'"}
       draft: {cel: "nodes.finalize.output.needs_human_attention"}
     guard: "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
 

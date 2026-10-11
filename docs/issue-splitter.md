@@ -48,8 +48,8 @@ source ─ issue ── read the issue ──┐
    a dependent one has to wait for a person to merge what it depends on. Slices are created in order, up to 6.
 7. **Tell Slack** what was created, or why nothing was.
 
-Then each created issue is an ordinary ticket: start the delivery workflow on it (inputs `source=github`, `ticket=owner/name#101`, `repo=owner/name`; for Jira, `source=jira` and the key). The `ready` label marks the ones that passed the analysis.
-Starting those runs automatically is not built.
+Then each created issue is an ordinary ticket: start the delivery workflow on it (inputs `source=github`, `ticket=owner/name#101`, `repo=owner/name`; for Jira, `source=jira` and the key). The `ready` label marks the slices that can be started now: those with no dependencies. A slice that waits for others is created without it, so a person (or a later queue) starts it only after what it depends on is merged.
+Starting those runs automatically is not built. Each slice's pull request says `Closes owner/name#N`, so GitHub closes the sub-issue when a person merges it (and moves the parent's progress); nothing in Azhi closes an issue.
 
 ## Answering the approval
 

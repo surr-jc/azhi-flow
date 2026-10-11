@@ -118,6 +118,8 @@ describe('issue splitter: scripts', () => {
     expect(p.issues[2].body).toContain('Suggested review path: full.');
     expect(p.issues[0].body).toContain('- criterion 1');
     expect(p.issues[0].labels).toEqual(['azhi-split', 'ready']);
+    // A slice that waits for another is not ready to start, so it is not labelled ready (slice 3 is independent).
+    expect(p.issues.map((i: any) => i.labels)).toEqual([['azhi-split', 'ready'], ['azhi-split'], ['azhi-split', 'ready']]);
   });
 
   it('leaves out the slices the approver dropped, and says when a dependency was dropped', () => {
