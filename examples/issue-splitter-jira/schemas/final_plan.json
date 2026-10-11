@@ -1,0 +1,123 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "single_existing",
+        "single_new",
+        "split_existing",
+        "split_new",
+        "none"
+      ]
+    },
+    "label": {
+      "type": "string"
+    },
+    "comment": {
+      "type": "string"
+    },
+    "labels_fields": {
+      "type": "string",
+      "description": "JSON for jira_update_issue: the issue's labels plus the ready label"
+    },
+    "single": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "string",
+          "description": "JSON of additional fields (labels), for an issue created without a parent"
+        },
+        "fields_tail": {
+          "type": "string",
+          "description": "The rest of the additional-fields JSON after the parent, for a sub-task"
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "fields",
+        "fields_tail"
+      ],
+      "additionalProperties": false
+    },
+    "umbrella": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "string",
+          "description": "JSON of additional fields (labels), for an issue created without a parent"
+        },
+        "fields_tail": {
+          "type": "string",
+          "description": "The rest of the additional-fields JSON after the parent, for a sub-task"
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "fields",
+        "fields_tail"
+      ],
+      "additionalProperties": false
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "string",
+            "description": "JSON of additional fields (labels), for an issue created without a parent"
+          },
+          "fields_tail": {
+            "type": "string",
+            "description": "The rest of the additional-fields JSON after the parent, for a sub-task"
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "fields",
+          "fields_tail"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    }
+  },
+  "required": [
+    "mode",
+    "label",
+    "comment",
+    "labels_fields",
+    "single",
+    "umbrella",
+    "issues",
+    "dropped"
+  ],
+  "additionalProperties": false
+}

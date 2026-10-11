@@ -88,7 +88,7 @@ The readiness check ends one of three ways (`dor_gate`):
 |---|---|---|
 | **ready** | all seven gates pass, none with low confidence, and the ticket can be built as code | the run goes on |
 | **clarify** | gates fail or are unsure, but a person can answer in a sentence (missing surface, unstated assumptions, unclear done state) | the run **pauses** at the `clarification` approval, with the failed gates and their questions. The delivery channel is told it is waiting. |
-| **stop** | `one_pr_scope` fails, or the agent says the ticket cannot be built as one code change (`dispatchable` false) | nothing is built and nobody is asked: an answer cannot split a ticket, so the ticket has to change and the run be started again |
+| **stop** | `one_pr_scope` fails, or the agent says the ticket cannot be built as one code change (`dispatchable` false) | nothing is built and nobody is asked: an answer cannot split a ticket, so the ticket has to change and the run be started again (run the [issue splitter](issue-splitter.md) on it to turn it into tickets that fit) |
 
 At `clarification` a person types **answers** (required) or **rejects**:
 
