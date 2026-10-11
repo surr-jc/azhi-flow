@@ -503,3 +503,72 @@ export async function checkRepoAccess(cfg: GithubConfig, token: string | undefin
   if (scopes && body.private && !scopes.includes('repo')) return { ...found, ok: false, status: 'insufficient', message: `This token's scopes (${scopes.join(', ') || 'none'}) do not include "repo", which a private repository needs.`, fix: 'Add the "repo" scope.' };
   return { ...found, ok: true, status: 'ok', message: `The token can read ${repo}.` };
 }
+
+
+/**
+ * Creates an issue, optionally as a sub-issue of a parent (`github.create-issue`, write-dedupable). The
+ * body carries the ledger action ID in a hidden marker, and a lookup finds the issue by it before any
+ * resend, so a retry never creates a second one. Linking as a sub-issue is best effort: GitHub
+ * Enterprise Server versions without sub-issues answer 404, so a failed link is reported
+ * (`linked` false, `link_error`) and the issue keeps a "Part of" line in its body instead.
+ */
+export async function createIssue(
+  cfg: GithubConfig,
+  args: { repo?: unknown; title?: unknown; body?: unknown; labels?: unknown; parent?: unknown },
+  token: string | undefined,
+  key: string,
+  timeoutMs: number,
+) {
+  const repo = argRepo(cfg, args.repo);
+  const title = String(args.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 250);
+  if (!title) throw new SendError('the issue title is empty', true, ErrorClass.invalidInput);
+  const labels = issueLabels(args.labels);
+  const parent = args.parent === undefined || args.parent === null || args.parent === 0 || args.parent === '' ? null : argNumber(args.parent);
+  const body = `${String(args.body ?? '').slice(0, 60_000)}\n\n${marker(key)}`;
+  const it = await request(cfg, token, 'POST', `/repos/${repo}/issues`, { title, body, ...(labels.length ? { labels } : {}) }, timeoutMs);
+  const out = { repo, number: Number(it.number), id: Number(it.id), url: String(it.html_url ?? ''), title, parent, linked: false, link_error: '', created: true };
+  return parent ? { ...out, ...(await linkSubIssue(cfg, token, repo, parent, out.id, timeoutMs)) } : out;
+}
+
+/** Links a created issue under its parent; a failure is data, not an error (the issue already exists). */
+async function linkSubIssue(cfg: GithubConfig, token: string | undefined, repo: string, parent: number, id: number, timeoutMs: number) {
+  try {
+    await request(cfg, token, 'POST', `/repos/${repo}/issues/${parent}/sub_issues`, { sub_issue_id: id }, timeoutMs);
+    return { linked: true, link_error: '' };
+  } catch (err) {
+    // Already linked (a retry) is a success.
+    if (err instanceof SendError && /GitHub HTTP 422/.test(err.message) && /already/i.test(err.message)) return { linked: true, link_error: '' };
+    return { linked: false, link_error: (err as Error).message.slice(0, 200) };
+  }
+}
+
+function issueLabels(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > 10) throw new SendError('labels must be a list of at most 10 names', true, ErrorClass.invalidInput);
+  return v.map((l) => {
+    const name = String(l).trim();
+    if (!name || name.length > 50 || /[,\n]/.test(name)) throw new SendError(`not a label name: '${name.slice(0, 60)}'`, true, ErrorClass.invalidInput);
+    return name;
+  });
+}
+
+/** Looks an issue up by the marker of the ledger action that created it, and makes sure it is linked. */
+export async function findIssue(cfg: GithubConfig, args: { repo?: unknown; parent?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const list = await pages(cfg, token, `/repos/${repo}/issues?state=all&sort=created&direction=desc`, undefined, timeoutMs);
+  const it = list.find((i: any) => !i.pull_request && String(i.body ?? '').includes(marker(key)));
+  if (!it) return null;
+  const parent = args.parent === undefined || args.parent === null || args.parent === 0 || args.parent === '' ? null : argNumber(args.parent);
+  const out = { repo, number: Number(it.number), id: Number(it.id), url: String(it.html_url ?? ''), title: String(it.title ?? ''), parent, linked: false, link_error: '', created: false };
+  return parent ? { ...out, ...(await linkSubIssue(cfg, token, repo, parent, out.id, timeoutMs)) } : out;
+}
+
+/** Adds labels to an issue (`github.label-issue`, write-idempotent: adding a label twice changes nothing). */
+export async function labelIssue(cfg: GithubConfig, args: { repo?: unknown; number?: unknown; labels?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const labels = issueLabels(args.labels);
+  if (!labels.length) throw new SendError('no labels to add', true, ErrorClass.invalidInput);
+  const r = await request(cfg, token, 'POST', `/repos/${repo}/issues/${number}/labels`, { labels }, timeoutMs);
+  return { repo, number, labels: (Array.isArray(r) ? r : []).map((l: any) => String(typeof l === 'string' ? l : l.name)) };
+}

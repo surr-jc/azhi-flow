@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "parent_comment": {
+      "type": "string"
+    },
+    "parent_number": {
+      "type": "integer"
+    },
+    "created": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "linked": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "message",
+    "parent_comment",
+    "parent_number",
+    "created"
+  ],
+  "additionalProperties": false
+}
