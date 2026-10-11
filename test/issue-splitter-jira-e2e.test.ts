@@ -160,7 +160,8 @@ describe.skipIf(!up)('Jira issue splitter with OpenCode', () => {
       ['PAY-201', 'Subtask', 'PAY-142', 'PAY', 'Slice 2: part 2'],
       ['PAY-202', 'Subtask', 'PAY-142', 'PAY', 'Slice 3: part 3'],
     ]);
-    expect(issues.every((i) => i.labels.join() === 'azhi-split,ready' && i.write_token === JIRA_WRITE)).toBe(true);
+    expect(issues.map((i) => i.labels.join())).toEqual(['azhi-split,ready', 'azhi-split', 'azhi-split,ready']);
+    expect(issues.every((i) => i.write_token === JIRA_WRITE)).toBe(true);
     expect(issues[0]!.description).toContain('Part of PAY-142');
     expect(issues[1]!.description).toContain('Depends on slice 1: Slice 1: part 1.');
     expect(comments).toEqual([{ issue_key: 'PAY-142', body: expect.stringContaining('- PAY-200 Slice 1: part 1') }]);

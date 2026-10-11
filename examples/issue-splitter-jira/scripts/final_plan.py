@@ -32,11 +32,12 @@ if d["weight"] == "split":
     out["dropped"] = sorted(n for n in drop if 1 <= n <= len(slices))
     keep = [(i, s) for i, s in enumerate(slices, 1) if i not in drop]
     names = {i: s["title"] for i, s in enumerate(slices, 1)}
+    # `ready` marks a slice that can be started now: one that waits for another is not ready until that is merged.
     for i, s in keep:
         deps = [f"slice {n}: {names[n]}" + (" (left out of this plan)" if n in drop else "") for n in s["depends_on"] if n in names]
         order = f"Slice {i} of {len(slices)}. " + (f"Depends on {'; '.join(deps)}. Do not start it before those are done." if deps else "Independent: it can be built on its own.")
         body = f"{s['summary']}\n\n## Acceptance criteria\n{bullets(s['acceptance_criteria'])}\n\n## Surface\n{s['surface']}\n\n## Order\n{order}\n\nSuggested review path: {s['weight']}."
-        out["issues"].append(issue(s["title"], body, labels(split_label, ready)))
+        out["issues"].append(issue(s["title"], body, labels(split_label, "" if s["depends_on"] else ready)))
     if existing:
         out["mode"] = "split_existing" if keep else "none"
     else:

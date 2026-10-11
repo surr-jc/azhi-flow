@@ -316,6 +316,8 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     expect(gh.git.pulls).toHaveLength(1);
     expect(gh.git.pulls[0]).toMatchObject({ repo: 'acme/shop', base: 'main', draft: false });
     expect(gh.git.pulls[0]!.body).toContain('Evidence record');
+    // GitHub closes the issue when a person merges the pull request: the line is added by the workflow, not the agent.
+    expect(gh.git.pulls[0]!.body).toMatch(/\n\nCloses acme\/shop#12\n/);
     expect(h.slack.messages.map((m) => m.text)).toContain('Pull request for acme/shop#12: https://github.com/acme/shop/pull/101 (total() applies the discount)');
     // No fix round ran: one build, one lite review.
     expect(last(d, 'lite_fix')?.state ?? 'skipped').toBe('skipped');

@@ -122,6 +122,10 @@ Limits: a form can hold strings, choices, yes/no and numbers; a step with object
 schema sends the person to mission control instead. Slack gives three seconds to open the form, so if
 the server is slow the click answers with a private note and the link; press Approve again.
 
+## Closing the ticket
+
+Nothing in this workflow closes an issue, merges or reopens anything; that is a person's decision (the AI-SDLC rule). For a GitHub ticket the pull request body ends with `Closes owner/name#N`, added by the workflow so it cannot be forgotten, and GitHub closes the issue when a person merges the pull request into the repository's default branch (a pull request against another branch does not close it). A Jira ticket is not closed by the pull request.
+
 ## Nodes
 
 | Node | What it does |
