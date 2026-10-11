@@ -89,6 +89,7 @@ const GY = 30;
 /** How much of each step's configuration the cards show. */
 export type CardDetail = 'names' | 'key' | 'all';
 const DETAIL_KEY = 'azhi.canvas.detail';
+const LINKS_KEY = 'azhi.canvas.links';
 const KEY_ROWS = 3;
 const ROW_H = 18;
 /** A setting on a card, marked when it differs from the saved version. */
@@ -229,7 +230,23 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const states = override ?? current;
   // While editing every direct dependency is drawn, so each one can be seen and removed.
   const reduced = useMemo(() => reduce(planNodes), [planNodes]);
-  const shown = useMemo(() => (edit ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduced), [planNodes, reduced, Boolean(edit)]);
+  const [links, setLinks] = useState<'flow' | 'all'>(() => {
+    try {
+      return localStorage.getItem(LINKS_KEY) === 'all' ? 'all' : 'flow';
+    } catch {
+      return 'flow';
+    }
+  });
+  const pickLinks = (v: 'flow' | 'all') => {
+    setLinks(v);
+    try {
+      localStorage.setItem(LINKS_KEY, v);
+    } catch {
+      /* not remembered */
+    }
+  };
+  const allLinks = Boolean(edit) && links === 'all';
+  const shown = useMemo(() => (allLinks ? new Map(planNodes.map((n) => [n.id, n.deps])) : reduced), [planNodes, reduced, allLinks]);
   const [level, setLevel] = useState<CardDetail>(() => {
     try {
       const v = localStorage.getItem(DETAIL_KEY);
@@ -348,14 +365,28 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const sel = planNodes.find((n) => n.id === selected);
   return (
     <div className="wf">
-      {settings ? (
+      {settings || edit ? (
         <div className="wf-detailbar">
-          <span className="muted small">Show on cards</span>
-          <div className="seg" role="group" aria-label="Show on cards">
-            {([['names', 'Names'], ['key', 'Key settings'], ['all', 'All settings']] as const).map(([v, label]) => (
-              <button key={v} type="button" aria-pressed={level === v} onClick={() => pickLevel(v)}>{label}</button>
-            ))}
-          </div>
+          {settings ? (
+            <>
+              <span className="muted small">Show on cards</span>
+              <div className="seg" role="group" aria-label="Show on cards">
+                {([['names', 'Names'], ['key', 'Key settings'], ['all', 'All settings']] as const).map(([v, label]) => (
+                  <button key={v} type="button" aria-pressed={level === v} onClick={() => pickLevel(v)}>{label}</button>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {edit ? (
+            <>
+              <span className="muted small">Links</span>
+              <div className="seg" role="group" aria-label="Links shown">
+                {([['flow', 'Flow only'], ['all', 'All links']] as const).map(([v, label]) => (
+                  <button key={v} type="button" aria-pressed={links === v} title={v === 'flow' ? 'Hide links already implied by a longer path (mostly data references)' : 'Show every direct dependency, so any can be removed'} onClick={() => pickLinks(v)}>{label}</button>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
       {edit ? (
