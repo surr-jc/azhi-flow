@@ -60,6 +60,13 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   step proposes a **lite** or **full** review path from the change's risk, and the approver can override
   it. `azhi example install ai-sdlc --repo OWNER/REPO --set slack_channel=...`. See
   [docs/ai-sdlc.md](docs/ai-sdlc.md).
+- Issue splitter (`examples/issue-splitter` for GitHub, `examples/issue-splitter-jira` for Jira): sizes an
+  issue, or a request typed as text, against the code and, when it is too big for one pull request, splits it
+  into ordered sub-issues (sub-tasks in Jira) linked under it, after a person approves the plan and may leave
+  slices out. Rules, not the agent alone, decide single or split; a small one gets a scope comment and a `ready`
+  label; something that is not code stops. Run it before the delivery workflow.
+  `azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=...`. See
+  [docs/issue-splitter.md](docs/issue-splitter.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from

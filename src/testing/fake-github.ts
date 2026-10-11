@@ -8,7 +8,7 @@ import http from 'node:http';
  */
 export interface FakeGithubData {
   runs: Array<{ id: number; conclusion: string; head_branch: string; run_started_at: string; updated_at: string; jobs?: Array<{ name: string; conclusion: string }> }>;
-  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean; body?: string; user?: string; repo?: string }>;
+  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean; body?: string; user?: string; repo?: string; id?: number }>;
   pulls?: Array<{
     number: number;
     title: string;
@@ -43,7 +43,7 @@ export interface FakeComment {
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean } = {}) {
   const requests: string[] = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
@@ -52,6 +52,9 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
   }
   const sha = (...parts: unknown[]) => createHash('sha1').update(JSON.stringify(parts)).digest('hex');
   const comments: Array<FakeComment & { user?: string }> = [...(opts.comments ?? [])];
+  /** What the issue splitter created, and the sub-issue links it made. */
+  const created: FakeGithubData['issues'] = [];
+  const links: Array<{ repo: string; parent: number; child: number }> = [];
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -78,11 +81,36 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     }
     m = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/actions\/runs\/(\d+)\/jobs$/);
     if (m) return send(200, { jobs: data.runs.find((r) => r.id === Number(m![1]))?.jobs ?? [] });
-    m = url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/issues$/);
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues$/);
+    if (m && req.method === 'POST') {
+      // Create an issue (the issue splitter): numbered after the highest one, with an id for sub-issue links.
+      const b = JSON.parse(raw || '{}');
+      const number = Math.max(99, ...data.issues.map((i) => i.number)) + 1;
+      const issue = { number, id: 5000 + number, repo: m[1]!, title: String(b.title ?? ''), body: String(b.body ?? ''), labels: ((b.labels ?? []) as string[]).map(String), user: 'azhi-bot', created_at: '2026-10-01T00:00:00Z' };
+      data.issues.push(issue);
+      created.push(issue);
+      return send(201, { number, id: issue.id, title: issue.title, html_url: `https://github.com/${m[1]}/issues/${number}` });
+    }
     if (m) {
       const label = url.searchParams.get('labels');
-      const found = data.issues.filter((i) => !label || i.labels.includes(label));
-      return send(200, slice(found).map((i) => ({ number: i.number, title: i.title, comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), ...(i.pull_request ? { pull_request: {} } : {}) })));
+      const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]));
+      return send(200, slice(found).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${m![1]}/issues/${i.number}`, ...(i.pull_request ? { pull_request: {} } : {}) })));
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/sub_issues$/);
+    if (m && req.method === 'POST') {
+      const child = Number(JSON.parse(raw || '{}').sub_issue_id);
+      const link = { repo: m[1]!, parent: Number(m[2]), child };
+      if (opts.noSubIssues) return send(404, { message: 'Not Found' });
+      if (links.some((l) => l.repo === link.repo && l.child === child)) return send(422, { message: 'Validation Failed: sub-issue already has a parent' });
+      links.push(link);
+      return send(201, { number: link.parent });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels$/);
+    if (m && req.method === 'POST') {
+      const i = data.issues.find((x) => x.number === Number(m![2]) && (!x.repo || x.repo === m![1]));
+      if (!i) return send(404, { message: 'Not Found' });
+      for (const l of (JSON.parse(raw || '{}').labels ?? []) as string[]) if (!i.labels.includes(l)) i.labels.push(l);
+      return send(200, i.labels.map((name) => ({ name })));
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
     if (m && req.method === 'GET') {
@@ -196,5 +224,5 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const t = c && git.trees.get(c.tree);
     return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
   };
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

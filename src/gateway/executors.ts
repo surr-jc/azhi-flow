@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, createPullRequest, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, labelIssue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
@@ -91,6 +91,21 @@ const builtin: Record<string, ToolExecutor> = {
     async lookup(spec, args, key, _since, ctx) {
       const hit = await findPullRequest(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
       return hit ? { value: hit } : null;
+    },
+  },
+  /** The issue splitter example: create an issue (as a sub-issue of a parent), and add labels to one. */
+  'github.create-issue': {
+    async call(spec, args, ctx) {
+      return { value: await createIssue(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findIssue(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  'github.label-issue': {
+    async call(spec, args, ctx) {
+      return { value: await labelIssue(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
     },
   },
   /** The SDLC example's intake: one GitHub issue, and any ticket in the shape its agents read. */
