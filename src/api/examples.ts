@@ -411,10 +411,23 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
 
     // Tools: the marketplace's description and schemas, with the repositories and API address kept as they are here.
     const toolPlan: Array<{ ref: string; kind: 'added' | 'updated' | 'unchanged'; spec: ToolSpec }> = [];
+    // A tool the template gained since the install arrives with the template's placeholder repository
+    // (OWNER/REPO); it takes the repositories and GitHub API address the example's other tools already have.
+    const known = await installedRepos(ctx, p.workspaceId, e);
+    let knownApi: unknown;
+    for (const sibling of (e.config.tools ?? []).filter(needsRepos)) {
+      const cfg = (await loadToolRevision(ctx, p.workspaceId, `${sibling.id}@${sibling.version}`, undefined))?.transport as { config?: { api_url?: unknown } } | undefined;
+      if (cfg?.config?.api_url) knownApi ??= cfg.config.api_url;
+    }
     for (const t of e.config.tools ?? []) {
       const spec = fill(structuredClone(t), values);
       const ref = `${spec.id}@${spec.version}`;
       const installed = await loadToolRevision(ctx, p.workspaceId, ref, undefined);
+      if (!installed && needsRepos(spec) && known.length) {
+        const config = ((spec.transport as { config?: Record<string, unknown> }).config ??= {});
+        config.repos = known;
+        if (knownApi && !config.api_url) config.api_url = knownApi;
+      }
       if (installed) {
         const mine = (installed.transport as { config?: Record<string, unknown> }).config ?? {};
         const keep = Object.fromEntries(['repos', 'api_url'].filter((k) => k in mine).map((k) => [k, mine[k]]));

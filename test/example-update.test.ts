@@ -121,6 +121,26 @@ describe('updating an installed marketplace workflow', () => {
     expect(merged.nodes.some((n) => n.id === 'audit_note')).toBe(true);
   });
 
+  it('gives a tool the marketplace gained the repositories the example already has, not the placeholder', async () => {
+    const cfgPath = join(examples, 'pr-review', 'azhi.config.yaml');
+    const cfg = parse(readFileSync(cfgPath, 'utf8'));
+    const extra = structuredClone(cfg.tools.find((t: any) => t.id === 'github.get-pull-request'));
+    extra.id = 'github.extra-read';
+    extra.transport.config = { repos: ['OWNER/REPO'] };
+    cfg.tools.push(extra);
+    const { stringify } = await import('yaml');
+    writeFileSync(cfgPath, stringify(cfg));
+    const r = await post('/v1/examples/pr-review/update', {});
+    expect(r.report.tools).toContainEqual({ ref: 'github.extra-read@1', kind: 'added' });
+    // The same repositories the example's other tools have (the install's, and the one an earlier test added), never OWNER/REPO.
+    const sibling = await loadToolRevision(ctx, WS, 'github.get-pull-request@1', undefined);
+    const added = await loadToolRevision(ctx, WS, 'github.extra-read@1', undefined);
+    const reposOf = (t: unknown) => ((t as { transport: { config: { repos: string[] } } }).transport.config.repos);
+    expect(reposOf(added)).toEqual(reposOf(sibling));
+    expect(reposOf(added)).toContain('acme/payments');
+    expect(reposOf(added)).not.toContain('OWNER/REPO');
+  });
+
   it('only admins may update', async () => {
     const other = Fastify();
     other.addHook('onRequest', async (req) => void (req.principal = { kind: 'user', workspaceId: WS, userId: 'usr_x', role: 'author' } as never));
