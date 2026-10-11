@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import { DiffView, looksLikeDiff } from './DiffView.js';
 
 // Agent and model text is rendered as GitHub-flavored Markdown. Raw HTML in it is dropped (never
 // injected), unsafe link protocols are stripped by react-markdown's URL filter, links open in a new
@@ -72,6 +73,7 @@ export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boo
     const parsed = depth < 6 ? parseJsonText(value) : undefined;
     if (parsed !== undefined && typeof parsed === 'object' && parsed !== null) return <Value value={parsed} plain={plain} depth={depth + 1} />;
     if (!value.trim()) return <span className="muted">empty</span>;
+    if (looksLikeDiff(value)) return <DiffView text={value} />;
     const pill = STATUS_TONE[value.trim().toLowerCase()];
     if (pill) return <span className={`v-pill ${pill}`}>{value.trim()}</span>;
     if (plain) return value.includes('\n') || value.length > 120 ? <pre className="json">{value}</pre> : <span className="mono">{value}</span>;

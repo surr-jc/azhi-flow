@@ -1067,3 +1067,78 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
   .ed-dock { margin: 8px 8px 0; }
   .ed-dock.open { height: 360px; }
 }
+
+/* Open questions: one group of radio options per question, the recommended one preselected. */
+.open-questions { margin: 12px 0; }
+.open-questions .oq { border: 1px solid var(--line, #d7dbe2); border-radius: 8px; padding: 12px 14px; margin: 10px 0; min-width: 0; }
+.open-questions .oq legend { font-weight: 600; padding: 0 6px; max-width: 100%; }
+.open-questions .oq-option { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.open-questions .oq-option.picked { background: var(--accent-soft, rgba(15, 118, 110, 0.1)); }
+.open-questions .oq-option input[type='radio'] { margin-top: 4px; flex: none; }
+.open-questions .oq-option input[type='text'] { display: block; width: 100%; margin-top: 4px; }
+.open-questions .oq-rec { color: var(--accent, #0f766e); font-weight: 600; font-size: 0.85em; }
+.open-questions .oq-pros { display: block; color: var(--muted, #5b6472); }
+.open-questions .oq-cons { display: block; color: var(--muted, #5b6472); }
+
+/* Diff viewer: one card per file, with line numbers and added/removed lines. */
+.diff { margin: 8px 0; min-width: 0; }
+.diff .plus { color: var(--ok, #1a7f37); font-weight: 600; }
+.diff .minus { color: var(--bad, #cf222e); font-weight: 600; }
+.diff-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 8px 2px; }
+.diff-actions { margin-left: auto; display: flex; gap: 12px; }
+.diff-index { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 4px; font-size: 0.9em; }
+.diff-index code { overflow-wrap: anywhere; }
+.diff-file { border: 1px solid var(--line, #d7dbe2); border-radius: 8px; margin: 8px 0; overflow: hidden; background: var(--panel, transparent); }
+.diff-file > summary { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; cursor: pointer; background: rgba(127, 127, 127, 0.08); }
+.diff-path { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em; }
+.diff-dir { color: var(--muted, #5b6472); }
+.diff-counts { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+.diff-status { font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 10px; background: rgba(127, 127, 127, 0.18); }
+.diff-status.added { background: rgba(26, 127, 55, 0.18); color: var(--ok, #1a7f37); }
+.diff-status.deleted { background: rgba(207, 34, 46, 0.18); color: var(--bad, #cf222e); }
+.diff-scroll { overflow-x: auto; }
+.diff-table { border-collapse: collapse; width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.45; }
+.diff-table td { padding: 0 8px; vertical-align: top; white-space: pre; }
+.diff-table td.no { width: 1%; min-width: 3ch; text-align: right; color: var(--muted, #5b6472); user-select: none; opacity: 0.8; }
+.diff-table td.sign { width: 1%; user-select: none; }
+.diff-table tr.add { background: rgba(46, 160, 67, 0.16); }
+.diff-table tr.del { background: rgba(248, 81, 73, 0.16); }
+.diff-table tr.add td.sign { color: var(--ok, #1a7f37); }
+.diff-table tr.del td.sign { color: var(--bad, #cf222e); }
+.diff-table tr.hunk td { background: rgba(88, 130, 255, 0.12); color: var(--muted, #5b6472); padding: 3px 8px; }
+.diff-table tr.note td { color: var(--muted, #5b6472); font-style: italic; }
+.diff-note { padding: 8px 12px; }
+.payload-title { margin: 14px 0 4px; }
+
+/* Release review: verdict summary, findings as cards, then the change and the evidence. */
+.review h3 { margin: 18px 0 8px; }
+.review-verdict { border: 1px solid var(--line, #d7dbe2); border-left-width: 5px; border-radius: 8px; padding: 12px 16px; }
+.review-verdict.draft { border-left-color: var(--warn, #bf8700); background: rgba(191, 135, 0, 0.07); }
+.review-verdict.clean { border-left-color: var(--ok, #1a7f37); background: rgba(26, 127, 55, 0.07); }
+.review-verdict h3 { margin: 0 0 4px; }
+.review-verdict ul { margin: 6px 0 10px 18px; padding: 0; }
+.review-title { font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.chip { display: inline-flex; gap: 4px; align-items: baseline; padding: 2px 10px; border-radius: 12px; font-size: 0.85em; background: rgba(127, 127, 127, 0.14); }
+.chip.ok { background: rgba(26, 127, 55, 0.16); color: var(--ok, #1a7f37); }
+.chip.warn { background: rgba(191, 135, 0, 0.18); color: var(--warn, #9a6700); }
+.chip.bad { background: rgba(207, 34, 46, 0.16); color: var(--bad, #cf222e); }
+.sev-badge { display: inline-block; font-size: 0.75em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 8px; border-radius: 10px; background: rgba(127, 127, 127, 0.2); }
+.sev-badge.critical { background: var(--bad, #cf222e); color: #fff; }
+.sev-badge.major { background: rgba(207, 34, 46, 0.18); color: var(--bad, #cf222e); }
+.sev-badge.minor { background: rgba(191, 135, 0, 0.2); color: var(--warn, #9a6700); }
+.finding { border: 1px solid var(--line, #d7dbe2); border-left-width: 5px; border-radius: 8px; padding: 10px 14px; margin: 10px 0; min-width: 0; }
+.finding.sev-critical { border-left-color: var(--bad, #cf222e); }
+.finding.sev-major { border-left-color: rgba(207, 34, 46, 0.7); }
+.finding.sev-minor { border-left-color: var(--warn, #bf8700); }
+.finding.sev-suggestion { border-left-color: rgba(127, 127, 127, 0.6); }
+.finding header { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.finding h4 { margin: 6px 0 4px; font-size: 1em; line-height: 1.35; }
+.finding-where { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin: 2px 0 6px; }
+.finding-where code { overflow-wrap: anywhere; }
+.finding-body summary { cursor: pointer; color: var(--muted, #5b6472); margin: 4px 0; }
+.review-more { margin: 10px 0; }
+.review-more summary { cursor: pointer; }
+.diff-table tr.flash, .diff-file.flash { outline: 2px solid var(--warn, #bf8700); outline-offset: -2px; animation: flash-fade 1.8s ease-out; }
+@keyframes flash-fade { from { background: rgba(191, 135, 0, 0.35); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .diff-table tr.flash, .diff-file.flash { animation: none; } }

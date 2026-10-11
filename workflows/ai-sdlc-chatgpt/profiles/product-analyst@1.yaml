@@ -1,7 +1,7 @@
 # The product analyst: OpenCode in a fresh checkout of the repository, with read-only tools and the
 # requirements-brief skill. GitHub Copilot models through OpenCode, on your Copilot subscription.
 # `default` is the server's AZHI_COPILOT_MODEL (claude-sonnet-5 unless set); name any Copilot model here.
-model: {provider: openai-chatgpt, name: default, credential: openai-chatgpt-auth}
+model: {provider: openai-chatgpt, name: gpt-5.5, credential: openai-chatgpt-auth}
 max_output_tokens: 4000
 instructions: |
   You turn one ticket into clear, testable requirements, grounded in the repository checked out in

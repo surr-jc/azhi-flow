@@ -60,6 +60,34 @@ describe('checking a token against a repository', () => {
     expect(w.warning).toContain('Pull requests');
   });
 
+  it('proves a fine-grained token can write instead of only warning, and names the missing permission', async () => {
+    // The first token may only read, the second may also write (what GitHub answers 403 to, the fake does too).
+    const g = await start({ token: ['github_pat_read', 'github_pat_write'], repos: { 'acme/payments': { private: true, permissions: { pull: true, push: true } } } });
+    const denied = await checkRepoAccess({ api_url: g.url }, 'github_pat_read', 'acme/payments', 'write', undefined, ['contents', 'pull_requests']);
+    expect(denied).toMatchObject({ ok: false, status: 'insufficient', token_kind: 'fine-grained' });
+    expect(denied.message).toContain('Contents');
+    expect(denied.message).toContain('Pull requests');
+    expect(denied.fix).toContain('Read and write');
+    const allowed = await checkRepoAccess({ api_url: g.url }, 'github_pat_write', 'acme/payments', 'write', undefined, ['contents', 'pull_requests']);
+    expect(allowed).toMatchObject({ ok: true, status: 'ok' });
+    expect(allowed.warning).toBeUndefined();
+    expect(allowed.message).toContain('test write');
+  });
+
+  it('only tries the permissions a step needs, and never writes for a read check or a classic token', async () => {
+    const g = await start({ token: ['github_pat_read', 'github_pat_write'], repos: { 'acme/payments': { private: true, permissions: { pull: true, push: true } } } });
+    const before = g.requests.length;
+    await checkRepoAccess({ api_url: g.url }, 'github_pat_write', 'acme/payments', 'write', undefined, ['pull_requests']);
+    const sent = g.requests.slice(before).filter((r) => r.startsWith('POST'));
+    expect(sent).toEqual(['POST /repos/acme/payments/pulls']);
+    const mark = g.requests.length;
+    await checkRepoAccess({ api_url: g.url }, 'github_pat_write', 'acme/payments', 'read', undefined, ['contents']);
+    expect(g.requests.slice(mark).some((r) => r.startsWith('POST'))).toBe(false);
+    const c = await start({ token: 'ghp_abc', scopes: 'repo', repos: { 'acme/payments': { private: true, permissions: { pull: true, push: true } } } });
+    await checkRepoAccess({ api_url: c.url }, 'ghp_abc', 'acme/payments', 'write', undefined, ['contents']);
+    expect(c.requests.some((r) => r.startsWith('POST'))).toBe(false);
+  });
+
   it('reports an unreachable GitHub', async () => {
     const r = await checkRepoAccess({ api_url: 'http://127.0.0.1:1' }, 'good', 'acme/payments', 'read', 2000);
     expect(r).toMatchObject({ ok: false, status: 'error' });

@@ -441,6 +441,36 @@ export interface RepoAccess {
   warning?: string;
 }
 
+/**
+ * What a write step needs from a fine-grained token, tried with a harmless request. GitHub does not list a
+ * fine-grained token's permissions, so the only proof that it can write is to ask for a write it will refuse:
+ * `contents` creates one tiny blob (an unreferenced object GitHub discards), `pull_requests` posts an empty
+ * pull request, which an allowed token answers with a validation error (422) and a refused one with 403.
+ */
+export type WriteProbe = 'contents' | 'pull_requests';
+const PROBES: Record<WriteProbe, { grant: string; path: (repo: string) => string; body: unknown; allowed: number[] }> = {
+  contents: { grant: 'Contents', path: (repo) => `/repos/${repo}/git/blobs`, body: { content: 'azhi-flow preflight', encoding: 'utf-8' }, allowed: [200, 201] },
+  pull_requests: { grant: 'Pull requests', path: (repo) => `/repos/${repo}/pulls`, body: {}, allowed: [422] },
+};
+
+async function probeWrite(api: string, token: string, repo: string, probe: WriteProbe, timeoutMs: number): Promise<'allowed' | 'denied' | 'unknown'> {
+  const spec = PROBES[probe];
+  try {
+    const url = `${api}${spec.path(repo)}`;
+    await checkEgress(url);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', 'content-type': 'application/json' },
+      body: JSON.stringify(spec.body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (spec.allowed.includes(res.status)) return 'allowed';
+    return res.status === 403 || res.status === 401 ? 'denied' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 const tokenKind = (token: string, scopes: string | null): RepoAccess['token_kind'] => (token.startsWith('github_pat_') ? 'fine-grained' : token.startsWith('ghp_') || scopes !== null ? 'classic' : 'unknown');
 
 /**
@@ -448,7 +478,7 @@ const tokenKind = (token: string, scopes: string | null): RepoAccess['token_kind
  * change when it cannot: the token's resource owner and repository access (fine-grained), its
  * scopes (classic), SSO authorization, or the account's own role on the repository.
  */
-export async function checkRepoAccess(cfg: GithubConfig, token: string | undefined, repo: string, need: 'read' | 'write', timeoutMs = 10_000): Promise<RepoAccess> {
+export async function checkRepoAccess(cfg: GithubConfig, token: string | undefined, repo: string, need: 'read' | 'write', timeoutMs = 10_000, probes: WriteProbe[] = []): Promise<RepoAccess> {
   const base = { repo, need };
   if (!token) return { ...base, ok: false, status: 'unauthorized', token_kind: 'unknown', message: 'No token is set for this tool.', fix: 'Set the secret the tool uses, then check again.' };
   const api = (cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '');
@@ -495,6 +525,21 @@ export async function checkRepoAccess(cfg: GithubConfig, token: string | undefin
     }
     if (scopes && !scopes.includes('repo') && !(body.private === false && scopes.includes('public_repo'))) {
       return { ...found, ok: false, status: 'insufficient', message: `This token's scopes (${scopes.join(', ') || 'none'}) do not allow changes to ${body.private ? 'a private repository' : 'this repository'}.`, fix: body.private ? 'Add the "repo" scope.' : 'Add the "public_repo" or "repo" scope.' };
+    }
+    // A token that does not list its permissions is asked to prove them with a harmless write.
+    if (kind !== 'classic' && probes.length) {
+      const results = await Promise.all(probes.map(async (probe) => [probe, await probeWrite(api, token, repo, probe, timeoutMs)] as const));
+      const denied = results.filter(([, r]) => r === 'denied').map(([probe]) => PROBES[probe].grant);
+      if (denied.length) {
+        return {
+          ...found,
+          ok: false,
+          status: 'insufficient',
+          message: `GitHub refuses this token's writes to ${repo}: it lacks ${denied.map((g) => `"${g}: Read and write"`).join(' and ')}.`,
+          fix: `Edit the fine-grained token: under Repository access include ${repo}, and under Repository permissions set ${denied.map((g) => `"${g}" to Read and write`).join(' and ')}. Then save it as the tool's secret and run again. (Checked with a harmless test write.)`,
+        };
+      }
+      if (results.every(([, r]) => r === 'allowed')) return { ...found, ok: true, status: 'ok', message: `The token can change ${repo} (confirmed with a harmless test write).` };
     }
     if (kind === 'fine-grained') return { ...found, ok: true, status: 'ok', message: `The token can see ${repo} and your account may change it.`, warning: 'GitHub does not list a fine-grained token\'s permissions. Make sure "Pull requests: Read and write" is granted for this repository.' };
     return { ...found, ok: true, status: 'ok', message: `The token can change ${repo}.` };

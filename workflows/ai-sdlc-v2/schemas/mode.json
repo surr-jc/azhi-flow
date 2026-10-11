@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "tested",
+        "static",
+        "untested"
+      ]
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "additionalProperties": false
+}

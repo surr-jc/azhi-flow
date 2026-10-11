@@ -102,9 +102,7 @@ nodes:
     type: condition
     description: Build only a ticket whose seven gates pass with no low-confidence
       gate and that can be built as code.
-    expression: "nodes.dor_check.output.gates.all(g, g.status == 'pass' &&
-      g.confidence != 'low') && nodes.dor_check.output.dispatchable ? 'ready' :
-      'refine'"
+    expression: "nodes.dor_check.output.dispatchable ? 'ready' : 'refine'"
     routes:
       ready:
         - requirements

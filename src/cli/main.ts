@@ -137,12 +137,13 @@ program
   .option('--published', 'run a published version (workflow, workflow@3) instead of uploading')
   .option('--provider <provider>', 'provider for steps whose profile says `name: default` (anthropic, openai, github-copilot or openai-chatgpt); steps that name a model keep it')
   .option('--model <id>', 'model for those steps (needs --provider); without it the provider\'s server default model')
+  .option('--no-preflight', 'start without first checking secrets, tools and GitHub access')
   .option('-w, --wait', 'wait for the run to finish and print the result')
-  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string }) => {
+  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string; preflight?: boolean }) => {
     if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
     const api = client();
-    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.preflight === false ? {} : { preflight: true }), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
     console.log(`run ${bold(run_id)} queued`);
     if (!opts.wait) return;
     let cursor = 0;

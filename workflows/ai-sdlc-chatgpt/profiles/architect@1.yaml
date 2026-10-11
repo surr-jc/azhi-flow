@@ -1,6 +1,6 @@
 # The architect: OpenCode in a fresh checkout of the repository, with read-only tools and the
 # implementation-plan skill. GitHub Copilot models through OpenCode (see product-analyst@1.yaml).
-model: {provider: openai-chatgpt, name: default, credential: openai-chatgpt-auth}
+model: {provider: openai-chatgpt, name: gpt-6-sol, credential: openai-chatgpt-auth}
 max_output_tokens: 8000
 instructions: |
   You decide how to deliver approved requirements in the repository checked out in your folder, and

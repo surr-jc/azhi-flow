@@ -4,6 +4,9 @@ import { api, atLeast, type Approval } from '../api';
 import { useMe } from '../App';
 import { Link } from '../router';
 import { Formatted, Markdown } from '../components/Rich';
+import { DiffView, looksLikeDiff } from '../components/DiffView';
+import { ChangeReview, isChangeReview } from '../components/ChangeReview';
+import { choicesComplete, composeAnswers, OpenQuestions, readOpenQuestions, type QuestionChoice } from '../components/OpenQuestions';
 import { ago, ErrorNote, formValues, Loading, PageHead, Panel, RunLink, SchemaFields, when } from '../ui';
 
 export function Approvals() {
@@ -48,21 +51,41 @@ export function useDecide(a: Approval) {
 /** True when the approver must fill in a form, so a one-click approve is not enough. */
 export const needsForm = (a: Approval) => Boolean(a.decision_schema?.properties && Object.keys(a.decision_schema.properties).length);
 
+/** The decision form without its free-text `answers` field, which the question selector replaces. */
+function withoutAnswers(schema: Approval['decision_schema']): Approval['decision_schema'] {
+  if (!schema?.properties || !('answers' in schema.properties)) return schema;
+  const { answers: _answers, ...properties } = schema.properties as Record<string, unknown>;
+  const required = Array.isArray(schema.required) ? schema.required.filter((k: string) => k !== 'answers') : schema.required;
+  return { ...schema, properties, required } as Approval['decision_schema'];
+}
+
 export function ApprovalCard({ approval: a, compact }: { approval: Approval; compact?: boolean }) {
   const [values, setValues] = useState<Record<string, string | boolean>>({});
+  const questions = readOpenQuestions(a.request.payload);
+  const pickable = questions.length > 0 && Boolean(a.decision_schema?.properties && 'answers' in a.decision_schema.properties);
+  const [choices, setChoices] = useState<QuestionChoice[]>([]);
+  const formSchema = pickable ? withoutAnswers(a.decision_schema) : a.decision_schema;
+  const formHasFields = Boolean(formSchema?.properties && Object.keys(formSchema.properties).length);
   const [formError, setFormError] = useState<string>();
   const decide = useDecide(a);
   const go = (d: 'approved' | 'rejected') => {
     setFormError(undefined);
     let data: Record<string, unknown> = {};
     try {
-      if (d === 'approved') data = formValues(a.decision_schema, values);
+      if (d === 'approved') {
+        if (pickable && !choicesComplete(questions, choices)) throw new Error('Pick an option for every question, or write your own answer.');
+        data = formValues(formSchema, values);
+        if (pickable) data.answers = composeAnswers(questions, choices);
+      }
     } catch (e) {
       return setFormError((e as Error).message);
     }
     decide.mutate({ decision: d, data });
   };
   const payload = a.request.payload;
+  // A change set is shown on its own as a diff, and the rest of the payload stays as readable fields.
+  const diffText = payload && typeof payload === 'object' && !Array.isArray(payload) && typeof (payload as { diff?: unknown }).diff === 'string' && looksLikeDiff((payload as { diff: string }).diff) ? (payload as { diff: string }).diff : undefined;
+  const restPayload = diffText ? Object.fromEntries(Object.entries(payload as Record<string, unknown>).filter(([k]) => k !== 'diff')) : payload;
   const expiry = a.expires_at ? `Expires ${ago(a.expires_at)} (${when(a.expires_at)}), then ${a.request.on_expiry === 'fail' ? 'the run fails' : 'it counts as rejected'}` : null;
   return (
     <section className="decision" aria-label={`Approval ${a.node_id}`}>
@@ -77,8 +100,15 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
           </div>
         ) : null}
         <div className="question"><Markdown text={approvalQuestion(a)} inline={!approvalQuestion(a).includes('\n')} /></div>
-        {payload !== undefined && payload !== null ? (
-          <div className="payload"><Formatted value={payload} rawLabel="the full payload as JSON" /></div>
+        {isChangeReview(payload) ? (
+          <ChangeReview payload={payload} />
+        ) : payload !== undefined && payload !== null ? (
+          <>
+            {diffText ? <h3 className="small payload-title">What changes</h3> : null}
+            {diffText ? <div className="payload"><DiffView text={diffText} /></div> : null}
+            {diffText ? <h3 className="small payload-title">Details</h3> : null}
+            <div className="payload"><Formatted value={restPayload} rawLabel="the full payload as JSON" /></div>
+          </>
         ) : (
           <p className="muted small">The workflow shows the approver no details for this step.</p>
         )}
@@ -89,7 +119,8 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
           <p className="ok-note" role="status">Decision recorded. The run continues from here.</p>
         ) : a.can_decide ? (
           <>
-            {needsForm(a) ? <SchemaFields schema={a.decision_schema} values={values} onChange={setValues} idPrefix={`d-${a.node_id}`} /> : null}
+            {pickable ? <OpenQuestions questions={questions} choices={choices} onChange={setChoices} idPrefix={`oq-${a.node_id}`} /> : null}
+            {needsForm(a) && (!pickable || formHasFields) ? <SchemaFields schema={formSchema} values={values} onChange={setValues} idPrefix={`d-${a.node_id}`} /> : null}
             <div className="row">
               <button className="primary" disabled={decide.isPending} onClick={() => go('approved')}>Approve</button>
               <button className="danger" disabled={decide.isPending} onClick={() => go('rejected')}>Reject</button>

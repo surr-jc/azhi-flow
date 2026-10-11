@@ -1,4 +1,8 @@
-import { checkRepoAccess, type GithubConfig, type RepoAccess } from '../gateway/tools/github.js';
+import { checkRepoAccess, type GithubConfig, type RepoAccess, type WriteProbe } from '../gateway/tools/github.js';
+
+/** What a GitHub tool needs from a fine-grained token, proved with a harmless write (see checkRepoAccess). */
+export const WRITE_PROBES: Record<string, WriteProbe[]> = { 'github.push-branch': ['contents'], 'github.create-pull-request': ['pull_requests'] };
+export const probesFor = (toolRef: string): WriteProbe[] => WRITE_PROBES[toolRef.replace(/@\d+$/, '')] ?? [];
 import type { AgentNode, ToolNode } from '../definition/types.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { loadCatalog } from '../server/catalog.js';
@@ -92,12 +96,12 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
     seen.add(key);
     pending.push(run());
   };
-  const github = (credential: string | undefined, cfg: GithubConfig, repo: string, need: 'read' | 'write', node: string, target: string) =>
-    once(`gh:${credential}:${cfg.api_url ?? ''}:${repo.toLowerCase()}:${need}`, async () => {
+  const github = (credential: string | undefined, cfg: GithubConfig, repo: string, need: 'read' | 'write', node: string, target: string, probes: WriteProbe[] = []) =>
+    once(`gh:${credential}:${cfg.api_url ?? ''}:${repo.toLowerCase()}:${need}:${probes.join(',')}`, async () => {
       if (!credential) return undefined;
       const token = await secret(credential);
       if (!token) return undefined; // reported above as a missing secret
-      return fromAccess(await checkRepoAccess(cfg, token, repo, need), { id: `github:${credential}:${repo}:${need}`, target: `${repo} with ${credential}`, node });
+      return fromAccess(await checkRepoAccess(cfg, token, repo, need, undefined, probes), { id: `github:${credential}:${repo}:${need}${probes.length ? `:${probes.join('+')}` : ''}`, target: `${repo} with ${credential}`, node });
     });
 
   // A checkout and the GitHub tools of one workflow talk to the same GitHub, so the tools' API address
@@ -114,7 +118,7 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
       const cfg = ((spec.transport as { config?: GithubConfig }).config ?? {}) as GithubConfig;
       const need = spec.effect === 'read' ? 'read' : 'write';
       if (Array.isArray(cfg.repos)) {
-        for (const repo of cfg.repos) github(spec.credential, cfg, repo, need, n.id, repo);
+        for (const repo of cfg.repos) github(spec.credential, cfg, repo, need, n.id, repo, need === 'write' ? probesFor(def.tool) : []);
         // A repository taken from this run's input must be one the tool allows.
         const arg = textOf((def.arguments as Record<string, unknown> | undefined)?.repo, inputs);
         if (arg.from && arg.value !== undefined) {

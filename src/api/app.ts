@@ -15,7 +15,7 @@ import { addDocuments, createDataset, listDatasets, publishRevision, resolveData
 import { buildRunPlan } from '../plan/run-plan.js';
 import { registerModelOptionRoutes } from './model-options.js';
 import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
-import { preflight } from '../plan/preflight.js';
+import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
@@ -500,7 +500,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     if (!spec || !Array.isArray(cfg.repos)) throw new AzhiError(ErrorClass.invalidInput, `${ref} is not a registered tool with a repository list`);
     const token = spec.credential ? (await resolveSecret(ctx, p.workspaceId, spec.credential))?.value : undefined;
     const need = spec.effect === 'read' ? 'read' : 'write';
-    const results = await Promise.all((b.repos ?? cfg.repos).map((r) => checkRepoAccess(cfg, token, r, need)));
+    const results = await Promise.all((b.repos ?? cfg.repos).map((r) => checkRepoAccess(cfg, token, r, need, undefined, need === 'write' ? probesFor(ref) : [])));
     return { tool: ref, credential: spec.credential ?? null, results };
   });
 
