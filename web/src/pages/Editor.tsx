@@ -4,6 +4,7 @@ import { parse, stringify } from 'yaml';
 import { api, atLeast, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { ModelChoice, ModelSteps } from '../components/ModelChoice';
+import { EXECUTOR_BLURB, FactChips, HbSection, PickList } from '../components/HarnessParts';
 import { Icon } from '../icons';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 import { graphOf } from '../graph';
@@ -759,6 +760,15 @@ function readProfile(text: string | undefined): ProfileDoc | undefined {
   }
 }
 
+interface LibraryAsset { id: string; kind: 'mcp' | 'agent' | 'skill' | 'command'; slug: string; name: string; description: string; status: string; definition?: Record<string, any> }
+/** How good a capability is, for the colour of its chip. */
+function capTone(key: string, value: string, unverified?: boolean): 'ok' | 'warn' | 'bad' | undefined {
+  if (unverified) return 'warn';
+  const good: Record<string, string[]> = { gatewayTools: ['native-mcp'], ambientTools: ['disableable', 'restrictable'], cancellation: ['confirmed'], resume: ['native'], usage: ['reported'] };
+  const bad: Record<string, string[]> = { ambientTools: ['uncontrolled'], cancellation: ['none'], gatewayTools: ['none'] };
+  return bad[key]?.includes(value) ? 'bad' : good[key]?.includes(value) ? 'ok' : 'warn';
+}
+
 const CAPABILITY_LABELS: Array<[string, string, Record<string, string>]> = [
   ['gatewayTools', 'Tools', { 'native-mcp': 'every call goes through the gateway', bridged: 'reach the gateway over a bridge', none: 'none' }],
   ['ambientTools', 'Built-in tools', { disableable: 'none exist', restrictable: 'switched off by permission rules', uncontrolled: 'cannot be restricted' }],
@@ -782,6 +792,9 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
   const [newName, setNewName] = useState('');
   const budget: Record<string, number> = step.budget ?? {};
   const tools: string[] = Array.isArray(step.tools) ? step.tools : [];
+  const stepDatasets: string[] = Array.isArray(step.datasets) ? step.datasets : [];
+  const datasets = useQuery({ queryKey: ['datasets'], queryFn: () => api<Array<{ name: string; trusted: boolean; documents: number }>>('/v1/datasets'), staleTime: 60_000 });
+  const library = useQuery({ queryKey: ['portable-assets'], queryFn: () => api<LibraryAsset[]>('/v1/assets'), staleTime: 60_000 });
 
   const writeProfile = (patch: (d: ProfileDoc) => ProfileDoc) => {
     if (!path) return;
@@ -824,8 +837,8 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
   const providerOk = !executor || !provider || provider === 'scripted' || executor.providers.includes(provider);
 
   return (
-    <fieldset className="harness">
-      <legend>Harness</legend>
+    <div className="hb" role="group" aria-label="Harness">
+      <HbSection icon="agent" title="Runs on" summary={step.executor || 'model-agent'} defaultOpen>
       <label>
         Executor
         <select value={step.executor ?? ''} onChange={(e) => set('executor', e.target.value || undefined)}>
@@ -834,14 +847,19 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
           {step.executor && !ctx.executors.some((e) => e.id === step.executor) ? <option value={step.executor}>{step.executor} (unknown)</option> : null}
         </select>
       </label>
+      {step.executor !== undefined || true ? <p className="muted small hb-blurb">{EXECUTOR_BLURB[step.executor || 'model-agent'] ?? 'A custom executor declared on this server.'}</p> : null}
       {executor ? (
-        <ul className="muted small harness-caps" aria-label="Capabilities">
-          {CAPABILITY_LABELS.map(([k, label, words]) => <li key={k}>{label}: {words[executor.capabilities[k]] ?? executor.capabilities[k]}{executor.capabilities.unverified?.includes(k) ? ' (not yet verified)' : ''}</li>)}
-          <li>Runs on: {executor.capabilities.platforms.join(', ')}{executor.capabilities.unverified?.includes('platforms') ? ' (Windows not yet verified)' : ''}</li>
-          {executor.notes.map((n) => <li key={n}>{n}</li>)}
-        </ul>
+        <>
+          <FactChips items={[
+            ...CAPABILITY_LABELS.map(([k, label, words]) => ({ text: `${label}: ${words[executor.capabilities[k]] ?? executor.capabilities[k]}${executor.capabilities.unverified?.includes(k) ? ' (not yet verified)' : ''}`, tone: capTone(k, executor.capabilities[k], executor.capabilities.unverified?.includes(k)) })),
+            { text: `Runs on: ${executor.capabilities.platforms.join(', ')}${executor.capabilities.unverified?.includes('platforms') ? ' (Windows not yet verified)' : ''}` },
+          ]} />
+          {executor.notes.length ? <details className="hb-more"><summary>Notes on this executor</summary><ul className="muted small">{executor.notes.map((n) => <li key={n}>{n}</li>)}</ul></details> : null}
+        </>
       ) : step.executor ? <p className="warn-note small">No executor named {step.executor} is declared on this server.</p> : null}
+      </HbSection>
 
+      <HbSection icon="retrieve" title="Model and instructions" summary={ref ? `${ref}${provider ? ` · ${provider}` : ''}` : 'no profile yet'} defaultOpen>
       <label>
         Profile
         <input value={ref} list="ed-profiles" spellCheck={false} onChange={(e) => set('profile', e.target.value)} />
@@ -878,26 +896,23 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
             Instructions
             <textarea rows={8} value={doc.instructions ?? ''} onChange={(e) => setTop('instructions', e.target.value)} />
           </label>
-          <div className="row wrap">
-            <label>Temperature
-              <input type="number" step="0.1" min="0" max="2" value={typeof doc.temperature === 'number' ? doc.temperature : ''} onChange={(e) => setTop('temperature', e.target.value === '' ? undefined : Number(e.target.value))} />
-            </label>
-            <label>Max turns
+          <label>Max turns
               <input type="number" min="1" value={typeof doc.max_turns === 'number' ? doc.max_turns : ''} onChange={(e) => setTop('max_turns', e.target.value === '' ? undefined : Number(e.target.value))} />
             </label>
-            <label>Max output tokens
+          <details className="hb-more">
+            <summary>More model settings</summary>
+            <div className="row wrap">
+              <label>Temperature
+              <input type="number" step="0.1" min="0" max="2" value={typeof doc.temperature === 'number' ? doc.temperature : ''} onChange={(e) => setTop('temperature', e.target.value === '' ? undefined : Number(e.target.value))} />
+            </label>
+              <label>Max output tokens
               <input type="number" min="1" value={typeof doc.max_output_tokens === 'number' ? doc.max_output_tokens : ''} onChange={(e) => setTop('max_output_tokens', e.target.value === '' ? undefined : Number(e.target.value))} />
             </label>
-          </div>
+            </div>
+          </details>
         </>
       ) : null}
-      {step.executor === 'opencode' && path && doc ? <OpencodeSetup ctx={ctx} setup={doc.harness?.opencode ?? {}} onChange={(h) => writeProfile((d) => {
-        const harness: Record<string, any> = { ...(d.harness ?? {}), opencode: h };
-        if (!Object.keys(h).length) delete harness.opencode;
-        const n: ProfileDoc = { ...d, harness };
-        if (!Object.keys(harness).length) delete n.harness;
-        return n;
-      })} /> : null}
+      <h5 className="hb-h">Or start a new profile</h5>
       <div className="row wrap">
         <input aria-label="New profile name" placeholder="new-profile@1" value={newName} spellCheck={false} onChange={(e) => setNewName(e.target.value)} />
         <button
@@ -914,27 +929,44 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
         </button>
       </div>
 
-      {step.executor === 'opencode' || step.workspace ? <WorkspaceFields value={step.workspace} onChange={(w) => set('workspace', w)} /> : null}
-      <div className="harness-tools">
-        <span className="label">Tools the agent may call</span>
-        {ctx.tools.length === 0 ? <span className="muted small">No tools are registered.</span> : null}
-        {ctx.tools.map((t) => {
-          const id = `${t.id}@${t.version}`;
-          return (
-            <label key={id} className="check">
-              <input type="checkbox" checked={tools.includes(id)} onChange={(e) => set('tools', e.target.checked ? [...tools, id] : tools.filter((x) => x !== id))} />
-              <span className="mono">{id}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge>
-              <span className="muted small"> {t.description}</span>
-            </label>
-          );
-        })}
-        {tools.filter((x) => !ctx.tools.some((t) => `${t.id}@${t.version}` === x)).map((x) => <span key={x} className="warn-note small">{x} is not registered here.</span>)}
-      </div>
-      <label>
-        Datasets
-        <input defaultValue={Array.isArray(step.datasets) ? step.datasets.join(', ') : ''} spellCheck={false} onChange={(e) => set('datasets', e.target.value.split(',').map((x) => x.trim()).filter(Boolean))} />
-        <span className="muted small">Separate with commas.</span>
-      </label>
+      </HbSection>
+
+      {step.executor === 'opencode' && path && doc ? <OpencodeSetup ctx={ctx} library={library.data ?? []} setup={doc.harness?.opencode ?? {}} onChange={(h) => writeProfile((d) => {
+        const harness: Record<string, any> = { ...(d.harness ?? {}), opencode: h };
+        if (!Object.keys(h).length) delete harness.opencode;
+        const n: ProfileDoc = { ...d, harness };
+        if (!Object.keys(harness).length) delete n.harness;
+        return n;
+      })} /> : null}
+
+      <HbSection icon="tool" title="Tools and knowledge" summary={`${tools.length} gateway tool${tools.length === 1 ? '' : 's'} · ${stepDatasets.length} dataset${stepDatasets.length === 1 ? '' : 's'}`}>
+        <h5 className="hb-h">Gateway tools the agent may call</h5>
+      <PickList
+        label="gateway tools"
+        empty="No tools are registered."
+        items={ctx.tools.map((t) => ({ id: `${t.id}@${t.version}`, text: `${t.id} ${t.description}`, label: <span className="mono">{`${t.id}@${t.version}`}</span>, badge: <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge>, sub: t.description }))}
+        selected={tools}
+        onToggle={(id, on) => set('tools', on ? [...tools, id] : tools.filter((x) => x !== id))}
+      />
+      {tools.filter((x) => !ctx.tools.some((t) => `${t.id}@${t.version}` === x)).map((x) => <span key={x} className="warn-note small">{x} is not registered here.</span>)}
+        <h5 className="hb-h">Datasets it may search</h5>
+      <PickList
+        label="datasets"
+        empty={<>No datasets yet. <a href="/ui/datasets">Create one</a> for guidelines, runbooks or decisions the agent should look up.</>}
+        items={(datasets.data ?? []).map((d) => ({ id: d.name, text: d.name, label: <span className="mono">{d.name}</span>, badge: d.trusted ? <Badge tone="ok">trusted</Badge> : <Badge tone="warn">untrusted</Badge>, sub: `${d.documents} document${d.documents === 1 ? '' : 's'}` }))}
+        selected={stepDatasets}
+        onToggle={(id, on) => set('datasets', on ? [...stepDatasets, id] : stepDatasets.filter((x) => x !== id))}
+      />
+      {stepDatasets.filter((x) => !(datasets.data ?? []).some((d) => d.name === x.split('@')[0])).map((x) => <span key={x} className="warn-note small">{x} is not a dataset here.</span>)}
+      </HbSection>
+
+      {step.executor === 'opencode' || step.workspace ? (
+        <HbSection icon="subworkflow" title="Workspace" summary={step.workspace ? 'Clones a repository for this step' : 'None'}>
+          <WorkspaceFields value={step.workspace} onChange={(w) => set('workspace', w)} />
+        </HbSection>
+      ) : null}
+
+      <HbSection icon="gate" title="Budget" summary={Object.keys(budget).length ? [budget.max_tool_calls !== undefined ? `${budget.max_tool_calls} tool calls` : '', budget.max_output_tokens !== undefined ? `${budget.max_output_tokens} output tokens` : '', budget.max_cost_usd !== undefined ? `$${budget.max_cost_usd}` : ''].filter(Boolean).join(' · ') : 'No budget set'}>
       <div className="row wrap">
         <label>Budget: output tokens
           <input type="number" min="1" value={budget.max_output_tokens ?? ''} onChange={(e) => setBudget('max_output_tokens', e.target.value === '' ? undefined : Number(e.target.value))} />
@@ -946,7 +978,8 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
           <input type="number" min="0" step="0.01" value={budget.max_cost_usd ?? ''} onChange={(e) => setBudget('max_cost_usd', e.target.value === '' ? undefined : Number(e.target.value))} />
         </label>
       </div>
-    </fieldset>
+      </HbSection>
+    </div>
   );
 }
 
@@ -1014,12 +1047,27 @@ const STARTER: Record<'agent' | 'command' | 'skill', (name: string) => string> =
   skill: (n) => `---\nname: ${n}\ndescription: When to use this skill.\n---\n\n# ${n}\n\nSteps to follow.\n`,
 };
 
+/** A Library item written as the Markdown file a harness reads: front matter, then the body. */
+const asMarkdown = (data: Record<string, string | undefined>, body: string) => `---\n${Object.entries(data).filter(([, v]) => v).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')}\n---\n\n${body.trim()}\n`;
+
+/** "Add from Library…": published items of one kind that are not in the package yet. */
+function LibrarySelect({ label, items, onPick, disabled }: { label: string; items: LibraryAsset[]; onPick: (a: LibraryAsset) => void; disabled?: (a: LibraryAsset) => string | undefined }) {
+  if (!items.length) return <span className="muted small">No published {label} in the <a href="/ui/assets">Library</a> yet.</span>;
+  return (
+    <select aria-label={`Add a ${label} from the Library`} value="" onChange={(e) => { const a = items.find((x) => x.id === e.target.value); if (a) onPick(a); }}>
+      <option value="">Add a {label} from the Library…</option>
+      {items.map((a) => { const why = disabled?.(a); return <option key={a.id} value={a.id} disabled={Boolean(why)}>{a.name}{why ? ` (${why})` : ''}</option>; })}
+    </select>
+  );
+}
+
 /**
  * The OpenCode setup of a profile (`harness.opencode`): the agent prompt and first command as
  * Markdown files, skills, which read-only built-in tools are on, and local MCP servers. Every file
- * lives in the package under harness/ and is saved with the draft.
+ * lives in the package under harness/ and is saved with the draft. Skills, agent prompts, commands
+ * and local MCP servers can be taken from the Library.
  */
-function OpencodeSetup({ ctx, setup, onChange }: { ctx: HarnessContext; setup: OpencodeSetupDoc; onChange: (h: OpencodeSetupDoc) => void }) {
+function OpencodeSetup({ ctx, library, setup, onChange }: { ctx: HarnessContext; library: LibraryAsset[]; setup: OpencodeSetupDoc; onChange: (h: OpencodeSetupDoc) => void }) {
   const set = <K extends keyof OpencodeSetupDoc>(k: K, v: OpencodeSetupDoc[K] | undefined) => {
     const n = { ...setup };
     if (v === undefined || v === '' || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length)) delete n[k];
@@ -1034,68 +1082,81 @@ function OpencodeSetup({ ctx, setup, onChange }: { ctx: HarnessContext; setup: O
   const [newMcp, setNewMcp] = useState('');
   const [newFile, setNewFile] = useState('');
   const harnessFiles = ctx.files.filter((f) => f.startsWith('harness/'));
+  const published = (kind: LibraryAsset['kind']) => library.filter((a) => a.kind === kind && a.status === 'published');
+  const hostedMcp = published('mcp').filter((a) => a.definition?.transport !== 'local').length;
+  const name = (path?: string) => (path ? path.split('/').pop()!.replace(/\.md$/, '') : undefined);
 
   return (
-    <fieldset className="harness-sub" aria-label="OpenCode setup">
-      <legend>OpenCode setup</legend>
-      <HarnessFile ctx={ctx} label="Agent prompt" kind="agent" path={setup.agent} placeholder="harness/agents/reviewer.md" onPath={(p) => set('agent', p)} />
-      <HarnessFile ctx={ctx} label="First command" kind="command" path={setup.command} placeholder="harness/commands/review.md" onPath={(p) => set('command', p)} />
+    <div role="group" aria-label="OpenCode setup" className="hb-group">
+      <HbSection icon="agent" title="Agent prompt and command" summary={[name(setup.agent), name(setup.command)].filter(Boolean).join(' \u00b7 ') || 'Not set'}>
+        <HarnessFile ctx={ctx} library={published('agent')} label="Agent prompt" kind="agent" path={setup.agent} placeholder="harness/agents/reviewer.md" onPath={(p) => set('agent', p)} />
+        <HarnessFile ctx={ctx} library={published('command')} label="First command" kind="command" path={setup.command} placeholder="harness/commands/review.md" onPath={(p) => set('command', p)} />
+      </HbSection>
 
-      <div className="harness-tools">
-        <span className="label">Built-in tools</span>
-        {OPENCODE_TOOLS.map(([t, what]) => (
-          <label key={t} className="check">
-            <input type="checkbox" checked={tools.includes(t)} onChange={(e) => set('tools', e.target.checked ? [...tools, t] : tools.filter((x) => x !== t))} />
-            <span className="mono">{t}</span> <span className="muted small">{what}</span>
-          </label>
-        ))}
-        <span className="muted small">Read-only tools only, inside the step's checkout. Shell, edit and web tools stay off.</span>
-      </div>
-
-      <div className="harness-tools">
-        <span className="label">Skills</span>
-        {available.length === 0 ? <span className="muted small">No skills in this package yet.</span> : null}
-        {available.map((dir) => (
-          <div key={dir}>
-            <label className="check">
-              <input type="checkbox" checked={skills.includes(dir)} onChange={(e) => set('skills', e.target.checked ? [...skills, dir] : skills.filter((x) => x !== dir))} />
-              <span className="mono">{dir.replace(/^harness\/skills\//, '')}</span>
+      <HbSection icon="lock" title="Built-in tools" summary={tools.length ? tools.join(', ') : 'None on'}>
+        <div className="harness-tools">
+          {OPENCODE_TOOLS.map(([t, what]) => (
+            <label key={t} className="check">
+              <input type="checkbox" checked={tools.includes(t)} onChange={(e) => set('tools', e.target.checked ? [...tools, t] : tools.filter((x) => x !== t))} />
+              <span className="mono">{t}</span> <span className="muted small">{what}</span>
             </label>
-            {skills.includes(dir) ? <FileText ctx={ctx} path={`${dir}/SKILL.md`} label={`${dir}/SKILL.md`} /> : null}
-          </div>
-        ))}
-        <div className="row wrap">
-          <input aria-label="New skill name" placeholder="my-checklist" value={newSkill} spellCheck={false} onChange={(e) => setNewSkill(e.target.value)} />
-          <button type="button" className="small" disabled={!SLUG.test(newSkill) || available.includes(`harness/skills/${newSkill}`)} onClick={() => {
-            const dir = `harness/skills/${newSkill}`;
-            ctx.setFile(`${dir}/SKILL.md`, STARTER.skill(newSkill));
+          ))}
+          <span className="muted small">Read-only tools only, inside the step's checkout. Shell, edit and web tools stay off.</span>
+        </div>
+      </HbSection>
+
+      <HbSection icon="retrieve" title="Skills" summary={skills.length ? `${skills.length} on` : 'None on'}>
+        <div className="harness-tools">
+          {available.length === 0 ? <span className="muted small">No skills in this package yet.</span> : null}
+          {available.map((dir) => (
+            <div key={dir}>
+              <label className="check">
+                <input type="checkbox" checked={skills.includes(dir)} onChange={(e) => set('skills', e.target.checked ? [...skills, dir] : skills.filter((x) => x !== dir))} />
+                <span className="mono">{dir.replace(/^harness\/skills\//, '')}</span>
+              </label>
+              {skills.includes(dir) ? <FileText ctx={ctx} path={`${dir}/SKILL.md`} label={`${dir}/SKILL.md`} /> : null}
+            </div>
+          ))}
+          <LibrarySelect label="skill" items={published('skill').filter((a) => !available.includes(`harness/skills/${a.slug}`))} onPick={(a) => {
+            const dir = `harness/skills/${a.slug}`;
+            ctx.setFile(`${dir}/SKILL.md`, asMarkdown({ name: a.slug, description: a.definition?.description ?? a.slug, license: a.definition?.license }, String(a.definition?.instructions ?? '')));
             set('skills', [...skills, dir]);
-            setNewSkill('');
-          }}>New skill</button>
-        </div>
-      </div>
-
-      <div className="harness-tools">
-        <span className="label">MCP servers</span>
-        {Object.entries(mcp).map(([name, m]) => (
-          <div key={name} className="row wrap">
-            <span className="mono">{name}</span>
-            <input aria-label={`Command for MCP server ${name}`} className="mono" defaultValue={m.command.join(' ')} spellCheck={false} onChange={(e) => set('mcp', { ...mcp, [name]: { ...m, command: e.target.value.trim().split(/\s+/).filter(Boolean) } })} />
-            <button type="button" className="small" onClick={() => { const n = { ...mcp }; delete n[name]; set('mcp', n); }}>Remove</button>
+          }} />
+          <div className="row wrap">
+            <input aria-label="New skill name" placeholder="or write a new one: my-checklist" value={newSkill} spellCheck={false} onChange={(e) => setNewSkill(e.target.value)} />
+            <button type="button" className="small" disabled={!SLUG.test(newSkill) || available.includes(`harness/skills/${newSkill}`)} onClick={() => {
+              const dir = `harness/skills/${newSkill}`;
+              ctx.setFile(`${dir}/SKILL.md`, STARTER.skill(newSkill));
+              set('skills', [...skills, dir]);
+              setNewSkill('');
+            }}>New skill</button>
           </div>
-        ))}
-        <div className="row wrap">
-          <input aria-label="New MCP server name" placeholder="repo-facts" value={newMcp} spellCheck={false} onChange={(e) => setNewMcp(e.target.value)} />
-          <button type="button" className="small" disabled={!SLUG.test(newMcp) || newMcp in mcp} onClick={() => {
-            set('mcp', { ...mcp, [newMcp]: { command: ['node', `harness/mcp/${newMcp}.mjs`] } });
-            setNewMcp('');
-          }}>Add MCP server</button>
         </div>
-        <span className="muted small">Local servers started in the checkout, for example <span className="mono">node harness/mcp/repo-facts.mjs</span>. Package paths become absolute; their tools are named <span className="mono">name_*</span>.</span>
-      </div>
+      </HbSection>
 
-      <details>
-        <summary>Harness files ({harnessFiles.length})</summary>
+      <HbSection icon="tool" title="MCP servers" summary={Object.keys(mcp).length ? Object.keys(mcp).join(', ') : 'None'}>
+        <div className="harness-tools">
+          {Object.entries(mcp).map(([n, m]) => (
+            <div key={n} className="hb-mcp">
+              <span className="mono">{n}</span>
+              <input aria-label={`Command for MCP server ${n}`} className="mono" defaultValue={m.command.join(' ')} spellCheck={false} onChange={(e) => set('mcp', { ...mcp, [n]: { ...m, command: e.target.value.trim().split(/\s+/).filter(Boolean) } })} />
+              <button type="button" className="small" onClick={() => { const next = { ...mcp }; delete next[n]; set('mcp', next); }}>Remove</button>
+            </div>
+          ))}
+          <LibrarySelect label="MCP server" items={published('mcp').filter((a) => a.definition?.transport === 'local' && !(a.slug in mcp))} onPick={(a) => set('mcp', { ...mcp, [a.slug]: { command: a.definition!.command as string[] } })} />
+          {hostedMcp ? <span className="muted small">{hostedMcp} hosted server{hostedMcp === 1 ? '' : 's'} in the Library are not listed: this setup starts local programs. Hosted ones are reached through the gateway tools.</span> : null}
+          <div className="row wrap">
+            <input aria-label="New MCP server name" placeholder="or start one from the package: repo-facts" value={newMcp} spellCheck={false} onChange={(e) => setNewMcp(e.target.value)} />
+            <button type="button" className="small" disabled={!SLUG.test(newMcp) || newMcp in mcp} onClick={() => {
+              set('mcp', { ...mcp, [newMcp]: { command: ['node', `harness/mcp/${newMcp}.mjs`] } });
+              setNewMcp('');
+            }}>Add MCP server</button>
+          </div>
+          <span className="muted small">Local servers started in the checkout, for example <span className="mono">node harness/mcp/repo-facts.mjs</span>. Package paths become absolute; their tools are named <span className="mono">name_*</span>. Set any environment variables a Library server needs on the worker.</span>
+        </div>
+      </HbSection>
+
+      <HbSection icon="report" title="Harness files" summary={`${harnessFiles.length} in the package`}>
         {harnessFiles.map((f) => (
           <div key={f}>
             <FileText ctx={ctx} path={f} label={f} />
@@ -1106,13 +1167,13 @@ function OpencodeSetup({ ctx, setup, onChange }: { ctx: HarnessContext; setup: O
           <input aria-label="New harness file" placeholder="harness/mcp/repo-facts.mjs" value={newFile} spellCheck={false} onChange={(e) => setNewFile(e.target.value)} />
           <button type="button" className="small" disabled={!/^harness\/[\w./-]+\.(md|mjs|js|json|ya?ml|txt)$/.test(newFile) || newFile.includes('..') || ctx.files.includes(newFile)} onClick={() => { ctx.setFile(newFile, ''); setNewFile(''); }}>Add file</button>
         </div>
-      </details>
-    </fieldset>
+      </HbSection>
+    </div>
   );
 }
 
-/** A harness Markdown file the profile points at: its path, its text, and a starter when it is new. */
-function HarnessFile({ ctx, label, kind, path, placeholder, onPath }: { ctx: HarnessContext; label: string; kind: 'agent' | 'command'; path?: string; placeholder: string; onPath: (p: string | undefined) => void }) {
+/** A harness Markdown file the profile points at: its path, its text, a starter when it is new, or a Library item. */
+function HarnessFile({ ctx, library, label, kind, path, placeholder, onPath }: { ctx: HarnessContext; library: LibraryAsset[]; label: string; kind: 'agent' | 'command'; path?: string; placeholder: string; onPath: (p: string | undefined) => void }) {
   const exists = path ? ctx.fileText(path) !== undefined : false;
   const valid = path ? /^harness\/[\w./-]+\.md$/.test(path) && !path.includes('..') : false;
   return (
@@ -1121,6 +1182,13 @@ function HarnessFile({ ctx, label, kind, path, placeholder, onPath }: { ctx: Har
         {label}
         <input value={path ?? ''} list="ed-harness-md" placeholder={placeholder} spellCheck={false} onChange={(e) => onPath(e.target.value || undefined)} />
       </label>
+      {!path ? (
+        <LibrarySelect label={kind} items={library} disabled={kind === 'command' ? (a) => (UNSAFE_TEMPLATE.test(String(a.definition?.template ?? '')) ? 'uses $ARGUMENTS' : undefined) : undefined} onPick={(a) => {
+          const file = `harness/${kind === 'agent' ? 'agents' : 'commands'}/${a.slug}.md`;
+          ctx.setFile(file, asMarkdown({ description: a.definition?.description ?? a.slug }, String(kind === 'agent' ? a.definition?.prompt ?? '' : a.definition?.template ?? '')));
+          onPath(file);
+        }} />
+      ) : null}
       {path && !exists ? (
         <div className="row">
           <button type="button" className="small" disabled={!valid} onClick={() => ctx.setFile(path, STARTER[kind](path.split('/').pop()!.replace(/\.md$/, '')))}>Create {path}</button>
