@@ -51,3 +51,22 @@ An example's `azhi.config.yaml` marks each setting `required: true` or leaves it
 
 `ai-sdlc` requires `slack_channel` and `test_command` (which has a default) and the repository; the Jira
 site and user are optional, for Jira tickets only.
+
+# Token cost for OpenAI models
+
+Every step that runs an OpenAI model (`provider: openai`, through the built-in model agent, OpenCode or
+Codex) gets a cost in USD, in every workflow, with no profile changes. Tokens are priced at a
+per-million-token rate; cached input is billed at its own rate and never counted twice. The rate comes
+from, highest first:
+
+1. the profile's `pricing` (input and output prices both set),
+2. `AZHI_OPENAI_RATES` on the server, e.g. `AZHI_OPENAI_RATES="gpt-5.5=5/0.5/30, my-model=1/4"`
+   (`model=input/cached/output`, or `input/output`, USD per million tokens),
+3. the cost OpenCode reports from its model catalog (OpenCode steps),
+4. the built-in standard-tier table in `src/agents/openai-pricing.ts` (`gpt-5.3-codex`, `gpt-5.4`,
+   `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`).
+
+A model with no rate is shown as *cost unavailable*, never guessed; the same costs feed the run page,
+`azhi inspect`, `/v1/usage/summary` and spend budgets. Check platform.openai.com/docs/pricing before
+relying on the built-in table, and set `AZHI_OPENAI_RATES` for newer models. ChatGPT plan steps
+(`openai-chatgpt`) stay at 0: they use plan limits, not per-token billing.

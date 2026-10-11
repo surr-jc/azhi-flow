@@ -16,6 +16,7 @@ import { citationIds } from '../runtime/report.js';
 import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
 import { applyModelDefaults, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile, type ModelDefaults } from './profile.js';
+import { OPENAI_PRICING_REVISION, openaiCost, openaiRate } from './openai-pricing.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
 /**
@@ -263,7 +264,10 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
 
   // Usage and cost: unknown stays null, cost is estimated only from declared pricing.
   const usageKnown = res.usage.input_tokens !== null && res.usage.output_tokens !== null;
-  const cost = estimateCost(res.usage, profile.pricing);
+  // OpenAI turns fall back to the built-in / configured OpenAI rates when the profile declares none.
+  const oa = profile.model.provider === 'openai' ? openaiRate(t.model, profile.pricing, ctx.settings) : undefined;
+  const cost = oa ? openaiCost(res.usage, oa.rate) : estimateCost(res.usage, profile.pricing);
+  const pricingRevision = oa && !profile.pricing?.revision ? (oa.source === 'configured' ? 'configured rate' : oa.source === 'builtin' ? OPENAI_PRICING_REVISION : 'unversioned') : (profile.pricing?.revision ?? 'unversioned');
   await ctx.pool.query(
     `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision)
      VALUES ($1,$2,$3,1,$4,'model-agent',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -282,9 +286,9 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
       res.usage.cache_write_tokens,
       res.usage.reasoning_tokens,
       cost,
-      cost === null ? null : (profile.pricing!.currency ?? 'USD'),
+      cost === null ? null : (profile.pricing?.currency ?? 'USD'),
       cost === null ? 'unavailable' : 'estimated',
-      cost === null ? null : (profile.pricing!.revision ?? 'unversioned'),
+      cost === null ? null : pricingRevision,
     ],
   );
   const estimated = t.items.reduce((n, x) => n + x.tokens, 0);

@@ -9,6 +9,8 @@ import { Formatted, plainText } from '../components/Rich';
 import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 import { duration } from './Overview';
 import { AgentActivityPanel } from './AgentActivity';
+import { Feed, FeedEmpty, FeedItem, offsetOf, type FeedTone } from '../components/ActivityFeed';
+import { Icon } from '../icons';
 import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
 
 interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
@@ -118,7 +120,7 @@ export function RunPage({ id }: { id: string }) {
           {Object.entries(TABS).filter(([k]) => k !== 'agent' || hasAgents).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => { picked.current = true; setTab(k); }}>{label}</button>)}
         </div>
         <div className="tab" role="tabpanel">
-          {tab === 'agent' ? <AgentActivityPanel runId={id} nodes={version.data?.plan?.nodes ?? []} detail={d} open={open} node={agentNode} onNode={setAgentNode} /> : tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+          {tab === 'agent' ? <AgentActivityPanel onEvents={() => show('timeline')} runId={id} nodes={version.data?.plan?.nodes ?? []} detail={d} open={open} node={agentNode} onNode={setAgentNode} /> : tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
         </div>
       </div>
     </>
@@ -423,16 +425,67 @@ function summarise(ev: RunEvent) {
   return s === '{}' ? '' : s.length > 160 ? s.slice(0, 159) + '…' : s;
 }
 
+/** An event in plain words, with the icon and tone that carry its meaning besides colour. */
+function describe(ev: RunEvent): { icon: string; tone: FeedTone; text: string; group: 'steps' | 'approvals' | 'problems' | 'run' } {
+  const n = ev.node_id ?? 'The step';
+  switch (ev.kind) {
+    case 'run.queued': return { icon: 'clock', tone: 'idle', text: 'Run queued', group: 'run' };
+    case 'run.started': case 'run.start': return { icon: 'play', tone: 'run', text: 'Run started', group: 'run' };
+    case 'run.planned': return { icon: 'approval', tone: 'idle', text: `Run plan recorded: ${ev.data?.ok ? 'no blockers' : `${ev.data?.blockers?.length ?? 0} blocker(s)`}`, group: 'run' };
+    case 'run.waiting': return { icon: 'clock', tone: 'wait', text: 'Run is waiting', group: 'run' };
+    case 'run.resumed': return { icon: 'play', tone: 'run', text: 'Run resumed', group: 'run' };
+    case 'run.succeeded': return { icon: 'check', tone: 'ok', text: 'Run finished', group: 'run' };
+    case 'run.failed': return { icon: 'alert', tone: 'bad', text: 'Run failed', group: 'problems' };
+    case 'run.cancel': case 'run.cancel_requested': return { icon: 'close', tone: 'wait', text: 'Cancel requested', group: 'run' };
+    case 'node.running': return { icon: 'step', tone: 'run', text: `${n} started`, group: 'steps' };
+    case 'node.succeeded': return { icon: 'check', tone: 'ok', text: `${n} finished${ev.data?.route !== undefined ? `, chose ${ev.data.route}` : ''}`, group: 'steps' };
+    case 'node.failed': return { icon: 'alert', tone: 'bad', text: `${n} failed${ev.data?.error?.message ? `: ${ev.data.error.message}` : ''}`, group: 'problems' };
+    case 'node.skipped': return { icon: 'step', tone: 'idle', text: `${n} skipped`, group: 'steps' };
+    case 'approval.requested': return { icon: 'gate', tone: 'wait', text: `${n} is waiting for a person to decide`, group: 'approvals' };
+    case 'approval.decided': case 'approval.submitted': return { icon: 'check', tone: 'ok', text: `${n} was decided`, group: 'approvals' };
+    case 'action.outcome_unknown': return { icon: 'alert', tone: 'bad', text: `${n}: a write has an unknown outcome and needs a person to confirm`, group: 'problems' };
+    default: return { icon: 'step', tone: ev.kind.endsWith('failed') ? 'bad' : 'idle', text: ev.kind.replaceAll('.', ' ').replaceAll('_', ' '), group: ev.kind.endsWith('failed') ? 'problems' : 'run' };
+  }
+}
+
+type EventFilter = 'all' | 'steps' | 'approvals' | 'problems';
 function Timeline({ events }: { events: RunEvent[] }) {
-  if (!events.length) return <p className="muted">Waiting for events…</p>;
+  const [filter, setFilter] = useState<EventFilter>('all');
+  const [q, setQ] = useState('');
+  const [newestFirst, setNewestFirst] = useState(false);
+  if (!events.length) return <FeedEmpty title="Waiting for the first event" text="Events appear here as the run progresses: steps starting and finishing, approvals, and problems." />;
+  const start = new Date(events[0]!.at).getTime();
+  const rows = events.map((e) => ({ e, d: describe(e) }));
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter(({ e, d }) => (filter === 'all' || d.group === filter || (filter === 'steps' && d.group === 'run')) && (!needle || `${d.text} ${e.node_id ?? ''} ${e.kind}`.toLowerCase().includes(needle)));
+  const list = newestFirst ? [...shown].reverse() : shown;
+  const count = (f: EventFilter) => (f === 'all' ? rows.length : rows.filter(({ d }) => d.group === f).length);
   return (
-    <Panel>
-      <Table head={['#', 'Time', 'Event', 'Node', 'Detail']}>
-        {events.map((e) => (
-          <tr key={e.seq}><td className="mono">{e.seq}</td><td className="nowrap">{new Date(e.at).toLocaleTimeString()}</td><td className="mono">{e.kind}</td><td>{e.node_id ?? ''}</td><td className="mono">{summarise(e)}</td></tr>
-        ))}
-      </Table>
-    </Panel>
+    <div className="aa">
+      <div className="aa-tools">
+        <div className="seg" role="group" aria-label="Show">
+          {([['all', 'All'], ['steps', 'Steps'], ['approvals', 'Approvals'], ['problems', 'Problems']] as Array<[EventFilter, string]>).map(([f, label]) => <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}>{label}{f !== 'all' ? <span className="aa-n"> {count(f)}</span> : null}</button>)}
+        </div>
+        <label className="aa-q"><Icon name="search" size={16} /><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events" autoComplete="off" /></label>
+        <div className="seg" role="group" aria-label="Order">
+          <button type="button" aria-pressed={!newestFirst} onClick={() => setNewestFirst(false)}>Oldest first</button>
+          <button type="button" aria-pressed={newestFirst} onClick={() => setNewestFirst(true)}>Newest first</button>
+        </div>
+      </div>
+      {!list.length ? <FeedEmpty title="No events match" text="Try a broader search, or show every event." action="Clear filters" onAction={() => { setFilter('all'); setQ(''); }} /> : (
+        <Feed label="Run events">
+          {list.map(({ e, d }) => (
+            <FeedItem key={e.seq} icon={d.icon} tone={d.tone} offset={offsetOf(new Date(e.at).getTime(), start)} offsetTitle={new Date(e.at).toLocaleTimeString()}>
+              <div className="af-line">
+                <span className="af-line-text">{d.text}</span>
+                <span className="muted small">{new Date(e.at).toLocaleTimeString()}</span>
+              </div>
+              {summarise(e) ? <details className="af-quiet af-raw"><summary><span className="muted small">Details</span></summary><pre className="code">{e.kind} #{e.seq}{'\n'}{summarise(e)}</pre></details> : null}
+            </FeedItem>
+          ))}
+        </Feed>
+      )}
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import { Context } from '@temporalio/activity';
 import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
+import { OPENAI_PRICING_REVISION, openaiCost, openaiRate } from '../agents/openai-pricing.js';
 import { COPILOT_CREDIT_USD, COPILOT_PRICING_REVISION, configuredCopilotRate, copilotCredits, copilotRate, round } from '../agents/copilot-pricing.js';
 import type { AgentProfile } from '../agents/profile.js';
 import type { HarnessResult } from '../worker/harness-activity.js';
@@ -411,6 +412,17 @@ export function harnessCost(ctx: Pick<AppContext, 'settings'>, profile: AgentPro
   }
   // A ChatGPT plan has no per-token charge: the step uses the plan's usage limits, so its cost is 0.
   if (profile.model.provider === 'openai-chatgpt') return { cost: 0, currency: 'USD', credits: null, revision: 'ChatGPT plan (no per-token charge)' };
+  if (profile.model.provider === 'openai') {
+    const known = r.usage.input_tokens !== null && r.usage.output_tokens !== null;
+    const found = model ? openaiRate(model, profile.pricing, ctx.settings) : undefined;
+    // OpenCode's own cost from its catalog prices a model nobody set a rate for; a rate someone set wins.
+    if ((!found || found.source === 'builtin') && known && typeof r.reported_cost === 'number' && r.reported_cost > 0) {
+      return { cost: round(r.reported_cost, 6), currency: 'USD', credits: null, revision: 'OpenCode model catalog' };
+    }
+    const cost = found ? openaiCost(r.usage, found.rate) : null;
+    if (!found || cost === null) return null;
+    return { cost, currency: profile.pricing?.currency ?? 'USD', credits: null, revision: profile.pricing?.revision ?? (found.source === 'configured' ? 'configured rate' : found.source === 'builtin' ? OPENAI_PRICING_REVISION : 'unversioned') };
+  }
   const cost = estimateCost(r.usage, profile.pricing);
   return cost === null ? null : { cost, currency: profile.pricing!.currency ?? 'USD', credits: null, revision: profile.pricing!.revision ?? 'unversioned' };
 }
