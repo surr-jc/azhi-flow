@@ -30,6 +30,13 @@ const PATHS: Record<string, ReactNode> = {
   save: <path d="M5 3h11l4 4v14H5zM8 3v6h8V3M8 21v-7h8v7" />,
   play: <path d="M7 4.5v15a1 1 0 001.5.9l12-7.5a1 1 0 000-1.8l-12-7.5A1 1 0 007 4.5z" fill="currentColor" />,
   edit: <path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3" />,
+  check: <path d="M5 12l5 5L20 7" />,
+  chat: <path d="M4 5h16v11H9l-5 4z" />,
+  think: <path d="M9 18h6M10 21h4M12 3a6 6 0 00-4 10.5V15h8v-1.5A6 6 0 0012 3z" />,
+  person: <><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0116 0" /></>,
+  alert: <path d="M12 3l10 18H2zM12 10v5M12 18h.01" />,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  down: <path d="M12 5v14M6 13l6 6 6-6" />,
   step: <circle cx="12" cy="12" r="4" />,
 };
 
