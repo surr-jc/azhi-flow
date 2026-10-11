@@ -99,6 +99,27 @@ tools:
         labels: {type: array, items: {type: string}}
         url: {type: string}
       required: [source, key, title, description]
+  - id: github.issue-blockers
+    version: 1
+    description: Are the slices an issue depends on still open? Reads the issue and its siblings under the parent (GitHub); an issue with no dependencies is never blocked
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue-blockers, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}, ignore: {type: boolean}}, additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        blocked: {type: boolean}
+        ignored: {type: boolean}
+        slice: {type: integer}
+        of: {type: integer}
+        parent: {type: integer}
+        depends: {type: array, items: {type: integer}}
+        reason: {type: string}
+        warnings: {type: array, items: {type: string}}
+        blockers: {type: array, items: {type: object, properties: {slice: {type: integer}, number: {type: integer}, title: {type: string}, state: {type: string}, url: {type: string}}}}
+      required: [blocked]
   - id: github.push-branch
     version: 1
     description: Commit a change onto a base commit as an azhi/ branch (GitHub Git Data API); deduplicated by the action ledger

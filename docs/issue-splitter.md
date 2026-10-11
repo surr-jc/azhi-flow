@@ -49,7 +49,7 @@ source ─ issue ── read the issue ──┐
 7. **Tell Slack** what was created, or why nothing was.
 
 Then each created issue is an ordinary ticket: start the delivery workflow on it (inputs `source=github`, `ticket=owner/name#101`, `repo=owner/name`; for Jira, `source=jira` and the key). The `ready` label marks the slices that can be started now: those with no dependencies. A slice that waits for others is created without it, so a person (or a later queue) starts it only after what it depends on is merged.
-Starting those runs automatically is not built. Each slice's pull request says `Closes owner/name#N`, so GitHub closes the sub-issue when a person merges it (and moves the parent's progress); nothing in Azhi closes an issue.
+The delivery workflow enforces the order: it refuses to start a slice while a slice it depends on is still open (see [the dependency guard](ai-sdlc.md#order-of-sub-issues-the-dependency-guard)). Starting those runs automatically is not built. Each slice's pull request says `Closes owner/name#N`, so GitHub closes the sub-issue when a person merges it (and moves the parent's progress); nothing in Azhi closes an issue.
 
 ## Answering the approval
 

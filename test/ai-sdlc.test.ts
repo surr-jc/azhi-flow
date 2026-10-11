@@ -54,6 +54,8 @@ describe('AI-SDLC example: definition', () => {
     expect(node('dor_gate').routes).toEqual({ ready: ['dor_pass'], clarify: ['dor_ask_message', 'clarification'], stop: ['dor_message'] });
     expect(node('clarification')).toMatchObject({ type: 'approval', role: 'author', on_expiry: 'reject', decision_schema: { required: ['answers'] } });
     expect(node('clarified')).toMatchObject({ merge: 'any', depends_on: ['dor_pass'] });
+    // The order guard runs first: a blocked slice stops before the readiness check, and only a clear one reaches it.
+    expect(node('deps_gate').routes).toEqual({ stop: ['deps_message'], go: ['dor_check'] });
     expect(node('weight').routes).toEqual({ lite: ['lite_review_1'], full: ['code_1', 'test_1', 'security_1'] });
     expect(node('gate_1').routes.fix).toEqual(['fix_1']);
     expect(node('gate_2').routes.fix).toEqual(['fix_2']);
@@ -100,6 +102,21 @@ describe('AI-SDLC example: definition', () => {
     }
     const used = new Set(profiles.flatMap((p) => p.harness.opencode.skills.map((s: string) => s.split('/').pop())));
     for (const dir of readdirSync(join(PKG, 'harness/skills'))) expect(used.has(dir), `${dir} is unused`).toBe(true);
+  });
+});
+
+describe('AI-SDLC example: order guard', () => {
+  it('checks an issue the splitter wrote, skips a Jira ticket and honours the override', () => {
+    const args = (inputs: Record<string, unknown>) => ({ issue: evaluateCel(node('deps').arguments.issue.cel, { inputs }), ignore: evaluateCel(node('deps').arguments.ignore.cel, { inputs }) });
+    expect(args({ source: 'github', ticket: 'acme/shop#42' })).toEqual({ issue: 'acme/shop#42', ignore: false });
+    expect(args({ source: 'jira', ticket: 'PAY-142' })).toEqual({ issue: '', ignore: false });
+    expect(args({ source: 'github', ticket: 'acme/shop#42', ignore_dependencies: true })).toEqual({ issue: 'acme/shop#42', ignore: true });
+    expect(args({ source: 'github', ticket: 'acme/shop#42', ignore_dependencies: false }).ignore).toBe(false);
+  });
+
+  it('stops only while the tool says blocked', () => {
+    const g = (blocked: boolean) => evaluateCel(node('deps_gate').expression, { nodes: { deps: { output: { blocked } } } });
+    expect([g(true), g(false)]).toEqual(['stop', 'go']);
   });
 });
 

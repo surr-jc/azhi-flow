@@ -572,3 +572,57 @@ export async function labelIssue(cfg: GithubConfig, args: { repo?: unknown; numb
   const r = await request(cfg, token, 'POST', `/repos/${repo}/issues/${number}/labels`, { labels }, timeoutMs);
   return { repo, number, labels: (Array.isArray(r) ? r : []).map((l: any) => String(typeof l === 'string' ? l : l.name)) };
 }
+
+
+/**
+ * `github.issue-blockers` (read): whether the slices an issue depends on are still open. The issue splitter
+ * writes each sub-issue as "Slice N of M." and, when it has to wait, "Depends on slice 1: Title; slice 2:
+ * Title. Do not start it before those are merged." under a "Part of #P" line. This reads that text, finds the
+ * issue's siblings under the parent, and reports the ones still open. An issue with no dependencies is never
+ * blocked, and costs one request. When the dependencies cannot be checked (the sub-issues of the parent cannot
+ * be read), it answers blocked, so a guard fails closed; `ignore` skips the check for a person who means it.
+ */
+export async function issueBlockers(cfg: GithubConfig, args: { issue?: unknown; ignore?: unknown }, token: string | undefined, timeoutMs: number) {
+  const none = { blocked: false, ignored: false, slice: 0, of: 0, parent: 0, depends: [] as number[], blockers: [] as Array<{ slice: number; number: number; title: string; state: string; url: string }>, warnings: [] as string[], reason: '' };
+  const ref = String(args.issue ?? '').trim();
+  if (args.ignore === true) return { ...none, ignored: true };
+  if (!ref) return none;
+  const m = ref.match(/^(?:https?:\/\/[^/]+\/)?([\w.-]+\/[\w.-]+)(?:#|\/issues\/)(\d+)\/?$/) ?? ref.match(/^()#?(\d+)$/);
+  if (!m) throw new SendError(`issue must be owner/name#number, got '${ref.slice(0, 100)}'`, true, ErrorClass.invalidInput);
+  let repo = m[1]!;
+  if (!repo) {
+    if (cfg.repos?.length !== 1) throw new SendError(`name the repository: owner/name#${m[2]}`, true, ErrorClass.invalidInput);
+    repo = cfg.repos[0]!;
+  }
+  repo = argRepo(cfg, repo);
+  const number = argNumber(m[2]);
+  const it = await get(cfg, token, `/repos/${repo}/issues/${number}`, timeoutMs);
+  const body = String(it.body ?? '');
+  const slice = body.match(/Slice (\d+) of (\d+)\./);
+  const dep = body.match(/Depends on ([^\n]*?)\. Do not start/);
+  const parent = Number(body.match(/^Part of #(\d+)/m)?.[1] ?? 0);
+  const depends = dep ? [...dep[1]!.matchAll(/slice (\d+):([^;]*)/g)].filter((d) => !/left out of this plan/.test(d[2]!)).map((d) => Number(d[1])) : [];
+  const info = { ...none, slice: Number(slice?.[1] ?? 0), of: Number(slice?.[2] ?? 0), parent, depends };
+  if (!depends.length) return info;
+  const fail = (reason: string) => ({ ...info, blocked: true, reason });
+  if (!parent) return fail(`it depends on slice ${depends.join(', ')} but does not say which issue it is part of, so the dependencies cannot be checked`);
+  let siblings: any[];
+  try {
+    siblings = await pages(cfg, token, `/repos/${repo}/issues/${parent}/sub_issues`, undefined, timeoutMs);
+  } catch (err) {
+    return fail(`the sub-issues of #${parent} could not be read (${(err as Error).message.slice(0, 120)}), so the dependencies cannot be checked`);
+  }
+  const bySlice = new Map<number, any>();
+  for (const s of siblings) {
+    const n = Number(String(s.body ?? '').match(/Slice (\d+) of \d+\./)?.[1] ?? 0);
+    if (n) bySlice.set(n, s);
+  }
+  const blockers: typeof none.blockers = [];
+  const warnings: string[] = [];
+  for (const d of depends) {
+    const s = bySlice.get(d);
+    if (!s) warnings.push(`slice ${d} was not found among the sub-issues of #${parent}; it is not counted as blocking`);
+    else if (String(s.state) !== 'closed') blockers.push({ slice: d, number: Number(s.number), title: String(s.title ?? ''), state: String(s.state ?? 'open'), url: String(s.html_url ?? '') });
+  }
+  return { ...info, blocked: blockers.length > 0, blockers, warnings, reason: blockers.length ? `waiting for ${blockers.map((b) => `#${b.number}`).join(', ')}` : '' };
+}

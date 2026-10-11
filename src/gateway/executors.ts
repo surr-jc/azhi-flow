@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, labelIssue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
@@ -91,6 +91,12 @@ const builtin: Record<string, ToolExecutor> = {
     async lookup(spec, args, key, _since, ctx) {
       const hit = await findPullRequest(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
       return hit ? { value: hit } : null;
+    },
+  },
+  /** The delivery workflows' order guard: are the slices an issue depends on still open? */
+  'github.issue-blockers': {
+    async call(spec, args, ctx) {
+      return { value: await issueBlockers(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
     },
   },
   /** The issue splitter example: create an issue (as a sub-issue of a parent), and add labels to one. */
