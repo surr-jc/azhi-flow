@@ -7,7 +7,7 @@ import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
 import { RunTable } from './Overview';
-import { Coverage } from './Run';
+import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { Popup } from '../components/Popup';
 import { StepPanel } from '../components/StepDrawer';
@@ -57,8 +57,10 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const [starting, setStarting] = useState(false);
   const [mode, setMode] = useState<'plan' | 'run'>('plan');
   const [lens, setLens] = useState<Lens>('flow');
+  const [dockRequest, setDockRequest] = useState<{ tab: DockTab; id: number }>({ tab: 'plan', id: 0 });
   const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
   const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
+  const source = useQuery({ queryKey: ['source', current?.id], queryFn: () => api<{ workflow: string; files: Array<{ path: string; text?: string }> }>(`/v1/versions/${current!.id}/source`), enabled: Boolean(current), staleTime: Infinity });
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<ToolRow[]>('/v1/tools') });
   const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
   const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
@@ -92,6 +94,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   return (
     <>
       <div className="ed-shell">
+        <div className="ed-main">
         <div className="ed-stage">
           {nodes ? (
             <WorkflowCanvas height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
@@ -130,10 +133,12 @@ export function WorkflowPage({ slug }: { slug: string }) {
                 </select>
                 {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" title="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
                 {canAuthor ? <PublishAction version={current} slug={slug} /> : null}
-                <a className="tb-btn" href="#run-plan" title="View the run plan" aria-label="View the run plan"><Icon name="approval" /></a>
+                <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} title="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
               </div>
             </WorkflowCanvas>
           ) : <Loading />}
+        </div>
+        <PlanDock plan={plan.data} yaml={source.data?.files.find((f) => f.path === source.data?.workflow)?.text} file={source.data?.workflow} selected={selected} request={dockRequest} note="This is the plan as it stands now, for you, with the workers online now." />
         </div>
         <aside className="ed-panel" aria-label="Settings and step">
           <div className="ed-tabs" role="tablist">
@@ -175,8 +180,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
           <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
         </Popup>
       ) : null}
-      <h2 className="section" id="run-plan">Run plan</h2>
-      {plan.error ? <ErrorNote error={plan.error} /> : plan.data ? <Coverage plan={plan.data} live /> : <Loading />}
+      {plan.error ? <ErrorNote error={plan.error} /> : null}
       <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>
         {runs.data ? <RunTable runs={runs.data} /> : <Loading />}
       </Panel>

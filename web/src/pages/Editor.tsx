@@ -12,7 +12,7 @@ import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
 import { Badge, ErrorNote, Loading, Panel } from '../ui';
-import { Coverage } from './Run';
+import { PlanDock } from '../components/PlanDock';
 
 /**
  * The workflow editor: add, connect, change and remove steps on the canvas, checked as you go by
@@ -337,6 +337,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   return (
     <>
       <div className="ed-shell">
+        <div className="ed-main">
         <div className="ed-stage">
           <WorkflowCanvas nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
             <div className="ed-title">
@@ -359,6 +360,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
             </div>
           </WorkflowCanvas>
         </div>
+        <PlanDock plan={check.data?.plan} yaml={check.data?.yaml} file={source.data?.workflow} selected={selected} note="This is the plan the edit would have now, as an unsigned draft, with the workers online now." />
+        </div>
         <aside className="ed-panel" aria-label="Steps and settings">
           <div className="ed-tabs" role="tablist">
             <button type="button" role="tab" aria-selected={!showSettings} onClick={() => setPanel('steps')}>Steps</button>
@@ -373,14 +376,6 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       <datalist id="ed-schemas">{suggestions.schemas.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="ed-files">{suggestions.files.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="ed-harness-md">{files.filter((f) => /^harness\/.+\.md$/.test(f)).map((t) => <option key={t} value={t} />)}</datalist>
-      <h2 className="section">Run plan of this edit</h2>
-      {check.data?.plan ? <Coverage plan={check.data.plan} note="This is the plan the edit would have now, as an unsigned draft, with the workers online now." /> : <p className="muted">The run plan shows once the workflow compiles.</p>}
-      {check.data?.yaml ? (
-        <details className="panel">
-          <summary>Workflow file ({source.data?.workflow ?? 'workflow.yaml'})</summary>
-          <pre className="code">{check.data.yaml}</pre>
-        </details>
-      ) : null}
       </div>
     </>
   );

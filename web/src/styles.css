@@ -240,7 +240,7 @@ button.linkish { background: none; border: 0; padding: 0; color: var(--accent); 
 /* editor: the canvas fills the page, the palette and settings sit in a right panel, controls float */
 .content.wide { max-width: none; padding: 0 0 40px; }
 .ed-shell { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: calc(100dvh - 68px); min-height: 520px; }
-.ed-stage { position: relative; min-width: 0; min-height: 0; margin: 0 0 0 12px; }
+.ed-stage { position: relative; min-width: 0; min-height: 0; margin: 0 0 0 12px; container-type: inline-size; isolation: isolate; }
 .ed-stage .wf { height: 100%; display: flex; flex-direction: column; position: relative; }
 .ed-stage .wf-canvas { flex: 1; height: auto !important; min-height: 0; }
 .ed-stage .wf-detailbar { position: absolute; top: 12px; right: 12px; z-index: 6; margin: 0; }
@@ -797,6 +797,8 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 900px) {
   .ed-stage .react-flow__panel.top.left, .ed-stage .wf-detailbar, .ed-check-float .ed-diags { display: none; }
   .ed-check-float { bottom: 80px; }
+  /* the link hint would sit on the check chip; keep it above both it and the toolbar */
+  .ed-stage .wf-edgebar { bottom: 136px; }
 }
 
 /* workflow page shares the editor's full-screen layout */
@@ -815,6 +817,15 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .ed-side .dock { border: 0; background: transparent; }
 .ed-side.wb-drawer { border: 0; max-height: none; }
 @media (max-width: 900px) { .ed-modes { position: static; display: none; } .ed-stage .wf-legend { display: none; } .ed-runbar .txt { display: none; } .ed-stage .update-note { display: none; } }
+
+/* A narrow stage (the right panel and sidebar take the width, not only a small window): the floating title, mode pills and card-detail bar stack in rows instead of colliding in the corners */
+@container (max-width: 760px) {
+  .ed-title { max-width: calc(100% - 28px); }
+  .ed-modes { top: 62px; left: 14px; right: auto; max-width: calc(100% - 28px); justify-content: flex-start; }
+  .ed-stage .wf-detailbar { top: 62px; left: 14px; right: auto; max-width: calc(100% - 28px); }
+  .ed-stage:has(.ed-modes) .wf-detailbar { top: 110px; }
+  .ed-stage .update-note { top: 158px; }
+}
 
 /* a link implied by a longer path: kept (it can still be selected and removed) but quiet, so the real flow reads */
 .wf .react-flow__edge.e-redundant .react-flow__edge-path { opacity: 0.3; stroke-dasharray: 3 5; }
@@ -1028,4 +1039,31 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
   .af-item { grid-template-columns: 32px minmax(0, 1fr); gap: 0 12px; }
   .af-off { display: none; }
   .aa-stats > div { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+
+/* Run plan dock: the plan, controls, requirements and workflow file sit under the canvas, one at a time, scrolling inside */
+.ed-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ed-main > .ed-stage { flex: 1 1 0; }
+.ed-dock { flex: none; margin: 8px 0 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
+.ed-dock.open { height: min(44%, 440px); min-height: 220px; }
+.ed-dock-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; flex-wrap: wrap; }
+.ed-dock-bar > button[role="tab"] { border: 0; background: transparent; color: var(--muted); border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ed-dock-bar > button[role="tab"][aria-selected="true"] { background: var(--idle-bg); color: var(--ink); }
+.ed-dock-bar .grow { flex: 1; }
+.dock-toggle { border: 0; background: transparent; color: var(--muted); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+.dock-toggle:hover { background: var(--idle-bg); color: var(--ink); }
+.dock-filter { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-right: 6px; }
+.ed-dock-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 14px; border-top: 1px solid var(--line); }
+.ed-dock-body table { font-size: 13px; }
+.dock-blockers { margin: 0 0 8px; padding-left: 18px; }
+.dock-blockers li { margin: 3px 0; }
+.dock-steps { display: inline; }
+.dock-steps summary { display: inline; cursor: pointer; color: var(--accent); }
+.dock-steps[open] > span { display: block; margin-top: 2px; color: var(--muted); overflow-wrap: anywhere; }
+.dock-yamlbar { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 4px; }
+.dock-yaml { max-height: none; margin: 0; }
+@media (max-width: 900px) {
+  .ed-main { display: block; }
+  .ed-dock { margin: 8px 8px 0; }
+  .ed-dock.open { height: 360px; }
 }
