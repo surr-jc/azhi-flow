@@ -1,0 +1,267 @@
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID pull requests and send-backs are posted to (the bot
+      must be in it).
+    placeholder: C0123ABCD
+    required: true
+  - name: test_command
+    title: Test command
+    description: Run in the checkout after the change (a shell command; it must exit
+      0 for the change to ship).
+    placeholder: npm ci && npm test
+    default: npm ci && npm run typecheck && npm test
+    required: true
+tools:
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport:
+      kind: builtin
+      name: github.issue
+      config:
+        repos:
+          - OWNER/REPO
+    input_schema:
+      type: object
+      properties:
+        issue:
+          type: string
+          maxLength: 300
+      required:
+        - issue
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        body:
+          type: string
+        author:
+          type: string
+        state:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+        comments:
+          type: array
+          items:
+            type: object
+            properties:
+              author:
+                type: string
+              body:
+                type: string
+  - id: ticket.normalize
+    version: 1
+    description: A Jira or GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport:
+      kind: builtin
+      name: ticket.normalize
+    input_schema:
+      type: object
+      properties:
+        source:
+          type: string
+          enum:
+            - jira
+            - github
+        issue:
+          type: object
+      required:
+        - source
+        - issue
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        source:
+          type: string
+        key:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+        reporter:
+          type: string
+        status:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+      required:
+        - source
+        - key
+        - title
+        - description
+  - id: github.push-branch
+    version: 1
+    description: Commit a change onto a base commit as an azhi/ branch (GitHub Git
+      Data API); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport:
+      kind: builtin
+      name: github.push-branch
+      config:
+        repos:
+          - OWNER/REPO
+        branch_prefix: azhi/
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        branch:
+          type: string
+          maxLength: 250
+        base_sha:
+          type: string
+        message:
+          type: string
+          maxLength: 5000
+        files:
+          type: array
+          maxItems: 300
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              status:
+                enum:
+                  - added
+                  - modified
+                  - deleted
+              mode:
+                enum:
+                  - "100644"
+                  - "100755"
+              content:
+                type: string
+              encoding:
+                enum:
+                  - utf-8
+                  - base64
+              additions:
+                type: integer
+              deletions:
+                type: integer
+            required:
+              - path
+              - status
+      required:
+        - repo
+        - branch
+        - base_sha
+        - message
+        - files
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        branch:
+          type: string
+        commit_sha:
+          type: string
+        base_sha:
+          type: string
+        files:
+          type: integer
+        created:
+          type: boolean
+        url:
+          type: string
+        commit_url:
+          type: string
+      required:
+        - repo
+        - branch
+        - commit_sha
+        - url
+  - id: github.create-pull-request
+    version: 1
+    description: Open a pull request from an azhi/ branch, or return the one already
+      open for it (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport:
+      kind: builtin
+      name: github.create-pull-request
+      config:
+        repos:
+          - OWNER/REPO
+        branch_prefix: azhi/
+    input_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        head:
+          type: string
+        base:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        draft:
+          type: boolean
+      required:
+        - repo
+        - head
+        - title
+        - body
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo:
+          type: string
+        number:
+          type: integer
+        url:
+          type: string
+        head:
+          type: string
+        base:
+          type: string
+        draft:
+          type: boolean
+        created:
+          type: boolean
+      required:
+        - repo
+        - number
+        - url
+        - head
+secrets:
+  - slack-bot-token
+  - github-read-token
+  - github-write-token
+  - openai-chatgpt-auth
