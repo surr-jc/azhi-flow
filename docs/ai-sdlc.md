@@ -80,6 +80,25 @@ settle do not trigger a fix round, but they keep the change from counting as app
 request opens as a draft marked `[needs-human-attention]`. Reviewers number their findings (`C1`, `T1`,
 `S1`, `L1`) so each can be matched to its check. See [confidence.md](confidence.md).
 
+## Order of sub-issues: the dependency guard
+
+A ticket written by the [issue splitter](issue-splitter.md) says which slices it depends on ("Slice 2 of 6. Depends
+on slice 1: ... Do not start it before those are merged.") and which issue it is part of ("Part of #27"). The first
+thing a run does (`deps`, then `deps_gate`) is read that and look at the ticket's siblings under the parent:
+
+- every slice it depends on is **closed**: the run goes on to the readiness check;
+- one is still **open**: the run **stops at once**, names it in Slack ("has to wait: slice 1: #28 ... (open)"), builds
+  nothing and calls no model. Merge the earlier slice's pull request (it says `Closes #N`, so merging closes it), then
+  start this one again;
+- a dependency that was left out of the plan is ignored, one that cannot be found is a warning and not counted;
+- the dependencies cannot be checked at all (the parent's sub-issues cannot be read, or the ticket depends on a slice
+  but names no parent): the run **stops**, so the guard fails closed;
+- an ordinary ticket (no dependencies) and every Jira ticket pass after one request, or none.
+
+Set the input `ignore_dependencies` to `true` to start a blocked slice anyway, for instance when you built its
+prerequisite by hand. The guard needs the `github.issue-blockers` tool, which the example install registers (install
+or update the example once on an existing server) and a read token that can read issues.
+
 ## Clarifications: pausing for answers
 
 The readiness check ends one of three ways (`dor_gate`):

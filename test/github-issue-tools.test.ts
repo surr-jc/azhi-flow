@@ -78,3 +78,85 @@ describe('github issue tools', () => {
     await expect(run(s, { repo: 'acme/shop', number: 999, labels: ['x'] })).rejects.toThrow(/404/);
   });
 });
+
+/**
+ * The order guard's tool: a slice written by the issue splitter says which slices it depends on, and the tool
+ * reports the ones still open among its siblings under the parent. No dependencies means never blocked; when the
+ * dependencies cannot be checked it answers blocked, so the guard fails closed.
+ */
+describe('github issue-blockers tool', () => {
+  const body = (order: string, part = 'Part of #40') => `${part}\n\nWork.\n\n## Order\n${order}\n\nSuggested review path: lite.\n\n<!-- azhi-action:x -->`;
+  const issue = (number: number, title: string, order: string, extra: Record<string, unknown> = {}) => ({ number, id: 5000 + number, repo: 'acme/shop', title, labels: [] as string[], body: body(order), ...extra });
+  const seeded = () => [
+    { number: 40, id: 5040, repo: 'acme/shop', title: 'Parent', labels: [], body: 'The big ticket' },
+    issue(41, 'First', 'Slice 1 of 4. Independent: it can be built on its own.'),
+    issue(42, 'Second', 'Slice 2 of 4. Depends on slice 1: First. Do not start it before those are merged.'),
+    issue(43, 'Third', 'Slice 3 of 4. Depends on slice 1: First; slice 2: Second (left out of this plan). Do not start it before those are merged.'),
+    issue(44, 'Fourth', 'Slice 4 of 4. Depends on slice 2: Second; slice 9: Ghost. Do not start it before those are merged.'),
+    issue(45, 'Orphan', 'Slice 2 of 2. Depends on slice 1: First. Do not start it before those are merged.', { body: 'Slice 2 of 2. Depends on slice 1: First. Do not start it before those are merged.' }),
+  ];
+  const links = [41, 42, 43, 44].map((n) => ({ repo: 'acme/shop', parent: 40, child: 5000 + n }));
+  let server: Awaited<ReturnType<typeof startFakeGithub>>;
+  let blind: Awaited<ReturnType<typeof startFakeGithub>>;
+  const check = (s: Awaited<ReturnType<typeof startFakeGithub>>, args: Record<string, unknown>) => {
+    const sp = spec('github.issue-blockers', s.url, 'read');
+    return executorFor(sp).call(sp, args, { credential: TOKEN, timeoutMs: 5000 }).then((r) => r.value as any);
+  };
+
+  beforeAll(async () => {
+    process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
+    server = await startFakeGithub({ runs: [], issues: seeded() }, { token: TOKEN, links });
+    blind = await startFakeGithub({ runs: [], issues: seeded() }, { token: TOKEN, links, noSubIssues: true });
+  });
+  afterAll(async () => {
+    await server.stop();
+    await blind.stop();
+  });
+  const setState = (number: number, state: 'open' | 'closed') => (server.issues.find((i) => i.number === number)!.state = state);
+
+  it('never blocks a slice with nothing to wait for, or an ordinary issue', async () => {
+    expect(await check(server, { issue: 'acme/shop#41' })).toMatchObject({ blocked: false, slice: 1, of: 4, parent: 40, depends: [], blockers: [] });
+    expect(await check(server, { issue: 'acme/shop#40' })).toMatchObject({ blocked: false, slice: 0, depends: [] });
+    expect(await check(server, { issue: '' })).toMatchObject({ blocked: false });
+  });
+
+  it('blocks a slice while the slice it depends on is open, and frees it once that is closed', async () => {
+    const r = await check(server, { issue: 'acme/shop#42' });
+    expect(r).toMatchObject({ blocked: true, slice: 2, depends: [1], reason: 'waiting for #41' });
+    expect(r.blockers).toEqual([expect.objectContaining({ slice: 1, number: 41, title: 'First', state: 'open' })]);
+    setState(41, 'closed');
+    expect(await check(server, { issue: 'acme/shop#42' })).toMatchObject({ blocked: false, blockers: [] });
+    setState(41, 'open');
+  });
+
+  it('ignores a dependency that was left out of the plan, and warns about one that cannot be found', async () => {
+    const third = await check(server, { issue: 'acme/shop#43' });
+    expect(third.depends).toEqual([1]);
+    expect(third.blocked).toBe(true);
+    setState(41, 'closed');
+    expect(await check(server, { issue: 'acme/shop#43' })).toMatchObject({ blocked: false });
+    // #44 waits for slice 2 (open, #42) and for a slice 9 that no sibling carries.
+    const fourth = await check(server, { issue: 'acme/shop#44' });
+    expect(fourth).toMatchObject({ blocked: true, depends: [2, 9] });
+    expect(fourth.blockers.map((b: any) => b.number)).toEqual([42]);
+    expect(fourth.warnings).toEqual([expect.stringContaining('slice 9 was not found')]);
+    setState(41, 'open');
+  });
+
+  it('skips the check when a person says to, without reading anything', async () => {
+    const before = server.requests.length;
+    expect(await check(server, { issue: 'acme/shop#42', ignore: true })).toMatchObject({ blocked: false, ignored: true });
+    expect(server.requests.length).toBe(before);
+  });
+
+  it('fails closed when the dependencies cannot be checked', async () => {
+    const noSubIssues = await check(blind, { issue: 'acme/shop#42' });
+    expect(noSubIssues).toMatchObject({ blocked: true });
+    expect(noSubIssues.reason).toContain('could not be read');
+    const orphan = await check(server, { issue: 'acme/shop#45' });
+    expect(orphan).toMatchObject({ blocked: true });
+    expect(orphan.reason).toContain('does not say which issue it is part of');
+    // An issue with no dependencies still passes when sub-issues are unavailable.
+    expect(await check(blind, { issue: 'acme/shop#41' })).toMatchObject({ blocked: false });
+  });
+});

@@ -8,7 +8,7 @@ import http from 'node:http';
  */
 export interface FakeGithubData {
   runs: Array<{ id: number; conclusion: string; head_branch: string; run_started_at: string; updated_at: string; jobs?: Array<{ name: string; conclusion: string }> }>;
-  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean; body?: string; user?: string; repo?: string; id?: number }>;
+  issues: Array<{ number: number; title: string; labels: string[]; comments?: number; created_at?: string; pull_request?: boolean; body?: string; user?: string; repo?: string; id?: number; state?: 'open' | 'closed' }>;
   pulls?: Array<{
     number: number;
     title: string;
@@ -43,7 +43,7 @@ export interface FakeComment {
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }> } = {}) {
   const requests: string[] = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
@@ -54,7 +54,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
   const comments: Array<FakeComment & { user?: string }> = [...(opts.comments ?? [])];
   /** What the issue splitter created, and the sub-issue links it made. */
   const created: FakeGithubData['issues'] = [];
-  const links: Array<{ repo: string; parent: number; child: number }> = [];
+  const links: Array<{ repo: string; parent: number; child: number }> = [...(opts.links ?? [])];
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -94,9 +94,14 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     if (m) {
       const label = url.searchParams.get('labels');
       const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]));
-      return send(200, slice(found).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${m![1]}/issues/${i.number}`, ...(i.pull_request ? { pull_request: {} } : {}) })));
+      return send(200, slice(found).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, state: i.state ?? 'open', comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${m![1]}/issues/${i.number}`, ...(i.pull_request ? { pull_request: {} } : {}) })));
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/sub_issues$/);
+    if (m && req.method === 'GET') {
+      if (opts.noSubIssues) return send(404, { message: 'Not Found' });
+      const kids = links.filter((l) => l.repo === m![1] && l.parent === Number(m![2])).map((l) => data.issues.find((i) => (i.id ?? 4000 + i.number) === l.child && (!i.repo || i.repo === m![1])));
+      return send(200, slice(kids.filter((i): i is NonNullable<typeof i> => Boolean(i))).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, state: i.state ?? 'open', html_url: `https://github.com/${m![1]}/issues/${i.number}` })));
+    }
     if (m && req.method === 'POST') {
       const child = Number(JSON.parse(raw || '{}').sub_issue_id);
       const link = { repo: m[1]!, parent: Number(m[2]), child };
@@ -118,7 +123,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const i = data.issues.find((x) => x.number === number && (!x.repo || x.repo === repo));
       if (!i) return send(404, { message: 'Not Found' });
       const count = comments.filter((c) => c.repo === repo && c.number === number).length;
-      return send(200, { number, title: i.title, body: i.body ?? null, state: 'open', user: { login: i.user ?? 'octocat' }, comments: count, labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${repo}/issues/${number}`, ...(i.pull_request ? { pull_request: {} } : {}) });
+      return send(200, { number, title: i.title, body: i.body ?? null, state: i.state ?? 'open', user: { login: i.user ?? 'octocat' }, comments: count, labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${repo}/issues/${number}`, ...(i.pull_request ? { pull_request: {} } : {}) });
     }
     const body = () => JSON.parse(raw || '{}');
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
@@ -224,5 +229,5 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const t = c && git.trees.get(c.tree);
     return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
   };
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

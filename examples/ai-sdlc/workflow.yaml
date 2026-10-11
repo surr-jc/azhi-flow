@@ -36,6 +36,7 @@ inputs:
     source: {type: string, title: Source, enum: [jira, github], description: "Where the ticket lives"}
     ticket: {type: string, title: Ticket, maxLength: 300, description: "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"}
     repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The repository to change, owner/name"}
+    ignore_dependencies: {type: boolean, default: false, title: Start even if earlier slices are open, description: "A slice written by the issue splitter says which slices it depends on and is not started while they are open. Set this to start it anyway."}
     base_branch: {type: string, title: Base branch, maxLength: 200, description: "Branch to build on and open the pull request against; leave empty for the default branch"}
   required: [source, ticket, repo]
 config:
@@ -77,6 +78,38 @@ nodes:
       source: {ref: inputs.source}
       issue: {cel: "inputs.source == 'jira' ? nodes.jira_issue.output : nodes.github_issue.output"}
     project: [source, key, title, description, priority, reporter, status, labels, url]
+
+  # ---- Order guard: a slice does not start while the slices it depends on are open -----------------
+  # The issue splitter writes "Depends on slice N" into a sub-issue. This reads it and checks the siblings under
+  # the parent; an issue with no dependencies (any ordinary ticket, and every Jira ticket) costs one request.
+  - id: deps
+    type: tool
+    description: Are the slices this ticket depends on still open? (An ordinary ticket is never blocked.)
+    tool: github.issue-blockers@1
+    arguments:
+      issue: {cel: "inputs.source == 'github' ? inputs.ticket : ''"}
+      ignore: {cel: "has(inputs.ignore_dependencies) && inputs.ignore_dependencies"}
+
+  - id: deps_gate
+    type: condition
+    description: Stop at once, with the reason, while an earlier slice is open; otherwise go on to the readiness check.
+    expression: "nodes.deps.output.blocked ? 'stop' : 'go'"
+    routes: {stop: [deps_message], go: [dor_check]}
+    default: stop
+
+  - id: deps_message
+    type: report
+    description: Which earlier slices are still open.
+    template: templates/blocked.md
+    input: {map: "{'ticket': inputs.ticket, 'deps': nodes.deps.output}"}
+
+  - id: deps_notify
+    type: notify
+    description: Tell the channel the ticket has to wait, and for what.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.deps_message.output.markdown}
+    guard: "args.channel == config.channel"
 
   - id: dor_check
     type: agent
