@@ -54,7 +54,7 @@ describe('openai provider', () => {
       ]);
       expect(r.stop).toBe('tool_use');
       expect(r.content).toEqual([{ type: 'tool_use', id: 'c2', name: 'submit_output', input: { summary: 'ok' } }]);
-      expect(r.usage).toEqual({ input_tokens: 120, output_tokens: 30, cache_read_tokens: 100, cache_write_tokens: null, reasoning_tokens: null });
+      expect(r.usage).toEqual({ input_tokens: 20, output_tokens: 30, cache_read_tokens: 100, cache_write_tokens: null, reasoning_tokens: null }); // OpenAI counts the 100 cached tokens inside the 120 prompt tokens; the usage record keeps them apart
     } finally {
       server.close();
     }

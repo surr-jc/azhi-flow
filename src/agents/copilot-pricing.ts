@@ -121,7 +121,7 @@ export function copilotRate(model: string, profile: AgentProfile['pricing'], s: 
 const norm = (m: string) => m.toLowerCase().replace(/^github-copilot\//, '').trim().replace(/[.\s_]+/g, '-');
 
 /** The model's rate, or the rate of the longest name it extends with a suffix (a dated or preview build, e.g. gpt-5.6-luna-2026-09-01). */
-function lookup(table: Record<string, CopilotRate>, model: string): CopilotRate | undefined {
+export function lookup(table: Record<string, CopilotRate>, model: string): CopilotRate | undefined {
   const m = norm(model);
   let best: [string, CopilotRate] | undefined;
   for (const [k, r] of Object.entries(table)) {

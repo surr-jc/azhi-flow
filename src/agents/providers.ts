@@ -65,6 +65,9 @@ async function post(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+/** OpenAI counts cached tokens inside the prompt; usage records keep them apart so each is priced once. */
+const exclCached = (input: number | null, cached: number | null) => (input === null ? null : Math.max(0, input - (cached ?? 0)));
+
 export const UNKNOWN_USAGE: Usage = { input_tokens: null, output_tokens: null, cache_read_tokens: null, cache_write_tokens: null, reasoning_tokens: null };
 
 /** Anthropic Messages API. The stable system prompt is marked for prefix caching. */
@@ -239,7 +242,7 @@ export function openaiProvider(o: OpenAIOptions): ModelProvider {
         content,
         stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : choices.some((ch) => ch.finish_reason === 'length') ? 'max_tokens' : 'end',
         usage: {
-          input_tokens: num(u.prompt_tokens),
+          input_tokens: exclCached(num(u.prompt_tokens), num(u.prompt_tokens_details?.cached_tokens)),
           output_tokens: num(u.completion_tokens),
           cache_read_tokens: num(u.prompt_tokens_details?.cached_tokens),
           cache_write_tokens: null,
@@ -319,7 +322,7 @@ export function responsesProvider(o: OpenAIOptions): ModelProvider {
         content,
         stop: content.some((b) => b.type === 'tool_use') ? 'tool_use' : body.status === 'incomplete' && body.incomplete_details?.reason === 'max_output_tokens' ? 'max_tokens' : 'end',
         usage: {
-          input_tokens: num(u.input_tokens),
+          input_tokens: exclCached(num(u.input_tokens), num(u.input_tokens_details?.cached_tokens)),
           output_tokens: num(u.output_tokens),
           cache_read_tokens: num(u.input_tokens_details?.cached_tokens),
           cache_write_tokens: null,

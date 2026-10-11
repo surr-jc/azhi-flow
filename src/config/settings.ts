@@ -47,6 +47,8 @@ export function settings() {
     copilotCreditUsd: positive(process.env.AZHI_COPILOT_CREDIT_USD) ?? COPILOT_CREDIT_USD,
     /** Per-model rates, `model=input/cached/cache_write/output` USD per million tokens; extend and override GitHub's table. */
     copilotRates: parseRates(process.env.AZHI_COPILOT_RATES),
+    /** Per-model OpenAI API rates, `model=input/cached/output` USD per million tokens; extend and override the built-in table (src/agents/openai-pricing.ts). */
+    openaiRates: parseRates(process.env.AZHI_OPENAI_RATES),
     /** The organization's monthly AI Credit pool, to show how much is left and what falls past it. */
     copilotCreditPool: positive(process.env.AZHI_COPILOT_CREDIT_POOL),
     /** ChatGPT plan model (through OpenCode) for profiles that say `name: default`. */
