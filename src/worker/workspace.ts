@@ -220,6 +220,9 @@ export function runWorkspaceTests(c: Checkout, o: { command: string; home: strin
     ...(win ? { ...windowsSystemEnv(), USERPROFILE: o.home, APPDATA: join(o.home, 'AppData', 'Roaming'), LOCALAPPDATA: join(o.home, 'AppData', 'Local'), TEMP: o.tmp, TMP: o.tmp } : {}),
     ...(process.env.HTTPS_PROXY ? { HTTPS_PROXY: process.env.HTTPS_PROXY, HTTP_PROXY: process.env.HTTP_PROXY ?? process.env.HTTPS_PROXY, NO_PROXY: process.env.NO_PROXY ?? '127.0.0.1,localhost' } : {}),
     ...(process.env.NODE_EXTRA_CA_CERTS ? { NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS } : {}),
+    // Where SWC may cache its native addon: a folder path, not a secret. Without it the bundler Temporal's tests use
+    // cannot load on Windows from the step's own temp folders, and every such suite fails for a reason unrelated to the change.
+    ...(process.env.SWC_NATIVE_BINDING_CACHE ? { SWC_NATIVE_BINDING_CACHE: process.env.SWC_NATIVE_BINDING_CACHE } : {}),
   };
   return new Promise((resolve) => {
     let out = '';

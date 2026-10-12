@@ -1142,3 +1142,17 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .diff-table tr.flash, .diff-file.flash { outline: 2px solid var(--warn, #bf8700); outline-offset: -2px; animation: flash-fade 1.8s ease-out; }
 @keyframes flash-fade { from { background: rgba(191, 135, 0, 0.35); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .diff-table tr.flash, .diff-file.flash { animation: none; } }
+
+/* Acceptance criteria checklist in the release review. */
+.criteria { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.criterion { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; border: 1px solid var(--line, #d7dbe2); border-left-width: 5px; border-radius: 8px; padding: 8px 12px; min-width: 0; }
+.criterion.met { border-left-color: var(--ok, #1a7f37); }
+.criterion.partial { border-left-color: var(--warn, #bf8700); }
+.criterion.unmet { border-left-color: var(--bad, #cf222e); }
+.criterion.unverifiable { border-left-color: rgba(127, 127, 127, 0.6); }
+.crit-text { flex: 1 1 18rem; min-width: 0; overflow-wrap: anywhere; }
+.crit-evidence { flex-basis: 100%; overflow-wrap: anywhere; }
+.crit-badge { font-size: 0.72em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 8px; border-radius: 10px; background: rgba(127, 127, 127, 0.2); white-space: nowrap; }
+.crit-badge.met { background: rgba(26, 127, 55, 0.18); color: var(--ok, #1a7f37); }
+.crit-badge.partial { background: rgba(191, 135, 0, 0.2); color: var(--warn, #9a6700); }
+.crit-badge.unmet { background: rgba(207, 34, 46, 0.18); color: var(--bad, #cf222e); }

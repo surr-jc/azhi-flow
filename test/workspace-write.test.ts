@@ -119,3 +119,24 @@ describe.skipIf(!hasGit)('write-mode workspace', () => {
     await expect(collectChange(c, home, tree, { repo: 'acme/shop', ref: 'HEAD', tests: { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' } })).rejects.toThrow(/symbolic link/);
   });
 });
+
+describe('the environment of a workspace test command', () => {
+  it('carries the SWC cache folder (a path) but still no secrets', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ws-env-'));
+    const home = mkdtempSync(join(tmpdir(), 'ws-home-'));
+    const tmp = mkdtempSync(join(tmpdir(), 'ws-tmp-'));
+    const win = process.platform === 'win32';
+    const script = win ? 'echo swc=%SWC_NATIVE_BINDING_CACHE% secret=%OPENAI_API_KEY%' : 'echo "swc=$SWC_NATIVE_BINDING_CACHE secret=$OPENAI_API_KEY"';
+    process.env.SWC_NATIVE_BINDING_CACHE = join(home, 'swc-cache');
+    process.env.OPENAI_API_KEY = 'must-not-leak';
+    try {
+      const r = await runWorkspaceTests({ dir, head: '' } as Checkout, { command: script, home, tmp, timeoutMs: 30_000 });
+      expect(r.exit_code).toBe(0);
+      expect(r.output).toContain(`swc=${join(home, 'swc-cache')}`);
+      expect(r.output).not.toContain('must-not-leak');
+    } finally {
+      delete process.env.SWC_NATIVE_BINDING_CACHE;
+      delete process.env.OPENAI_API_KEY;
+    }
+  });
+});
