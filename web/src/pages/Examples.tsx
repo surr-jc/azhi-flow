@@ -542,6 +542,16 @@ function SecretRow({ secret }: { secret: Secret }) {
     },
   });
   const isSet = secret.set || done;
+  // A GitHub token can be replaced by the GitHub CLI's login on the server's machine (nothing is stored).
+  const isGithubToken = /^github-.*-token$/.test(secret.name) && secret.name !== 'github-copilot-token';
+  const cli = useMutation({
+    mutationFn: () => api<{ login: string | null; scopes: string[]; warning?: string }>('/v1/github/cli-login', { method: 'POST', body: { secrets: [secret.name] } }),
+    onSuccess: () => {
+      setDone(true);
+      void qc.invalidateQueries({ queryKey: ['secrets'] });
+      void qc.invalidateQueries({ queryKey: ['examples'] });
+    },
+  });
   const odd = /[\s​-‍﻿]/.test(value);
   if (secret.name === 'github-copilot-token') {
     return (
@@ -562,6 +572,15 @@ function SecretRow({ secret }: { secret: Secret }) {
         <button type="submit" className="small" disabled={!value || save.isPending}>Save</button>
         {odd ? <span className="hint warn-text">Contains spaces or invisible characters; check what you pasted.</span> : null}
         <ErrorNote error={save.error} />
+        {isGithubToken ? (
+          <div className="hint">
+            <span>Or skip the token: first run <code>gh auth login</code> on the computer the server runs on, then </span>
+            <button type="button" className="link small" disabled={cli.isPending} onClick={() => cli.mutate()}>use the GitHub CLI login</button>
+            {cli.data ? <span className="ok-note"> Using the login of {cli.data.login ?? 'unknown'} ({cli.data.scopes.join(', ') || 'no scopes listed'}).</span> : null}
+            {cli.data?.warning ? <span className="warn-text"> {cli.data.warning}</span> : null}
+            <ErrorNote error={cli.error} />
+          </div>
+        ) : null}
       </div>
     </form>
   );

@@ -405,6 +405,20 @@ example
     console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
   });
 
+const github = program.command('github').description('GitHub access for the GitHub tools and repository checkouts');
+github
+  .command('login')
+  .description('Use the GitHub CLI login (gh auth login, on the machine the server runs on) for the GitHub secrets, instead of storing a token')
+  .option('--secret <name...>', 'secrets that should use it', ['github-read-token', 'github-write-token'])
+  .option('--hostname <host>', 'GitHub host (an Enterprise server), default github.com', 'github.com')
+  .action(async (opts: { secret: string[]; hostname: string }) => {
+    const r = await client().post<{ host: string; login: string | null; scopes: string[]; secrets: string[]; warning?: string }>('/v1/github/cli-login', { secrets: opts.secret, host: opts.hostname });
+    console.log(`${green('using the GitHub CLI login')} of ${bold(r.login ?? 'unknown')} on ${r.host} for: ${r.secrets.join(', ')}`);
+    console.log(dim(`scopes: ${r.scopes.join(', ') || 'none listed'}. No token is stored: it is asked of gh each time a step needs it.`));
+    console.log(dim('It acts as you, so the repository list of each tool decides which repositories a workflow may use.'));
+    if (r.warning) console.log(yellow(r.warning));
+  });
+
 const chatgpt = program.command('chatgpt').description('OpenAI models on your ChatGPT plan, for OpenCode steps');
 chatgpt
   .command('login')

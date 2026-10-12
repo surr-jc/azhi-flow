@@ -20,6 +20,8 @@ import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
+import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
+import { checkEgress } from '../gateway/egress.js';
 import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import type { Role } from '../db/schema.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
@@ -533,6 +535,35 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'admin');
     const { value } = z.object({ value: z.string().min(1) }).parse(req.body);
     return { version: await setSecret(ctx, p.workspaceId, (req.params as { name: string }).name, value, p.userId) };
+  });
+
+  // Points GitHub secrets at the GitHub CLI's login (`gh auth login` on this machine) instead of a stored
+  // token: the token is asked of `gh` each time a step needs it and is never stored.
+  app.post('/v1/github/cli-login', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z
+      .object({
+        secrets: z.array(z.string().regex(/^[A-Za-z0-9._-]+$/)).min(1).max(10).default(['github-read-token', 'github-write-token']),
+        host: z.string().regex(/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$/).default('github.com'),
+      })
+      .parse(req.body ?? {});
+    const token = await ghCliToken(b.host);
+    const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
+    await checkEgress(`${api}/user`);
+    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
+    const who = (await res.json().catch(() => ({}))) as { login?: string };
+    const header = res.headers.get('x-oauth-scopes');
+    const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+    for (const name of b.secrets) await setSecret(ctx, p.workspaceId, name, ghCliPointer(b.host), p.userId);
+    return {
+      host: b.host,
+      login: who.login ?? null,
+      scopes,
+      secrets: b.secrets,
+      warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
+    };
   });
 
   app.post('/v1/schedules', async (req) => {

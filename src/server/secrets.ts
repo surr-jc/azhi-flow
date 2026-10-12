@@ -1,5 +1,6 @@
 import { decryptSecret, encryptSecret } from '../security/secrets.js';
 import { audit } from './catalog.js';
+import { ghCliToken, parseGhCliPointer } from './gh-cli.js';
 import type { AppContext } from './context.js';
 
 export async function setSecret(ctx: AppContext, workspaceId: string, name: string, value: string, actor: string): Promise<number> {
@@ -18,7 +19,11 @@ export async function setSecret(ctx: AppContext, workspaceId: string, name: stri
 export async function resolveSecret(ctx: AppContext, workspaceId: string, name: string): Promise<{ value: string; version: number } | undefined> {
   const r = await ctx.pool.query(`SELECT version, ciphertext FROM secrets WHERE workspace_id=$1 AND name=$2 ORDER BY version DESC LIMIT 1`, [workspaceId, name]);
   const row = r.rows[0];
-  return row ? { value: decryptSecret(ctx.secretKey, row.ciphertext), version: row.version } : undefined;
+  if (!row) return undefined;
+  const value = decryptSecret(ctx.secretKey, row.ciphertext);
+  // A secret that points at the GitHub CLI login holds no token: ask `gh` for it now (never stored).
+  const pointer = parseGhCliPointer(value);
+  return { value: pointer ? await ghCliToken(pointer.host) : value, version: row.version };
 }
 
 export async function listSecrets(ctx: AppContext, workspaceId: string) {

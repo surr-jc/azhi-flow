@@ -65,8 +65,11 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
   const catalog = await loadCatalog(ctx, workspaceId);
   const plan = await buildRunPlan(ctx, workspaceId, version, opts.principal);
   const secretCache = new Map<string, Promise<string | undefined>>();
+  // Why a secret that exists could not be resolved (the GitHub CLI missing or signed out), so it is reported
+  // as that and not as a secret that was never set.
+  const secretErrors = new Map<string, string>();
   const secret = (name: string) => {
-    if (!secretCache.has(name)) secretCache.set(name, resolveSecret(ctx, workspaceId, name).then((s) => s?.value, () => undefined));
+    if (!secretCache.has(name)) secretCache.set(name, resolveSecret(ctx, workspaceId, name).then((s) => s?.value, (err) => { secretErrors.set(name, (err as Error).message); return undefined; }));
     return secretCache.get(name)!;
   };
 
@@ -100,6 +103,9 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
     once(`gh:${credential}:${cfg.api_url ?? ''}:${repo.toLowerCase()}:${need}:${probes.join(',')}`, async () => {
       if (!credential) return undefined;
       const token = await secret(credential);
+      if (!token && secretErrors.has(credential)) {
+        return { id: `github:${credential}:${repo}:${need}`, kind: 'github', status: 'fail', target: `${repo} with ${credential}`, node, message: `The secret ${credential} could not be read: ${secretErrors.get(credential)}` };
+      }
       if (!token) return undefined; // reported above as a missing secret
       return fromAccess(await checkRepoAccess(cfg, token, repo, need, undefined, probes), { id: `github:${credential}:${repo}:${need}${probes.length ? `:${probes.join('+')}` : ''}`, target: `${repo} with ${credential}`, node });
     });
