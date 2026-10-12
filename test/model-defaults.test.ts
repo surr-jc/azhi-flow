@@ -123,6 +123,7 @@ describe('model defaults: the run plan and the options', () => {
     await expect(h.api.post('/v1/runs', { version, inputs: { repo: 'a/b', pr: 1 }, model_defaults: { name: 'x' } })).rejects.toThrow();
     const opts = await h.api.get<any>('/v1/model-options');
     expect(opts.providers.map((p: any) => p.id)).toEqual(['anthropic', 'openai', 'github-copilot', 'openai-chatgpt']);
+    expect(opts.providers.every((p: any) => p.enabled)).toBe(true);
     const copilot = opts.providers.find((p: any) => p.id === 'github-copilot');
     expect(copilot).toMatchObject({ ready: false, server_default_model: 'claude-sonnet-5', executors: ['opencode'] });
     expect(opts.providers.find((p: any) => p.id === 'anthropic')).toMatchObject({ executors: ['model-agent', 'opencode', 'claude-agent-sdk'].filter((e) => e !== 'x'), server_default_model: 'claude-sonnet-5-5' });
@@ -130,5 +131,14 @@ describe('model defaults: the run plan and the options', () => {
     expect((await h.api.get<any>('/v1/model-options')).providers.find((p: any) => p.id === 'github-copilot').ready).toBe(true);
     const models = await h.api.get<any>('/v1/model-options/models?provider=anthropic');
     expect(models.models.length).toBeGreaterThan(0);
+    const ids = models.models.map((m: any) => m.id);
+    await h.api.put('/v1/settings/model-availability/anthropic', { enabled: true, allowed_model_ids: [ids[0]] });
+    expect((await h.api.get<any>('/v1/model-options/models?provider=anthropic')).models.map((m: any) => m.id)).toEqual([ids[0]]);
+    expect((await h.api.get<any>('/v1/settings/model-availability')).providers.anthropic.allowed_model_ids).toEqual([ids[0]]);
+    await h.api.put('/v1/settings/model-availability/openai', { enabled: false, allowed_model_ids: null });
+    expect((await h.api.get<any>('/v1/model-options')).providers.find((p: any) => p.id === 'openai').enabled).toBe(false);
+    await expect(h.api.get('/v1/model-options/models?provider=openai')).rejects.toThrow(/disabled/);
+    await h.api.put('/v1/settings/model-availability/openai', { enabled: true, allowed_model_ids: [] });
+    expect((await h.api.get<any>('/v1/model-options/models?provider=openai')).models).toEqual([]);
   });
 });

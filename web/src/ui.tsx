@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import type { JsonSchema } from './api';
-import { Link } from './router';
+import type { JsonSchema } from './api.js';
+import { Link } from './router.js';
 
 export const when = (t: string | null | undefined) => (t ? new Date(t).toLocaleString() : '—');
 export const num = (n: number | null | undefined) => (n === null || n === undefined ? 'unknown' : Number(n).toLocaleString());
