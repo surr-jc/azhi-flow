@@ -15,6 +15,8 @@ out). A step that names its own provider and model keeps them, whatever is chose
 | CLI | `azhi run ... --provider github-copilot --model gpt-5.6-terra`; `azhi plan ... --provider anthropic` shows the plan under a choice |
 | API | `POST /v1/runs` with `model_defaults: {provider, name?}`; `GET /v1/versions/:id/plan?provider=&model=`; `GET /v1/model-options` and `/v1/model-options/models?provider=` list the providers (ready or not) and models |
 
+Workspace administrators can read availability with `GET /v1/settings/model-availability` and update one provider with `PUT /v1/settings/model-availability/:provider` using `{enabled, allowed_model_ids}`. Missing settings keep existing unrestricted choices. A `null` model list is unrestricted; an explicit empty list allows no named catalog models. Disabled providers and filtered models are not offered for new picker selections; arbitrary IDs are available only when no allowlist is configured. Saved choices remain visible as unavailable and are not rewritten. This policy governs option endpoints and pickers only; it does not block execution, CLI choices, or explicitly named profile models.
+
 Precedence, highest first: the run's choice, the workflow's `model_defaults`, the server's default for
 the profile's own provider.
 

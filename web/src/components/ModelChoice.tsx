@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useId, useState } from 'react';
-import { api } from '../api';
-import type { RunPlan } from '../api';
-import { Badge } from '../ui';
+import { api } from '../api.js';
+import type { RunPlan } from '../api.js';
+import { Badge } from '../ui.js';
 
 /**
  * The provider and model for the steps that use "the default model" (a profile that says
@@ -10,8 +10,8 @@ import { Badge } from '../ui';
  * Used in the workflow editor (the workflow's default) and when starting a run (this run's choice).
  */
 export interface ModelValue { provider?: string; name?: string }
-interface Provider { id: string; label: string; ready: boolean; reason?: string; credential: string; server_default_model: string | null; server_default_env: string; executors: string[] }
-interface ModelList { models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
+interface Provider { id: string; label: string; ready: boolean; enabled: boolean; reason?: string; credential: string; server_default_model: string | null; server_default_env: string; executors: string[] }
+interface ModelList { models: Array<{ id: string; label: string }>; allowed_model_ids?: string[] | null; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
 
 const OTHER = '__other__';
 
@@ -32,17 +32,20 @@ export function ModelChoice({ value, onChange, noneLabel = 'Each step\'s own def
   const list = useQuery({
     queryKey: ['model-options', 'models', value.provider],
     queryFn: () => api<ModelList>(`/v1/model-options/models?provider=${encodeURIComponent(value.provider!)}`),
-    enabled: Boolean(value.provider),
+    enabled: Boolean(value.provider && options.data && provider?.enabled),
     staleTime: 5 * 60_000,
+    refetchOnWindowFocus: true,
   });
   const models = list.data?.models ?? [];
   const listed = !value.name || models.some((m) => m.id === value.name);
   const [typing, setTyping] = useState(false);
-  const other = typing || (Boolean(value.name) && !listed && models.length > 0) || (Boolean(value.provider) && !models.length && !list.isLoading);
+  const policyKnown = list.data !== undefined;
+  const unavailable = Boolean(value.name && (!provider?.enabled || (policyKnown && !listed && list.data?.allowed_model_ids != null)));
+  const other = Boolean(provider?.enabled && policyKnown && list.data?.allowed_model_ids == null && !unavailable && (typing || (Boolean(value.name) && !listed && models.length > 0) || (Boolean(value.provider) && !models.length && !list.isLoading)));
   const [custom, setCustom] = useState(value.name && !listed ? value.name : '');
   // Not a form of its own: the picker sits inside the run form and the editor's forms.
   const useCustom = () => {
-    if (!custom.trim()) return;
+    if (!custom.trim() || !provider?.enabled || !policyKnown || list.data?.allowed_model_ids != null) return;
     onChange({ provider: value.provider, name: custom.trim() });
     setTyping(false);
   };
@@ -54,7 +57,7 @@ export function ModelChoice({ value, onChange, noneLabel = 'Each step\'s own def
         <span className="muted small">Provider</span>
         <select id={pid} name={`${nameBase}-provider`} value={value.provider ?? ''} onChange={(e) => { setTyping(false); onChange(e.target.value ? { provider: e.target.value } : {}); }}>
           <option value="">{noneLabel}</option>
-          {providers.map((p) => <option key={p.id} value={p.id} title={p.reason}>{p.label}{p.ready ? '' : ' (not signed in)'}</option>)}
+          {providers.filter((p) => p.enabled || p.id === value.provider).map((p) => <option key={p.id} value={p.id} disabled={!p.enabled} title={p.reason}>{p.label}{p.enabled ? (p.ready ? '' : ' (not signed in)') : ' (unavailable)'}</option>)}
         </select>
       </label>
       {value.provider ? (
@@ -64,7 +67,7 @@ export function ModelChoice({ value, onChange, noneLabel = 'Each step\'s own def
             id={mid}
             name={`${nameBase}-model`}
             value={other ? OTHER : (value.name ?? '')}
-            disabled={list.isLoading}
+            disabled={list.isLoading || !provider?.enabled || !policyKnown}
             onChange={(e) => {
               if (e.target.value === OTHER) setTyping(true);
               else {
@@ -74,8 +77,9 @@ export function ModelChoice({ value, onChange, noneLabel = 'Each step\'s own def
             }}
           >
             <option value="">{provider?.server_default_model ? `Server default (${provider.server_default_model})` : `Server default (${provider?.server_default_env ?? 'not set'})`}</option>
-            {models.map((m) => <option key={m.id} value={m.id} title={m.id}>{m.label}{m.id === list.data?.recommended?.id ? ' · Recommended' : ''}</option>)}
-            <option value={OTHER}>Other model id…</option>
+            {value.name && (unavailable || (!listed && !policyKnown)) ? <option value={value.name} disabled>{value.name} (unavailable)</option> : null}
+            {provider?.enabled ? models.map((m) => <option key={m.id} value={m.id} title={m.id} disabled={list.data?.allowed_model_ids != null && !list.data.allowed_model_ids.includes(m.id)}>{m.label}{m.id === list.data?.recommended?.id ? ' · Recommended' : ''}</option>) : null}
+            {provider?.enabled && policyKnown && list.data?.allowed_model_ids == null ? <option value={OTHER}>Other model id…</option> : null}
           </select>
         </label>
       ) : null}
@@ -88,6 +92,9 @@ export function ModelChoice({ value, onChange, noneLabel = 'Each step\'s own def
       <div className="model-note muted small">
         Applies to steps that use the default model. A step that names its own provider and model keeps them.
         {provider && !provider.ready ? <span className="block warn-text">{provider.label} is not signed in here: {provider.reason}.</span> : null}
+        {provider && !provider.enabled ? <span className="block warn-text">{provider.label} is unavailable for new selections; the saved provider ID is retained.</span> : null}
+        {unavailable ? <span className="block warn-text">Saved model {value.name} is unavailable under workspace model settings; it has not been changed.</span> : null}
+        {list.isError && provider?.enabled ? <span className="block warn-text">Model options could not be loaded; new model selections are unavailable.</span> : null}
         {provider && !provider.server_default_model && !value.name ? <span className="block warn-text">No default {provider.label} model is set on the server ({provider.server_default_env}); pick one.</span> : null}
         {list.data?.note ? <span className="block">{list.data.note}.</span> : null}
         {provider ? <span className="block">Runs through {provider.executors.join(' or ')}; a step on another executor is marked unsupported in the plan.</span> : null}

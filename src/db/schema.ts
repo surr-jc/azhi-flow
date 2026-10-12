@@ -8,6 +8,7 @@ export const workspaces = pgTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   timezone: text('timezone').notNull().default('UTC'),
+  settings: jsonb('settings').notNull().default({}),
   createdAt: ts('created_at').notNull().defaultNow(),
 });
 
