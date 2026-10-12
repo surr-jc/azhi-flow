@@ -180,13 +180,12 @@ describe.skipIf(!up)('mission control', () => {
   });
 
   it('tells you what an example needs before you install it, and holds the install until it is given', async () => {
-    const page = await open('/ui/examples/ai-sdlc');
+    const page = await open('/ui/examples/ai-sdlc-v2');
     const before = page.getByRole('region', { name: 'Before you install' });
     await before.waitFor();
     const text = await before.innerText();
     expect(text).toContain('the install is refused without');
     expect(text).toMatch(/required\s*Slack channel/i);
-    expect(text).toMatch(/optional\s*Jira site\s*only for Jira tickets/i);
     expect(text).toMatch(/set\s*Secret github-read-token|later\s*Secret github-read-token/);
     const install = page.getByRole('button', { name: 'Install', exact: true });
     expect(await install.isDisabled()).toBe(true);

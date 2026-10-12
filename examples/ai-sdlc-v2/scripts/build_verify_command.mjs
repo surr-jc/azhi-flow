@@ -1,6 +1,6 @@
 // Prints the test command for the static verification: verify_static.js, compressed and wrapped so that the
 // same string runs in cmd.exe and in sh (no quotes, percent signs or newlines to trip either).
-// Usage: node workflows/ai-sdlc-v2/scripts/build_verify_command.mjs
+// Usage: node examples/ai-sdlc-v2/scripts/build_verify_command.mjs
 import { readFileSync } from 'node:fs';
 import { deflateRawSync } from 'node:zlib';
 

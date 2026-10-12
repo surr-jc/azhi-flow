@@ -10,12 +10,12 @@ import { loadDefinitionText } from '../src/definition/load.js';
 import { staticCatalog } from '../src/gateway/types.js';
 
 /**
- * The AI-SDLC example (examples/ai-sdlc): definition checks, the CEL that routes it (definition of
+ * The earlier AI-SDLC example, kept as a fixture (test/fixtures/examples/ai-sdlc): definition checks, the CEL that routes it (definition of
  * ready, the lite/full weight, the reviewer verdict gate, the join over skipped fix rounds) and the
  * finalize script, none of which need Temporal or OpenCode. The agents are exercised by the
  * sdlc-implement end-to-end test, which runs the same node types.
  */
-const PKG = 'examples/ai-sdlc';
+const PKG = 'test/fixtures/examples/ai-sdlc';
 const pkg = packageFromDirectory(PKG);
 const tools = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools;
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;

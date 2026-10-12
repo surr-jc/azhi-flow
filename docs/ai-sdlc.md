@@ -1,6 +1,10 @@
 # AI-SDLC feature delivery (lite or full)
 
-`examples/ai-sdlc` takes one ticket to an opened pull request like [sdlc-implement](sdlc-implement.md),
+> **Retired from the marketplace.** This workflow is no longer offered as a template; the delivery workflow is
+> [AI-SDLC v2](../examples/ai-sdlc-v2/README.md). The package now lives at `test/fixtures/examples/ai-sdlc`, where the
+> tests use it to cover the engine features described here, so `azhi example install ai-sdlc` no longer works.
+
+`test/fixtures/examples/ai-sdlc` takes one ticket to an opened pull request like [sdlc-implement](sdlc-implement.md),
 and adds the gates of the [AI-SDLC framework](https://github.com/ai-sdlc-framework/ai-sdlc)
 (Apache-2.0): a definition-of-ready check before any work, open questions in the decision-rubric
 format, three independent reviewers with one shared verdict, fix rounds driven by the reviewers'

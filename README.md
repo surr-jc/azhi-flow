@@ -46,24 +46,16 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
-- Feature delivery (`examples/sdlc`): from a Jira ticket (through a Jira MCP server) or a GitHub
-  issue to requirements, design, two approval gates, release and retro. Set it up with
-  `azhi example install sdlc --repo OWNER/REPO --set slack_channel=... --set jira_url=...`. See
-  [docs/sdlc.md](docs/sdlc.md).
-- Feature delivery to a pull request (`examples/sdlc-implement`): the same intake, with OpenCode
-  agents in checkouts of the repository using skills adapted from Cole Medin's PIV loop; the design
-  review must answer the open questions, the build agent edits a writable checkout and the worker
-  runs the project's tests on it (failures go back to the agent), and after a person approves the
-  diff the gateway pushes an `azhi/` branch and opens a pull request.
-  `azhi example install sdlc-implement --repo OWNER/REPO --set slack_channel=...`. See
-  [docs/sdlc-implement.md](docs/sdlc-implement.md).
-- AI-SDLC feature delivery (`examples/ai-sdlc`): the same ticket-to-pull-request flow with the
-  [AI-SDLC framework](https://github.com/ai-sdlc-framework/ai-sdlc)'s gates, adapted as skills: a
-  definition-of-ready check, decision-rubric open questions, code, test and security reviewers on
-  different models with one verdict, fix rounds, and an evidence record on the pull request. The design
-  step proposes a **lite** or **full** review path from the change's risk, and the approver can override
-  it. `azhi example install ai-sdlc --repo OWNER/REPO --set slack_channel=...`. See
-  [docs/ai-sdlc.md](docs/ai-sdlc.md).
+- AI-SDLC v2 feature delivery (`examples/ai-sdlc-v2`), the delivery workflow in the marketplace: a
+  GitHub issue to a pull request. It checks the ticket is ready, runs the tests on the untouched base
+  branch first, plans the change in one pass (you approve the design), builds it in a writable checkout
+  with the project's tests, has an independent reviewer and a verifier challenge it with one fix round,
+  and after a person approves the release pushes an `azhi/` branch and opens a pull request that says how
+  much was verified. `azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...`. See
+  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). The earlier delivery workflows
+  (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
+  `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
+  [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
 - Issue splitter (`examples/issue-splitter` for GitHub, `examples/issue-splitter-jira` for Jira): sizes an
   issue, or a request typed as text, against the code and, when it is too big for one pull request, splits it
   into ordered sub-issues (sub-tasks in Jira) linked under it, after a person approves the plan and may leave

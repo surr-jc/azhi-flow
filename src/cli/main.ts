@@ -343,7 +343,7 @@ function printNeeds(e: ExampleNeeds, given: Record<string, string> = {}, haveRep
 example
   .command('needs')
   .description('Show what an example needs before it can be installed: settings (required or optional), repositories and secrets')
-  .argument('<id>', 'example id, for example ai-sdlc')
+  .argument('<id>', 'example id, for example ai-sdlc-v2')
   .action(async (id: string) => {
     const e = (await client().get<ExampleNeeds[]>('/v1/examples')).find((x) => x.id === id);
     if (!e) throw new Error(`no example named '${id}'`);

@@ -20,7 +20,7 @@ The preflight checks most of this and says what to fix, but it is quicker to hav
 ## Run it
 
 ```bash
-azhi run workflows/ai-sdlc-v2 -i source=github -i ticket=OWNER/REPO#28 -i repo=OWNER/REPO -i base_branch=dev
+azhi run examples/ai-sdlc-v2 -i source=github -i ticket=OWNER/REPO#28 -i repo=OWNER/REPO -i base_branch=dev
 ```
 
 `base_branch` is required. Name the branch the ticket was written against: the repository's default
