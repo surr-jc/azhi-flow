@@ -19,7 +19,8 @@ and never decide the verdict; refuted ones are dropped and counted. See
 
 | Node | What it does |
 |---|---|
-| `pr` | `github.get-pull-request@1`: title, body, author, base and head refs and SHAs, changed files with line counts |
+| `pr` | `github.get-pull-request@1`: title, body, author, state, base and head refs and SHAs, changed files with line counts |
+| `should_review` | Only an open pull request is reviewed. A closed or merged one skips every later step (no model calls, no comment, no Slack) unless the run input `allow_closed` is true |
 | `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
 | `verify` | OpenCode agent (`finding-verifier@1`, `gpt-5.6-terra`) in its own checkout: re-derives every finding, walks its scenario, looks for the reason it is fine, and returns `confirmed`/`refuted`/`unverifiable` with a 0 to 100 confidence and quoted evidence (`schemas/verification.json`, skill `finding-verification`) |
 | `triage` | Script (`scripts/triage.py`): kept = confirmed at or above `config.min_confidence`; unverified = unverifiable or unchecked; dropped = refuted or confirmed below the bar |
@@ -57,7 +58,8 @@ harness:
   folder are refused (`external_directory: deny`).
 - **MCP servers**: local processes from the package, started with the checkout's isolated
   environment plus `AZHI_WORKSPACE` (the checkout path). `repo-facts` is dependency-free and offers
-  `changed-files` and `file-diff` against the PR base. The run plan marks MCP servers
+  `changed-files` and `file-diff` against the PR base. A missing base or an empty diff is a tool
+  error, not "(no changes)", and the reviewers are told to report nothing without a diff. The run plan marks MCP servers
   *unobservable*: their calls do not go through the gateway or the ledger.
 - The gateway bridge (`submit_output` and any gateway tools) is unchanged.
 
@@ -70,11 +72,16 @@ and only accepts `workspace` with `executor: opencode`.
 workspace:
   repo: {ref: inputs.repo}                                   # owner/name
   ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-  base_ref: {cel: "'refs/heads/' + nodes.pr.output.base_ref"}   # fetched as refs/azhi/base
+  base_ref: {ref: nodes.pr.output.base_sha}                  # fetched as refs/azhi/base
   credential: github-read-token                              # optional workspace secret
   # host: https://github.com   (default; GitHub Enterprise: https://ghe.example.com)
   # depth: 50                  (shallow fetch; full history by default)
 ```
+
+`base_ref` is the base commit GitHub recorded for the pull request (`base_sha`), not the live base
+branch: once a pull request is merged its branch already contains the PR commits, and the diff against
+it is empty. If the base still contains the checked-out head, the step fails before the agent starts
+("already contained in base_ref"), so nothing is reviewed, posted or sent.
 
 For each step the worker:
 
