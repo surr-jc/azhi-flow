@@ -154,6 +154,24 @@
         "static",
         "none"
       ]
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "criteria_counts": {
+      "type": "object"
+    },
+    "targeted_tests": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "closes_removed": {
+      "type": "boolean"
     }
   },
   "required": [

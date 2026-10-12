@@ -17,3 +17,30 @@ the change carefully, add the tests you would add, and say in `deviations` that 
 Read and edit files with paths relative to the current folder (for example `src/api/app.ts`). Never use
 an absolute path or a `/repo` prefix; those are outside the checkout and are refused. If a read is
 refused, retry the same file with the relative path instead of giving up.
+
+## Before you submit: the definition of done
+
+You cannot run anything, so check your own work by reading it:
+
+1. **One test per acceptance criterion.** For each criterion in the requirements, name the test that fails
+   if the feature is removed. If a criterion has none, write it. Say in `tests_added` which criterion each
+   test covers.
+2. **Every way in.** A rule you add (a filter, a permission, a limit) must hold on every path that can
+   reach the behaviour: each control in the UI, each API route, each default and cached value. List the
+   entry points you found with grep and check each one. A rule enforced on one path and bypassed on another
+   is the most common reason a change is sent back.
+3. **Boundary tests** for anything with roles, workspaces or tenants: a role that must be refused, a second
+   workspace that must not see the data, an invalid or unknown value.
+4. **Tests that can pass.** Read each test's setup and confirm it creates the state its assertions rely on
+   (a credential, a row, a registered provider). Do not assert on something the fixture never establishes.
+5. **No empty changes.** Before you add a migration, search `migrations/` for the table or column: if it
+   exists already, do not add one.
+6. **Stay in the plan.** Edit only the files the plan names, plus what the typecheck forces; list the rest in
+   `deviations`.
+
+## When the message has `feedback`
+
+It holds the findings of the last review. Treat each finding as a class of bug, not a single line: fix the
+line, then grep for the same pattern in the sibling code (the other controls, routes and defaults) and fix
+those too. Add the missing test for each finding. Do not change anything the findings do not touch.
+

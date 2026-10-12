@@ -14,7 +14,12 @@ The evidence record is a plain digest of what was reviewed and tested. It is not
 """
 import hashlib
 import json
+import re
 import sys
+
+# The worker pipes UTF-8 JSON; on Windows Python would read it in the legacy code page and corrupt non-ASCII text.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 
 data = json.load(sys.stdin)
 weight = data["weight"]
@@ -69,6 +74,20 @@ approved = bool(reviewers) and reviewers_ok and counts["critical"] == 0 and coun
 files = ws.get("files", [])
 tests = ws.get("tests") or {}
 tests_passed = tests.get("status") == "passed"
+# What the reviewers say about each acceptance criterion (the first reviewer that returned them).
+criteria = []
+for _v in (last.get("verdicts") or {}).values():
+    if _v and _v.get("criteria"):
+        criteria = _v["criteria"]
+        break
+crit_counts = {k: sum(1 for c in criteria if c.get("status") == k) for k in ("met", "partial", "unmet", "unverifiable")}
+all_met = bool(criteria) and crit_counts["met"] == len(criteria)
+incomplete = crit_counts["partial"] + crit_counts["unmet"] > 0
+
+# Whether the new or changed test files were run (the static test command prints a marker line).
+_m = re.search(r"AZHI_TARGETED_TESTS (passed|failed) (\d+) file", tests.get("output") or "")
+targeted = {"result": _m.group(1), "files": int(_m.group(2))} if _m else None
+
 # How the change was verified: "full" (the whole test command passed), "static" (the full command could
 # not run here, so typecheck and build passed instead) or "none" (nothing could run and a person chose to
 # continue). Only "full" can open as a normal pull request.
@@ -76,10 +95,20 @@ verification = data.get("verification") or ("none" if data.get("untested") else 
 untested = verification == "none" and not tests_passed
 static = verification == "static"
 ship = (tests_passed or untested) and len(files) > 0
-flagged = (not approved) or untested or static
+flagged = (not approved) or untested or static or incomplete
 strategy = data.get("strategy") or {}
 
-digest = lambda s: hashlib.sha256(s.encode("utf-8")).hexdigest()
+# A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
+# ("Closes #28") becomes "Refs #28", so merging a draft never closes the ticket by itself.
+closing_ok = (not flagged) and verification == "full" and (all_met or not criteria)
+pr_body = change["pr_body"]
+closes_removed = False
+_closing = re.compile(r"(?im)^(\s*)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*((?:[\w.-]+/[\w.-]+)?#\d+)")
+if not closing_ok and _closing.search(pr_body):
+    pr_body = _closing.sub(lambda m: f"{m.group(1)}Refs {m.group(2)}", pr_body)
+    closes_removed = True
+
+digest = lambda s: hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
 file_hashes = [{"path": f["path"], "status": f["status"], "sha256": digest(f.get("content", ""))} for f in sorted(files, key=lambda f: f["path"])]
 record = {
     "ticket": data["ticket"],
@@ -91,6 +120,9 @@ record = {
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
     "coverage": strategy or None,
+    "criteria": criteria,
+    "targeted_tests": targeted,
+    "closing_keyword_replaced": closes_removed,
     "reviewers": [{k: r[k] for k in ("reviewer", "approved", "critical", "major", "minor", "suggestion")} for r in reviewers],
     "verdict": {"approved": approved, "prompt_injection_detected": injection, "needs_human_attention": flagged, "verification": {"min_confidence": minimum, "dropped": len(dropped), "unverified": len(unverified)}},
     "files": file_hashes,
@@ -102,6 +134,9 @@ lines = ["## Evidence record", "",
          f"- Weight: **{weight['final']}** (proposed {weight['proposed']}" + (f", overridden by {weight['overridden_by']}" if weight.get("overridden_by") else "") + ")",
          f"- Fix rounds used: {index}",
          f"- Tests: {tests.get('status')} (`{tests.get('command')}`, attempt {tests.get('attempts')})",
+         *([f"- New or changed test files run: {targeted['result']} ({targeted['files']} file(s))"] if targeted else []),
+         *([f"- Acceptance criteria: {crit_counts['met']} of {len(criteria)} met" + "".join(f", {crit_counts[k]} {k}" for k in ("partial", "unmet", "unverifiable") if crit_counts[k])] if criteria else []),
+         *(["- Closing keyword replaced by `Refs`: this change does not finish the ticket, so merging it will not close it"] if closes_removed else []),
          "- Reviewers: " + ("; ".join(f"{r['reviewer']} {'approved' if r['approved'] else 'requested changes'} ({r['critical']} critical, {r['major']} major)" for r in reviewers) or "none"),
          f"- Verifier: {len(dropped)} critical or major finding(s) refuted or below {minimum}/100 and dropped, {len(unverified)} could not be verified",
          f"- Diff SHA-256: `{record['diff_sha256']}`",
@@ -117,9 +152,10 @@ if static:
                + " (" + str(strategy.get("basis")) + "). Not covered: " + str(strategy.get("does_not_cover")) + ".")
     lines = ["> **VERIFIED BY STATIC CHECKS ONLY:** the full test command could not run in this environment ("
              + str(strategy.get("failure_class", "unknown")) + "), so typecheck and build passed instead. That shows the change compiles, not that it behaves."
+             + (f" The new or changed test files were also run and {targeted['result']}." if targeted else " No test was run.")
              + cov + " Run the tests before merging.", ""] + lines
 if flagged and not ((untested or static) and approved):
-    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, or findings the verifier could not settle.", ""] + lines
+    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, findings the verifier could not settle, or acceptance criteria that are not met.", ""] + lines
 
 title = change["pr_title"]
 if untested and "[untested]" not in title:
@@ -139,7 +175,7 @@ out = {
         "summary": change["summary"],
         "commit_message": change["commit_message"],
         "pr_title": title,
-        "pr_body": change["pr_body"],
+        "pr_body": pr_body,
         "deviations": change["deviations"],
         "tests_added": change["tests_added"],
         "base_sha": ws.get("base_sha", ""),
@@ -150,6 +186,10 @@ out = {
     },
     "verdict": {"approved": approved, "counts": counts, "reviewers": reviewers, "findings": findings, "dropped": dropped, "unverified": unverified, "prompt_injection_detected": injection},
     "evidence": record,
+    "criteria": criteria,
+    "criteria_counts": crit_counts,
+    "targeted_tests": targeted,
+    "closes_removed": closes_removed,
     "evidence_markdown": "\n".join(lines),
 }
 print(json.dumps(out))

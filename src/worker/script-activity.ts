@@ -125,6 +125,10 @@ export function scriptActivities(o: ScriptWorkerOptions): Pick<ExecActivities, '
             PATH: process.env.PATH ?? '',
             HOME: home,
             LANG: 'C.UTF-8',
+            // Python on Windows reads piped input in the legacy code page unless told otherwise, which turns
+            // any non-ASCII text (a dash, a quote) into broken characters.
+            PYTHONUTF8: '1',
+            PYTHONIOENCODING: 'utf-8',
             UV_CACHE_DIR: process.env.UV_CACHE_DIR ?? join(o.cacheDir, 'uv-cache'),
             UV_PYTHON_INSTALL_DIR: process.env.UV_PYTHON_INSTALL_DIR ?? join(o.cacheDir, 'python'),
             ...(process.env.UV_PYTHON_DOWNLOADS ? { UV_PYTHON_DOWNLOADS: process.env.UV_PYTHON_DOWNLOADS } : {}),
