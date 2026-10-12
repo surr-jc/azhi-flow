@@ -98,6 +98,11 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   await git(['checkout', '-q', '--detach', 'refs/azhi/head'], { ...base, ...config(always) });
   const head = await git(['rev-parse', 'HEAD'], { ...base, ...config(always) });
   const baseSha = spec.baseRef ? await git(['rev-parse', 'refs/azhi/base'], { ...base, ...config(always) }) : undefined;
+  // A head the base already contains (a merged pull request against its live branch) has nothing to
+  // diff: stop here rather than let agents review an empty change.
+  if (baseSha && (baseSha === head || (await git(['merge-base', '--is-ancestor', head, baseSha], { ...base, ...config(always) }).then(() => true, () => false)))) {
+    throw ApplicationFailure.create({ type: ErrorClass.invalidInput, nonRetryable: true, message: `workspace ref ${spec.ref} (${head.slice(0, 12)}) is already contained in base_ref ${spec.baseRef}, so there is no change to work on; was the pull request merged?` });
+  }
   if (spec.mode !== 'write') return { dir, head, ...(baseSha ? { base: baseSha } : {}) };
   // An agent that may write files must not be able to write git's own files (hooks, config, filters run
   // commands): the git directory moves out of the folder it edits.

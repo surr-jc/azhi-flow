@@ -19,6 +19,7 @@ inputs:
     repo: {type: string, title: Repository, description: "owner/name, for example acme/payments"}
     pr: {type: integer, title: Pull request number}
     post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
+    allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
   required: [repo, pr]
 config:
   # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
@@ -32,6 +33,13 @@ nodes:
     tool: github.get-pull-request@1
     arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
 
+  - id: should_review
+    type: condition
+    description: Review only open pull requests (unless allow_closed is set); a closed or merged one skips every later step, so nothing is spent, posted or sent.
+    expression: "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'"
+    routes: {review: [correctness, security, tests, quality], skip: []}
+    default: skip
+
   - id: correctness
     type: agent
     description: Look for bugs the change introduces.
@@ -40,7 +48,9 @@ nodes:
     workspace: &checkout
       repo: {ref: inputs.repo}
       ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      base_ref: {cel: "'refs/heads/' + nodes.pr.output.base_ref"}
+      # The base commit GitHub recorded for the PR, not the live base branch: once a PR is merged the
+      # branch already contains its commits and the diff against it is empty.
+      base_ref: {ref: nodes.pr.output.base_sha}
       credential: github-read-token
     input: {map: "{'pr': nodes.pr.output}"}
     output_schema: schemas/findings.json

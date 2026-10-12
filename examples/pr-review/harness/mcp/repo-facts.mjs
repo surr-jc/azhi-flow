@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // repo-facts: a dependency-free stdio MCP server for the PR review agents. It answers questions
 // about the checkout the step works in (AZHI_WORKSPACE): which files the pull request changes and
-// the diff of one file, against refs/azhi/base (the PR's base branch, fetched by the workspace).
-// Read-only: it runs `git diff` and nothing else.
+// the diff of one file, against refs/azhi/base (the PR's base commit, fetched by the workspace).
+// Read-only: it runs `git diff` and nothing else. A missing base or an empty diff is an error, never
+// "(no changes)", so an agent cannot mistake a broken checkout for a pull request with nothing in it.
 import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -16,17 +17,21 @@ function git(args) {
 function range() {
   try {
     git(['rev-parse', '--verify', '-q', 'refs/azhi/base']);
-    return ['refs/azhi/base...HEAD'];
   } catch {
-    return ['HEAD~1', 'HEAD'];
+    throw new Error('no base commit in this checkout (refs/azhi/base is missing), so the pull request diff is unavailable');
   }
+  const r = ['refs/azhi/base...HEAD'];
+  if (!git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', ...r]).trim()) {
+    throw new Error('the pull request shows no changes against its base (refs/azhi/base...HEAD is empty), so the diff is unavailable; do not review or guess the change');
+  }
+  return r;
 }
 
 const tools = {
   'changed-files': {
     description: 'Files the pull request changes, one per line as STATUS<TAB>PATH (A added, M modified, D deleted).',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    run: () => git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', ...range()]).trim() || '(no changes)',
+    run: () => git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-status', ...range()]).trim(),
   },
   'file-diff': {
     description: 'The unified diff of one changed file (path relative to the repository root).',
