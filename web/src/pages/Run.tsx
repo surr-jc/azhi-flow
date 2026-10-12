@@ -430,6 +430,7 @@ function describe(ev: RunEvent): { icon: string; tone: FeedTone; text: string; g
   const n = ev.node_id ?? 'The step';
   switch (ev.kind) {
     case 'run.queued': return { icon: 'clock', tone: 'idle', text: 'Run queued', group: 'run' };
+    case 'run.held': return { icon: 'clock', tone: 'wait', text: `Waiting for a free slot on ${ev.data?.repo ?? 'its repository'}: ${ev.data?.running?.length ?? ev.data?.limit} run(s) already working on it (limit ${ev.data?.limit})`, group: 'run' };
     case 'run.started': case 'run.start': return { icon: 'play', tone: 'run', text: 'Run started', group: 'run' };
     case 'run.planned': return { icon: 'approval', tone: 'idle', text: `Run plan recorded: ${ev.data?.ok ? 'no blockers' : `${ev.data?.blockers?.length ?? 0} blocker(s)`}`, group: 'run' };
     case 'run.waiting': return { icon: 'clock', tone: 'wait', text: 'Run is waiting', group: 'run' };

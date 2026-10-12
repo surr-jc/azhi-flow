@@ -749,6 +749,22 @@ function readSecretStdin(): string {
   return strip(strip(text, 0xfeff), 0).trim();
 }
 
+const settingsCmd = program.command('settings').description('Workspace settings');
+settingsCmd
+  .command('concurrency')
+  .description('Show or set how many runs may work on one repository at once (0: no limit)')
+  .option('--max-runs-per-repo <n>', "a number, or 'default' for the server's setting (admin)")
+  .action(async (opts: { maxRunsPerRepo?: string }) => {
+    if (opts.maxRunsPerRepo !== undefined) {
+      const v = opts.maxRunsPerRepo === 'default' ? null : Number(opts.maxRunsPerRepo);
+      if (v !== null && !(Number.isInteger(v) && v >= 0)) throw new Error(`--max-runs-per-repo must be a whole number 0 or more, or 'default'`);
+      await client().put('/v1/settings/concurrency', { max_runs_per_repo: v });
+    }
+    const s = await client().get<{ max_runs_per_repo: number; source: string; server_default: number; repos: Array<{ repo: string; running: string[]; held: string[] }> }>('/v1/settings/concurrency');
+    console.log(`runs per repository: ${s.max_runs_per_repo === 0 ? 'no limit' : s.max_runs_per_repo} (${s.source === 'workspace' ? 'workspace setting' : `server default, AZHI_MAX_RUNS_PER_REPO=${s.server_default}`})`);
+    if (s.repos.length) table([['REPOSITORY', 'RUNNING', 'WAITING'], ...s.repos.map((r) => [r.repo, r.running.join(' ') || '-', r.held.join(' ') || '-'])]);
+  });
+
 const secret = program.command('secret').description('Manage workspace secrets');
 secret
   .command('set')

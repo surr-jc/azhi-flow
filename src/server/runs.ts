@@ -10,6 +10,7 @@ import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog, loadToolRevision } from './catalog.js';
+import { runRepos } from './repo-slots.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { contentHash } from '../lib/hash.js';
 import type { AppContext } from './context.js';
@@ -112,9 +113,9 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {
     const r = await c.query(
-      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by)
-       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (occurrence_id) DO NOTHING`,
-      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy],
+      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by, repos)
+       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11::text[]) ON CONFLICT (occurrence_id) DO NOTHING`,
+      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy, runRepos(o.version.plan, o.inputs)],
     );
     if (r.rowCount === 0) {
       const existing = (await c.query(`SELECT id FROM runs WHERE occurrence_id=$1`, [o.occurrenceId])).rows[0].id as string;

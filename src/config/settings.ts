@@ -63,6 +63,8 @@ export function settings() {
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
     /** Agent steps' transcripts (prompts, model text, tool calls and results, redacted) for the run page; on unless set to 0. */
     agentTranscripts: process.env.AZHI_AGENT_TRANSCRIPTS !== '0',
+    /** Top-level runs that may work on one repository at once, unless the workspace sets its own; 0 means no limit. */
+    maxRunsPerRepo: nonNegativeInt(process.env.AZHI_MAX_RUNS_PER_REPO) ?? 2,
     /** Deployments sharing one Temporal namespace need distinct gateway queues. */
     gatewayQueue: process.env.AZHI_GATEWAY_QUEUE || 'azhi-gateway',
   };
@@ -72,6 +74,11 @@ export type Settings = ReturnType<typeof settings>;
 function positive(v: string | undefined): number | undefined {
   const n = v === undefined || v.trim() === '' ? NaN : Number(v);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function nonNegativeInt(v: string | undefined): number | undefined {
+  const n = positive(v);
+  return n !== undefined && Number.isInteger(n) ? n : undefined;
 }
 
 export const TASK_QUEUES = {

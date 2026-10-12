@@ -83,6 +83,8 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           `UPDATE runs SET ${sets.join(', ')} WHERE id=$1 AND workspace_id=$2 AND state NOT IN ('succeeded','delivery_failed','failed','cancelled','expired')`,
           vals,
         );
+        // A finished run frees its repository slot: wake the dispatcher for any run held for it.
+        if (patch.state && TERMINAL_STATES.includes(patch.state)) await ctx.pool.query(`NOTIFY azhi_outbox`);
       }
       if (patch.event) {
         await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,$3,$4,$5)`, [

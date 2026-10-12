@@ -6,6 +6,7 @@ import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '
 import { getDataset } from '../knowledge/datasets.js';
 import { datasetAllows } from '../plan/run-plan.js';
 import { budgetStatus } from '../server/budgets.js';
+import { concurrencySettings } from '../server/repo-slots.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { requireRole } from './auth.js';
@@ -225,6 +226,39 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     } catch (err) {
       throw new AzhiError(ErrorClass.invalidInput, `Slack did not accept the message: ${(err as Error).message}`);
     }
+  });
+
+  // Per-repository run limit: reading needs any user; changing it needs admin and is audited.
+  app.get('/v1/settings/concurrency', async (req) => {
+    const p = user(req);
+    const s = await concurrencySettings(ctx, p.workspaceId);
+    const repos = (
+      await ctx.pool.query(
+        `SELECT repo, array_agg(r.id ORDER BY r.admitted_at) FILTER (WHERE r.admitted_at IS NOT NULL) AS running,
+           array_agg(r.id ORDER BY r.created_at) FILTER (WHERE r.admitted_at IS NULL) AS held
+         FROM runs r, unnest(r.repos) AS repo
+         WHERE r.workspace_id=$1 AND r.parent_run_id IS NULL AND r.state IN ('queued','running','waiting','cancelling')
+         GROUP BY repo ORDER BY repo`,
+        [p.workspaceId],
+      )
+    ).rows.map((r) => ({ repo: r.repo as string, running: (r.running ?? []) as string[], held: (r.held ?? []) as string[] }));
+    return { ...s, server_default: ctx.settings.maxRunsPerRepo, repos };
+  });
+
+  app.put('/v1/settings/concurrency', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ max_runs_per_repo: z.number().int().min(0).max(64).nullable() }).parse(req.body);
+    await ctx.pool.query(
+      b.max_runs_per_repo === null
+        ? `UPDATE workspaces SET settings = settings - 'concurrency' WHERE id=$1`
+        : `UPDATE workspaces SET settings = jsonb_set(settings, '{concurrency}', $2::jsonb) WHERE id=$1`,
+      b.max_runs_per_repo === null ? [p.workspaceId] : [p.workspaceId, JSON.stringify({ max_runs_per_repo: b.max_runs_per_repo })],
+    );
+    await audit(ctx, p.workspaceId, p.userId, 'settings.concurrency_changed', b);
+    // A higher limit may free slots for held runs at once.
+    await ctx.pool.query(`NOTIFY azhi_outbox`);
+    return concurrencySettings(ctx, p.workspaceId);
   });
 
   // Spend limits: reading needs any user; changing them needs admin and is audited.

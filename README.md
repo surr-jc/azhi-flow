@@ -36,6 +36,10 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
 - The taint rule: an ungated write after an agent that read untrusted data fails to compile.
 - The built-in model agent (Anthropic or OpenAI, chosen per profile, plus a scripted provider for fixtures): gateway-only tools,
   validated output with two repairs, budgets, usage with null for unknown, a context manifest per turn.
+- Parallel runs, including several runs of the same workflow, each harness step in its own fresh
+  checkout. At most 2 runs work on one repository at once (the rest wait in order); change it per
+  workspace with `azhi settings concurrency` or the Workers page, or the server default with
+  `AZHI_MAX_RUNS_PER_REPO` (0: no limit).
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
 - The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to
@@ -268,6 +272,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
+| `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |
 | `azhi schedule <workflow> --cron ... --timezone ...` | Set or change a schedule |
 | `azhi doctor` | Database, Temporal, workers online, live interpreter builds (max 3) |
