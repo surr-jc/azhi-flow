@@ -4,6 +4,8 @@ import type { TaintReport } from '../compiler/taint.js';
 import type { AgentNode, RetrieveNode, ScriptNode, SubworkflowNode } from '../definition/types.js';
 import { applyModelDefaults, parseProfile, usesDefaultModel, type AgentProfile, type ModelDefaults } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
+import { chatgptAuth } from '../agents/chatgpt-auth.js';
+import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { EXECUTORS, isHarness } from '../executors/capabilities.js';
 import { resolveDatasetRef } from '../knowledge/datasets.js';
@@ -367,7 +369,13 @@ async function modelRequirements(
     );
     const credential = profile.model.credential ?? d.credential;
     if (!secrets.has(credential)) missing.push({ kind: 'secret', name: credential, node });
-    reqs.push({ name: `credential ${credential}`, mark: secrets.has(credential) ? 'native' : 'unsupported', detail: secrets.has(credential) ? 'set' : `MISSING (azhi secret set ${credential})` });
+    // A ChatGPT step needs a ChatGPT sign-in; a secret that is merely set (e.g. a Copilot token) would fail the step at run time.
+    const wrongKind = provider === 'openai-chatgpt' && secrets.has(credential) && !chatgptAuth((await resolveSecret(ctx, workspaceId, credential))?.value ?? '');
+    reqs.push({
+      name: `credential ${credential}`,
+      mark: secrets.has(credential) && !wrongKind ? 'native' : 'unsupported',
+      detail: wrongKind ? `is not a ChatGPT sign-in (the ${provider} model needs one): run \`azhi chatgpt login --secret ${credential}\`, or change the profile's credential to a ChatGPT sign-in secret` : secrets.has(credential) ? 'set' : `MISSING (azhi secret set ${credential})`,
+    });
   }
   if (def.budget?.max_cost_usd !== undefined) {
     reqs.push(

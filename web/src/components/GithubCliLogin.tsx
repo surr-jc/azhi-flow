@@ -9,9 +9,9 @@ interface Result { host: string; login: string | null; scopes: string[]; secrets
  * Points the GitHub secrets at the GitHub CLI's login on the server's machine, so no token is stored or
  * pasted. The token is asked of `gh` each time a step needs it.
  */
-export function GithubCliLogin() {
+export function GithubCliLogin({ secrets: defaults }: { secrets?: string[] } = {}) {
   const qc = useQueryClient();
-  const [names, setNames] = useState('github-read-token, github-write-token');
+  const [names, setNames] = useState((defaults ?? ['github-read-token', 'github-write-token']).join(', '));
   const [host, setHost] = useState('');
   const use = useMutation({
     mutationFn: () => {

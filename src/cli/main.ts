@@ -285,6 +285,25 @@ program
   });
 
 program
+  .command('delete')
+  .description('Delete a workflow revision (slug@3) or a whole workflow (slug); needs an admin token')
+  .argument('<ref>', 'slug@version to delete one revision, or slug to delete the workflow and every revision')
+  .option('--purge-runs', 'also delete the runs on it (without this, a workflow with runs is refused)')
+  .action(async (ref: string, opts: { purgeRuns?: boolean }) => {
+    const api = client();
+    const qs = opts.purgeRuns ? '?purge_runs=true' : '';
+    const [slug, ver] = ref.split('@');
+    if (ver) {
+      const v = await api.get<{ id: string }>(`/v1/versions/${encodeURIComponent(ref)}`);
+      const r = await api.del<{ runs_deleted: number; workflow_deleted: boolean }>(`/v1/versions/${v.id}${qs}`);
+      console.log(`${green('deleted')} ${ref}${r.runs_deleted ? ` and ${r.runs_deleted} run(s)` : ''}${r.workflow_deleted ? ' (that was the last revision, so the workflow is gone)' : ''}`);
+    } else {
+      const r = await api.del<{ versions_deleted: number; runs_deleted: number }>(`/v1/workflows/${encodeURIComponent(slug!)}${qs}`);
+      console.log(`${green('deleted')} ${slug}: ${r.versions_deleted} revision(s)${r.runs_deleted ? `, ${r.runs_deleted} run(s)` : ''}`);
+    }
+  });
+
+program
   .command('apply')
   .description('Apply an admin config: register tools and schedules, check secrets')
   .argument('<file>', 'azhi.config.yaml')
@@ -762,6 +781,22 @@ function readSecretStdin(): string {
   const strip = (s: string, code: number) => s.split(String.fromCharCode(code)).join('');
   return strip(strip(text, 0xfeff), 0).trim();
 }
+
+const signin = program.command('signin').description('Every sign-in the workspace has, and how each was supplied');
+signin
+  .command('list')
+  .description('Show each integration (GitHub, Copilot, ChatGPT, Claude, Slack, Jira), its secrets and whether the value suits it')
+  .action(async () => {
+    type S = { name: string; status: string; kind?: string; host?: string; gh_ok?: boolean; problem?: string };
+    const r = await client().get<{ integrations: Array<{ title: string; cli: string; secrets: S[] }>; other: S[] }>('/v1/signins');
+    const how = (x: S) => (x.kind === 'gh-cli' ? `GitHub CLI login (${x.host})${x.gh_ok ? '' : ' - gh gives no token'}` : x.kind === 'chatgpt' ? 'ChatGPT sign-in' : x.kind === 'copilot' ? 'Copilot sign-in' : 'pasted token');
+    for (const i of r.integrations) {
+      console.log(bold(i.title));
+      for (const x of i.secrets) console.log(`  ${x.name}: ${x.status === 'missing' ? yellow(`missing (${i.cli})`) : x.problem ? red(x.problem) : x.kind === 'gh-cli' && !x.gh_ok ? yellow(how(x)) : green(how(x))}`);
+    }
+    if (r.other.length) console.log(`${bold('Other secrets')}: ${r.other.map((x) => x.name).join(', ')}`);
+    process.exitCode = r.integrations.some((i) => i.secrets.some((x) => x.problem)) ? 1 : 0;
+  });
 
 const settingsCmd = program.command('settings').description('Workspace settings');
 settingsCmd

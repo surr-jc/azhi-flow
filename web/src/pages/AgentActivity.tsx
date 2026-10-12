@@ -147,6 +147,7 @@ export function AgentActivity({ runId, nodes, detail: d, open, node, onNode, onE
   const steps = list.filter((e) => e.kind === 'step');
   const sum = (f: (t: NonNullable<TranscriptEntry['tokens']>) => number | undefined) => steps.reduce((n, s) => n + (f(s.tokens ?? {}) ?? 0), 0);
   const cost = ((d.usage?.records ?? []) as any[]).filter((x) => x.node_id === shown && typeof x.cost === 'number').reduce((t, x) => t + x.cost, 0);
+  const models = [...new Set(list.map((e) => e.model).filter((m): m is string => !!m))];
   const start = list.find((e) => e.at)?.at;
   const last = list.at(-1)?.at;
   const elapsed = start && last ? Math.max(0, Math.round((last - start) / 1000)) : undefined;
@@ -174,6 +175,7 @@ export function AgentActivity({ runId, nodes, detail: d, open, node, onNode, onE
 
       <dl className="aa-stats" aria-label="Summary of this step" aria-live="polite">
         <div><dt>Tool calls</dt><dd>{tools.length}{failed ? <span className="bad-text"> · {failed} failed</span> : null}</dd></div>
+        <div><dt>{models.length > 1 ? 'Models' : 'Model'}</dt><dd>{models.length ? models.join(', ') : '—'}</dd></div>
         <div><dt>Model calls</dt><dd>{steps.length}</dd></div>
         <div><dt>Tokens in / out</dt><dd>{steps.length ? `${num(sum((t) => t.input))} / ${num(sum((t) => t.output))}` : '—'}</dd></div>
         <div><dt>Cached</dt><dd>{steps.length ? num(sum((t) => t.cache_read)) : '—'}</dd></div>

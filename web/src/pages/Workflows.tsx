@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 import { api, atLeast, type PreflightReport, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
 import { PublishAction } from './Authoring';
@@ -18,6 +18,7 @@ import { keySettings } from '../stepHelp';
 
 export function Workflows() {
   const me = useMe();
+  const isAdmin = atLeast(me.data?.role, 'admin');
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
   return (
     <>
@@ -29,7 +30,7 @@ export function Workflows() {
       <ErrorNote error={q.error} />
       <Panel>
         {!q.data ? <Loading /> : (
-          <Table head={['Workflow', 'Published', 'Latest', 'Schedule', 'Last run']} empty="No workflows yet. Run azhi init, then azhi publish.">
+          <Table head={['Workflow', 'Published', 'Latest', 'Schedule', 'Last run', ...(isAdmin ? [''] : [])]} empty="No workflows yet. Run azhi init, then azhi publish.">
             {q.data.map((w) => (
               <tr key={w.slug}>
                 <td><Link to={`/ui/workflows/${encodeURIComponent(w.slug)}`}>{w.latest?.name ?? w.slug}</Link>{w.latest?.name && w.latest.name !== w.slug ? <div className="muted small mono">{w.slug}</div> : null}</td>
@@ -37,6 +38,7 @@ export function Workflows() {
                 <td>v{w.latest?.version}{w.latest?.draft ? <> <Badge tone="idle">draft</Badge></> : null}</td>
                 <td>{w.schedule ? <>{w.schedule.cron} <span className="muted">{w.schedule.timezone}</span>{w.schedule.enabled ? null : <> <Badge tone="idle">off</Badge></>}</> : <span className="muted">manual</span>}</td>
                 <td>{w.last_run ? <><StateBadge state={w.last_run.state} /> <span className="muted">{ago(w.last_run.created_at)}</span></> : <span className="muted">never</span>}</td>
+                {isAdmin ? <td><DeleteAction slug={w.slug} compact /></td> : null}
               </tr>
             ))}
           </Table>
@@ -46,10 +48,48 @@ export function Workflows() {
   );
 }
 
+/**
+ * Deletes one revision, or the whole workflow when `version` is omitted. The server refuses when
+ * runs exist; the person is then asked once more, naming how many runs go with it.
+ */
+function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; version?: { id: string; version: number }; onDeleted?: () => void; compact?: boolean }) {
+  const qc = useQueryClient();
+  const what = version ? `v${version.version} of ${slug}` : `${slug} and every revision of it`;
+  const remove = useMutation({
+    mutationFn: async () => {
+      const path = version ? `/v1/versions/${version.id}` : `/v1/workflows/${encodeURIComponent(slug)}`;
+      try {
+        return await api<{ workflow_deleted: boolean }>(path, { method: 'DELETE' });
+      } catch (e) {
+        const m = /has (\d+) run\(s\)/.exec((e as Error).message);
+        if (!m) throw e;
+        if (!confirm(`${slug} has ${m[1]} run(s) on ${version ? 'this revision' : 'it'}. Delete them too? Their history, logs and approvals are erased for good.`)) return null;
+        return api<{ workflow_deleted: boolean }>(`${path}?purge_runs=true`, { method: 'DELETE' });
+      }
+    },
+    onSuccess: (r) => {
+      if (!r) return;
+      void qc.invalidateQueries();
+      onDeleted?.();
+    },
+  });
+  const label = version ? `Delete v${version.version}` : `Delete ${slug}`;
+  return (
+    <>
+      {compact ? (
+        <button type="button" className="small danger" disabled={remove.isPending} onClick={() => confirm(`Delete ${what}? This cannot be undone.`) && remove.mutate()}>Delete</button>
+      ) : (
+        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} title={label} onClick={() => confirm(`Delete ${what}? This cannot be undone.`) && remove.mutate()}><Icon name="trash" /></button>
+      )}
+      {remove.error ? <span className="warn-text small" role="alert">{(remove.error as Error).message}</span> : null}
+    </>
+  );
+}
+
 export function WorkflowPage({ slug }: { slug: string }) {
   const me = useMe();
   const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<VersionRow[]>(`/v1/workflows/${encodeURIComponent(slug)}/versions`) });
-  const { search } = useRoute();
+  const { search, navigate } = useRoute();
   const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
   const [selected, setSelected] = useState<string | null>(null);
   const [section, setSection] = useState<SectionId | null>(null);
@@ -88,6 +128,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
   const data: SettingsData = { slug, version: current, def, nodes: nodes ?? [], plan: plan.data, tools: toolList, role: me.data?.role, schedule: schedules.data?.find((s) => s.workflow === slug), schedulesLoaded: Boolean(schedules.data), hasPublished: versions.data.some((v) => !v.draft), assets: portableAssets.data };
   const blockers = plan.data?.blockers.length ?? 0;
   const canAuthor = atLeast(me.data?.role, 'author');
+  const isAdmin = atLeast(me.data?.role, 'admin');
   const lastRunRow = runs.data?.[0];
   const update = examples.data?.find((x) => x.workflow === slug && x.update?.available);
   const showStep = Boolean(step && nodes);
@@ -133,6 +174,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
                 </select>
                 {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" title="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
                 {canAuthor ? <PublishAction version={current} slug={slug} /> : null}
+                {isAdmin ? <DeleteAction slug={slug} version={current} onDeleted={() => { setPicked(undefined); setSelected(null); if (versions.data.length <= 1) navigate('/ui/workflows'); }} /> : null}
                 <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} title="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
               </div>
             </WorkflowCanvas>

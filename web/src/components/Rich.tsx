@@ -60,7 +60,7 @@ export const fieldLabel = (k: string) => {
 const isScalar = (v: unknown) => v === null || v === undefined || ['string', 'number', 'boolean'].includes(typeof v);
 const scalar = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
 const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-const STATUS_TONE: Record<string, string> = { pass: 'ok', passed: 'ok', ok: 'ok', fail: 'bad', failed: 'bad', error: 'bad', warn: 'warn', warning: 'warn' };
+const STATUS_TONE: Record<string, string> = { pass: 'ok', passed: 'ok', ok: 'ok', fail: 'bad', failed: 'bad', error: 'bad', warn: 'warn', warning: 'warn', blocker: 'bad', critical: 'bad', major: 'bad', high: 'bad', medium: 'warn', minor: 'warn', low: 'idle', info: 'idle', nit: 'idle' };
 const looksLikeId = (s: string) => /^\S+$/.test(s) && s.length < 80 && !/[*_`#[]/.test(s);
 
 /**
@@ -76,7 +76,7 @@ export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boo
     if (looksLikeDiff(value)) return <DiffView text={value} />;
     const pill = STATUS_TONE[value.trim().toLowerCase()];
     if (pill) return <span className={`v-pill ${pill}`}>{value.trim()}</span>;
-    if (plain) return value.includes('\n') || value.length > 120 ? <pre className="json">{value}</pre> : <span className="mono">{value}</span>;
+    if (plain) return value.includes('\n') || value.length > 120 ? <pre className="json">{value}</pre> : <span className={/\s/.test(value) ? undefined : 'mono'}>{value}</span>;
     if (looksLikeId(value)) return <span className={/[/.:]/.test(value) ? 'mono' : undefined}>{value}</span>;
     return <Markdown text={value} inline={!value.includes('\n') && value.length < 200} />;
   }

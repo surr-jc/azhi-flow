@@ -15,6 +15,7 @@ import { RunPage } from './pages/Run';
 import { Runs } from './pages/Runs';
 import { Schedules } from './pages/Schedules';
 import { Secrets } from './pages/Secrets';
+import { Signins } from './pages/Signins';
 import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
@@ -93,7 +94,7 @@ const SECTIONS: Section[] = [
   { label: 'Today', icon: 'home', to: '/ui', count: 'approvals', items: [] },
   { label: 'Runs', icon: 'runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
   { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Library' }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }, { to: '/ui/connections', label: 'Connections' }] },
-  { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
+  { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/signins', label: 'Sign-ins', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
   { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
 
@@ -183,6 +184,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/schedules') return <Schedules />;
   if (path === '/ui/workers') return <Workers />;
   if (path === '/ui/usage') return <Usage />;
+  if (path === '/ui/signins') return <Signins />;
   if (path === '/ui/secrets') return <Secrets />;
   if (path === '/ui/users') return <Users />;
   if (path === '/ui/datasets') return <Datasets />;

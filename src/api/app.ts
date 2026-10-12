@@ -22,7 +22,7 @@ import { readTranscript, redactor, writeTranscript } from '../agents/transcript.
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
 import { checkEgress } from '../gateway/egress.js';
-import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
+import { deleteVersion, deleteWorkflow, publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import type { Role } from '../db/schema.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
 
@@ -37,6 +37,7 @@ import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
 import { freshChatgptAuth, keepRenewedChatgptAuth, registerChatgptRoutes } from './chatgpt.js';
 import { registerCopilotRoutes } from './copilot.js';
+import { registerSigninRoutes } from './signins.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
@@ -99,6 +100,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerExampleRoutes(app, ctx);
   registerCopilotRoutes(app, ctx);
   registerChatgptRoutes(app, ctx);
+  registerSigninRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   registerMcpRoutes(app, ctx);
@@ -152,6 +154,23 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     await requireValidSignature(ctx, p.workspaceId, signature, current.package_hash, p.userId);
     const v = await publishVersion(ctx, p.workspaceId, id, p.userId, signature);
     return { id: v.id, workflow: v.slug, version: v.version, draft: v.draft };
+  });
+
+  // Deleting a revision (or the whole workflow) is an admin action; runs on it block it unless purge_runs is set.
+  app.delete('/v1/versions/:id', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const { id } = req.params as { id: string };
+    const { purge_runs } = z.object({ purge_runs: z.enum(['true', 'false']).default('false') }).parse(req.query);
+    return deleteVersion(ctx, p.workspaceId, id, p.userId, purge_runs === 'true');
+  });
+
+  app.delete('/v1/workflows/:slug', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const { slug } = req.params as { slug: string };
+    const { purge_runs } = z.object({ purge_runs: z.enum(['true', 'false']).default('false') }).parse(req.query);
+    return deleteWorkflow(ctx, p.workspaceId, slug, p.userId, purge_runs === 'true');
   });
 
   app.get('/v1/versions/:ref', async (req) => {
