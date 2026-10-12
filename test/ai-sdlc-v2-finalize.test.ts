@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 /** The AI-SDLC v2 workflow's finalize step, run the way the worker runs a script: JSON in on stdin, JSON out. */
-const SCRIPT = 'workflows/ai-sdlc-v2/scripts/finalize.py';
+const SCRIPT = 'examples/ai-sdlc-v2/scripts/finalize.py';
 const python = ['python3', 'python'].find((p) => spawnSync(p, ['-c', 'import sys;print(sys.version_info[0])'], { encoding: 'utf8' }).stdout?.trim() === '3');
 
 interface Options {

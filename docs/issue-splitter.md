@@ -2,8 +2,8 @@
 
 `examples/issue-splitter` and `examples/issue-splitter-jira` size a ticket against the code and, when it is
 too big for one pull request, split it into ordered, linked sub-issues. They exist to fix the scope of a
-ticket **before** the delivery workflow ([ai-sdlc](ai-sdlc.md)) builds it: that workflow stops a ticket that
-fails its one-pull-request gate, and these turn it into tickets that pass.
+ticket **before** the delivery workflow ([AI-SDLC v2](../examples/ai-sdlc-v2/README.md)) builds it: that workflow
+sends back a ticket that fails its definition-of-ready check, and these turn it into tickets that pass.
 
 The two are twins: the same analysis, rules, approval and layout. Only the reading and writing differ
 (the GitHub API, or the Jira MCP server `mcp-atlassian`).
@@ -49,7 +49,7 @@ source ─ issue ── read the issue ──┐
 7. **Tell Slack** what was created, or why nothing was.
 
 Then each created issue is an ordinary ticket: start the delivery workflow on it (inputs `source=github`, `ticket=owner/name#101`, `repo=owner/name`; for Jira, `source=jira` and the key). The `ready` label marks the slices that can be started now: those with no dependencies. A slice that waits for others is created without it, so a person (or a later queue) starts it only after what it depends on is merged.
-The delivery workflow enforces the order: it refuses to start a slice while a slice it depends on is still open (see [the dependency guard](ai-sdlc.md#order-of-sub-issues-the-dependency-guard)). Starting those runs automatically is not built. Each slice's pull request says `Closes owner/name#N`, so GitHub closes the sub-issue when a person merges it (and moves the parent's progress); nothing in Azhi closes an issue.
+AI-SDLC v2 does not yet enforce the order: start a slice only after the slices it depends on are merged. (The retired `ai-sdlc` workflow had [a dependency guard](ai-sdlc.md#order-of-sub-issues-the-dependency-guard) for this.) Starting those runs automatically is not built. Each slice's pull request says `Closes owner/name#N`, so GitHub closes the sub-issue when a person merges it (and moves the parent's progress); nothing in Azhi closes an issue.
 
 ## Answering the approval
 

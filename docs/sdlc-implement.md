@@ -1,6 +1,10 @@
 # Feature delivery to a pull request (OpenCode)
 
-`examples/sdlc-implement` takes one ticket from intake to an opened pull request. It is the
+> **Retired from the marketplace.** This workflow is no longer offered as a template; the delivery workflow is
+> [AI-SDLC v2](../examples/ai-sdlc-v2/README.md). The package now lives at `test/fixtures/examples/sdlc-implement`, where the
+> tests use it to cover the engine features described here, so `azhi example install sdlc-implement` no longer works.
+
+`test/fixtures/examples/sdlc-implement` takes one ticket from intake to an opened pull request. It is the
 `examples/sdlc` flow with agents that work in the real code: they read a checkout of the repository,
 the build agent edits it, the worker runs the project's tests on the change, and after a person
 approves the exact diff the gateway pushes an `azhi/` branch and opens a pull request.

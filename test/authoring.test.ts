@@ -26,7 +26,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
   beforeAll(async () => {
     if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execSync('npm run build:web', { stdio: 'ignore' });
     h = await startHarness({ worker: false });
-    for (const t of parse(readFileSync('examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
+    for (const t of parse(readFileSync('test/fixtures/examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     for (const t of parse(readFileSync('examples/ci-digest/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
     browser = await chromium.launch({ executablePath: CHROMIUM });
@@ -48,7 +48,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
   it('uploads a package folder as a draft signed in the browser and shows its files', async () => {
     const page = await open('/ui/workflows');
     await page.getByRole('link', { name: 'Upload a workflow' }).click();
-    await page.getByLabel('Package folder').setInputFiles('examples/sdlc');
+    await page.getByLabel('Package folder').setInputFiles('test/fixtures/examples/sdlc');
     await page.getByRole('cell', { name: 'profiles/architect@1.yaml' }).waitFor();
     // The local tool config never goes into a package.
     expect(await page.getByRole('cell', { name: 'azhi.config.yaml' }).count()).toBe(0);
@@ -64,7 +64,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
     await page.getByRole('button', { name: /Version and files/ }).click();
     expect(await page.getByLabel('Contents of workflow.yaml').innerText()).toContain('id: sdlc');
     await page.getByRole('button', { name: 'templates/retro.md' }).click();
-    expect((await page.getByLabel('Contents of templates/retro.md').innerText()).trim()).toBe(readFileSync('examples/sdlc/templates/retro.md', 'utf8').trim());
+    expect((await page.getByLabel('Contents of templates/retro.md').innerText()).trim()).toBe(readFileSync('test/fixtures/examples/sdlc/templates/retro.md', 'utf8').trim());
     await page.close();
   });
 

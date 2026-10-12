@@ -25,8 +25,8 @@ describe.skipIf(!up)('workflow editor', () => {
   beforeAll(async () => {
     if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execSync('npm run build:web', { stdio: 'ignore' });
     h = await startHarness({ worker: false });
-    for (const t of parse(readFileSync('examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
-    const r = await uploadDir(h.api, 'examples/sdlc');
+    for (const t of parse(readFileSync('test/fixtures/examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
+    const r = await uploadDir(h.api, 'test/fixtures/examples/sdlc');
     expect(r.ok).toBe(true);
     base = r.version;
     await h.api.post(`/v1/versions/${base.id}/publish`, {});
@@ -64,7 +64,7 @@ describe.skipIf(!up)('workflow editor', () => {
     expect(v.definition.nodes.at(-1)).toMatchObject({ id: 'sign_off', depends_on: ['retro'] });
     expect(v.manifest.files.map((f: any) => f.path)).toEqual(source.files.map((f: any) => f.path));
     const kept = (await h.api.get<any>(`/v1/versions/${saved.version.id}/source`)).files.find((f: any) => f.path === 'templates/retro.md');
-    expect(kept.text).toBe(readFileSync('examples/sdlc/templates/retro.md', 'utf8'));
+    expect(kept.text).toBe(readFileSync('test/fixtures/examples/sdlc/templates/retro.md', 'utf8'));
     // A draft is not published: publishing still needs the author's signature.
     await expect(h.api.post(`/v1/versions/${saved.version.id}/publish`, {})).rejects.toThrow(/signature/i);
 

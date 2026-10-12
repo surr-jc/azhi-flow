@@ -16,7 +16,7 @@ import { startFakeGithub } from '../src/testing/fake-github.js';
  * one plain ticket, including what it strips from untrusted ticket text.
  */
 const FAKE_JIRA = resolve('test/fixtures/sdlc/fake-jira-mcp.mjs');
-const config = parse(readFileSync('examples/sdlc/azhi.config.yaml', 'utf8'));
+const config = parse(readFileSync('test/fixtures/examples/sdlc/azhi.config.yaml', 'utf8'));
 const tool = (id: string): ToolSpec => structuredClone(config.tools.find((t: ToolSpec) => t.id === id));
 // Zero-width space, right-to-left override, a bell and an escape sequence hidden in ticket text.
 const HIDDEN = '​‮\u0007\u001b[31m';

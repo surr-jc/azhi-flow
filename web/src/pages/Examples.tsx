@@ -74,8 +74,7 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 const META: Record<string, { category: string; steps: number; works_with: string[]; featured?: boolean }> = {
   'quality-report': { category: 'Reports', steps: 7, works_with: ['Slack'], featured: true },
   'pr-review': { category: 'Code review', steps: 12, works_with: ['GitHub', 'Slack', 'OpenCode'] },
-  sdlc: { category: 'Delivery', steps: 15, works_with: ['Jira or GitHub', 'Slack', 'OpenCode'] },
-  'ai-sdlc': { category: 'Delivery', steps: 39, works_with: ['Jira or GitHub', 'Slack', 'OpenCode'] },
+  'ai-sdlc-v2': { category: 'Delivery', steps: 46, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter-jira': { category: 'Delivery', steps: 34, works_with: ['Jira', 'GitHub', 'Slack', 'OpenCode'] },
   'issue-investigation': { category: 'Investigation', steps: 6, works_with: ['GitHub', 'OpenCode'] },

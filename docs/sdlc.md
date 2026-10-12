@@ -1,6 +1,10 @@
 # Feature delivery (SDLC) from a Jira ticket or a GitHub issue
 
-`examples/sdlc` takes one ticket from intake to release and retro. A run starts from a **Jira
+> **Retired from the marketplace.** This workflow is no longer offered as a template; the delivery workflow is
+> [AI-SDLC v2](../examples/ai-sdlc-v2/README.md). The package now lives at `test/fixtures/examples/sdlc`, where the
+> tests use it to cover the engine features described here, so `azhi example install sdlc` no longer works.
+
+`test/fixtures/examples/sdlc` takes one ticket from intake to release and retro. A run starts from a **Jira
 ticket**, read through a Jira MCP server, or a **GitHub issue**, read with the GitHub API. The
 intake step turns either into one plain ticket, and the rest of the workflow reads only that.
 

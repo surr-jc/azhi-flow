@@ -9,7 +9,7 @@ import { startFakeGithub } from '../src/testing/fake-github.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
- * The SDLC example (examples/sdlc) end to end with scripted agents, and the React Flow canvas
+ * The SDLC example (test/fixtures/examples/sdlc) end to end with scripted agents, and the React Flow canvas
  * following it: intake from a Jira ticket (through a fake Jira MCP server) or a GitHub issue (from
  * a fake GitHub), set up with the example install; two approval gates, the quality gate's routes,
  * skipped branches.
@@ -31,7 +31,7 @@ const OUTPUTS = {
 
 function packageDir(reviewApproves: boolean) {
   const dir = mkdtempSync(join(tmpdir(), 'azhi-sdlc-'));
-  cpSync('examples/sdlc', dir, { recursive: true });
+  cpSync('test/fixtures/examples/sdlc', dir, { recursive: true });
   for (const [name, out] of Object.entries(OUTPUTS)) {
     const output = typeof out === 'function' ? out(reviewApproves) : out;
     writeFileSync(join(dir, 'profiles', `${name}@1.yaml`), JSON.stringify({ model: { provider: 'scripted' }, instructions: 'scripted', pricing: { currency: 'USD', input_per_mtok: 1, output_per_mtok: 5, revision: 'test' }, script: [{ output }] }));
@@ -69,7 +69,7 @@ describe.skipIf(!up)('SDLC example', () => {
     );
     // The server's examples, with the Jira tool pointed at the fake Jira MCP server.
     const examples = join(dir, 'examples');
-    cpSync('examples/sdlc', join(examples, 'sdlc'), { recursive: true });
+    cpSync('test/fixtures/examples/sdlc', join(examples, 'sdlc'), { recursive: true });
     const cfgPath = join(examples, 'sdlc', 'azhi.config.yaml');
     const cfg = parse(readFileSync(cfgPath, 'utf8'));
     const jira = cfg.tools.find((t: any) => t.id === 'jira.get-issue').transport;
@@ -116,7 +116,7 @@ describe.skipIf(!up)('SDLC example', () => {
   });
 
   it('compiles with no plan blockers and its taint gates in place', async () => {
-    const up = await uploadDir(h.api, 'examples/sdlc');
+    const up = await uploadDir(h.api, 'test/fixtures/examples/sdlc');
     expect(up.ok).toBe(true);
     const plan = await h.api.get<any>(`/v1/versions/${up.version.id}/plan`);
     expect(plan.nodes.map((n: any) => n.id)).toEqual(['source', 'jira_issue', 'github_issue', 'intake', 'requirements', 'design', 'design_review', 'build', 'code_review', 'tests', 'quality_gate', 'release_approval', 'release', 'send_back', 'retro']);
