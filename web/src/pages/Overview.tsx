@@ -4,7 +4,9 @@ import { Link } from '../router';
 import type { ReactNode } from 'react';
 import { ago, Badge, ErrorNote, Loading, money, num, PageHead, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
 import { plainText } from '../components/Rich';
+import { Donut, Funnel, LineChart, Sparkline } from '../components/Charts';
 import { approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
+import { Icon } from '../icons';
 
 export function Overview() {
   const o = useQuery({ queryKey: ['overview'], queryFn: () => api<OverviewData>('/v1/overview'), refetchInterval: 5_000 });
@@ -12,6 +14,7 @@ export function Overview() {
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<Approval[]>('/v1/approvals'), refetchInterval: 5_000 });
   const open = useQuery({ queryKey: ['runs', 'open'], queryFn: () => api<RunRow[]>('/v1/runs?state=running,queued,waiting,cancelling&limit=10'), refetchInterval: 5_000 });
   const done = useQuery({ queryKey: ['runs', 'finished'], queryFn: () => api<RunRow[]>(`/v1/runs?state=${TERMINAL.join(',')}&limit=5`), refetchInterval: 10_000 });
+  const usage = useQuery({ queryKey: ['usage', 28], queryFn: () => api<UsageSummary>('/v1/usage/summary?days=28'), refetchInterval: 30_000 });
   if (o.error) return <ErrorNote error={o.error} />;
   if (!o.data) return <Loading />;
   const d = o.data;
@@ -42,17 +45,19 @@ export function Overview() {
             {!approvals.data ? <Loading /> : waiting.length ? waiting.map((a) => <DecisionRow key={`${a.run_id}/${a.node_id}`} a={a} />) : <p className="today-empty">No run is waiting for a person. New approvals appear here first.</p>}
           </section>
 
-          <section className="today-sec" aria-labelledby="t-running">
-            <header><h2 id="t-running">Running now</h2><Link to="/ui/runs?state=running,queued,waiting" className="small">All open runs</Link></header>
-            {!open.data ? <Loading /> : running.length ? running.map((r) => <RunRowLink key={r.id} r={r} />) : <p className="today-empty">No runs in progress.</p>}
-          </section>
-
           {alerts.data?.length ? (
             <section className="today-sec" aria-labelledby="t-alerts">
               <header><h2 id="t-alerts">Needs attention</h2><Link to="/ui/alerts" className="small">Alerts and Slack</Link></header>
               <div className="card"><AlertList alerts={alerts.data} /></div>
             </section>
           ) : null}
+
+          <Trends o={d} usage={usage.data} />
+
+          <section className="today-sec" aria-labelledby="t-running">
+            <header><h2 id="t-running">Running now</h2><Link to="/ui/runs?state=running,queued,waiting" className="small">All open runs</Link></header>
+            {!open.data ? <Loading /> : running.length ? running.map((r) => <RunRowLink key={r.id} r={r} />) : <p className="today-empty">No runs in progress.</p>}
+          </section>
 
           <section className="today-sec" aria-labelledby="t-done">
             <header><h2 id="t-done">Recently finished</h2><Link to="/ui/runs" className="small">All runs</Link></header>
@@ -69,6 +74,7 @@ export function Overview() {
             </div>
             <span className="small muted">{spendHint(d.spend.week)}</span>
           </Link>
+          <Busiest o={d} usage={usage.data} />
           <div className="card">
             <h3>Coming up <Link to="/ui/schedules" className="small">Schedules</Link></h3>
             {d.schedules.length ? (
@@ -89,6 +95,136 @@ export function Overview() {
         </aside>
       </div>
     </>
+  );
+}
+
+interface UsageSummary { by_day: Array<{ day: string; turns: number; unpriced: number; cost: number }>; by_workflow: Array<{ workflow: string; cost: number; unpriced: number }> }
+
+// Chart colours: the --s* series tokens, validated for colour-blind separation in light and dark.
+const SERIES = { started: 'var(--s1)', failed: 'var(--s2)', succeeded: 'var(--s3)' };
+const SLOTS = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)'];
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+const dayKey = (t: string) => new Date(t).toISOString().slice(0, 10);
+
+/** The last `n` UTC days, oldest first, keyed like the server's YYYY-MM-DD day buckets. */
+function lastDays(n: number) {
+  return Array.from({ length: n }, (_, i) => {
+    const d = new Date(Date.now() - (n - 1 - i) * 86400_000);
+    return { key: d.toISOString().slice(0, 10), label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }) };
+  });
+}
+
+/** Last 14 days against the 14 before: trend cards, runs per day, where runs went and how they ended. */
+function Trends({ o, usage }: { o: OverviewData; usage?: UsageSummary }) {
+  const runDay = new Map(o.runs_by_day.map((r) => [dayKey(r.day), r]));
+  const spendDay = new Map((usage?.by_day ?? []).map((r) => [dayKey(r.day), r]));
+  const rows = lastDays(28).map((x) => ({ ...x, run: runDay.get(x.key), spend: spendDay.get(x.key) }));
+  const prev = rows.slice(0, 14), cur = rows.slice(14);
+  const total = (rs: typeof rows, f: (r: (typeof rows)[number]) => number) => sum(rs.map(f));
+  const started = total(cur, (r) => r.run?.started ?? 0), startedBefore = total(prev, (r) => r.run?.started ?? 0);
+  const ended = total(cur, (r) => r.run?.ended ?? 0), endedBefore = total(prev, (r) => r.run?.ended ?? 0);
+  const succeeded = total(cur, (r) => r.run?.succeeded ?? 0), succeededBefore = total(prev, (r) => r.run?.succeeded ?? 0);
+  const failed = total(cur, (r) => r.run?.failed ?? 0);
+  const rate = ended ? succeeded / ended : null, rateBefore = endedBefore ? succeededBefore / endedBefore : null;
+  const spend = total(cur, (r) => r.spend?.cost ?? 0), spendBefore = total(prev, (r) => r.spend?.cost ?? 0);
+  // A day with no finished runs carries the previous day's rate rather than dropping to zero.
+  let lastRate = 0;
+  const rateLine = cur.map((r) => (lastRate = r.run?.ended ? r.run.succeeded / r.run.ended : lastRate));
+  const top = o.runs_by_workflow.slice(0, 4);
+  const rest = sum(o.runs_by_workflow.slice(4).map((w) => w.runs));
+  const parts = [...top.map((w, i) => ({ label: w.workflow, value: w.runs, color: SLOTS[i]! })), ...(rest ? [{ label: 'Other workflows', value: rest, color: 'var(--idle)' }] : [])];
+  return (
+    <section className="today-sec" aria-labelledby="t-trends">
+      <header><h2 id="t-trends">Last 14 days</h2><Link to="/ui/usage" className="small">Usage and cost</Link></header>
+      <div className="trend-cards">
+        <TrendCard label="Runs started" value={num(started)} delta={pct(started, startedBefore)} good spark={cur.map((r) => r.run?.started ?? 0)} color={SERIES.started} to="/ui/runs" />
+        <TrendCard label="Success rate" value={rate === null ? '—' : `${Math.round(rate * 100)}%`} delta={rate === null || rateBefore === null ? null : { value: Math.round((rate - rateBefore) * 100), unit: ' pts' }} good spark={rateLine} color={SERIES.succeeded} to="/ui/runs?state=succeeded" />
+        <TrendCard label="Model spend" value={usage ? money(spend, 'USD', total(cur, (r) => r.spend?.unpriced ?? 0) === 0) : '—'} delta={usage ? pct(spend, spendBefore) : null} spark={cur.map((r) => r.spend?.cost ?? 0)} color={SERIES.failed} to="/ui/usage" />
+      </div>
+      {started ? (
+        <>
+          <div className="card trend-chart">
+            <h3>Run activity <span className="small">per day</span></h3>
+            <div className="activity">
+              <ul className="activity-legend">
+                <LegendStat color={SERIES.started} label="Started" value={started} />
+                <LegendStat color={SERIES.succeeded} label="Succeeded" value={succeeded} />
+                <LegendStat color={SERIES.failed} label="Failed" value={failed} />
+              </ul>
+              <LineChart
+                label="Runs started, succeeded and failed per day, last 14 days"
+                series={[{ key: 'started', label: 'Started', color: SERIES.started }, { key: 'succeeded', label: 'Succeeded', color: SERIES.succeeded }, { key: 'failed', label: 'Failed', color: SERIES.failed }]}
+                points={cur.map((r) => ({ label: r.label, values: { started: r.run?.started ?? 0, succeeded: r.run?.succeeded ?? 0, failed: r.run?.failed ?? 0 } }))}
+              />
+            </div>
+          </div>
+          <div className="trend-pair">
+            <div className="card">
+              <h3>Runs by workflow <Link to="/ui/workflows" className="small">Workflows</Link></h3>
+              <Donut parts={parts} unit="runs" />
+            </div>
+            <div className="card">
+              <h3>How runs ended <Link to="/ui/runs" className="small">All runs</Link></h3>
+              <Funnel stages={[
+                { label: 'Started', value: started },
+                { label: 'Finished', value: ended, hint: 'Reached an end state: succeeded, failed, cancelled or expired' },
+                { label: 'Succeeded', value: succeeded },
+              ]} />
+            </div>
+          </div>
+        </>
+      ) : <p className="today-empty">No runs in the last 14 days. Start one from <Link to="/ui/workflows">Workflows</Link>.</p>}
+    </section>
+  );
+}
+
+type Delta = { value: number; unit: string } | null;
+const pct = (now: number, before: number): Delta => (before ? { value: Math.round(((now - before) / before) * 100), unit: '%' } : null);
+
+/** A 14-day number with its trend. `good` marks numbers where up is better, so the change is coloured; spend stays neutral. */
+function TrendCard({ label, value, delta, good, spark, color, to }: { label: string; value: string; delta: Delta; good?: boolean; spark: number[]; color: string; to: string }) {
+  const tone = !delta || !delta.value || !good ? '' : delta.value > 0 ? 'up' : 'down';
+  return (
+    <Link to={to} className="trend-card">
+      <span className="tile-label">{label}</span>
+      <span className="trend-value">
+        {value}
+        {delta ? (
+          <span className={`delta ${tone}`}>
+            {delta.value ? <Icon name={delta.value > 0 ? 'up' : 'down'} size={12} /> : null}
+            {Math.abs(delta.value)}{delta.unit}
+          </span>
+        ) : null}
+      </span>
+      <span className="tile-sub">{delta ? 'vs the 14 days before' : 'last 14 days'}</span>
+      <Sparkline values={spark} color={color} />
+    </Link>
+  );
+}
+
+function LegendStat({ color, label, value }: { color: string; label: string; value: number }) {
+  return (
+    <li>
+      <span className="muted small"><span className="key" style={{ background: color }} />{label}</span>
+      <b>{num(value)}</b>
+    </li>
+  );
+}
+
+function Busiest({ o, usage }: { o: OverviewData; usage?: UsageSummary }) {
+  const w = o.runs_by_workflow[0];
+  if (!w) return null;
+  const cost = usage?.by_workflow.find((x) => x.workflow === w.workflow);
+  return (
+    <div className="card">
+      <h3>Busiest workflow <span className="small">14 days</span></h3>
+      <Link to={`/ui/workflows/${encodeURIComponent(w.workflow)}`} className="big">{w.workflow}</Link>
+      <div className="kv-list">
+        <div><span>Runs</span><span>{num(w.runs)}</span></div>
+        <div><span>Succeeded</span><span>{num(w.succeeded)} ({Math.round((w.succeeded / w.runs) * 100)}%)</span></div>
+        <div><span>Model spend</span><span>{cost ? money(cost.cost, 'USD', cost.unpriced === 0) : '—'}</span></div>
+      </div>
+    </div>
   );
 }
 

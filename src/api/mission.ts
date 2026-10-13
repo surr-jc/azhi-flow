@@ -17,6 +17,7 @@ import { requireRole } from './auth.js';
  * role checks, the run plan and the audit log apply unchanged. Nothing here returns a secret.
  */
 const OPEN_STATES = ['queued', 'running', 'waiting', 'cancelling'];
+const FAILED_STATES = ['failed', 'delivery_failed', 'expired'];
 
 function user(req: FastifyRequest) {
   if (req.principal.kind !== 'user') throw new AzhiError(ErrorClass.authorization, 'run tokens cannot use this endpoint');
@@ -77,7 +78,7 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/overview', async (req) => {
     const p = user(req);
     const ws = p.workspaceId;
-    const [open, recent, workers, approvals, today, week, schedules] = await Promise.all([
+    const [open, recent, workers, approvals, today, week, schedules, byDay, byWorkflow] = await Promise.all([
       ctx.pool.query(`SELECT state, count(*)::int AS n FROM runs WHERE workspace_id=$1 AND state = ANY($2) GROUP BY state`, [ws, OPEN_STATES]),
       ctx.pool.query(`SELECT state, count(*)::int AS n FROM runs WHERE workspace_id=$1 AND ended_at >= now() - interval '24 hours' GROUP BY state`, [ws]),
       ctx.pool.query(`SELECT count(*)::int AS total, count(*) FILTER (WHERE last_heartbeat > now() - interval '30 seconds')::int AS online FROM workers WHERE workspace_id=$1`, [ws]),
@@ -85,6 +86,19 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
       spend(ctx, ws, '24 hours'),
       spend(ctx, ws, '7 days'),
       nextSchedules(ctx, ws, 5),
+      // Runs started per UTC day over 28 days, so the app can compare the last 14 with the 14 before.
+      ctx.pool.query(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS started, count(*) FILTER (WHERE ended_at IS NOT NULL)::int AS ended,
+           count(*) FILTER (WHERE state='succeeded')::int AS succeeded, count(*) FILTER (WHERE state = ANY($2))::int AS failed
+         FROM runs WHERE workspace_id=$1 AND created_at >= now() - interval '28 days' GROUP BY 1 ORDER BY 1`,
+        [ws, FAILED_STATES],
+      ),
+      ctx.pool.query(
+        `SELECT w.slug AS workflow, count(*)::int AS runs, count(*) FILTER (WHERE r.state='succeeded')::int AS succeeded
+         FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+         WHERE r.workspace_id=$1 AND r.created_at >= now() - interval '14 days' GROUP BY 1 ORDER BY runs DESC, workflow`,
+        [ws],
+      ),
     ]);
     const counts = (rows: Array<{ state: string; n: number }>) => Object.fromEntries(rows.map((r) => [r.state, r.n]));
     return {
@@ -94,6 +108,8 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
       approvals: { pending: approvals.length, mine: approvals.filter((a) => canDecide(p.role, a.role)).length },
       spend: { today, week },
       schedules: schedules.filter((s) => s.enabled),
+      runs_by_day: byDay.rows,
+      runs_by_workflow: byWorkflow.rows,
     };
   });
 
@@ -156,7 +172,7 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     const { days } = z.object({ days: z.coerce.number().int().min(1).max(90).default(14) }).parse(req.query);
     const [byDay, byWorkflow] = await Promise.all([
       ctx.pool.query(
-        `SELECT date_trunc('day', u.at) AS day, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
+        `SELECT to_char(u.at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
            COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens, SUM(u.credits)::float8 AS credits
          FROM usage_records u WHERE u.workspace_id=$1 AND u.at >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 1`,
         [p.workspaceId, days],
