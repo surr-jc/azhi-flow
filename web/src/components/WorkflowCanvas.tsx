@@ -476,7 +476,7 @@ function NodeDetails({ node, run, plan, onClose }: { node: PlanNode; run?: NodeR
         <h2><span className={`step-type t-${node.type}`}>{TYPE[node.type]?.label ?? node.type}</span>{node.id}</h2>
         {run ? <StateBadge state={run.state} /> : null}
         {run && run.attempts > 1 ? <span className="muted small">{run.attempts} attempts</span> : null}
-        <div className="actions"><button type="button" className="small" onClick={onClose}>Close</button></div>
+        <div className="actions"><button type="button" className="small" onClick={onClose}>Close step</button></div>
         {def.description ? <p className="ed-sentence">{def.description}</p> : null}
       </header>
       {summary.length ? (

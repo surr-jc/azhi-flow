@@ -90,7 +90,7 @@ function SlackSettings() {
         <label htmlFor="alert-enabled">Sending is on</label>
       </div>
       <div className="row">
-        <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+        <button type="submit" className="primary" disabled={save.isPending}>Save alert settings</button>
         <button type="button" disabled={test.isPending || !q.data.slack_channel || save.isPending} onClick={() => test.mutate()}>Send a test message</button>
       </div>
       {save.isSuccess && !test.data ? <p className="ok-note">Saved. New alerts go to Slack once each, within a minute.</p> : null}

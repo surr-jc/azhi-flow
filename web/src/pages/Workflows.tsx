@@ -5,7 +5,7 @@ import { PublishAction } from './Authoring';
 import { useMe } from '../App';
 import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, useConfirm, when } from '../ui';
 import { RunTable } from './Overview';
 import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
@@ -54,6 +54,7 @@ export function Workflows() {
  */
 function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; version?: { id: string; version: number }; onDeleted?: () => void; compact?: boolean }) {
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const what = version ? `v${version.version} of ${slug}` : `${slug} and every revision of it`;
   const remove = useMutation({
     mutationFn: async () => {
@@ -63,7 +64,7 @@ function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; ver
       } catch (e) {
         const m = /has (\d+) run\(s\)/.exec((e as Error).message);
         if (!m) throw e;
-        if (!confirm(`${slug} has ${m[1]} run(s) on ${version ? 'this revision' : 'it'}. Delete them too? Their history, logs and approvals are erased for good.`)) return null;
+        if (!(await ask({ title: `Delete ${m[1]} run(s) of ${slug}?`, text: `${slug} has ${m[1]} run(s) on ${version ? 'this revision' : 'it'}. Deleting erases their history, logs and approvals for good.`, confirm: `Delete ${what} and its runs` }))) return null;
         return api<{ workflow_deleted: boolean }>(`${path}?purge_runs=true`, { method: 'DELETE' });
       }
     },
@@ -73,14 +74,16 @@ function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; ver
       onDeleted?.();
     },
   });
+  const confirmDelete = async () => (await ask({ title: `Delete ${what}?`, text: 'This cannot be undone.', confirm: `Delete ${version ? `v${version.version}` : slug}` })) && remove.mutate();
   const label = version ? `Delete v${version.version}` : `Delete ${slug}`;
   return (
     <>
       {compact ? (
-        <button type="button" className="small danger" disabled={remove.isPending} onClick={() => confirm(`Delete ${what}? This cannot be undone.`) && remove.mutate()}>Delete</button>
+        <button type="button" className="small danger" disabled={remove.isPending} onClick={() => void confirmDelete()}>{version ? `Delete v${version.version}` : `Delete ${slug}`}</button>
       ) : (
-        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} title={label} onClick={() => confirm(`Delete ${what}? This cannot be undone.`) && remove.mutate()}><Icon name="trash" /></button>
+        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} data-tip={label} onClick={() => void confirmDelete()}><Icon name="trash" /></button>
       )}
+      {dialog}
       {remove.error ? <span className="warn-text small" role="alert">{(remove.error as Error).message}</span> : null}
     </>
   );
@@ -164,7 +167,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
               ) : null}
               {atLeast(me.data?.role, 'operator') ? (
                 <div className="ed-runbar">
-                  <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Run…" title="Start a run"><Icon name="play" size={22} /></button>
+                  <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Start a run" data-tip="Start a run"><Icon name="play" size={22} /></button>
                   <span className="txt"><b>Run…</b><span className="muted small">{lastRunRow ? <>Last run {ago(lastRunRow.created_at)} · {lastRunRow.state.replaceAll('_', ' ')}</> : 'Not run yet'}</span></span>
                 </div>
               ) : null}
@@ -172,10 +175,10 @@ export function WorkflowPage({ slug }: { slug: string }) {
                 <select aria-label="Version" value={current.id} onChange={(e) => { setPicked(e.target.value); setSelected(null); }}>
                   {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
                 </select>
-                {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" title="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
+                {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" data-tip="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
                 {canAuthor ? <PublishAction version={current} slug={slug} /> : null}
                 {isAdmin ? <DeleteAction slug={slug} version={current} onDeleted={() => { setPicked(undefined); setSelected(null); if (versions.data.length <= 1) navigate('/ui/workflows'); }} /> : null}
-                <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} title="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
+                <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} data-tip="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
               </div>
             </WorkflowCanvas>
           ) : <Loading />}

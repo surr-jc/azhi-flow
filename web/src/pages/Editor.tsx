@@ -352,8 +352,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
             ) : null}
             <div className="ed-check-float"><CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} /></div>
             <div className="ed-toolbar" role="toolbar" aria-label="Editor">
-              <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="tb-btn" title="Close the editor" aria-label="Close the editor"><Icon name="close" /></Link>
-              <button type="button" className="tb-btn" onClick={undo} disabled={!past.length} title="Undo" aria-label="Undo"><Icon name="undo" /></button>
+              <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="tb-btn" data-tip="Close the editor" aria-label="Close the editor"><Icon name="close" /></Link>
+              <button type="button" className="tb-btn" onClick={undo} disabled={!past.length} data-tip="Undo" aria-label="Undo"><Icon name="undo" /></button>
               <button type="button" className="tb-save" disabled={!canSave} onClick={() => save.mutate()} title="Saving makes a new draft version, signed with this browser's publisher key so workers can run it.">
                 <Icon name="save" size={18} />{save.isPending ? 'Saving…' : 'Save draft'}
               </button>
@@ -498,7 +498,7 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
       <header className="step-head">
         <h2><span className={`step-type t-${step.type}`}>{t?.label ?? step.type}</span>{step.id}</h2>
         {!saved ? <Badge tone="idle">new step</Badge> : changes ? <Badge tone="warn">{changes} change{changes === 1 ? '' : 's'} since the saved version</Badge> : null}
-        <div className="actions"><button type="button" className="small" onClick={onClose}>Done</button></div>
+        <div className="actions"><button type="button" className="small" onClick={onClose}>Close step</button></div>
         <p className="ed-sentence">{sentenceOf(step, harness.tools, deps)}</p>
       </header>
       {summary.length ? (
@@ -909,7 +909,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
       ) : null}
       <h5 className="hb-h">Or start a new profile</h5>
       <div className="row wrap">
-        <input aria-label="New profile name" placeholder="new-profile@1" value={newName} spellCheck={false} onChange={(e) => setNewName(e.target.value)} />
+        <label className="lbl"><span>New profile name</span><input placeholder="new-profile@1" value={newName} spellCheck={false} onChange={(e) => setNewName(e.target.value)} /></label>
         <button
           type="button"
           className="small"
@@ -1118,7 +1118,7 @@ function OpencodeSetup({ ctx, library, setup, onChange }: { ctx: HarnessContext;
             set('skills', [...skills, dir]);
           }} />
           <div className="row wrap">
-            <input aria-label="New skill name" placeholder="or write a new one: my-checklist" value={newSkill} spellCheck={false} onChange={(e) => setNewSkill(e.target.value)} />
+            <label className="lbl"><span>New skill name</span><input placeholder="my-checklist" value={newSkill} spellCheck={false} onChange={(e) => setNewSkill(e.target.value)} /></label>
             <button type="button" className="small" disabled={!SLUG.test(newSkill) || available.includes(`harness/skills/${newSkill}`)} onClick={() => {
               const dir = `harness/skills/${newSkill}`;
               ctx.setFile(`${dir}/SKILL.md`, STARTER.skill(newSkill));
@@ -1135,13 +1135,13 @@ function OpencodeSetup({ ctx, library, setup, onChange }: { ctx: HarnessContext;
             <div key={n} className="hb-mcp">
               <span className="mono">{n}</span>
               <input aria-label={`Command for MCP server ${n}`} className="mono" defaultValue={m.command.join(' ')} spellCheck={false} onChange={(e) => set('mcp', { ...mcp, [n]: { ...m, command: e.target.value.trim().split(/\s+/).filter(Boolean) } })} />
-              <button type="button" className="small" onClick={() => { const next = { ...mcp }; delete next[n]; set('mcp', next); }}>Remove</button>
+              <button type="button" className="small" onClick={() => { const next = { ...mcp }; delete next[n]; set('mcp', next); }}>Remove server</button>
             </div>
           ))}
           <LibrarySelect label="MCP server" items={published('mcp').filter((a) => a.definition?.transport === 'local' && !(a.slug in mcp))} onPick={(a) => set('mcp', { ...mcp, [a.slug]: { command: a.definition!.command as string[] } })} />
           {hostedMcp ? <span className="muted small">{hostedMcp} hosted server{hostedMcp === 1 ? '' : 's'} in the Library are not listed: this setup starts local programs. Hosted ones are reached through the gateway tools.</span> : null}
           <div className="row wrap">
-            <input aria-label="New MCP server name" placeholder="or start one from the package: repo-facts" value={newMcp} spellCheck={false} onChange={(e) => setNewMcp(e.target.value)} />
+            <label className="lbl"><span>New MCP server name</span><input placeholder="repo-facts" value={newMcp} spellCheck={false} onChange={(e) => setNewMcp(e.target.value)} /></label>
             <button type="button" className="small" disabled={!SLUG.test(newMcp) || newMcp in mcp} onClick={() => {
               set('mcp', { ...mcp, [newMcp]: { command: ['node', `harness/mcp/${newMcp}.mjs`] } });
               setNewMcp('');
@@ -1159,7 +1159,7 @@ function OpencodeSetup({ ctx, library, setup, onChange }: { ctx: HarnessContext;
           </div>
         ))}
         <div className="row wrap">
-          <input aria-label="New harness file" placeholder="harness/mcp/repo-facts.mjs" value={newFile} spellCheck={false} onChange={(e) => setNewFile(e.target.value)} />
+          <label className="lbl"><span>New harness file</span><input placeholder="harness/mcp/repo-facts.mjs" value={newFile} spellCheck={false} onChange={(e) => setNewFile(e.target.value)} /></label>
           <button type="button" className="small" disabled={!/^harness\/[\w./-]+\.(md|mjs|js|json|ya?ml|txt)$/.test(newFile) || newFile.includes('..') || ctx.files.includes(newFile)} onClick={() => { ctx.setFile(newFile, ''); setNewFile(''); }}>Add file</button>
         </div>
       </HbSection>

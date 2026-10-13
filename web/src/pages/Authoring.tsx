@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { signVersion } from '../signing';
 import { api, type JsonSchema, type ScheduleRow } from '../api';
 import { Link } from '../router';
-import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, Table, useConfirm, when } from '../ui';
 
 /**
  * Authoring in mission control (docs/mission-control-plan.md, increment 3): a version's files,
@@ -162,7 +162,7 @@ export function NewDataset({ onCreated }: { onCreated: (name: string) => void })
   });
   return (
     <form className="row" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
-      <input aria-label="Dataset name" placeholder="name, for example runbooks" value={name} onChange={(e) => setName(e.target.value)} pattern="[a-z0-9][a-z0-9._\-]*" required />
+      <label className="lbl"><span>Dataset name</span><input placeholder="runbooks" value={name} onChange={(e) => setName(e.target.value)} pattern="[a-z0-9][a-z0-9._\-]*" title="Lowercase letters, digits, dots, dashes and underscores" required /></label>
       <label className="row"><input type="checkbox" checked={trusted} onChange={(e) => setTrusted(e.target.checked)} /> Trusted</label>
       <button type="submit" disabled={create.isPending}>Create dataset</button>
       <ErrorNote error={create.error} />
@@ -173,6 +173,7 @@ export function NewDataset({ onCreated }: { onCreated: (name: string) => void })
 
 export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean }) {
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const q = useQuery({ queryKey: ['dataset', name], queryFn: () => api<DatasetDetail>(`/v1/datasets/${encodeURIComponent(name)}`) });
   const input = useRef<HTMLInputElement>(null);
   const [tag, setTag] = useState('');
@@ -207,6 +208,7 @@ export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean 
   const pending = d.documents.filter((x) => x.unpublished).length;
   return (
     <>
+      {dialog}
       <PageHead title={d.name} sub={<>{d.trusted ? <Badge tone="ok">trusted</Badge> : <Badge tone="warn">untrusted</Badge>} Readable by {d.acl.roles?.length ? `role ${d.acl.roles.join(', ')} or higher` : 'listed users only'}. <Link to="/ui/datasets">All datasets</Link></>} />
       {canEdit ? (
         <Panel title="Add documents">
@@ -234,7 +236,7 @@ export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean 
               <td>{x.size === null ? '—' : `${x.size.toLocaleString()} B`}</td>
               <td title={when(x.added_at)}>{ago(x.added_at)}</td>
               <td>{x.revoked ? <Badge tone="idle">revoked</Badge> : x.unpublished ? <Badge tone="warn">not published yet</Badge> : <Badge tone="ok">published</Badge>}</td>
-              <td>{canEdit && !x.revoked ? <button type="button" className="small danger" disabled={revoke.isPending} onClick={() => confirm(`Revoke ${x.path}? It stops being retrievable at once, from every revision.`) && revoke.mutate(x.path)}>Revoke</button> : null}</td>
+              <td>{canEdit && !x.revoked ? <button type="button" className="small danger" disabled={revoke.isPending} onClick={async () => (await ask({ title: `Revoke ${x.path}?`, text: 'It stops being retrievable at once, from every revision.', confirm: 'Revoke document' })) && revoke.mutate(x.path)}>Revoke document</button> : null}</td>
             </tr>
           ))}
         </Table>
@@ -242,8 +244,8 @@ export function DatasetPage({ name, canEdit }: { name: string; canEdit: boolean 
       <Panel title="Revisions">
         {canEdit ? (
           <form className="row" onSubmit={(e) => { e.preventDefault(); publish.mutate(); }}>
-            <input aria-label="Tag" placeholder="tag (optional), for example approved" value={tag} onChange={(e) => setTag(e.target.value)} />
-            <button type="submit" className="primary" disabled={publish.isPending || !d.documents.some((x) => !x.revoked)}>{publish.isPending ? 'Publishing…' : 'Publish a revision'}</button>
+            <label className="lbl"><span>Tag (optional)</span><input placeholder="approved" value={tag} onChange={(e) => setTag(e.target.value)} /></label>
+            <button type="submit" className="primary" disabled={publish.isPending}>{publish.isPending ? 'Publishing…' : 'Publish a revision'}</button>
             {pending ? <span className="muted small">{pending} document(s) not in a revision yet.</span> : null}
             {publish.data ? <span className="ok-note">Published r{publish.data.revision}: {publish.data.documents} documents, {publish.data.chunks} chunks.</span> : null}
           </form>

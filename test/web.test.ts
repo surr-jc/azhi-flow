@@ -123,7 +123,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('link', { name: 'Workflows', exact: true }).click();
     await page.getByRole('link', { name: 'approval-check' }).click();
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
-    await page.getByRole('button', { name: 'Run…' }).click();
+    await page.getByRole('button', { name: 'Start a run' }).click();
     await page.getByLabel('team').fill('search');
     await page.getByRole('button', { name: 'Test run' }).click();
     await page.waitForURL(/\/ui\/runs\/run_/);
@@ -146,7 +146,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.keyboard.press('Escape');
 
     // The runner: pick OpenAI-less Anthropic with a model; only the default-model step follows it.
-    await page.getByRole('button', { name: 'Run…' }).click();
+    await page.getByRole('button', { name: 'Start a run' }).click();
     await page.getByLabel('Team').fill('search');
     await page.locator('select[name="run-provider"]').selectOption('anthropic');
     await page.locator('select[name="run-model"]').selectOption('__other__');
@@ -263,12 +263,12 @@ describe.skipIf(!up)('mission control', () => {
     const today = new Date().toLocaleDateString('en-CA');
     await page.getByLabel('From').fill(today);
     await page.getByRole('cell', { name: /needle-team/ }).waitFor();
-    await page.getByLabel('To').fill('2020-01-01');
-    await page.getByText('No runs match.').waitFor();
-    await page.getByRole('button', { name: 'Clear' }).click();
+    await page.getByLabel('To', { exact: true }).fill('2020-01-01');
+    await page.getByText('No runs match these filters').waitFor();
+    await page.getByRole('button', { name: 'Clear all filters' }).first().click();
 
-    page.on('dialog', (d) => void d.accept());
     await page.getByRole('button', { name: `Cancel ${run_id}` }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel run' }).click();
     expect((await waitForRun(h.api, run_id)).run.state).toBe('cancelled');
 
     await page.getByLabel('Theme').selectOption('dark');
@@ -284,8 +284,8 @@ describe.skipIf(!up)('mission control', () => {
   it('asks for a token when none is held, and raised no page errors', async () => {
     const page = await browser.newPage();
     await page.goto(`${h.server.url}/ui/runs`);
-    await page.getByPlaceholder('API token').fill(token);
-    await page.getByRole('button', { name: 'Open' }).click();
+    await page.getByLabel('API token').fill(token);
+    await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByRole('heading', { name: 'Runs' }).waitFor();
     await page.locator('tbody tr').first().waitFor();
     await page.close();

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { useMe } from '../App';
-import { ago, Badge, ErrorNote, Loading, PageHead, Panel, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Loading, PageHead, Panel, Table, useConfirm, when } from '../ui';
 
 /**
  * Users and roles (admin). Inviting by email lets the person sign in with single sign-on and get
@@ -17,6 +17,7 @@ const ROLES = ['viewer', 'operator', 'author', 'admin'];
 export function Users() {
   const me = useMe();
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const q = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('/v1/users') });
   const config = useQuery({ queryKey: ['auth-config'], queryFn: () => api<{ sso: boolean }>('/v1/auth/config') });
   const [shown, setShown] = useState<{ who: string; token: string }>();
@@ -35,6 +36,7 @@ export function Users() {
 
   return (
     <>
+      {dialog}
       <PageHead title="Users" sub={config.data?.sso ? 'People sign in with single sign-on. Invite them by email to give them a role before they first sign in; anyone else starts as a viewer.' : 'Single sign-on is not set up, so people sign in with an API token.'} />
       <Panel title="Invite someone">
         <Invite sso={Boolean(config.data?.sso)} owner={owner} onToken={setShown} onDone={refresh} />
@@ -42,7 +44,7 @@ export function Users() {
       {shown ? (
         <div className="warn-note" role="status">
           <p>API token for {shown.who}. Copy it now: it is not shown again.</p>
-          <div className="token-once"><code aria-label="New API token">{shown.token}</code><button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(shown.token)}>Copy</button><button type="button" className="small" onClick={() => setShown(undefined)}>Done</button></div>
+          <div className="token-once"><code aria-label="New API token">{shown.token}</code><button type="button" className="small" onClick={() => void navigator.clipboard?.writeText(shown.token)}>Copy token</button><button type="button" className="small" onClick={() => setShown(undefined)}>Hide token</button></div>
         </div>
       ) : null}
       <ErrorNote error={change.error ?? issue.error ?? revoke.error} />
@@ -73,7 +75,7 @@ export function Users() {
                   {manageable(u) ? (
                     <div className="row">
                       {!u.disabled_at ? <button type="button" className="small" disabled={issue.isPending} onClick={() => issue.mutate(u)}>New token</button> : null}
-                      {u.tokens ? <button type="button" className="small" disabled={revoke.isPending} onClick={() => confirm(`Revoke every API token of ${u.display_name ?? u.id}?`) && revoke.mutate(u)}>Revoke tokens</button> : null}
+                      {u.tokens ? <button type="button" className="small" disabled={revoke.isPending} onClick={async () => (await ask({ title: `Revoke every API token of ${u.display_name ?? u.id}?`, text: 'Anything using those tokens stops working at once.', confirm: 'Revoke tokens' })) && revoke.mutate(u)}>Revoke tokens</button> : null}
                       <button type="button" className={`small ${u.disabled_at ? '' : 'danger'}`} disabled={change.isPending} onClick={() => change.mutate({ id: u.id, body: { disabled: !u.disabled_at } })}>{u.disabled_at ? 'Enable' : 'Disable'}</button>
                     </div>
                   ) : null}
@@ -108,8 +110,8 @@ function Invite({ sso, owner, onToken, onDone }: { sso: boolean; owner: boolean;
   return (
     <form onSubmit={submit}>
       <div className="row">
-        <input aria-label="Name" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input aria-label="Email" type="email" placeholder={sso ? 'Email they sign in with' : 'Email (optional)'} value={email} onChange={(e) => setEmail(e.target.value)} required={sso && !token} />
+        <label className="lbl"><span>Name</span><input placeholder="Ada Lovelace" value={name} onChange={(e) => setName(e.target.value)} required /></label>
+        <label className="lbl"><span>{sso ? 'Email they sign in with' : 'Email (optional)'}</span><input type="email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required={sso && !token} /></label>
         <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value)}>
           {ROLES.filter((r) => owner || r !== 'admin').map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
@@ -128,7 +130,7 @@ function SlackUser({ user, editable, onSave }: { user: UserRow; editable: boolea
   return (
     <form className="row" onSubmit={(e) => { e.preventDefault(); onSave(value.trim() || null); }}>
       <input aria-label={`Slack user of ${user.display_name ?? user.id}`} className="mono slack-id" placeholder="U0123ABCD" value={value} onChange={(e) => setValue(e.target.value)} pattern="[UW][A-Z0-9]{2,}" />
-      {dirty ? <button type="submit" className="small">Save</button> : null}
+      {dirty ? <button type="submit" className="small">Save Slack ID</button> : null}
     </form>
   );
 }

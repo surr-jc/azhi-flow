@@ -46,6 +46,7 @@ export function Runs() {
     else p.delete(k);
     navigate(`/ui/runs${p.size ? `?${p}` : ''}`);
   };
+  const filtered = Boolean(state || workflow || text || from || to);
   const states = STATES.includes(state) ? STATES : [...STATES, state];
   return (
     <>
@@ -60,15 +61,15 @@ export function Runs() {
           {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
         </select>
         <form className="row" role="search" onSubmit={(e) => { e.preventDefault(); set('q', typed.trim()); }}>
-          <input type="search" aria-label="Search runs" placeholder="Search inputs or run id" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          <label className="lbl"><span>Search runs</span><input type="search" placeholder="Inputs or run id" value={typed} onChange={(e) => setTyped(e.target.value)} /></label>
         </form>
         <label className="row small">From <input type="date" aria-label="From" value={from} onChange={(e) => set('from', e.target.value)} /></label>
         <label className="row small">To <input type="date" aria-label="To" value={to} onChange={(e) => set('to', e.target.value)} /></label>
-        {state || workflow || text || from || to ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear</button> : null}
+        {state || workflow || text || from || to ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : null}
       </div>
       <Panel>
         <ErrorNote error={q.error} />
-        {q.data ? <RunTable runs={q.data.pages.flat()} empty="No runs match." cancel={atLeast(me.data?.role, 'operator')} inputs={Boolean(text)} /> : <Loading />}
+        {q.data ? <RunTable runs={q.data.pages.flat()} empty={filtered ? 'No runs match these filters' : 'No runs yet'} emptyHint={filtered ? 'Widen the date range or pick another state.' : 'Start a workflow from its page and the run shows up here.'} emptyAction={filtered ? <button type="button" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : undefined} cancel={atLeast(me.data?.role, 'operator')} inputs={Boolean(text)} /> : <Loading />}
         {q.hasNextPage ? <button onClick={() => q.fetchNextPage()} disabled={q.isFetchingNextPage}>Load more</button> : null}
       </Panel>
     </>

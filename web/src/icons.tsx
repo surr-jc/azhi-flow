@@ -27,7 +27,7 @@ const PATHS: Record<string, ReactNode> = {
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 018 0v3" /></>,
   close: <path d="M6 6l12 12M18 6L6 18" />,
   trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
-  undo:<path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" />,
+  undo: <path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" />,
   save: <path d="M5 3h11l4 4v14H5zM8 3v6h8V3M8 21v-7h8v7" />,
   play: <path d="M7 4.5v15a1 1 0 001.5.9l12-7.5a1 1 0 000-1.8l-12-7.5A1 1 0 007 4.5z" fill="currentColor" />,
   edit: <path d="M4 20l1-4L16 5l3 3L8 19zM14 7l3 3" />,
@@ -38,6 +38,7 @@ const PATHS: Record<string, ReactNode> = {
   alert: <path d="M12 3l10 18H2zM12 10v5M12 18h.01" />,
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
+  up: <path d="M12 19V5M6 11l6-6 6 6" />,
   step: <circle cx="12" cy="12" r="4" />,
 };
 

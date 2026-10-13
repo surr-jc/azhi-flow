@@ -1,3 +1,4 @@
+import { Icon } from '../icons';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
 import { Badge, Table } from '../ui';
@@ -92,7 +93,7 @@ export function PlanDock({ plan, yaml, file, selected, note, request }: { plan?:
         ))}
         <span className="grow" />
         {open ? filter : null}
-        <button type="button" className="dock-toggle" aria-expanded={open} aria-label={open ? 'Collapse the panel' : 'Expand the panel'} onClick={() => setOpen(!open)}>{open ? '▾' : '▴'}</button>
+        <button type="button" className="dock-toggle" aria-expanded={open} aria-label={open ? 'Collapse the panel' : 'Expand the panel'} onClick={() => setOpen(!open)}><Icon name={open ? 'down' : 'up'} size={16} /></button>
       </div>
       {open ? (
         <div className="ed-dock-body">

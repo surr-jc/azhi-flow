@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api, atLeast, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
-import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, useConfirm, when } from '../ui';
 
 /** credits: GitHub Copilot AI Credits (null without Copilot turns). */
 interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null; credits: number | null }
@@ -98,6 +98,7 @@ interface Budget { id: string; workflow: string | null; period: 'day' | 'month';
 function SpendLimits() {
   const me = useMe();
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const q = useQuery({ queryKey: ['budgets'], queryFn: () => api<Budget[]>('/v1/budgets'), refetchInterval: 30_000 });
   const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
   const [workflow, setWorkflow] = useState('');
@@ -117,6 +118,7 @@ function SpendLimits() {
   };
   return (
     <Panel title="Spend limits">
+      {dialog}
       <p className="muted small">When a limit is used up, new runs of workflows with agent steps are refused (scheduled ones too) until the period resets at midnight UTC or the start of the month. Test runs still work. Unpriced turns are not counted, so spend is a lower bound.</p>
       <ErrorNote error={q.error ?? remove.error} />
       {!q.data ? <Loading /> : (
@@ -132,7 +134,7 @@ function SpendLimits() {
                 {money(b.spent, b.currency)} of {money(b.limit, b.currency)} {b.exceeded ? <Badge tone="bad">used up</Badge> : <span className="muted">({b.used_pct}%)</span>}
               </td>
               <td title={when(b.resets_at)} className="nowrap">{ago(b.resets_at)}</td>
-              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={() => confirm('Remove this spend limit?') && remove.mutate(b.id)}>Remove</button> : null}</td>
+              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={async () => (await ask({ title: `Remove the ${b.period === 'day' ? 'daily' : 'monthly'} spend limit for ${b.workflow ?? 'the whole workspace'}?`, text: 'Runs are no longer refused when spend passes it.', confirm: 'Remove limit' })) && remove.mutate(b.id)}>Remove limit</button> : null}</td>
             </tr>
           ))}
         </Table>
@@ -147,8 +149,8 @@ function SpendLimits() {
             <option value="day">Per day</option>
             <option value="month">Per month</option>
           </select>
-          <input aria-label="Limit in USD" type="number" min="0.01" step="0.01" placeholder="Limit in USD" value={limit} onChange={(e) => setLimit(e.target.value)} required />
-          <button type="submit" className="primary" disabled={save.isPending || !(Number(limit) > 0)}>Set limit</button>
+          <label className="lbl"><span>Limit in USD</span><input type="number" min="0.01" step="0.01" placeholder="50.00" value={limit} onChange={(e) => setLimit(e.target.value)} required /></label>
+          <button type="submit" className="primary" disabled={save.isPending}>Set limit</button>
         </form>
       ) : null}
       <ErrorNote error={save.error} />

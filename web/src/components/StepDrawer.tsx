@@ -1,3 +1,4 @@
+import { Icon } from '../icons';
 import { useState, type ReactNode } from 'react';
 import { stringify } from 'yaml';
 import type { RunPlan } from '../api';
@@ -46,7 +47,7 @@ export function StepPanel({ node, nodes, tools, plan, run, runLabel, onPick, onC
           <Badge>{t.label}</Badge>
           {effects.map((e) => <span key={e.label} className={`chip-effect ${e.tone}`}>{e.label}</span>)}
           <span className="sd-actions">
-            {onExpand ? <button type="button" className="small" onClick={onExpand} aria-label="Open larger" title="Open larger">⤢</button> : null}
+            {onExpand ? <button type="button" className="small" onClick={onExpand} aria-label="Open larger" data-tip="Open larger"><Icon name="subworkflow" size={16} /></button> : null}
             <button type="button" className="small" onClick={onClose} aria-label="Close step">✕</button>
           </span>
         </div>

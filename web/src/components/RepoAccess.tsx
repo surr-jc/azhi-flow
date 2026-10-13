@@ -120,8 +120,8 @@ export function RepoList({ refs, repos, canEdit, change, onChanged }: { refs: st
       </div>
       {canEdit ? (
         <form className="row wrap" onSubmit={(ev) => { ev.preventDefault(); void run({ add: [repo.trim()] }).then(() => setRepo('')); }}>
-          <input aria-label="Add a repository" className="mono" placeholder="owner/name" value={repo} spellCheck={false} onChange={(x) => setRepo(x.target.value)} />
-          <button type="submit" className="small" disabled={!repo.trim() || Boolean(bad) || pending}>Add repository</button>
+          <label className="lbl"><span>Repository</span><input className="mono" placeholder="acme/payments" value={repo} spellCheck={false} required pattern="[\w.\-]+/[\w.\-]+" title="Use owner/name" onChange={(x) => setRepo(x.target.value)} /></label>
+          <button type="submit" className="small" disabled={pending}>Add repository</button>
           {bad ? <span className="hint warn-text">Use owner/name.</span> : <span className="hint">The GitHub tools refuse any repository not listed here. The token is checked as soon as it is added.</span>}
         </form>
       ) : null}

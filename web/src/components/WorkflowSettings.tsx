@@ -7,6 +7,7 @@ import { Link } from '../router';
 import { Badge, Loading, Table, when } from '../ui';
 import type { ToolInfo } from '../stepHelp';
 import { ConfigRow } from './ConfigRow';
+import { Icon } from '../icons';
 import { ModelSteps } from './ModelChoice';
 import { RepoList } from './RepoAccess';
 import type { PlanNode } from './WorkflowCanvas';
@@ -92,16 +93,16 @@ export function sectionsOf(d: SettingsData): Section[] {
   const sched = d.def?.trigger?.schedule as { cron?: string; timezone?: string } | undefined;
   const live = d.schedule;
   return [
-    { id: 'inputs', icon: '⇥', title: 'Inputs', summary: inputs.length ? inputs.map(([k]) => `${k}${required.has(k) ? '*' : ''}`).join(', ') : 'Takes no inputs', chip: { label: String(inputs.length) } },
-    { id: 'config', icon: '⚙', title: 'Config', summary: config.length ? config.map(([k, v]) => `${k} = ${unfilled(v) ? 'not set' : String(v)}`).join(', ') : 'None', chip: config.length ? (config.some(([, v]) => unfilled(v)) ? { label: 'not set', tone: 'warn' } : { label: 'set', tone: 'ok' }) : undefined },
-    { id: 'models', icon: '✦', title: 'Models', summary: modelSummary(d), chip: d.def?.model_defaults?.provider ? { label: 'set', tone: 'ok' } : undefined },
-    { id: 'trigger', icon: '◷', title: 'Trigger', summary: live ? `${live.cron} (${live.timezone})${live.enabled ? '' : ', off'}` : sched?.cron ? `${sched.cron} (${sched.timezone ?? 'UTC'})` : 'Manual only' },
-    { id: 'secrets', icon: '⚿', title: 'Secrets', summary: secrets.size ? [...secrets.keys()].join(', ') : 'None used', chip: secrets.size ? { label: `${setCount} of ${secrets.size}`, tone: setCount === secrets.size ? 'ok' : 'warn' } : undefined },
-    { id: 'connections', icon: '⛓', title: 'Connections', summary: tools.length ? [...new Set(tools.map((t) => t.id.split('.')[0]))].join(' · ') : 'No tools called', chip: { label: String(tools.length) } },
-    { id: 'datasets', icon: '☰', title: 'Datasets', summary: datasets.size ? [...datasets.keys()].join(', ') : 'None used', chip: { label: String(datasets.size) } },
-    { id: 'limits', icon: '◈', title: 'Limits', summary: limited.length ? `${plural(limited.length, 'step')} with a limit` : 'Defaults only', chip: { label: String(limited.length) } },
-    { id: 'assets', icon: '❖', title: 'Library items', summary: d.assets ? (d.assets.length ? d.assets.map((a) => a.name).join(', ') : 'None attached') : '…', chip: d.assets ? { label: String(d.assets.length) } : undefined },
-    { id: 'files', icon: '✎', title: 'Version and files', summary: `v${d.version.version}${d.version.draft ? ' draft' : ''} · ${plural(d.nodes.length, 'step')}` },
+    { id: 'inputs', icon: 'down', title: 'Inputs', summary: inputs.length ? inputs.map(([k]) => `${k}${required.has(k) ? '*' : ''}`).join(', ') : 'Takes no inputs', chip: { label: String(inputs.length) } },
+    { id: 'config', icon: 'tool', title: 'Config', summary: config.length ? config.map(([k, v]) => `${k} = ${unfilled(v) ? 'not set' : String(v)}`).join(', ') : 'None', chip: config.length ? (config.some(([, v]) => unfilled(v)) ? { label: 'not set', tone: 'warn' } : { label: 'set', tone: 'ok' }) : undefined },
+    { id: 'models', icon: 'agent', title: 'Models', summary: modelSummary(d), chip: d.def?.model_defaults?.provider ? { label: 'set', tone: 'ok' } : undefined },
+    { id: 'trigger', icon: 'clock', title: 'Trigger', summary: live ? `${live.cron} (${live.timezone})${live.enabled ? '' : ', off'}` : sched?.cron ? `${sched.cron} (${sched.timezone ?? 'UTC'})` : 'Manual only' },
+    { id: 'secrets', icon: 'lock', title: 'Secrets', summary: secrets.size ? [...secrets.keys()].join(', ') : 'None used', chip: secrets.size ? { label: `${setCount} of ${secrets.size}`, tone: setCount === secrets.size ? 'ok' : 'warn' } : undefined },
+    { id: 'connections', icon: 'flow', title: 'Connections', summary: tools.length ? [...new Set(tools.map((t) => t.id.split('.')[0]))].join(' · ') : 'No tools called', chip: { label: String(tools.length) } },
+    { id: 'datasets', icon: 'runs', title: 'Datasets', summary: datasets.size ? [...datasets.keys()].join(', ') : 'None used', chip: { label: String(datasets.size) } },
+    { id: 'limits', icon: 'gate', title: 'Limits', summary: limited.length ? `${plural(limited.length, 'step')} with a limit` : 'Defaults only', chip: { label: String(limited.length) } },
+    { id: 'assets', icon: 'subworkflow', title: 'Library items', summary: d.assets ? (d.assets.length ? d.assets.map((a) => a.name).join(', ') : 'None attached') : '…', chip: d.assets ? { label: String(d.assets.length) } : undefined },
+    { id: 'files', icon: 'edit', title: 'Version and files', summary: `v${d.version.version}${d.version.draft ? ' draft' : ''} · ${plural(d.nodes.length, 'step')}` },
   ];
 }
 
@@ -111,7 +112,7 @@ export function SettingsDock({ data, collapsed, active, onOpen }: { data: Settin
   if (collapsed) {
     return (
       <nav className="dock dock-rail" aria-label="Workflow settings">
-        {sections.map((s) => <button key={s.id} type="button" className="dock-icon" title={`${s.title}: ${s.summary}`} aria-label={s.title} onClick={() => onOpen(s.id)}>{s.icon}</button>)}
+        {sections.map((s) => <button key={s.id} type="button" className="dock-icon" data-tip={`${s.title}: ${s.summary}`} aria-label={s.title} onClick={() => onOpen(s.id)}><Icon name={s.icon} size={18} /></button>)}
       </nav>
     );
   }
@@ -120,7 +121,7 @@ export function SettingsDock({ data, collapsed, active, onOpen }: { data: Settin
       <h2 className="dock-head">Workflow settings</h2>
       {sections.map((s) => (
         <button key={s.id} type="button" className={`dock-row${active === s.id ? ' on' : ''}`} onClick={() => onOpen(s.id)}>
-          <span className="dock-icon" aria-hidden="true">{s.icon}</span>
+          <span className="dock-icon" aria-hidden="true"><Icon name={s.icon} size={18} /></span>
           <span className="dock-text"><b>{s.title}</b><span className="muted small">{s.summary}</span></span>
           {s.chip ? <Badge tone={s.chip.tone}>{s.chip.label}</Badge> : null}
         </button>
@@ -253,7 +254,7 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
           {d.version.draft ? <p className={author ? 'muted' : 'warn-note'}>This version is a draft. {author ? 'Sign and publish it from the buttons at the top of the page.' : 'An author publishes it.'}</p> : null}
           <h3 className="section">Files in this version</h3>
           <WorkflowFiles versionId={d.version.id} />
-          <p className="small"><button type="button" className="linkish" onClick={onClose}>Close</button></p>
+          <p className="small"><button type="button" className="linkish" onClick={onClose}>Close settings</button></p>
         </>
       );
   }

@@ -77,8 +77,8 @@ function SignIn({ onDone }: { onDone: () => void }) {
       ) : null}
       <p className="muted">Paste an API token. <code>azhi open</code> prints a link that signs you in, and the local owner token is in your data folder's <code>local-token</code> file.</p>
       <form onSubmit={submit} className="row">
-        <input type="password" placeholder="API token" autoComplete="off" aria-label="API token" value={value} onChange={(e) => setValue(e.target.value)} />
-        <button type="submit" className="primary">Open</button>
+        <label className="lbl"><span>API token</span><input type="password" placeholder="azhi_…" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} /></label>
+        <button type="submit" className="primary">Sign in</button>
       </form>
       {error ? <div className="error" role="alert">{error}</div> : null}
     </main>
@@ -119,12 +119,12 @@ function Shell() {
   return (
     <div className="shell">
       <nav className="rail" aria-label="Main">
-        <Link to="/ui" className="rail-logo" aria-label="Azhi Flow home" title="Azhi Flow">az</Link>
+        <Link to="/ui" className="rail-logo" aria-label="Azhi Flow home" data-tip="Azhi Flow">az</Link>
         {SECTIONS.map((s) => {
           const active = s === current;
           const count = s.count ? counts[s.count] : 0;
           return (
-            <Link key={s.label} to={s.to} className={`rail-link ${active ? 'active' : ''}`} title={s.label} aria-label={count ? `${s.label}, ${count} waiting` : s.label} aria-current={active && s.to === path ? 'page' : undefined}>
+            <Link key={s.label} to={s.to} className={`rail-link ${active ? 'active' : ''}`} data-tip={s.label} aria-label={count ? `${s.label}, ${count} waiting` : s.label} aria-current={active && s.to === path ? 'page' : undefined}>
               <Icon name={s.icon} size={22} />
               <span className="rail-label">{s.label}</span>
               {count ? <span className="rail-badge" aria-hidden="true">{count}</span> : null}
@@ -132,7 +132,7 @@ function Shell() {
           );
         })}
         <span className="rail-gap" />
-        <button type="button" className="rail-link" title="Sign out" aria-label="Sign out" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>
+        <button type="button" className="rail-link" data-tip="Sign out" aria-label="Sign out" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>
           <Icon name="signout" size={22} />
           <span className="rail-label">Sign out</span>
         </button>

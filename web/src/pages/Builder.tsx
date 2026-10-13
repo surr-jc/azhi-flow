@@ -213,7 +213,7 @@ export function WorkflowBuilder() {
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKey}
               />
-              <button type="submit" className="primary" disabled={!draft.trim() || send.isPending}>Send</button>
+              <button type="submit" className="primary" disabled={!draft.trim() || send.isPending}>Send message</button>
             </form>
           </section>
           {shown ? <DraftPanel p={shown} onClose={() => setState((s) => ({ ...s, shown: undefined }))} /> : null}

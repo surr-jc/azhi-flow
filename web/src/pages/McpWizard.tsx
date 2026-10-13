@@ -81,7 +81,7 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
             <McpForm initial={{ name: saved.name, url: saved.url }} />
           </>
         ) : null}
-        <div className="row"><button type="button" className="primary" onClick={onDone}>Done</button></div>
+        <div className="row"><button type="button" className="primary" onClick={onDone}>Finish setup</button></div>
       </Panel>
     );
   }
@@ -107,7 +107,7 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
                 <div className="row" key={i}>
                   <input aria-label="Variable name" value={e.name} onChange={(ev) => setEnv(env.map((x, j) => (j === i ? { ...x, name: ev.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') } : x)))} placeholder="API_KEY" />
                   <label className="row"><input type="checkbox" checked={e.secret} onChange={(ev) => setEnv(env.map((x, j) => (j === i ? { ...x, secret: ev.target.checked } : x)))} /> secret</label>
-                  <button type="button" className="small" onClick={() => setEnv(env.filter((_, j) => j !== i))}>Remove</button>
+                  <button type="button" className="small" onClick={() => setEnv(env.filter((_, j) => j !== i))}>Remove variable</button>
                 </div>
               ))}
               <button type="button" className="small" onClick={() => setEnv([...env, { name: '', secret: true }])}>Add a variable</button>

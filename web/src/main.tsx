@@ -4,7 +4,6 @@ import { ApiError, applyTheme, getTheme, isAuthError, setToken, takeTokenFromHas
 import { App } from './App';
 import { Router } from './router';
 import '@fontsource-variable/public-sans';
-import '@fontsource-variable/source-serif-4';
 import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';

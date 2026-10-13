@@ -125,7 +125,7 @@ export function Examples() {
       {!q.data ? <Loading /> : all.length === 0 ? <p className="muted">This server has no bundled workflows.</p> : (
         <>
           <div className="filters">
-            <input type="search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(x) => setSearch(x.target.value)} />
+            <label className="lbl"><span>Search workflows</span><input type="search" placeholder="Name or topic" value={search} onChange={(x) => setSearch(x.target.value)} /></label>
             <div className="row wrap" role="group" aria-label="Category">
               {['', ...categories].map((c) => (
                 <button key={c || 'all'} type="button" className={`small${category === c ? ' primary' : ''}`} aria-pressed={category === c} onClick={() => setCategory(c)}>{c || 'All'}</button>
@@ -567,8 +567,8 @@ function SecretRow({ secret }: { secret: Secret }) {
     <form className="secret-row" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
       <div className="secret-name"><span className="mono">{secret.name}</span> {isSet ? <Badge tone="ok">set</Badge> : <Badge tone="warn">missing</Badge>}</div>
       <div className="secret-ctl">
-        <input type="password" autoComplete="off" aria-label={`Value for ${secret.name}`} placeholder={isSet ? 'Replace value' : 'Value'} value={value} onChange={(e) => setValue(e.target.value)} />
-        <button type="submit" className="small" disabled={!value || save.isPending}>Save</button>
+        <label className="lbl"><span>{isSet ? `New value for ${secret.name}` : `Value for ${secret.name}`}</span><input type="password" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} /></label>
+        <button type="submit" className="small" disabled={save.isPending}>Save secret</button>
         {odd ? <span className="hint warn-text">Contains spaces or invisible characters; check what you pasted.</span> : null}
         <ErrorNote error={save.error} />
         {isGithubToken ? (

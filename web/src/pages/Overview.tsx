@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, TERMINAL, type Alert, type Approval, type Overview as OverviewData, type RunRow } from '../api';
 import { Link } from '../router';
-import { ago, Badge, ErrorNote, Loading, money, num, PageHead, RunLink, StateBadge, Table, when } from '../ui';
+import type { ReactNode } from 'react';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
 import { plainText } from '../components/Rich';
 import { approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 
@@ -184,16 +185,18 @@ export function AlertList({ alerts }: { alerts: Alert[] }) {
   );
 }
 
-export function RunTable({ runs, empty = 'No runs yet.', cancel, inputs }: { runs: RunRow[]; empty?: string; cancel?: boolean; inputs?: boolean }) {
+export function RunTable({ runs, empty = 'No runs yet.', cancel, inputs, emptyHint, emptyAction }: { runs: RunRow[]; empty?: string; cancel?: boolean; inputs?: boolean; emptyHint?: ReactNode; emptyAction?: ReactNode }) {
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const stop = useMutation({
     mutationFn: (id: string) => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['runs'] }),
   });
   return (
     <>
+      {dialog}
     <ErrorNote error={stop.error} />
-    <Table head={['Run', 'Workflow', 'State', ...(inputs ? ['Inputs'] : []), 'Trigger', 'Started', 'Took', ...(cancel ? [''] : [])]} empty={empty}>
+    <Table head={['Run', 'Workflow', 'State', ...(inputs ? ['Inputs'] : []), 'Trigger', 'Started', 'Took', ...(cancel ? [''] : [])]} empty={empty} hint={emptyHint} action={emptyAction}>
       {runs.map((r) => (
         <tr key={r.id}>
           <td><RunLink id={r.id} /></td>
@@ -210,7 +213,7 @@ export function RunTable({ runs, empty = 'No runs yet.', cancel, inputs }: { run
           {cancel ? (
             <td>
               {!TERMINAL.includes(r.state) && r.state !== 'cancelling' ? (
-                <button type="button" className="small danger" aria-label={`Cancel ${r.id}`} disabled={stop.isPending && stop.variables === r.id} onClick={() => confirm(`Cancel ${r.id}?`) && stop.mutate(r.id)}>Cancel</button>
+                <button type="button" className="small danger" aria-label={`Cancel ${r.id}`} disabled={stop.isPending && stop.variables === r.id} onClick={async () => (await ask({ title: `Cancel run ${r.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && stop.mutate(r.id)}>Cancel run</button>
               ) : null}
             </td>
           ) : null}

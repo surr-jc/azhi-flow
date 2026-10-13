@@ -167,7 +167,7 @@ function SlackApprovals() {
         <code className="mono small">{q.data.interactivity_url}</code>
       </div>
       <div className="row">
-        <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+        <button type="submit" className="primary" disabled={save.isPending}>Save Slack settings</button>
         {save.isSuccess ? <span className="ok-note">Saved.</span> : null}
       </div>
       <ErrorNote error={save.error} />

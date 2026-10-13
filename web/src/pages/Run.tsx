@@ -4,7 +4,7 @@ import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, useConfirm, when } from '../ui';
 import { Formatted, plainText } from '../components/Rich';
 import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
 import { duration } from './Overview';
@@ -17,6 +17,7 @@ interface RunEvent { seq: number; at: string; kind: string; node_id: string | nu
 
 export function RunPage({ id }: { id: string }) {
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const me = useMe();
   const { navigate } = useRoute();
   const detail = useQuery({ queryKey: ['run', id], queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(id)}`) });
@@ -73,6 +74,7 @@ export function RunPage({ id }: { id: string }) {
   };
   return (
     <>
+      {dialog}
       <div className="crumbs">
         <Link to="/ui/runs">Runs</Link> › <Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
         <span className="live">· {live}</span>
@@ -83,7 +85,7 @@ export function RunPage({ id }: { id: string }) {
         actions={
           operator ? (
             <>
-              {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={() => confirm('Cancel this run? Steps that have not started will not run.') && cancel.mutate()}>Cancel run</button> : null}
+              {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={async () => (await ask({ title: `Cancel run ${r.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && cancel.mutate()}>Cancel run</button> : null}
               {!open && !d.run.snapshot?.test_node ? <button disabled={rerun.isPending} onClick={() => rerun.mutate()} title="Start a new run of the same version with the same inputs">Run again</button> : null}
             </>
           ) : null
