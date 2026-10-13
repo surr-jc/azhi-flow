@@ -54,7 +54,10 @@ describe.skipIf(!up)('mission control', () => {
     expect((await fetch(`${h.server.url}/v1/runs`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/v1/overview`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/ui/assets/..%2F..%2Froutes.ts`)).status).toBe(404);
-    expect((await fetch(`${h.server.url}/favicon.ico`)).status).toBe(204);
+    const favicon = await fetch(`${h.server.url}/favicon.ico`);
+    expect(favicon.status).toBe(200);
+    expect(favicon.headers.get('content-type')).toBe('image/x-icon');
+    expect((await fetch(`${h.server.url}/ui/favicon.svg`)).headers.get('content-type')).toContain('image/svg+xml');
   });
 
   it('follows a live run and approves it from the browser', async () => {

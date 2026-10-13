@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
+import { BrandLogo, BrandMark } from './brand';
 import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -67,7 +68,7 @@ function SignIn({ onDone }: { onDone: () => void }) {
   };
   return (
     <main className="signin">
-      <div className="brand big">Azhi Flow</div>
+      <div className="brand big"><BrandLogo height={44} /></div>
       <h1>Sign in</h1>
       {config.data?.sso ? (
         <>
@@ -119,7 +120,7 @@ function Shell() {
   return (
     <div className="shell">
       <nav className="rail" aria-label="Main">
-        <Link to="/ui" className="rail-logo" aria-label="Azhi Flow home" data-tip="Azhi Flow">az</Link>
+        <Link to="/ui" className="rail-logo" aria-label="Azhi Flow home" data-tip="Azhi Flow"><BrandMark size={40} /></Link>
         {SECTIONS.map((s) => {
           const active = s === current;
           const count = s.count ? counts[s.count] : 0;

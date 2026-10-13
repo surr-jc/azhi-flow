@@ -63,7 +63,13 @@ code, .mono { font-family: var(--f-mono); font-size: 12px; }
 /* shell: a dark icon rail for the sections, the section's pages as pill tabs on top */
 .shell { min-height: 100dvh; display: grid; grid-template-columns: 76px minmax(0, 1fr); }
 .rail { position: sticky; top: 0; height: 100dvh; background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 0; z-index: 6; }
-.rail-logo { width: 40px; height: 40px; margin-bottom: 16px; border-radius: 12px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 600; font-size: 18px; letter-spacing: -0.04em; }
+.rail-logo { width: 40px; height: 40px; margin-bottom: 16px; border-radius: 10px; display: grid; place-items: center; }
+.brand-tile { fill: var(--accent); }
+.brand-glyph { stroke: var(--accent-ink); }
+.brand-azhi { fill: var(--ink); }
+.brand-flow { fill: var(--accent); }
+.brand-mark, .brand-logo { display: block; }
+.signin .brand { margin-bottom: 20px; }
 .rail-logo:hover { text-decoration: none; filter: brightness(1.08); }
 .rail-link { position: relative; width: 56px; padding: 8px 0 8px; border: 0; border-radius: 16px; background: transparent; color: var(--rail-ink); display: flex; flex-direction: column; align-items: center; gap: 2px; font: inherit; cursor: pointer;  }
 .rail-link:hover { background: var(--rail-on); color: #fff; text-decoration: none; }

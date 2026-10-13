@@ -10,7 +10,9 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
  * which routes in the browser.
  */
 const DIST = fileURLToPath(new URL('./dist/', import.meta.url));
-const TYPES: Record<string, string> = { js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', svg: 'image/svg+xml', woff2: 'font/woff2', png: 'image/png' };
+const TYPES: Record<string, string> = { js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', svg: 'image/svg+xml', woff2: 'font/woff2', png: 'image/png', ico: 'image/x-icon' };
+// The icons Vite copies from web/public to the top of the bundle.
+const ICONS = ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png'];
 // Build output names only (name-hash.ext): no slashes or dots that could leave the folder.
 const ASSET_NAME = /^[A-Za-z0-9_-]+\.(js|css|svg|woff2|png)$/;
 const SECURITY_HEADERS = {
@@ -33,8 +35,15 @@ export function registerWebRoutes(app: FastifyInstance) {
   let page: Buffer | undefined;
   const index = () => (page ??= existsSync(`${DIST}index.html`) ? readFileSync(`${DIST}index.html`) : undefined);
   const html = (_req: unknown, reply: FastifyReply) => reply.headers({ ...SECURITY_HEADERS, 'cache-control': 'no-cache' }).type('text/html; charset=utf-8').send(index() ?? NOT_BUILT);
-  // Browsers ask for /favicon.ico on their own; answer it rather than with an auth error.
-  app.get('/favicon.ico', (_req, reply) => reply.status(204).send());
+  // Browsers ask for /favicon.ico on their own; answer it (empty until the app is built) rather
+  // than with an auth error.
+  const icon = (file: string) => (_req: unknown, reply: FastifyReply) => {
+    const path = `${DIST}${file}`;
+    if (!existsSync(path)) return reply.status(file === 'favicon.ico' ? 204 : 404).send();
+    return reply.headers({ ...SECURITY_HEADERS, 'cache-control': 'public, max-age=86400' }).type(TYPES[file.split('.').pop()!]!).send(readFileSync(path));
+  };
+  app.get('/favicon.ico', icon('favicon.ico'));
+  for (const file of ICONS) app.get(`/ui/${file}`, icon(file));
   app.get('/ui', html);
   app.get('/ui/*', html);
   app.get('/ui/assets/:file', async (req, reply) => {

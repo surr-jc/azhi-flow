@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-horizontal-dark.svg">
+  <img src="docs/brand/logo-horizontal.svg" alt="Azhi Flow" height="56">
+</picture>
+
 # Azhi Flow
 
 Governed, durable agent workflows that say plainly what they can and cannot guarantee.
