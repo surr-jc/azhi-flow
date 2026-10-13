@@ -124,6 +124,10 @@ export interface Overview {
   approvals: { pending: number; mine: number };
   spend: { today: Spend; week: Spend };
   schedules: ScheduleRow[];
+  /** Runs started per UTC day (YYYY-MM-DD) over the last 28 days; days without runs are absent. */
+  runs_by_day: Array<{ day: string; started: number; ended: number; succeeded: number; failed: number }>;
+  /** Runs started per workflow over the last 14 days, busiest first. */
+  runs_by_workflow: Array<{ workflow: string; runs: number; succeeded: number }>;
 }
 
 export interface ScheduleRow {
