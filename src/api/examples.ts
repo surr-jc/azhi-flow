@@ -16,6 +16,7 @@ import { packageFile } from '../server/packages.js';
 import { checkPackage, getVersion, uploadPackage } from '../server/workflows.js';
 import { mergePackages, summarise } from './example-merge.js';
 import { requireRole } from './auth.js';
+import { bundleInventory } from './bundle-inventory.js';
 
 /**
  * The example workflows that ship with the server (`examples/`), set up in one step from mission
@@ -266,7 +267,9 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
         workflow: e.workflow.id,
         nodes: e.nodes,
         inputs: e.inputs ?? null,
-        tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect, description: t.description, needs_repos: needsRepos(t) })),
+        tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect, description: t.description, needs_repos: needsRepos(t), transport: t.transport.kind, roles: t.access?.roles ?? null })),
+        /** What the bundle ships: agents, skills, commands, MCP servers and built-in tools, and who uses them. */
+        inventory: bundleInventory(join(examplesDir(), e.id), e.nodes),
         needs_repos: (e.config.tools ?? []).some(needsRepos),
         secrets: secretsOf(e).map((name) => ({ name, set: set.has(name) })),
         /** Repositories its installed tools may use now (empty before install). */

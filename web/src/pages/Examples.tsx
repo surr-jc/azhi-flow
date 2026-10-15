@@ -4,6 +4,8 @@ import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
+import type { Inventory } from '../bundle';
+import { BundleContents } from '../components/BundleContents';
 import { CopilotLogin } from '../components/CopilotLogin';
 import { Popup } from '../components/Popup';
 import { RepoList } from '../components/RepoAccess';
@@ -30,7 +32,9 @@ interface Example {
   id: string;
   name: string;
   description: string;
-  tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean }>;
+  tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean; transport?: string; roles?: string[] | null }>;
+  /** What the template ships: agents, skills, commands, MCP servers and built-in tools. */
+  inventory?: Inventory;
   needs_repos: boolean;
   /** The workflow is saved in this workspace. */
   installed: boolean;
@@ -172,6 +176,7 @@ function MarketCard({ example: e, featured, onLook }: { example: Example; featur
  * page uses, with what it changes and what must be set up first beside it.
  */
 function ExampleSteps({ example: e, height = 380 }: { example: Example; height?: number }) {
+  const { navigate } = useRoute();
   const nodes = useMemo(() => graphOf({ nodes: e.nodes ?? [] }), [e]);
   const tools: ToolInfo[] = e.tools.map((t) => ({ id: t.ref.split('@')[0]!, version: Number(t.ref.split('@')[1]), effect: t.effect, description: t.description }));
   const [selected, setSelected] = useState<string | null>(null);
@@ -192,6 +197,7 @@ function ExampleSteps({ example: e, height = 380 }: { example: Example; height?:
       ) : (
         <aside className="quicklook-side">
           <div><span className="label">It changes</span><p className="small"><Badge tone={c.tone}>{c.label}</Badge></p></div>
+          <BundleContents inventory={e.inventory} tools={e.tools} compact onOpen={() => navigate(`/ui/examples/${encodeURIComponent(e.id)}`)} />
           <div>
             <span className="label">{installed(e) ? 'Set up' : 'Before you install'}</span>
             {todo.length ? <ul className="small quicklook-todo">{todo.map((t) => <li key={t.label}><Badge tone={t.ok ? 'ok' : t.optional ? 'idle' : 'warn'}>{t.ok ? 'set' : t.optional ? 'later' : 'needed'}</Badge> {t.label}</li>)}</ul> : <p className="muted small">Nothing to set up.</p>}
@@ -336,6 +342,10 @@ function ExampleDetail({ example: e }: { example: Example }) {
           <ExampleSteps example={e} />
         </div>
       ) : null}
+      <div id="inside">
+        <h2 className="section">What’s inside</h2>
+        <BundleContents inventory={e.inventory} tools={e.tools} />
+      </div>
       <div className="market-facts">
         <div className="panel"><span className="label">It reads</span><p className="small">{reads.length ? reads.map((t) => t.description).join('; ') : 'Only what you give it as input.'}</p></div>
         <div className="panel"><span className="label">It changes</span><p className="small">{writes.length ? writes.map((t) => t.description).join('; ') : 'Nothing outside Azhi.'}</p></div>
