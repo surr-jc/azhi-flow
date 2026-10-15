@@ -1,0 +1,21 @@
+{
+  "_note": "OpenCode model ids per provider and tier, used by .claude/scripts/opencode-setup.mjs. Tiers follow each skill's `model:` line (opus = strong, sonnet = balanced, haiku = light). Ids are provider/model as `opencode models` prints them. Only the openai ids were checked against a connected ChatGPT plan; confirm the others with `opencode models anthropic` or `opencode models github-copilot` and edit here. Claude Code ignores this file and uses the opus/sonnet/haiku aliases.",
+  "openai": {
+    "label": "ChatGPT Plus/Pro (connect: /connect, OpenAI, ChatGPT Plus/Pro)",
+    "strong": "openai/gpt-6-sol",
+    "balanced": "openai/gpt-6-luna",
+    "light": "openai/gpt-5.6-luna"
+  },
+  "github-copilot": {
+    "label": "GitHub Copilot (connect: /connect, GitHub Copilot)",
+    "strong": "github-copilot/claude-opus-5.5",
+    "balanced": "github-copilot/claude-sonnet-5",
+    "light": "github-copilot/gpt-5.6-luna"
+  },
+  "anthropic": {
+    "label": "Anthropic API key (connect: /connect, Anthropic)",
+    "strong": "anthropic/claude-opus-5-5",
+    "balanced": "anthropic/claude-sonnet-5-5",
+    "light": "anthropic/claude-haiku-5-5"
+  }
+}
