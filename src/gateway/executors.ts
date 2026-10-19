@@ -8,7 +8,7 @@ import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
 import type { AppContext } from '../server/context.js';
-import { callRemoteMcpTool } from '../server/mcp.js';
+import { callRemoteMcpTool, mcpToolValue } from '../server/mcp.js';
 
 export interface ExecContext {
   /** Gateway-owned fields are present for remote MCP execution. Kept optional for direct executor tests. */
@@ -212,17 +212,11 @@ const mcpStdio: ToolExecutor = {
       await client.connect(transport);
       const r = (await client.callTool({ name: t.tool, arguments: args }, undefined, { timeout: ctx.timeoutMs })) as {
         isError?: boolean;
-        structuredContent?: unknown;
         content?: Array<{ type: string; text?: string }>;
       };
       const text = (r.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
       if (r.isError) throw new SendError(`MCP tool error: ${text.slice(0, 200)}`, true, ErrorClass.invalidInput);
-      if (r.structuredContent !== undefined) return { value: r.structuredContent };
-      try {
-        return { value: JSON.parse(text) };
-      } catch {
-        return { value: text };
-      }
+      return { value: mcpToolValue(r) };
     } finally {
       await client.close().catch(() => {});
     }

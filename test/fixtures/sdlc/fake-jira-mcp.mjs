@@ -2,7 +2,8 @@
 // A stand-in for a Jira MCP server (the `jira_get_issue` tool of mcp-atlassian), for tests.
 // Issues come from FAKE_JIRA_DATA (a JSON file of key -> issue, in mcp-atlassian's flattened
 // shape). It checks the site, user and token the gateway passes, and appends each call with the
-// environment names it saw to FAKE_JIRA_LOG.
+// environment names it saw to FAKE_JIRA_LOG. With FAKE_JIRA_WRAP=1 it answers the way FastMCP
+// (current mcp-atlassian) does: the text again as structuredContent {result: text}, marked in _meta.
 import { appendFileSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
@@ -39,7 +40,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const t = tools[params?.name];
     if (!t) return send({ id, result: { isError: true, content: [{ type: 'text', text: `unknown tool ${params?.name}` }] } });
     try {
-      return send({ id, result: { content: [{ type: 'text', text: t.run(params.arguments ?? {}) }] } });
+      const text = t.run(params.arguments ?? {});
+      if (env.FAKE_JIRA_WRAP === '1') return send({ id, result: { _meta: { fastmcp: { wrap_result: true } }, content: [{ type: 'text', text }], structuredContent: { result: text } } });
+      return send({ id, result: { content: [{ type: 'text', text }] } });
     } catch (e) {
       return send({ id, result: { isError: true, content: [{ type: 'text', text: String(e.message) }] } });
     }

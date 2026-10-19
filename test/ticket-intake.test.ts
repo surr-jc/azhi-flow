@@ -128,6 +128,13 @@ describe('jira.get-issue over MCP', () => {
     expect(call.env).not.toContain('AZHI_TOOL_CREDENTIAL');
   });
 
+  it('unwraps a FastMCP result, as current mcp-atlassian sends it', async () => {
+    const t = jira(true);
+    (t.transport as Extract<ToolSpec['transport'], { kind: 'mcp-stdio' }>).env!.FAKE_JIRA_WRAP = '1';
+    const r = await executorFor(t).call(t, { issue_key: 'PAY-142' }, { credential: 'jira-token-1', timeoutMs: 20_000 });
+    expect(r.value).toMatchObject({ key: 'PAY-142', summary: 'Retry failed card payments', priority: { name: 'High' } });
+  });
+
   it('refuses to start while the install settings are not filled in', async () => {
     await expect(executorFor(jira(false)).call(jira(false), { issue_key: 'PAY-142' }, { credential: 'jira-token-1', timeoutMs: 20_000 })).rejects.toThrow(
       'jira.get-issue is missing the settings jira_url, jira_username: install the example again with --set jira_url=... --set jira_username=...',

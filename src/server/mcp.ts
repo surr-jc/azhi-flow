@@ -182,7 +182,19 @@ export async function discoverMcpTools(ctx: AppContext, workspaceId: string, id:
 export async function callRemoteMcpTool(ctx: AppContext, workspaceId: string, connection: string, tool: string, args: Record<string, unknown>) {
   const r = await getMcpConnection(ctx, workspaceId, connection); const session = await initialized(ctx, r); const reply = await rpcSession(ctx, r, session, 'tools/call', { name: tool, arguments: args });
   if (reply.error || reply.result?.isError) throw new AzhiError(ErrorClass.invalidInput, `remote MCP tool error: ${reply.error?.message ?? textContent(reply.result).slice(0, 200)}`);
-  if (reply.result?.structuredContent !== undefined) return reply.result.structuredContent;
-  const text = textContent(reply.result); try { return JSON.parse(text); } catch { return text; }
+  return mcpToolValue(reply.result);
 }
 function textContent(result: any) { return (result?.content ?? []).filter((x: any) => x?.type === 'text').map((x: any) => x.text ?? '').join(''); }
+/**
+ * The value of a successful tools/call result. FastMCP servers (mcp-atlassian among them) wrap a text result
+ * as structuredContent `{result: "<text>"}` and mark it with `_meta.fastmcp.wrap_result`; that is unwrapped
+ * like plain text content, so a step sees the issue object rather than `{result: "{...}"}`.
+ */
+export function mcpToolValue(result: any): unknown {
+  const s = result?.structuredContent;
+  const wrapped = result?._meta?.fastmcp?.wrap_result === true && s && typeof s === 'object' && !Array.isArray(s) && Object.keys(s).length === 1 && 'result' in s;
+  if (s !== undefined && !wrapped) return s;
+  const text = wrapped ? s.result : textContent(result);
+  if (typeof text !== 'string') return text;
+  try { return JSON.parse(text); } catch { return text; }
+}
