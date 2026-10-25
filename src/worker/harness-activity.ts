@@ -1,6 +1,6 @@
 import { CancelledFailure, Context } from '@temporalio/activity';
 import { ApplicationFailure } from '@temporalio/common';
-import { createOpencodeClient } from '@opencode-ai/sdk';
+import { createOpencodeClient, type AssistantMessage, type OpencodeClient } from '@opencode-ai/sdk/v2';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -311,7 +311,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           baseUrl: url,
           directory: project,
           headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
-        } as Parameters<typeof createOpencodeClient>[0]);
+        });
         transcript = new OpencodeTranscript(client, sink);
         transcript.start();
         // Every step's OpenCode listens on the same loopback address (it prefers port 4096), so the first call can meet a
@@ -328,9 +328,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             message: `model '${input.model}' is not available on this ${where}. ${names.length ? `Available: ${names.join(', ')}.` : 'OpenCode offers no models for it; check the sign-in.'} ${copilot ? 'Set AZHI_COPILOT_MODEL on the server or the profile\'s model name.' : chatgpt ? 'Set AZHI_CHATGPT_MODEL on the server or the profile\'s model name.' : 'Check the profile\'s model name.'}${saveLog()}`,
           });
         }
-        const session = (await step('session', () => client.session.create({ body: { title: `${input.runId}/${input.nodeId}` } }))).data;
+        const session = (await step('session', () => client.session.create({ title: `${input.runId}/${input.nodeId}` }))).data;
         if (!session) throw ApplicationFailure.create({ type: ErrorClass.transient, message: 'opencode did not create a session' });
-        ctx.cancellationSignal.addEventListener('abort', () => void client.session.abort({ path: { id: session.id } }).catch(() => {}));
+        ctx.cancellationSignal.addEventListener('abort', () => void client.session.abort({ sessionID: session.id }).catch(() => {}));
         transcript.follow(session.id);
 
         const readState = (): BridgeState => JSON.parse(readFileSync(stateFile, 'utf8'));
@@ -347,25 +347,22 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           // substituting its arguments, so untrusted text must never be a command argument.
           if (setup?.command && turns === 0) {
             const added = await step('input', () =>
-              client.session.prompt({ path: { id: session.id }, body: { noReply: true, model: { providerID, modelID: input.model }, agent: setup.agent, parts: [{ type: 'text', text }] } }),
+              client.session.prompt({ sessionID: session.id, noReply: true, model: { providerID, modelID: input.model }, agent: setup.agent, parts: [{ type: 'text', text }] }),
             );
             if (added.error) throw ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode input: ${describe(added.error)}` });
           }
           // When the bridge stops the node (budget, repairs, repeated failures), end the turn now.
           const watch = setInterval(() => {
             try {
-              if (readState().stopped) void client.session.abort({ path: { id: session.id } }).catch(() => {});
+              if (readState().stopped) void client.session.abort({ sessionID: session.id }).catch(() => {});
             } catch {
               /* state file mid-write */
             }
           }, 300);
           const r = await step('prompt', () =>
             setup?.command && turns === 0
-              ? client.session.command({ path: { id: session.id }, body: { command: setup.command, arguments: '', agent: setup.agent, model: `${providerID}/${input.model}` } })
-              : client.session.prompt({
-                  path: { id: session.id },
-                  body: { model: { providerID, modelID: input.model }, ...(setup ? { agent: setup.agent } : { system }), parts: [{ type: 'text', text }] },
-                }),
+              ? client.session.command({ sessionID: session.id, command: setup.command, arguments: '', agent: setup.agent, model: `${providerID}/${input.model}` })
+              : client.session.prompt({ sessionID: session.id, model: { providerID, modelID: input.model }, ...(setup ? { agent: setup.agent } : { system }), parts: [{ type: 'text', text }] }),
           ).finally(() => clearInterval(watch));
           turns++;
           if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled; opencode session aborted');
@@ -413,13 +410,13 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
           text = `Return your result by calling ${MCP_NAME}_${SUBMIT_TOOL}.`;
         }
 
-        async function finish(client: ReturnType<typeof createOpencodeClient>, sessionId: string, r: Pick<HarnessResult, 'output' | 'error'>, state: BridgeState): Promise<HarnessResult> {
+        async function finish(client: OpencodeClient, sessionId: string, r: Pick<HarnessResult, 'output' | 'error'>, state: BridgeState): Promise<HarnessResult> {
           // OpenCode reports tokens per assistant message; sum every message of the session.
-          const messages = ((await step('messages', () => client.session.messages({ path: { id: sessionId } }), true)).data ?? []) as Array<{ info: { role: string; cost?: number; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } } }>;
+          const messages = (await step('messages', () => client.session.messages({ sessionID: sessionId }), true)).data ?? [];
           transcript?.backfill(messages as never);
           if (r.error) sink?.put({ id: 'azhi-result', kind: 'error', text: `${r.error.class}: ${r.error.message}`, at: Date.now() });
-          const assistant = messages.filter((m) => m.info.role === 'assistant' && m.info.tokens);
-          const sum = (f: (t: NonNullable<(typeof assistant)[number]['info']['tokens']>) => number) => (assistant.length ? assistant.reduce((n, m) => n + f(m.info.tokens!), 0) : null);
+          const assistant = messages.map((m) => m.info).filter((m): m is AssistantMessage => m.role === 'assistant' && Boolean(m.tokens));
+          const sum = (f: (t: AssistantMessage['tokens']) => number) => (assistant.length ? assistant.reduce((n, m) => n + f(m.tokens), 0) : null);
           return {
             ...r,
             usage: {
@@ -430,7 +427,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
               reasoning_tokens: sum((t) => t.reasoning),
             },
             model_calls: assistant.length,
-            reported_cost: assistant.length ? assistant.reduce((n, m) => n + (typeof m.info.cost === 'number' ? m.info.cost : 0), 0) : null,
+            reported_cost: assistant.length ? assistant.reduce((n, m) => n + (typeof m.cost === 'number' ? m.cost : 0), 0) : null,
             tool_calls: state.toolCalls,
             repairs: state.repairs,
             duration_ms: Date.now() - started,
@@ -489,7 +486,7 @@ function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {
 const MCP_CONNECT_MS = 120_000;
 
 /** Waits until the gateway bridge and the profile's MCP servers are connected. */
-async function waitForBridge(client: ReturnType<typeof createOpencodeClient>, names: string[], timeoutMs: number) {
+async function waitForBridge(client: OpencodeClient, names: string[], timeoutMs: number) {
   const end = Date.now() + timeoutMs;
   for (;;) {
     const s = ((await client.mcp.status()).data ?? {}) as Record<string, { status: string; error?: string }>;

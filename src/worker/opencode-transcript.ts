@@ -1,8 +1,8 @@
-import type { createOpencodeClient } from '@opencode-ai/sdk';
+import type { OpencodeClient } from '@opencode-ai/sdk/v2';
 import type { TranscriptEntry } from '../agents/transcript.js';
 import type { TranscriptSink } from './transcript.js';
 
-type Client = ReturnType<typeof createOpencodeClient>;
+type Client = OpencodeClient;
 type AnyPart = { id: string; sessionID: string; messageID: string; type: string; [k: string]: any };
 type AnyMessage = { id: string; sessionID: string; role: 'user' | 'assistant'; modelID?: string; providerID?: string; error?: { name: string; data?: { message?: string } }; time?: { created?: number } };
 
@@ -16,6 +16,8 @@ export class OpencodeTranscript {
   private sessionId: string | undefined;
   private roles = new Map<string, AnyMessage>();
   private parts = new Map<string, AnyPart>();
+  /** Text deltas for parts not seen yet, by part id. */
+  private pending = new Map<string, string>();
   private abort = new AbortController();
 
   constructor(
@@ -27,7 +29,7 @@ export class OpencodeTranscript {
   start() {
     void (async () => {
       try {
-        const sub = await this.client.event.subscribe({ signal: this.abort.signal, sseMaxRetryAttempts: 3 } as never);
+        const sub = await this.client.event.subscribe(undefined, { signal: this.abort.signal, sseMaxRetryAttempts: 3 });
         for await (const ev of sub.stream as AsyncIterable<{ type: string; properties: any }>) {
           if (this.abort.signal.aborted) break;
           this.onEvent(ev);
@@ -57,6 +59,7 @@ export class OpencodeTranscript {
   private onEvent(ev: { type: string; properties: any }) {
     if (ev.type === 'message.updated') this.onMessage(ev.properties.info);
     else if (ev.type === 'message.part.updated') this.onPart(ev.properties.part, ev.properties.delta);
+    else if (ev.type === 'message.part.delta') this.onDelta(ev.properties);
     else if (ev.type === 'session.error' && ev.properties?.sessionID === this.sessionId && ev.properties?.error) {
       const e = ev.properties.error;
       this.sink.put({ id: `session-error-${Date.now()}`, kind: 'error', text: `${e.name ?? 'error'}: ${e.data?.message ?? JSON.stringify(e.data ?? {})}`, at: Date.now() });
@@ -78,7 +81,26 @@ export class OpencodeTranscript {
     if (!part || part.sessionID !== this.sessionId) return;
     const prev = this.parts.get(part.id);
     // Text streams in; a part sent with only its newest piece keeps what came before.
-    if ((part.type === 'text' || part.type === 'reasoning') && !part.text && delta) part = { ...part, text: `${prev?.text ?? ''}${delta}` };
+    if ((part.type === 'text' || part.type === 'reasoning') && !part.text && (delta || prev?.text)) part = { ...part, text: `${prev?.text ?? ''}${delta ?? ''}` };
+    // Deltas that came before the part was known become its text until the full text arrives.
+    const early = this.pending.get(part.id);
+    if (early !== undefined) {
+      this.pending.delete(part.id);
+      if (!part.text) part = { ...part, text: early };
+    }
+    this.parts.set(part.id, part);
+    this.emit(part);
+  }
+
+  /** Newer servers stream text as separate deltas to a part's field. */
+  private onDelta(d: { sessionID?: string; partID?: string; field?: string; delta?: string } | undefined) {
+    if (!d?.partID || !d.delta || d.sessionID !== this.sessionId || d.field !== 'text') return;
+    const prev = this.parts.get(d.partID);
+    if (!prev) {
+      this.pending.set(d.partID, `${this.pending.get(d.partID) ?? ''}${d.delta}`);
+      return;
+    }
+    const part = { ...prev, text: `${prev.text ?? ''}${d.delta}` };
     this.parts.set(part.id, part);
     this.emit(part);
   }

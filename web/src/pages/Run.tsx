@@ -50,6 +50,22 @@ export function RunPage({ id }: { id: string }) {
     }, 450);
     return () => clearInterval(t);
   }, [playing, events.length]);
+  // The evidence drawer over the canvas can be hidden, and stays hidden in this browser.
+  const [drawerOpen, setDrawerOpen] = useState(() => {
+    try {
+      return localStorage.getItem(DRAWER_KEY) !== 'hidden';
+    } catch {
+      return true;
+    }
+  });
+  const pickDrawer = (open: boolean) => {
+    setDrawerOpen(open);
+    try {
+      localStorage.setItem(DRAWER_KEY, open ? 'shown' : 'hidden');
+    } catch {
+      /* not remembered */
+    }
+  };
   const replayStates = useMemo(() => (cursor === null ? undefined : statesAt(events, cursor)), [events, cursor]);
 
   const cancel = useMutation({ mutationFn: () => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['run', id] }) });
@@ -104,11 +120,15 @@ export function RunPage({ id }: { id: string }) {
             plan={d.plan}
             height="clamp(400px, 66vh, 760px)"
             controls="top-left"
-            inset={{ right: 334, bottom: 64 }}
+            inset={{ right: drawerOpen ? 334 : 0, bottom: 64 }}
             states={replayStates}
             toolbar={waiting[0] && cursor === null ? { node: waiting[0].node_id, content: <DecisionPop a={waiting[0]} /> } : undefined}
           >
-            <Drawer className="atlas-drawer floating" nodes={version.data.plan.nodes} detail={d} show={show} />
+            {drawerOpen ? <Drawer className="atlas-drawer floating" nodes={version.data.plan.nodes} detail={d} show={show} onHide={() => pickDrawer(false)} /> : (
+              <button type="button" className="atlas-reopen" onClick={() => pickDrawer(true)} title="Show steps, ledger, policy, context and cost">
+                <Icon name="runs" size={16} />Run details
+              </button>
+            )}
             <Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />
           </WorkflowCanvas>
           <Drawer className="atlas-drawer stacked" nodes={version.data.plan.nodes} detail={d} show={show} />
@@ -250,10 +270,11 @@ function DecisionPop({ a }: { a: Approval }) {
   );
 }
 
+const DRAWER_KEY = 'azhi.run.drawer';
 const DRAWER: Record<string, string> = { steps: 'Steps', ledger: 'Ledger', coverage: 'Policy', context: 'Context', usage: 'Cost' };
 
 /** The run's trust features in a panel over the canvas; each tab opens its full detail below. */
-function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; detail: any; show: (tab: string, node?: string) => void; className: string }) {
+function Drawer({ nodes, detail: d, show, className, onHide }: { nodes: PlanNode[]; detail: any; show: (tab: string, node?: string) => void; className: string; onHide?: () => void }) {
   const [tab, setTab] = useState('steps');
   const p: RunPlan | null = d.plan;
   const controls = p ? p.nodes.flatMap((n) => n.coverage ?? []) : [];
@@ -270,10 +291,13 @@ function Drawer({ nodes, detail: d, show, className }: { nodes: PlanNode[]; deta
   const more = (k: string, label: string) => <button type="button" className="link small" onClick={() => show(k)}>{label}</button>;
   return (
     <aside className={className} aria-label="Run evidence">
-      <div className="atlas-tabs" role="tablist">
-        {Object.entries(DRAWER).map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{count[k] ? <span> {count[k]}</span> : null}</button>
-        ))}
+      <div className="atlas-head">
+        <div className="atlas-tabs" role="tablist">
+          {Object.entries(DRAWER).map(([k, label]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{count[k] ? <span> {count[k]}</span> : null}</button>
+          ))}
+        </div>
+        {onHide ? <button type="button" className="atlas-hide" onClick={onHide} aria-label="Hide run details" title="Hide run details"><Icon name="close" size={16} /></button> : null}
       </div>
       <div className="atlas-panel" role="tabpanel">
         {tab === 'steps' ? (
