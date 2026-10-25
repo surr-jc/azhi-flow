@@ -339,7 +339,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       <div className="ed-shell">
         <div className="ed-main">
         <div className="ed-stage">
-          <WorkflowCanvas nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
+          <WorkflowCanvas title={def.name ?? slug} tag={dirty ? 'unsaved changes' : `v${base.data.version}${base.data.draft ? ' draft' : ''}`} nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
             <div className="ed-title">
               <h1>{def.name ?? slug}</h1>
               <span className="pill">v{base.data.version}{base.data.draft ? ' draft' : ''}{dirty ? ' · unsaved changes' : ''}</span>

@@ -1304,3 +1304,85 @@ button.danger.solid { background: var(--bad); border-color: var(--bad); color: v
 .bundle-strip li { display: flex; gap: 8px; align-items: center; font-size: 14px; }
 .bundle-strip li svg { color: var(--ink-t); }
 @media (max-width: 1000px) { .bundle-split.has-panel { grid-template-columns: minmax(0, 1fr); } .bundle-panel { position: static; max-height: none; } }
+
+/* canvas fullscreen: the graph edge to edge, rimmed by a heads-up display drawn from the graph and the run */
+.wf .react-flow__controls-button svg.ctl-ico { max-width: 18px; max-height: 18px; fill: none; }
+.wf .react-flow__controls-button[aria-pressed="true"] { color: var(--accent); background: var(--accent-bg); }
+.wf.is-full { position: relative; background: var(--bg); display: flex; flex-direction: column; width: 100%; height: 100%; margin: 0; }
+.wf.is-overlay { position: fixed; inset: 0; z-index: 1000; width: auto; height: auto; }
+.wf:fullscreen { width: 100vw; height: 100vh; }
+.wf.is-full .wf-canvas { flex: 1; height: auto !important; min-height: 0; border: 0; border-radius: 0; }
+/* the page's own floating panels and the panels under the canvas give way to the HUD */
+.wf.is-full .wf-canvas > :not(.react-flow):not(.hud), .wf.is-full > .wf-legend, .wf.is-full > .wf-details, .wf.is-full > p.muted { display: none; }
+.wf.is-full .wf-detailbar { position: absolute; z-index: 6; top: 16px; left: 50%; transform: translateX(-50%); margin: 0; }
+.wf.is-full .wf-edgebar { position: absolute; z-index: 6; left: 50%; bottom: 64px; transform: translateX(-50%); margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 16px; box-shadow: var(--shadow); width: max-content; max-width: calc(100% - 32px); }
+.wf.is-full .react-flow__panel.top.right { margin: 16px; }
+.wf.is-full .react-flow__node.dim { opacity: 0.22; }
+.wf.is-full .react-flow__edge.e-dim .react-flow__edge-path { opacity: 0.15; }
+.wf.is-full .react-flow__edge.e-focus .react-flow__edge-path { stroke: var(--accent); stroke-width: 2.6; }
+.wf.is-full .react-flow__node { transition: opacity var(--dur-200) var(--ease-out); }
+
+.hud { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 8px 24px -12px rgba(19, 33, 59, 0.18), var(--shadow); color: var(--ink); }
+.react-flow__panel.hud { margin: 16px; }
+.hud-kicker { display: block; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); line-height: 1.3; }
+.hud-id { padding: 12px 16px; max-width: min(380px, calc(100vw - 280px)); }
+.hud-title { display: flex; align-items: center; gap: 8px; font: 650 18px/1.3 var(--f-title); letter-spacing: -0.01em; min-width: 0; }
+.hud-title > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; color: var(--muted); min-width: 0; }
+.hud-meta .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hud-progress { padding: 12px 16px; width: min(440px, calc(100vw - 32px)); display: grid; gap: 8px; }
+.hud-stats { display: flex; gap: 24px; }
+.hud-stats b { display: block; font: 650 20px/1.2 var(--f-ui); font-variant-numeric: tabular-nums; }
+.hud-stats b .muted { font-weight: 500; font-size: 15px; }
+.hud-bar { display: flex; gap: 2px; height: 8px; border-radius: 999px; overflow: hidden; background: var(--idle-bg); }
+.hud-bar i { display: block; min-width: 4px; }
+.hud-bar .b-succeeded { background: var(--ok); } .hud-bar .b-failed { background: var(--bad); } .hud-bar .b-skipped { background: var(--idle); opacity: 0.5; }
+.hud-bar .b-running { background: var(--run); } .hud-bar .b-waiting { background: var(--attention); } .hud-bar .b-pending { background: var(--idle-bg); }
+.hud-filters, .hud-types { display: flex; flex-wrap: wrap; gap: 4px; }
+.hud-filters button, .hud-types button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 999px; padding: 2px 8px; font: inherit; font-size: 12px; min-height: 28px; cursor: pointer; }
+.hud-filters button:hover, .hud-types button:hover { background: var(--idle-bg); color: var(--ink); }
+.hud-filters button[aria-pressed="true"], .hud-types button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); color: var(--ink); }
+.hud-filters b, .hud-types b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.hud-types { padding: 8px; max-width: min(520px, calc(100vw - 300px)); }
+.hud-types button svg { color: var(--ink-t); }
+
+.hud-keys { display: flex; gap: 16px; padding: 6px 14px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+.hud-keys span { display: inline-flex; align-items: center; gap: 4px; }
+.hud-keys kbd { font: 600 11px/1 var(--f-mono); min-width: 20px; padding: 4px 5px; text-align: center; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--bg); color: var(--ink); }
+
+.wf .hud-map { --xy-minimap-background-color: var(--panel); --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg) 72%, transparent); --xy-minimap-mask-stroke-color: var(--accent); --xy-minimap-mask-stroke-width: 2; overflow: hidden; width: 220px; }
+.wf .hud-map svg { display: block; width: 220px; height: 140px; }
+.wf .hud-map .react-flow__minimap-node { fill: var(--ink-t, var(--idle)); opacity: 0.6; stroke: none; }
+.wf .hud-map .react-flow__minimap-node.st-pending, .wf .hud-map .react-flow__minimap-node.st-skipped { fill: var(--idle); opacity: 0.35; }
+.wf .hud-map .react-flow__minimap-node.st-succeeded { fill: var(--ok); } .wf .hud-map .react-flow__minimap-node.st-failed { fill: var(--bad); opacity: 1; }
+.wf .hud-map .react-flow__minimap-node.st-running { fill: var(--run); opacity: 1; } .wf .hud-map .react-flow__minimap-node.st-waiting { fill: var(--attention); opacity: 1; }
+.wf .hud-map .react-flow__minimap-node.on { opacity: 1; stroke: var(--ink); stroke-width: 6; }
+
+.hud-step { position: absolute; z-index: 7; top: 84px; right: 16px; width: 336px; max-height: calc(100% - 260px); min-height: 180px; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; animation: hud-in var(--dur-200) var(--ease-out); }
+.hud-step header { display: flex; align-items: center; gap: 12px; }
+.hud-tile { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--tint); color: var(--ink-t); flex: none; }
+.hud-step-name { min-width: 0; flex: 1; }
+.hud-step h2 { font: 600 15px/1.3 var(--f-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-x { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--muted); display: grid; place-items: center; padding: 0; cursor: pointer; flex: none; }
+.hud-x:hover { color: var(--ink); background: var(--idle-bg); }
+.hud-desc { margin: 0; font-size: 13px; color: var(--muted); }
+.hud-run { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hud-err { margin: 0; font-size: 13px; color: var(--bad); background: var(--bad-bg); border-radius: 8px; padding: 8px 12px; overflow-wrap: anywhere; }
+.hud-rows { margin: 0; display: grid; gap: 6px; }
+.hud-rows > div { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+.hud-rows dt { color: var(--muted); }
+.hud-rows dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-rows dd.tone-ok { color: var(--accent); font-weight: 600; } .hud-rows dd.tone-warn { color: var(--warn); font-weight: 600; }
+.hud-step footer { display: flex; justify-content: space-between; gap: 8px; margin-top: auto; }
+@keyframes hud-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .hud-step { animation: none; } .wf.is-full .react-flow__node { transition: none; } }
+@media (max-width: 1100px) { .hud-keys { display: none; } }
+@media (max-width: 860px) {
+  .wf .hud-map, .wf.is-full .wf-detailbar, .hud-progress, .wf.is-full:has(.hud-step) .hud-types { display: none; }
+  /* pinch zooms on a phone: only the exit button stays */
+  .wf.is-full .react-flow__controls-button:not(:last-child) { display: none; }
+  .hud-id { max-width: calc(100vw - 104px); }
+  .hud-types { max-width: calc(100vw - 32px); }
+  .hud-step { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 55%; border-radius: 16px 16px 0 0; }
+}

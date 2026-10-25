@@ -40,6 +40,9 @@ const PATHS: Record<string, ReactNode> = {
   down: <path d="M12 5v14M6 13l6 6 6-6" />,
   up: <path d="M12 19V5M6 11l6-6 6 6" />,
   step: <circle cx="12" cy="12" r="4" />,
+  expand: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />,
+  shrink: <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />,
+  map: <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14" />,
 };
 
 export function Icon({ name, size = 20, className }: { name: string; size?: number; className?: string }) {

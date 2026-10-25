@@ -141,7 +141,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
         <div className="ed-main">
         <div className="ed-stage">
           {nodes ? (
-            <WorkflowCanvas height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
+            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
               <div className="ed-title">
                 <h1>{def?.name ?? slug}</h1>
                 <span className="pill">v{current.version}{current.draft ? ' draft' : ''}</span>

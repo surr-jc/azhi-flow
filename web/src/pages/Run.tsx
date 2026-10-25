@@ -97,6 +97,8 @@ export function RunPage({ id }: { id: string }) {
       {version.data?.plan?.nodes ? (
         <div className="atlas">
           <WorkflowCanvas
+            title={r.workflow}
+            tag={`v${r.workflow_version}`}
             nodes={version.data.plan.nodes}
             detail={d}
             plan={d.plan}

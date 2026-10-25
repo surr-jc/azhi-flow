@@ -1,11 +1,12 @@
-import { Background, BackgroundVariant, Controls, Handle, MarkerType, NodeToolbar, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { Background, BackgroundVariant, ControlButton, Controls, Handle, MarkerType, MiniMap, NodeToolbar, Panel, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
 import { stringify } from 'yaml';
 import { Icon } from '../icons';
+import { duration } from '../pages/Overview';
 import { keySettings, type KeySetting } from '../stepHelp';
-import { Badge, Json, StateBadge } from '../ui';
+import { Badge, Json, money, StateBadge } from '../ui';
 import { Formatted } from './Rich';
 
 /**
@@ -193,7 +194,15 @@ function Card({ data }: NodeProps<Node<CardData>>) {
 
 const nodeTypes = { card: Card };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, toolbar, controls = 'top-right', inset, children, chips, settings, details }: {
+/** Run states in the order the fullscreen progress bar draws them. */
+const STATES = ['succeeded', 'failed', 'skipped', 'running', 'waiting', 'pending'] as const;
+const STATE_LABEL: Record<string, string> = { succeeded: 'succeeded', failed: 'failed', skipped: 'skipped', running: 'running', waiting: 'waiting', pending: 'not started' };
+
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, toolbar, controls = 'top-right', inset, children, chips, settings, details, title, tag }: {
+  /** Named in the fullscreen heads-up display, where the page's own floating panels are hidden. */
+  title?: string;
+  /** A short label beside the title there, such as the version. */
+  tag?: string;
   nodes: PlanNode[];
   detail?: any;
   plan?: RunPlan | null;
@@ -274,12 +283,86 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   // Placement follows the reduced graph, so links implied by longer paths do not pull steps around.
   const pos = useMemo(() => layout(planNodes, reduced, W, H), [planNodes, reduced, W, H]);
 
+  // Fullscreen: the browser's own where it allows it, else the canvas covering the window. The
+  // page's floating panels give way to a heads-up display drawn from the graph and the run.
+  const root = useRef<HTMLDivElement>(null);
+  const [full, setFull] = useState<'native' | 'overlay' | null>(null);
+  const [showMap, setShowMap] = useState(true);
+  const [spot, setSpot] = useState<{ by: 'type' | 'state'; value: string } | null>(null);
+  useEffect(() => {
+    const on = () => setFull((f) => (document.fullscreenElement && document.fullscreenElement === root.current ? 'native' : f === 'native' ? null : f));
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
+  useEffect(() => {
+    if (full !== 'overlay') return;
+    const was = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => void (document.body.style.overflow = was);
+  }, [full]);
+  const enter = () => {
+    const el = root.current;
+    if (!el) return;
+    if (!el.requestFullscreen) return setFull('overlay');
+    el.requestFullscreen().catch(() => setFull('overlay'));
+    // Some embedded browsers neither grant nor refuse the request: cover the window instead.
+    setTimeout(() => document.fullscreenElement !== el && setFull((f) => f ?? 'overlay'), 400);
+  };
+  const exit = () => {
+    setSpot(null);
+    if (full === 'native') void document.exitFullscreen().catch(() => setFull(null));
+    else setFull(null);
+  };
+  const toggle = () => (full ? exit() : enter());
+  const stateOf = (id: string) => (live ? (states[id]?.state ?? 'pending') : undefined);
+  const lit = (n: PlanNode) => !spot || (spot.by === 'type' ? n.type === spot.value : stateOf(n.id) === spot.value);
+  const pickSpot = (by: 'type' | 'state', value: string) => setSpot((s) => (s?.by === by && s.value === value ? null : { by, value }));
+  // Arrow keys walk the steps in reading order: left to right, then top to bottom.
+  const order = useMemo(() => [...planNodes].sort((a, b) => pos[a.id]!.x - pos[b.id]!.x || pos[a.id]!.y - pos[b.id]!.y).map((n) => n.id), [planNodes, pos]);
+  const stepBy = (d: number) => {
+    if (!order.length) return;
+    const i = selected ? order.indexOf(selected) : -1;
+    const next = i < 0 ? (d > 0 ? 0 : order.length - 1) : (i + d + order.length) % order.length;
+    setSelected(() => order[next]!);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggle();
+      } else if (!full) return;
+      else if (e.key === 'Escape') {
+        if (selected) setSelected(() => null);
+        else if (full === 'overlay') exit();
+      } else if (e.key === 'm' || e.key === 'M') setShowMap((m) => !m);
+      else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        // Taken before React Flow, which would otherwise nudge a focused step.
+        e.preventDefault();
+        e.stopPropagation();
+        stepBy(e.key === 'ArrowRight' ? 1 : -1);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
+  const run = detail?.run as { id: string; workflow: string; state: string; created_at: string; ended_at: string | null } | undefined;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!full || !run || run.ended_at) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [full, run]);
+
   const nodes: Node<CardData>[] = planNodes.map((n) => ({
     id: n.id,
     type: 'card',
     position: pos[n.id]!,
     data: { size, rows: rowsOf.has(n.id) ? (detailLevel === 'key' ? rowsOf.get(n.id)!.slice(0, KEY_ROWS) : rowsOf.get(n.id)) : undefined, node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], chips: chips?.(n), toolbar: toolbar?.node === n.id ? toolbar.content : undefined },
     selected: selected === n.id,
+    ...(full && !lit(n) ? { className: 'dim' } : {}),
     width: W,
     height: H,
     ariaLabel: `${n.id}, ${TYPE[n.type]?.label ?? n.type}${live ? `, ${states[n.id]?.state ?? 'pending'}` : ''}`,
@@ -291,6 +374,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
       const target = states[n.id]?.state;
       const source = states[dep]?.state;
       const taken = live && routed ? routeTaken(states[dep]) === n.route!.route : undefined;
+      // In fullscreen the selected step's links stand out, and links between dimmed steps fade.
+      const near = full ? (selected && (dep === selected || n.id === selected) ? 'e-focus' : spot && !lit(n) && !lit(planNodes.find((x) => x.id === dep) ?? n) ? 'e-dim' : '') : '';
       const cls = !live ? '' : target === 'running' || target === 'waiting' ? 'e-active' : source === 'succeeded' && target && target !== 'skipped' ? 'e-done' : target === 'skipped' || taken === false ? 'e-skipped' : '';
       return {
         id: `${dep}->${n.id}`,
@@ -298,7 +383,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
         source: dep,
         target: n.id,
         type: 'default',
-        className: [cls || (live ? '' : `es-${planNodes.find((x) => x.id === dep)?.type ?? 'tool'}`), edit && !reduced.get(n.id)?.includes(dep) ? 'e-redundant' : ''].filter(Boolean).join(' '),
+        className: [cls || (live ? '' : `es-${planNodes.find((x) => x.id === dep)?.type ?? 'tool'}`), edit && !reduced.get(n.id)?.includes(dep) ? 'e-redundant' : '', near].filter(Boolean).join(' '),
         // While editing, the direction of each link matters; a link implied by a longer path is drawn faint.
         ...(edit ? { markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--idle)' } } : {}),
         animated: live && (target === 'running' || target === 'waiting'),
@@ -324,10 +409,11 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     const gh = Math.max(...ys) + H;
     // Panels floating over the canvas take room the graph should not sit under (the right one
     // folds away on narrow canvases), and a pinned panel under a step needs room below it.
-    const right = inset && el.clientWidth > 860 ? inset.right : 0;
-    const bottom = (inset?.bottom ?? 0) + (toolbar ? 200 : 0);
-    const fit = Math.min((el.clientWidth - right - 48) / gw, (el.clientHeight - bottom - 48) / gh, 1.1);
-    if (fit >= 0.5) return void f.fitView({ padding: right || bottom ? { top: '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
+    // In fullscreen those panels are hidden and the heads-up display rims the edges instead.
+    const right = full ? 0 : inset && el.clientWidth > 860 ? inset.right : 0;
+    const bottom = (full ? 72 : (inset?.bottom ?? 0)) + (toolbar ? 200 : 0);
+    const fit = Math.min((el.clientWidth - right - 48) / gw, (el.clientHeight - bottom - (full ? 136 : 48)) / gh, 1.1);
+    if (fit >= 0.5) return void f.fitView({ padding: right || bottom ? { top: full ? '112px' : '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
     const zoom = Math.max(0.72, Math.min(0.9, (el.clientHeight - 48) / gh));
     const at = focus ? pos[focus]! : { x: 0, y: gh / 2 - H / 2 };
     const x = focus ? (el.clientWidth - right) / 2 - (at.x + W / 2) * zoom : 24;
@@ -338,6 +424,13 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     frame();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [W, H]);
+  // Entering or leaving fullscreen resizes the canvas: frame the graph again once it has.
+  useEffect(() => {
+    // React Flow measures the new size a frame later.
+    const id = setTimeout(frame, 60);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [full]);
   useEffect(() => {
     if (framedOn.current === focus) return;
     framedOn.current = focus;
@@ -345,26 +438,33 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
 
-  // While editing, a step that is selected (or just added) off screen is brought into view.
+  // While editing, a step that is selected (or just added) off screen is brought into view; in
+  // fullscreen any selected step is, clear of the step panel on the right.
+  const watched = owner ? owner.selected : full ? selected : null;
   useEffect(() => {
     const f = flow.current;
     const el = box.current;
-    const at = owner?.selected ? pos[owner.selected] : undefined;
+    const at = watched ? pos[watched] : undefined;
     if (!f || !el || !at) return;
     const { x, y, zoom } = f.getViewport();
     const sx = at.x * zoom + x;
     const sy = at.y * zoom + y;
-    if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth && sy + H * zoom <= el.clientHeight) return;
-    void f.setCenter(at.x + W / 2, at.y + H / 2, { zoom, duration: 200 });
+    const panel = full && el.clientWidth > 860 ? 360 : 0;
+    if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth - panel && sy + H * zoom <= el.clientHeight) return;
+    void f.setCenter(at.x + W / 2 + panel / 2 / zoom, at.y + H / 2, { zoom, duration: 200 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [owner?.selected, pos]);
+  }, [watched, pos]);
 
   // Tall enough for the graph's widest layer at a readable zoom, and no taller.
   const height: number | string = fixed ?? Math.round(Math.min(settings ? 620 : 560, Math.max(260, (Math.max(0, ...Object.values(pos).map((p) => p.y)) + H) * 0.85 + 110)));
 
   const sel = planNodes.find((n) => n.id === selected);
+  const typeCounts = countBy(planNodes, (n) => n.type);
+  const stateCounts = live ? countBy(planNodes, (n) => stateOf(n.id)!) : {};
+  const done = (stateCounts.succeeded ?? 0) + (stateCounts.failed ?? 0) + (stateCounts.skipped ?? 0);
+  const usage = detail?.usage as { turns?: number; cost?: { amount: number | null; currency?: string } } | undefined;
   return (
-    <div className="wf">
+    <div className={`wf${full ? ' is-full' : ''}${full === 'overlay' ? ' is-overlay' : ''}`} ref={root}>
       {settings || edit ? (
         <div className="wf-detailbar">
           {settings ? (
@@ -438,17 +538,125 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
           aria-label="Workflow graph"
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
-          <Controls showInteractive={false} position={controls} orientation="horizontal" />
+          <Controls showInteractive={false} position={full ? 'top-right' : controls} orientation="horizontal">
+            {full ? (
+              <ControlButton onClick={() => setShowMap((m) => !m)} title="Minimap (M)" aria-label="Show the minimap" aria-pressed={showMap}>
+                <Icon name="map" size={18} className="ctl-ico" />
+              </ControlButton>
+            ) : null}
+            <ControlButton onClick={toggle} title={full ? 'Exit fullscreen (F)' : 'Fullscreen (F)'} aria-label={full ? 'Exit fullscreen' : 'Show fullscreen'}>
+              <Icon name={full ? 'shrink' : 'expand'} size={18} className="ctl-ico" />
+            </ControlButton>
+          </Controls>
+          {full ? (
+            <>
+              <Panel position="top-left" className="hud hud-id">
+                <div className="hud-kicker">{live ? 'Run' : edit ? 'Editing' : 'Workflow'}</div>
+                <div className="hud-title">
+                  <span>{title ?? run?.workflow ?? 'Workflow'}</span>
+                  {tag ? <span className="pill">{tag}</span> : null}
+                </div>
+                <div className="hud-meta">
+                  {run ? <><StateBadge state={run.state} /><span className="mono">{run.id}</span></> : (
+                    <span>
+                      {planNodes.length} step{planNodes.length === 1 ? '' : 's'}
+                      {typeCounts.agent ? ` · ${typeCounts.agent} agent${typeCounts.agent === 1 ? '' : 's'}` : ''}
+                      {typeCounts.approval ? ` · ${typeCounts.approval} approval gate${typeCounts.approval === 1 ? '' : 's'}` : ''}
+                    </span>
+                  )}
+                </div>
+              </Panel>
+              {live ? (
+                <Panel position="top-center" className="hud hud-progress">
+                  <div className="hud-stats">
+                    <div><span className="hud-kicker">Steps done</span><b>{done}<span className="muted">/{planNodes.length}</span></b></div>
+                    {run?.created_at ? <div><span className="hud-kicker">{run.ended_at ? 'Took' : 'Elapsed'}</span><b>{duration(run.created_at, run.ended_at ?? new Date(now).toISOString())}</b></div> : null}
+                    {usage?.turns ? <div><span className="hud-kicker">Model cost</span><b>{money(usage.cost?.amount ?? null, usage.cost?.currency)}</b></div> : null}
+                  </div>
+                  <div className="hud-bar" role="img" aria-label={STATES.filter((s) => stateCounts[s]).map((s) => `${stateCounts[s]} ${STATE_LABEL[s]}`).join(', ')}>
+                    {STATES.map((s) => (stateCounts[s] ? <i key={s} className={`b-${s}`} style={{ flexGrow: stateCounts[s] }} /> : null))}
+                  </div>
+                  <div className="hud-filters" role="group" aria-label="Highlight steps by state">
+                    {STATES.filter((s) => stateCounts[s]).map((s) => (
+                      <button key={s} type="button" aria-pressed={spot?.by === 'state' && spot.value === s} onClick={() => pickSpot('state', s)}>
+                        <i className={`sw st-${s}`} />{STATE_LABEL[s]}<b>{stateCounts[s]}</b>
+                      </button>
+                    ))}
+                  </div>
+                </Panel>
+              ) : null}
+              <Panel position="bottom-left" className="hud hud-types" aria-label="Highlight steps by type">
+                {Object.entries(typeCounts).map(([type, n]) => (
+                  <button key={type} type="button" className={`t-${type}`} aria-pressed={spot?.by === 'type' && spot.value === type} onClick={() => pickSpot('type', type)} title={`Highlight ${TYPE[type]?.label.toLowerCase() ?? type} steps`}>
+                    <Icon name={TYPE[type]?.icon ?? 'step'} size={16} />{TYPE[type]?.label ?? type}<b>{n}</b>
+                  </button>
+                ))}
+              </Panel>
+              <Panel position="bottom-center" className="hud hud-keys" aria-hidden="true">
+                <span><kbd>←</kbd><kbd>→</kbd> step through</span>
+                <span><kbd>M</kbd> minimap</span>
+                <span><kbd>F</kbd> exit</span>
+              </Panel>
+              {showMap ? <MiniMap position="bottom-right" className="hud hud-map" pannable zoomable ariaLabel="Minimap" nodeBorderRadius={14} nodeClassName={(n) => `t-${(n.data as CardData).node.type} ${live ? `st-${stateOf(n.id)}` : ''} ${n.selected ? 'on' : ''}`} /> : null}
+            </>
+          ) : null}
         </ReactFlow>
+        {full && sel ? <HudStep node={sel} run={states[sel.id]} live={live} onStep={stepBy} onClose={() => setSelected(() => null)} /> : null}
         {children}
       </div>
       {edit ? null : <Legend live={live} />}
-      {edit || select ? null : sel ? (details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
+      {edit || select ? null : sel ?(details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
     </div>
   );
 }
 
 const routeTaken = (s?: NodeRunState) => (s?.state === 'succeeded' && typeof s.output === 'string' ? s.output : (s?.output as { route?: string } | undefined)?.route);
+
+function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const x of xs) out[key(x)] = (out[key(x)] ?? 0) + 1;
+  return out;
+}
+
+/** The selected step in fullscreen: what it is, how it ran, and its key settings. */
+function HudStep({ node, run, live, onStep, onClose }: { node: PlanNode; run?: NodeRunState; live: boolean; onStep: (d: number) => void; onClose: () => void }) {
+  const t = TYPE[node.type] ?? { glyph: '•', icon: 'step', label: node.type };
+  const def = node.def ?? {};
+  const rows = keySettings({ type: node.type, ...def }, []);
+  const route = routeTaken(run);
+  const error = run?.error ? String((run.error as { message?: unknown }).message ?? JSON.stringify(run.error)) : null;
+  return (
+    <aside className="hud hud-step" aria-label={`Step ${node.id}`}>
+      <header>
+        <span className={`hud-tile t-${node.type}`} aria-hidden="true"><Icon name={t.icon} size={20} /></span>
+        <div className="hud-step-name">
+          <span className="hud-kicker">{t.label}</span>
+          <h2>{node.id}</h2>
+        </div>
+        <button type="button" className="hud-x" onClick={onClose} aria-label="Close step" title="Close (Esc)"><Icon name="close" size={16} /></button>
+      </header>
+      {def.description ? <p className="hud-desc">{def.description}</p> : null}
+      {live ? (
+        <div className="hud-run">
+          <StateBadge state={run?.state ?? 'pending'} />
+          {run && run.attempts > 1 ? <span className="muted small">{run.attempts} attempts</span> : null}
+          {route ? <span className="muted small">took route <b>{route}</b></span> : null}
+          {run?.worker ? <span className="muted small mono" title="Worker">{run.worker}</span> : null}
+        </div>
+      ) : null}
+      {error ? <p className="hud-err">{error}</p> : null}
+      <dl className="hud-rows">
+        <div><dt>Runs after</dt><dd>{node.deps.length ? node.deps.join(', ') : 'the start of the run'}</dd></div>
+        {node.route ? <div><dt>Only on route</dt><dd>{node.route.route} of {node.route.condition}</dd></div> : null}
+        {rows.map((r) => <div key={r.label}><dt>{r.label}</dt><dd className={r.tone ? `tone-${r.tone}` : undefined} title={r.value}>{r.value}</dd></div>)}
+      </dl>
+      <footer>
+        <button type="button" className="small" onClick={() => onStep(-1)}>← Previous step</button>
+        <button type="button" className="small" onClick={() => onStep(1)}>Next step →</button>
+      </footer>
+    </aside>
+  );
+}
 
 function Legend({ live }: { live: boolean }) {
   const items: Array<[string, ReactNode]> = live
