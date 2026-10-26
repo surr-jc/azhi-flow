@@ -17,7 +17,7 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree, windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
-import { DCP_CONFIG, dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
+import { dcpConfig, dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
 import { runOpencode2 } from './harness-opencode2.js';
@@ -160,8 +160,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         // DCP prunes stale tool output when token saving is on and the plugin is installed on this worker (azhi setup --dcp).
         // Its config is Azhi's only: the wrapper keeps DCP from reading a `.opencode/dcp.json` in the checkout or above it.
         const dcpInstalled = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+        const dcpSettings = dcpInstalled ? workerDcpConfig() : undefined;
         const dcp = dcpInstalled ? writeDcpWrapper(root, dcpInstalled) : undefined;
-        if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(DCP_CONFIG));
+        if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(dcpSettings));
         const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
         writeFileSync(
           join(configDir, 'opencode.json'),
@@ -249,7 +250,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         // The step's transcript goes to the run page live, with this step's secrets taken out first.
         sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
         sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
-        if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version));
+        if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version, dcpSettings?.compress));
         if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
         // On Windows there are no process groups (killTree walks the tree instead) and a detached child would open a
         // console window; an AZHI_OPENCODE_BIN that is a .cmd wrapper starts only through the shell (fixed arguments).
@@ -485,6 +486,15 @@ export function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string
       reject(ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode serve exited (${code}): ${out.slice(-300)}` }));
     });
   });
+}
+
+/** DCP's config with this worker's context limits; a bad AZHI_DCP_* setting fails the step for an operator to fix. */
+export function workerDcpConfig(): ReturnType<typeof dcpConfig> {
+  try {
+    return dcpConfig();
+  } catch (e) {
+    throw ApplicationFailure.create({ type: ErrorClass.needsOperator, message: `worker setting: ${(e as Error).message}`, nonRetryable: true });
+  }
 }
 
 /** How long OpenCode may take to start the bridge and each MCP server. */

@@ -16,11 +16,11 @@ import { ErrorClass } from '../lib/errors.js';
 import { windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
-import { copilotAuth, MCP_CONNECT_MS, serverUrl, stopProcess, type HarnessInput, type HarnessResult } from './harness-activity.js';
+import { copilotAuth, MCP_CONNECT_MS, serverUrl, stopProcess, workerDcpConfig, type HarnessInput, type HarnessResult } from './harness-activity.js';
 import { Opencode2Transcript } from './opencode2-transcript.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
-import { DCP_CONFIG, dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
+import { dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 
@@ -94,8 +94,9 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
     // Its config is Azhi's only: the wrapper keeps DCP from reading a `.opencode/dcp.json` in the checkout or above it.
     const dcpInstalled = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+    const dcpSettings = dcpInstalled ? workerDcpConfig() : undefined;
     const dcp = dcpInstalled ? writeDcpWrapper(root, dcpInstalled) : undefined;
-    if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(DCP_CONFIG));
+    if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(dcpSettings));
     const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
     const agent = setup?.agent ?? AGENT;
     const copilotSignIn = copilot ? copilotAuth(key.value) : undefined;
@@ -174,7 +175,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     };
     sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilotSignIn ? Object.values(copilotSignIn).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
     sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
-    if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version));
+    if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version, dcpSettings?.compress));
     if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
     const shell = win && /\.(cmd|bat)$/i.test(oc.path);
     proc = spawn(shell ? `"${oc.path}"` : oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: !win, shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

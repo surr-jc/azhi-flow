@@ -898,7 +898,7 @@ program
   .option('--opencode2', 'also install OpenCode 2 into the tools folder (used by workers that set AZHI_OPENCODE_MAJOR=2)')
   .action(async (opts: { dcp?: boolean; opencode2?: boolean }) => {
     const { detectCapabilities } = await import('../worker/capabilities.js');
-    const { DCP_VERSION, dcpDir, dcpPlugin, installDcp, installOpencode2, OPENCODE2_VERSION, opencode2Binary, opencode2Dir, ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
+    const { DCP_VERSION, dcpDir, dcpLimits, dcpPlugin, installDcp, installOpencode2, OPENCODE2_VERSION, opencode2Binary, opencode2Dir, ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
     if (opts.dcp && !dcpPlugin()) {
       console.log(`Installing @tarquinen/opencode-dcp ${DCP_VERSION} into ${dcpDir()} (about 180 MB; set AZHI_TOOLS_DIR to use another drive)`);
       installDcp();
@@ -915,6 +915,15 @@ program
     if (rt.opencode) line(Boolean(rt.ripgrep), 'ripgrep', rt.ripgrep ? `${rt.ripgrep.version} (${rt.ripgrep.path})` : ripgrepInstallHint());
     else console.log(dim(`ripgrep is checked once OpenCode is present. Tools folder: ${toolsDir()} (AZHI_TOOLS_DIR to change it)`));
     if (rt.opencode) console.log(`${rt.dcp ? green('ok  ') : dim('--  ')} dcp (optional): ${rt.dcp ? `${rt.dcp.version} (used when token saving is on)` : `not installed; run azhi setup --dcp`}`);
+    if (rt.dcp) {
+      try {
+        const l = dcpLimits();
+        const at = (v: number | string | undefined, dflt: number) => (v === undefined ? `${dflt} tokens (default)` : typeof v === 'number' ? `${v} tokens` : `${v} of the context window`);
+        console.log(dim(`     dcp asks the model to compress from ${at(l.minContextLimit, 50000)} and insists past ${at(l.maxContextLimit, 100000)} (AZHI_DCP_MIN_CONTEXT, AZHI_DCP_MAX_CONTEXT)`));
+      } catch (e) {
+        line(false, 'dcp limits', (e as Error).message);
+      }
+    }
     process.exitCode = rt.git && rt.opencode && rt.ripgrep ? 0 : 1;
   });
 

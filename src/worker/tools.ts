@@ -126,9 +126,23 @@ export function installOpencode2(env: NodeJS.ProcessEnv = process.env): void {
  * The transcript note that tells the run page DCP is loaded for a step. The fixed id is how the page knows that a
  * bare `compress` tool call is DCP pruning the context (gateway and package MCP tools are always prefixed).
  */
-export function dcpNote(version: string): { id: 'dcp'; kind: 'note'; text: string; at: number } {
-  return { id: 'dcp', kind: 'note', text: `DCP ${version} context pruning is on for this step. When the model calls DCP's compress tool, older messages and tool output are replaced by a summary, so later model calls send fewer tokens.`, at: Date.now() };
+export function dcpNote(version: string, limits: { minContextLimit?: number | string; maxContextLimit?: number | string } = {}): { id: 'dcp'; kind: 'note'; text: string; at: number } {
+  const n = (v: number | string | undefined, dflt: string) => (v === undefined ? dflt : typeof v === 'number' ? `${v.toLocaleString('en-US')} tokens` : `${v} of the context window`);
+  return {
+    id: 'dcp',
+    kind: 'note',
+    text: `DCP ${version} context pruning is on for this step. When the model calls DCP's compress tool, older messages and OpenCode tool output are replaced by a summary, so later model calls send fewer tokens; Azhi gateway tool results are always kept. DCP asks the model to compress from ${n(limits.minContextLimit, '50,000 tokens')} of context, and insists past ${n(limits.maxContextLimit, '100,000 tokens')}.`,
+    at: Date.now(),
+  };
 }
+
+/**
+ * Tools DCP may never prune: the Azhi gateway, bridged as `azhi_*` (submit_output included). Their results carry the
+ * excerpt ids the model cites and the ledger records, so DCP works only on OpenCode's own tools. A protected result
+ * is kept word for word inside a compressed block, and skipped by deduplication and error purging. DCP adds these
+ * to its own defaults (task, skill, todo tools).
+ */
+export const DCP_PROTECTED_TOOLS = ['azhi_*'];
 
 /**
  * DCP's own config for a step. In 3.2.0 its deduplication and error-purging run only when the model calls its
@@ -138,10 +152,39 @@ export const DCP_CONFIG = {
   enabled: true,
   autoUpdate: false,
   pruneNotification: 'off',
-  commands: { enabled: false },
-  compress: { permission: 'allow', showCompression: false },
-  strategies: { deduplication: { enabled: true }, purgeErrors: { enabled: true, turns: 4 } },
+  commands: { enabled: false, protectedTools: DCP_PROTECTED_TOOLS },
+  compress: { permission: 'allow', showCompression: false, protectedTools: DCP_PROTECTED_TOOLS },
+  strategies: { deduplication: { enabled: true, protectedTools: DCP_PROTECTED_TOOLS }, purgeErrors: { enabled: true, turns: 4, protectedTools: DCP_PROTECTED_TOOLS } },
 };
+
+/** A DCP context limit: a token count, or a share of the model's context window ("40%"). */
+type DcpLimit = number | `${number}%`;
+
+function dcpLimit(name: string, value: string | undefined): DcpLimit | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const v = value.trim();
+  const pct = /^(\d+(?:\.\d+)?)%$/.exec(v);
+  if (pct && Number(pct[1]) > 0 && Number(pct[1]) <= 100) return `${Number(pct[1])}%`;
+  if (/^\d+$/.test(v) && Number(v) > 0) return Number(v);
+  throw new Error(`${name} must be a token count (e.g. 30000) or a share of the model's context window (e.g. 40%), not '${value}'`);
+}
+
+/**
+ * When DCP asks the model to compress: from AZHI_DCP_MIN_CONTEXT it starts nudging, past AZHI_DCP_MAX_CONTEXT it
+ * insists. Unset, DCP's own defaults apply (50000 and 100000 tokens in 3.2.0), so short steps never compress.
+ */
+export function dcpLimits(env: NodeJS.ProcessEnv = process.env): { minContextLimit?: DcpLimit; maxContextLimit?: DcpLimit } {
+  const min = dcpLimit('AZHI_DCP_MIN_CONTEXT', env.AZHI_DCP_MIN_CONTEXT);
+  const max = dcpLimit('AZHI_DCP_MAX_CONTEXT', env.AZHI_DCP_MAX_CONTEXT);
+  if (typeof min === 'number' && typeof max === 'number' && min > max) throw new Error(`AZHI_DCP_MIN_CONTEXT (${min}) must not be above AZHI_DCP_MAX_CONTEXT (${max})`);
+  if (typeof min === 'string' && typeof max === 'string' && parseFloat(min) > parseFloat(max)) throw new Error(`AZHI_DCP_MIN_CONTEXT (${min}) must not be above AZHI_DCP_MAX_CONTEXT (${max})`);
+  return { ...(min !== undefined ? { minContextLimit: min } : {}), ...(max !== undefined ? { maxContextLimit: max } : {}) };
+}
+
+/** DCP's config for a step on this worker: DCP_CONFIG with the worker's context limits. */
+export function dcpConfig(env: NodeJS.ProcessEnv = process.env) {
+  return { ...DCP_CONFIG, compress: { ...DCP_CONFIG.compress, ...dcpLimits(env) } };
+}
 
 /**
  * DCP also reads `.opencode/dcp.json(c)`, and with experimental.customPrompts its prompt overrides, from the nearest

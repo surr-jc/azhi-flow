@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startFakeAnthropic, type FakeStep } from '../src/testing/fake-anthropic.js';
+import { startFakeAnthropic, type FakeRequest, type FakeStep } from '../src/testing/fake-anthropic.js';
 import { opencodeBinary } from '../src/worker/capabilities.js';
 import { dcpPlugin, opencode2Binary } from '../src/worker/tools.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
@@ -18,7 +18,7 @@ const two = process.env.AZHI_OPENCODE_MAJOR === '2';
 const up = (await temporalAvailable()) && Boolean(two ? opencode2Binary() : opencodeBinary());
 const MODEL = 'conformance-model';
 
-let script: FakeStep[] = [];
+let script: FakeStep[] | ((r: FakeRequest) => FakeStep[]) = [];
 let delayMs = 0;
 
 function opencodePackage(): string {
@@ -56,7 +56,7 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
   const ours = () => fake.requests.filter((r) => r.model === MODEL);
 
   beforeAll(async () => {
-    fake = await startFakeAnthropic({ script: () => script, get delayMs() { return delayMs; } } as never);
+    fake = await startFakeAnthropic({ script: (r: FakeRequest) => (typeof script === 'function' ? script(r) : script), get delayMs() { return delayMs; } } as never);
     h = await startHarness({ settings: { anthropicApiUrl: fake.url, anthropicModel: MODEL } });
     for (const t of parse(readFileSync('examples/ci-digest/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-conformance' });
@@ -144,6 +144,34 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
     const first = JSON.stringify(calls[0]!.messages);
     expect(first.indexOf('COMMAND-BODY')).toBeGreaterThan(first.indexOf('r3'));
     expect(calls[0]!.tools.sort()).toEqual(['azhi_ci_list-runs_1', 'azhi_submit_output', ...(dcpPlugin() ? ['compress'] : []), 'read'].sort());
+  });
+
+  it.skipIf(!dcpPlugin())('lets DCP compress the conversation but keeps the gateway tool results', async () => {
+    const harnessVersion = (await uploadDir(h.api, harnessPackage())).version.id;
+    // Look the runs up, compress everything so far, then submit. DCP's message ids are m0001 (1.x) or @1@ (2.x).
+    script = (r) => {
+      const text = JSON.stringify(r.messages);
+      if (!r.tools.length) return [{ text: 'title' }];
+      if (text.includes('azhi_submit_output')) return [{ text: 'done' }];
+      if (text.includes('DCP-SUMMARY')) return [{ tool: 'submit_output', input: { summary: '1 of 4 runs failed (r3).', failed: 1 } }];
+      const refs = [...new Set([...text.matchAll(/@\d+@|\bm\d{4}\b/g)].map((m) => m[0]))];
+      if (text.includes('tool_result')) return [{ tool: 'compress', input: { topic: 'CI lookup', content: [{ startId: refs[0] ?? 'm0001', endId: refs.at(-1) ?? 'm0002', summary: 'DCP-SUMMARY the runs were looked up' }] } }];
+      return [{ tool: 'ci_list-runs_1', input: { team: 'payments' } }];
+    };
+    try {
+      const before = ours().length;
+      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: harnessVersion, inputs: {} });
+      const d = await waitForRun(h.api, run_id, 120_000);
+      expect(d.run.error).toBeNull();
+      const tx = await h.api.get<any>(`/v1/runs/${run_id}/transcript?node=explain`);
+      expect(tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'compress')).toMatchObject({ status: 'completed', output: expect.stringMatching(/^Compressed \d+ messages?/) });
+      // After the compression the model sees DCP's summary, and the gateway result word for word (duration_s is only in it).
+      const after = ours().slice(before).find((c) => c.tools.length && JSON.stringify(c.messages).includes('DCP-SUMMARY') && !JSON.stringify(c.messages).includes('azhi_submit_output'));
+      expect(after, 'a model call after the compression').toBeDefined();
+      expect(JSON.stringify(after!.messages)).toContain('duration_s');
+    } finally {
+      script = [];
+    }
   });
 
   it('cancels a running harness (best effort) and stops OpenCode', async () => {

@@ -120,6 +120,15 @@ before turning it on for a workflow. See the plan in the project files for what 
 DCP 3.2.0 install works with OpenCode 2 (below): its package carries an OpenCode 2 build, which 2.x loads from
 the package folder.
 
+DCP prunes only OpenCode's own tool output (reads, searches, skills, a profile's MCP tools). It never prunes the
+Azhi gateway tools (`azhi_*`, `submit_output` included): their results carry the excerpt ids the model cites and
+the ledger records, so a compressed block keeps them word for word, and deduplication and error purging skip
+them. DCP only asks the model to compress once a step's context is large: from 50,000 tokens, and insistently past
+100,000, by default. On a worker, `AZHI_DCP_MIN_CONTEXT` and `AZHI_DCP_MAX_CONTEXT` change those two limits, as a
+token count (`30000`) or a share of the model's context window (`40%`). Lower limits make DCP step in on shorter
+steps; a step's Agent activity says when DCP is on, its limits, and each time it compressed. `azhi setup` shows
+the limits a worker will use and flags a bad value, which would otherwise fail OpenCode steps that load DCP.
+
 **OpenCode 2 (preview, off by default).** A worker started with `AZHI_OPENCODE_MAJOR=2` runs OpenCode steps on
 OpenCode 2 instead of the pinned 1.x, through its own adapter. `npx azhi setup --opencode2` installs the pinned
 `@opencode/cli` into the tools folder (about 250 MB; it is not an npm dependency of Azhi), or set

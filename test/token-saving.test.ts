@@ -4,7 +4,7 @@ import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { opencodeHarnessProblems } from '../src/agents/profile.js';
-import { DCP_CONFIG, DCP_VERSION, dcpPlugin, pathWithRipgrep, ripgrepBinary, ripgrepInstallHint, SEARCH_FIRST_GUIDANCE, tokenSavingOn, toolsDir, writeDcpWrapper } from '../src/worker/tools.js';
+import { DCP_CONFIG, DCP_PROTECTED_TOOLS, DCP_VERSION, dcpConfig, dcpLimits, dcpNote, dcpPlugin, pathWithRipgrep, ripgrepBinary, ripgrepInstallHint, SEARCH_FIRST_GUIDANCE, tokenSavingOn, toolsDir, writeDcpWrapper } from '../src/worker/tools.js';
 
 describe('token saving', () => {
   it('is off unless the profile or the worker setting turns it on', () => {
@@ -40,6 +40,33 @@ describe('token saving', () => {
     expect(DCP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     expect(DCP_CONFIG.autoUpdate).toBe(false);
     expect(DCP_CONFIG.commands.enabled).toBe(false);
+  });
+
+  it('never lets DCP prune the Azhi gateway tools, only OpenCode tools', () => {
+    expect(DCP_PROTECTED_TOOLS).toEqual(['azhi_*']);
+    const c = dcpConfig({});
+    expect(c.compress.protectedTools).toEqual(['azhi_*']);
+    expect(c.strategies.deduplication.protectedTools).toEqual(['azhi_*']);
+    expect(c.strategies.purgeErrors.protectedTools).toEqual(['azhi_*']);
+    expect(c.commands.protectedTools).toEqual(['azhi_*']);
+  });
+
+  it('takes DCP context limits from the worker settings, and refuses bad ones', () => {
+    expect(dcpLimits({})).toEqual({});
+    expect(dcpConfig({}).compress).not.toHaveProperty('minContextLimit');
+    expect(dcpLimits({ AZHI_DCP_MIN_CONTEXT: '20000', AZHI_DCP_MAX_CONTEXT: '40000' })).toEqual({ minContextLimit: 20000, maxContextLimit: 40000 });
+    expect(dcpLimits({ AZHI_DCP_MIN_CONTEXT: ' 25% ', AZHI_DCP_MAX_CONTEXT: '50%' })).toEqual({ minContextLimit: '25%', maxContextLimit: '50%' });
+    expect(dcpLimits({ AZHI_DCP_MAX_CONTEXT: '60000' })).toEqual({ maxContextLimit: 60000 });
+    expect(dcpConfig({ AZHI_DCP_MIN_CONTEXT: '20000' }).compress).toMatchObject({ permission: 'allow', minContextLimit: 20000, protectedTools: ['azhi_*'] });
+    for (const bad of ['0', '-5', '12k', '0%', '150%', 'lots']) expect(() => dcpLimits({ AZHI_DCP_MIN_CONTEXT: bad })).toThrow(/AZHI_DCP_MIN_CONTEXT/);
+    expect(() => dcpLimits({ AZHI_DCP_MIN_CONTEXT: '50000', AZHI_DCP_MAX_CONTEXT: '40000' })).toThrow(/must not be above/);
+    expect(() => dcpLimits({ AZHI_DCP_MIN_CONTEXT: '60%', AZHI_DCP_MAX_CONTEXT: '40%' })).toThrow(/must not be above/);
+  });
+
+  it('says on the run page when DCP will step in', () => {
+    expect(dcpNote('3.2.0').text).toContain('from 50,000 tokens');
+    expect(dcpNote('3.2.0', { minContextLimit: 20000, maxContextLimit: '40%' }).text).toMatch(/from 20,000 tokens .* past 40% of the context window/);
+    expect(dcpNote('3.2.0').text).toContain('gateway tool results are always kept');
   });
 
   it("keeps a checkout's .opencode/dcp.json out of the DCP config a step runs with", async () => {

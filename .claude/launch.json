@@ -7,6 +7,22 @@
       "runtimeArgs": ["bin/azhi.js", "up", "--port", "7410"],
       "port": 7410,
       "url": "http://127.0.0.1:7410"
+    },
+    {
+      "name": "azhi-token-saving",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/azhi.js", "up", "--port", "7410"],
+      "env": { "AZHI_OPENCODE_TOKEN_SAVING": "on" },
+      "port": 7410,
+      "url": "http://127.0.0.1:7410"
+    },
+    {
+      "name": "azhi-dcp-limits",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/azhi.js", "up", "--port", "7410"],
+      "env": { "AZHI_OPENCODE_TOKEN_SAVING": "on", "AZHI_DCP_MIN_CONTEXT": "20000", "AZHI_DCP_MAX_CONTEXT": "40000" },
+      "port": 7410,
+      "url": "http://127.0.0.1:7410"
     }
   ]
 }
