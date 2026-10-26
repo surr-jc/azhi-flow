@@ -11,3 +11,4 @@ Look for the defects that earlier reviews of this kind kept finding:
 - A test that cannot pass: check that its fixture really sets up the state its assertions rely on, and that it would fail if the feature were removed.
 - Missing boundary tests for anything with roles, workspaces or tenants: a forbidden role, a second workspace, an unknown or invalid value.
 - Edits to files the plan did not name: a minor finding unless the typecheck needs them.
+- Spec files that disagree with the code: when the change writes `openspec/changes/<id>/` or `specs/<NNN-feature>/`, a scenario the code does not do, or a task ticked `- [x]` that is not done, is a major finding.

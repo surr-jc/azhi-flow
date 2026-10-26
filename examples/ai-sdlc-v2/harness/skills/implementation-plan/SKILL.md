@@ -42,8 +42,10 @@ needs a reason.
   of the code to mirror.
 - `tasks`: in dependency order, top to bottom, each atomic: an action (CREATE, UPDATE, ADD, REMOVE,
   REFACTOR, MIRROR), the target file, the detail (names, signatures, imports from the right files),
-  a `gotcha` when there is a known trap, and `satisfies`: the acceptance criterion it advances.
-  Every criterion is satisfied by at least one task, and the tests are tasks too.
+  a `gotcha` when there is a known trap, and `satisfies`: the ids of the acceptance criteria it
+  advances (`AC-1, AC-3`), or `enabling` for setup another task needs. End `detail` with `Verify:` and
+  how the task is checked (the test that covers it, or what to read). Every criterion is satisfied by
+  at least one task, and the tests are tasks too.
 - `test_plan`: the unit and integration tests to add (mirroring which existing test), the edge cases,
   and the command that runs them (from the project's config).
 - `risks`: what could go wrong (edge cases, compatibility, security, data) and the mitigation.
@@ -72,7 +74,17 @@ from the code, not from the ticket's tone:
 
 The file count is taken from `files`; list every file the change really touches, tests included.
 
-## 7. Confidence
+## 7. Check the plan is consistent
+
+Before you submit, check the plan against itself; fix it, do not just note it:
+
+- Every acceptance criterion id appears in `satisfies` of a code task and of a test task.
+- Every task names criteria it satisfies or says `enabling`; a task that serves none is scope creep: drop it.
+- Every task's target is in `files`, and every file in `files` has a task.
+- No task touches a non-goal.
+- If you loaded `spec-driven-change`, its project rules check and spec files are done.
+
+## 8. Confidence
 
 `confidence` 1 to 10: how likely an engineer is to implement this plan in one pass with the tests
 passing. Below 7, the risks and open questions should say why. `summary` is one sentence. Submit

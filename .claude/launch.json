@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "azhi",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["bin/azhi.js", "up", "--port", "7410"],
+      "port": 7410,
+      "url": "http://127.0.0.1:7410"
+    }
+  ]
+}

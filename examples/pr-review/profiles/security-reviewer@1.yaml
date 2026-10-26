@@ -11,7 +11,7 @@ harness:
   opencode:
     agent: harness/agents/security.md
     command: harness/commands/review.md
-    skills: [harness/skills/fresh-eyes-review, harness/skills/review-checklist, harness/skills/security-checklist, harness/skills/find-bugs]
+    skills: [harness/skills/fresh-eyes-review, harness/skills/impact-analysis, harness/skills/review-checklist, harness/skills/security-checklist, harness/skills/find-bugs]
     tools: [read, grep, glob, skill]
     mcp:
       repo-facts: {command: [node, harness/mcp/repo-facts.mjs]}

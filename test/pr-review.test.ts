@@ -439,7 +439,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     expect(existsSync(PWNED)).toBe(false);
     expect(toolResults(c[1]!)).toContain('No finding without evidence you read in the checkout');
     // Only the gateway bridge, the allowed read-only tools and the profile's MCP servers are offered.
-    expect([...c[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'probe_env', 'read', 'repo-facts_changed-files', 'repo-facts_file-diff', 'skill']);
+    expect([...c[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'probe_env', 'read', 'repo-facts_changed-files', 'repo-facts_changed-symbols', 'repo-facts_diff-stat', 'repo-facts_file-diff', 'repo-facts_references', 'skill']);
     expect([...reqs('summarizer')[0]!.tools].sort()).toEqual(['azhi_submit_output', 'skill']);
     expect(toolResults(reqs('security')[1]!)).toContain('Input reaches `eval`');
     // Every reviewer has the fresh-eyes skill (adapted from Cole Medin's review skills).
@@ -450,7 +450,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const q = reqs('quality');
     expect(toolResults(q[1]!)).toContain('Thermo-Nuclear Code Quality Review');
     expect(toolResults(q[1]!)).toContain('code judo');
-    expect([...q[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'read', 'repo-facts_changed-files', 'repo-facts_file-diff', 'skill']);
+    expect([...q[0]!.tools].sort()).toEqual(['azhi_submit_output', 'glob', 'grep', 'read', 'repo-facts_changed-files', 'repo-facts_changed-symbols', 'repo-facts_diff-stat', 'repo-facts_file-diff', 'repo-facts_references', 'skill']);
     // The verifier refuted this finding, so the summarizer never sees it.
     expect(JSON.stringify(reqs('summarizer')[0]!.messages)).not.toContain('The direct call became an eval branch');
     expect(JSON.stringify(reqs('summarizer')[0]!.messages)).toContain('eval of caller input');

@@ -41,7 +41,14 @@ export interface FakeComment {
   repo: string;
   number: number;
   body: string;
+  /** The author's login; comments the gateway posts are by `BOT_LOGIN`. */
+  user?: string;
+  /** How many times the comment was edited. */
+  edits?: number;
 }
+
+/** The account every token of the fake belongs to (what `GET /user` answers). */
+export const BOT_LOGIN = 'azhi-bot';
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
@@ -75,7 +82,18 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const page = Number(url.searchParams.get('page') ?? 1);
     const per = Number(url.searchParams.get('per_page') ?? 30);
     const slice = <T>(xs: T[]) => xs.slice((page - 1) * per, page * per);
-    let m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/actions\/runs$/);
+    // Every token is the same account here; comments it writes are by that login.
+    if (url.pathname === '/user') return send(200, { login: BOT_LOGIN, type: 'User' });
+    let m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/);
+    if (m && req.method === 'PATCH') {
+      const c = comments.find((x) => x.repo === m![1] && x.id === Number(m![2]));
+      if (!c) return send(404, { message: 'Not Found' });
+      if ((c.user ?? 'octocat') !== BOT_LOGIN) return send(403, { message: 'You can only edit your own comments' });
+      c.body = String(JSON.parse(raw || '{}').body ?? '');
+      c.edits = (c.edits ?? 0) + 1;
+      return send(200, { id: c.id, body: c.body, html_url: `https://github.com/${c.repo}/pull/${c.number}#issuecomment-${c.id}` });
+    }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/actions\/runs$/);
     if (m) {
       const since = url.searchParams.get('created')?.replace(/^>=/, '');
       const runs = data.runs.filter((r) => !since || Date.parse(r.run_started_at) >= Date.parse(since));
@@ -215,7 +233,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     if (m) {
       const [repo, number] = [m[1]!, Number(m[2])];
       if (req.method === 'POST') {
-        const c = { id: 9000 + comments.length, repo, number, body: String(JSON.parse(raw || '{}').body ?? '') };
+        const c = { id: 9000 + comments.length, repo, number, body: String(JSON.parse(raw || '{}').body ?? ''), user: BOT_LOGIN };
         comments.push(c);
         return send(201, { id: c.id, body: c.body, html_url: `https://github.com/${repo}/pull/${number}#issuecomment-${c.id}` });
       }

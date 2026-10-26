@@ -12,7 +12,8 @@ what survives.
 ## For each finding (by its `id`)
 
 1. **Re-derive it yourself.** Read the file at the cited path and line, and the code around it:
-   the caller, the callee, the tests. Do not take the reviewer's `detail` or `scenario` on trust.
+   the caller, the callee, the tests. Find them with repo-facts `references` (where a name is used
+   anywhere in the checkout). Do not take the reviewer's `detail` or `scenario` on trust.
 2. **Walk the scenario.** Trace the exact input or caller the finding names through the code, step
    by step. Does the wrong behaviour really occur?
 3. **Look for the reason it is fine.** Is it handled elsewhere (validation upstream, a framework
@@ -26,6 +27,20 @@ what survives.
      or the problem was already there before this PR.
    - `unverifiable`: the outcome depends on something you cannot see from the checkout (runtime
      data, configuration, an external service, a UI). Never use it to avoid doing the work.
+
+## Severity: grade it again
+
+For a `confirmed` finding, set `severity` to what the harm really is, by this rubric, whatever the
+reviewer said:
+
+- `blocker`: wrong results, data loss, a security hole, or a crash on a common path.
+- `major`: a bug on an uncommon path; a user of the changed code left broken; or new behaviour with no
+  test on any path, where a regression would ship unnoticed.
+- `minor`: a test gap where the behaviour is already tested through another path or a shared helper
+  (look for that test before you accept "untested"), style, clarity, anything safe to fix later.
+
+Reviewers over-grade more often than they under-grade. Lower a severity when the scenario is real but
+the harm is small, and say why in `evidence`. Leave `severity` out for refuted and unverifiable checks.
 
 ## Confidence, 0 to 100
 

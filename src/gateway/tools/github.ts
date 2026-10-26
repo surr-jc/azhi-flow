@@ -21,6 +21,8 @@ export interface GithubConfig {
   failed_run_details?: number;
   /** Branches the push and pull request tools may create or move start with this. Default `azhi/`. */
   branch_prefix?: string;
+  /** The PR comment tool keeps one comment per pull request under this name and edits it on every run. */
+  sticky?: string;
 }
 
 const MAX_PAGES = 3;
@@ -196,18 +198,43 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
 }
 
 const marker = (key: string) => `<!-- azhi-action:${key} -->`;
+const stickyMarker = (name: string) => `<!-- azhi-sticky:${name} -->`;
 
 /**
  * A comment on a pull request (`github.pr-comment`, write-dedupable): the body carries the ledger
  * action ID in a hidden marker, and a lookup finds the comment by it before any resend.
+ *
+ * With `sticky` set, the tool keeps one comment per pull request: it edits the newest comment that
+ * carries the sticky marker and was written by the token's own account, and posts one only when there
+ * is none. The marker is plain text anyone can paste, so a comment by someone else is never edited.
  */
 export async function commentOnPullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown; body?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
   const repo = argRepo(cfg, args.repo);
   const number = argNumber(args.number);
   const text = String(args.body ?? '').slice(0, 60_000);
   if (!text.trim()) throw new SendError('comment body is empty', true, ErrorClass.invalidInput);
-  const c = await request(cfg, token, 'POST', `/repos/${repo}/issues/${number}/comments`, { body: `${text}\n\n${marker(key)}` }, timeoutMs);
-  return { id: Number(c.id), url: String(c.html_url ?? '') };
+  const sticky = cfg.sticky ? stickyMarker(cfg.sticky) : '';
+  const body = `${text}\n\n${marker(key)}${sticky ? `\n${sticky}` : ''}`;
+  if (sticky) {
+    const ours = await stickyComment(cfg, token, repo, number, sticky, timeoutMs);
+    if (ours) {
+      const c = await request(cfg, token, 'PATCH', `/repos/${repo}/issues/comments/${ours}`, { body }, timeoutMs);
+      return { id: Number(c.id), url: String(c.html_url ?? ''), updated: true };
+    }
+  }
+  const c = await request(cfg, token, 'POST', `/repos/${repo}/issues/${number}/comments`, { body }, timeoutMs);
+  return { id: Number(c.id), url: String(c.html_url ?? ''), updated: false };
+}
+
+/** The id of the newest comment on the pull request that carries `tag` and was written by this token's account. */
+async function stickyComment(cfg: GithubConfig, token: string | undefined, repo: string, number: number, tag: string, timeoutMs: number): Promise<number | null> {
+  const comments = await pages(cfg, token, `/repos/${repo}/issues/${number}/comments`, undefined, timeoutMs);
+  const tagged = comments.filter((c: any) => String(c.body ?? '').includes(tag));
+  if (!tagged.length) return null;
+  // A GitHub App's token cannot read /user; its comments are the app's bot account.
+  const me = await getOrNull(cfg, token, '/user', timeoutMs).catch(() => null);
+  const mine = tagged.filter((c: any) => (me?.login ? c.user?.login === me.login : c.user?.type === 'Bot' && c.performed_via_github_app));
+  return mine.length ? Number(mine[mine.length - 1].id) : null;
 }
 
 export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, key: string, timeoutMs: number) {

@@ -6,7 +6,8 @@ checks, and the minimum confidence. A finding is
   dropped     refuted, or confirmed below the minimum (the verifier was not sure enough)
   unverified  unverifiable, or the verifier gave no check for its id; shown as "check by hand",
               never counted toward the verdict
-Only kept findings can make the review request changes.
+Only kept findings can make the review request changes. A kept finding takes the verifier's severity
+when it gave one (the reviewer's is kept as reported_severity when they differ).
 """
 import json
 import sys
@@ -28,7 +29,9 @@ for r in data["reviews"]:
             unverified.append({"reviewer": r["reviewer"], **f, "why": "unverifiable" if c else "no check was returned"})
         elif c["verdict"] == "confirmed" and c["confidence"] >= minimum:
             kept += 1
-            mine.append({**f, "confidence": c["confidence"], "verification": c["evidence"]})
+            graded = c.get("severity")
+            regrade = {"severity": graded, "reported_severity": f["severity"]} if graded and graded != f["severity"] else {}
+            mine.append({**f, **regrade, "confidence": c["confidence"], "verification": c["evidence"]})
         else:
             dropped.append({"reviewer": r["reviewer"], "id": f["id"], "title": f["title"], "verdict": c["verdict"], "confidence": c["confidence"], "evidence": c["evidence"]})
     reviews.append({"reviewer": r["reviewer"], "summary": r.get("summary", ""), "findings": mine})

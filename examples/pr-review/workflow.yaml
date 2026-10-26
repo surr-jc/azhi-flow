@@ -150,7 +150,7 @@ nodes:
 
   - id: post
     type: tool
-    description: Post the review as a comment on the pull request.
+    description: Post the review as a comment on the pull request, or edit the review comment an earlier run posted there.
     tool: github.comment-on-pr@1
     arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, body: {ref: nodes.summarize.output.body}}
     # Taint gate (ADR-10): the reviewers read untrusted code, so the comment may only go to the

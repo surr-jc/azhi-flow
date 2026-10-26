@@ -1,5 +1,18 @@
 # Changelog
 
+## Spec-driven planning (after OpenSpec and GitHub Spec Kit)
+
+| Gap | Change |
+|---|---|
+| Acceptance criteria were free text, so plan, tests and review pointed at them by position | Each criterion is `AC-n: <subject> MUST ... GIVEN ... WHEN ... THEN ...`; tasks name the ids they satisfy (or `enabling`) and end with `Verify:`. The schema is unchanged: criteria are still strings. |
+| The requirements lived only in the run, not in the repository | New planner skill `spec-driven-change`: in a repository that uses OpenSpec (`openspec/`) or spec-kit (`.specify/`), the plan's first tasks write the change's spec files (an OpenSpec change folder with proposal, delta specs and tasks, or a spec-kit feature spec). A repository with neither gets no new framework. Archiving into `openspec/specs/` stays a human step. |
+| The plan never read what was already specified, or the project's written rules | The planner reads the current specs of the capability (a changed requirement is a modification, a contradiction is fixed or asked) and checks the plan against the project's rules (constitution, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`); a deviation is an open question that quotes the rule. |
+| Gaps inside the plan (a criterion with no test task, a task that serves nothing) reached the engineer | The planner checks the plan against itself before it submits. |
+| Spec files could drift from the code | The engineer ticks spec tasks only when done and updates a scenario it built differently; the code and lite reviewers treat a spec that disagrees with the code as `major`. |
+
+Not verified by a live run yet: the definition checks pass, and the next delivery run on a repository with
+an `openspec/` folder is the check.
+
 ## Gaps found by running it on a real ticket, and what changed
 
 The first complete runs (issue #28 of this repository, pull request #36) exposed these. Each is listed with

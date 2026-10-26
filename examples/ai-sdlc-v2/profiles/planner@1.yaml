@@ -10,5 +10,5 @@ harness:
   opencode:
     agent: harness/agents/planner.md
     command: harness/commands/plan.md
-    skills: [harness/skills/requirements-brief, harness/skills/implementation-plan, harness/skills/decision-rubric]
+    skills: [harness/skills/requirements-brief, harness/skills/implementation-plan, harness/skills/decision-rubric, harness/skills/spec-driven-change]
     tools: [read, grep, glob, skill]

@@ -37,6 +37,11 @@ You cannot run anything, so check your own work by reading it:
    exists already, do not add one.
 6. **Stay in the plan.** Edit only the files the plan names, plus what the typecheck forces; list the rest in
    `deviations`.
+7. **The spec matches the code.** When the plan names spec files (`openspec/changes/<id>/...` or
+   `specs/<NNN-feature>/...`), write them first, as the plan describes, and tick each task in their
+   `tasks.md` (`- [x]`) only once its change and test are in place. If you had to build something
+   differently from a scenario, change the scenario to match and say so in `deviations`. Never edit
+   `openspec/specs/`, the archive or the constitution.
 
 ## When the message has `feedback`
 

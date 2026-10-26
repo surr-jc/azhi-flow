@@ -37,6 +37,17 @@ Each criterion is observable and binary: an input or action, and the result. Cov
 the error paths the ticket implies, and what must not change. Prefer 3 to 8. Do not invent scope:
 nothing the ticket and the code do not support.
 
+Write each one as a requirement with a stable id and a scenario, so the plan, the tests and the review
+can all point at it:
+
+`AC-1: <subject> MUST <behaviour>. GIVEN <state> WHEN <action> THEN <observable result>.`
+
+MUST is a hard rule, SHOULD allows a stated exception. One scenario per criterion; an edge case is its
+own criterion. Describe behaviour, never implementation (no function, table or library names). A
+criterion that keeps behaviour unchanged reads `AC-n: <subject> MUST still ...`. When something you
+would need to write a criterion is unclear, do not guess: make it an open question and write the
+criterion with its recommended default.
+
 ## 5. Non-goals
 
 Name what a reasonable reader might assume is in scope but is not (a neighbouring feature, a

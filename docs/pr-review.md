@@ -26,7 +26,7 @@ and never decide the verdict; refuted ones are dropped and counted. See
 | `triage` | Script (`scripts/triage.py`): kept = confirmed at or above `config.min_confidence`; unverified = unverifiable or unchecked; dropped = refuted or confirmed below the bar |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |
 | `report` | The review as a run artifact (`templates/review.md`) |
-| `should_post` → `post` | Always, unless the run input `post` is false (a dry run): `github.comment-on-pr@1` posts the review. No approval step. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review |
+| `should_post` → `post` | Always, unless the run input `post` is false (a dry run): `github.comment-on-pr@1` posts the review. No approval step. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review. The tool is registered with `sticky: azhi-pr-review`, so the PR keeps one review comment: a later run edits the comment the token's own account posted before (found by a hidden `azhi-sticky` marker) instead of adding another. A comment by anyone else that carries the marker is never edited. The output says `updated: true` when it edited |
 | `slack_message`, `should_notify` → `notify` | When the reviewers have any comment (and `post` is not false), a short Slack message (`templates/slack.md`: verdict, summary, findings) goes to the channel set at install (`slack_channel`, secret `slack-bot-token`); a guard only allows that channel |
 
 ## The agents' setup (profile `harness.opencode`)
@@ -58,7 +58,10 @@ harness:
   folder are refused (`external_directory: deny`).
 - **MCP servers**: local processes from the package, started with the checkout's isolated
   environment plus `AZHI_WORKSPACE` (the checkout path). `repo-facts` is dependency-free and offers
-  `changed-files` and `file-diff` against the PR base. A missing base or an empty diff is a tool
+  `diff-stat`, `changed-files` and `file-diff` against the PR base, `changed-symbols` (the names the
+  change defines or edits, and config keys in config files) and `references` (where a name, a
+  kebab-case value such as `mcp-stdio`, or a dotted key is used anywhere in the checkout, via
+  `git grep`; a name starting with `-` is refused). A missing base or an empty diff is a tool
   error, not "(no changes)", and the reviewers are told to report nothing without a diff. The run plan marks MCP servers
   *unobservable*: their calls do not go through the gateway or the ledger.
 - The gateway bridge (`submit_output` and any gateway tools) is unchanged.
@@ -125,7 +128,36 @@ or is outside the PR's scope, so the author files an issue instead of growing th
 hand**: a person should look or test first, because the reviewers could not verify it from the code
 (runtime behaviour, configuration, performance, UI) or disagree; a blocker never moves here. The
 posted comment has one table per group, the findings carry a `triage` field, and the run report
-lists them under the same three headings. The verdict rules did not change.
+lists them under the same three headings.
+
+### Impact, severity and verdict
+
+A diff shows what changed, not what depends on it. The correctness, security and tests reviewers
+load the `impact-analysis` skill: they size the change with `diff-stat`, look up each changed name
+with `references`, follow each changed value (a return value, a tool's output, a schema) through
+the setting that wires it up to the code that reads its fields, and check the description's claims
+against the code. Their summary names the users they checked, and the summarizer adds an
+`Impact:` line when a reviewer reports an effect outside the diff (for example a script the change
+also fixes). It is not a finding.
+
+Severity is the harm if the PR merges as it is (`review-checklist`). A test gap is `minor` when the
+behaviour is already tested through another path or a shared helper, and `major` only when the new
+behaviour has no test on any path. The verifier grades the severity of every confirmed finding
+again by the same rubric; `triage` keeps its grade and records the reviewer's as
+`reported_severity` when they differ. The verdict is `request_changes` with a blocker, `comment`
+with a major finding, and `approve` when only minor findings (listed as nits) or none remain. The
+comment ends with `Ready to merge: Yes / With fixes / No` and a reason.
+
+`review-checklist` also says what not to report, after Anthropic's `code-review` plugin: problems the PR
+did not introduce, what the project's linter or type checker catches, pedantic nits, and code silenced on
+purpose. A convention finding quotes the rule and where it is written, and a change that quietly weakens
+a check (a skipped test, a disabled lint rule, a dropped CI step) is a finding.
+
+When the repository has a spec for the change (an OpenSpec change folder, a spec-kit feature spec, or a
+plan file), the correctness reviewer's `spec-conformance` skill checks it on its own axis, as Matt
+Pocock's `code-review` skill does: every requirement and scenario met, partial or missing, scope the spec
+did not ask for, tasks ticked but not done, and existing specs the change makes wrong. The review shows
+the counts on a `Spec:` line.
 
 ### The code quality reviewer and its skill
 

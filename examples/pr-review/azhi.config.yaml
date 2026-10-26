@@ -8,7 +8,7 @@
 #    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read
 #                          the PR and to clone the repository on the worker
 #    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
-#                          comment step (the review is posted automatically)
+#                          comment step (the review is posted automatically, and later runs edit that comment)
 #    github-copilot-token  your GitHub Copilot sign-in; the reviewers run on Copilot models through
 #                          OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
 settings:
@@ -49,13 +49,13 @@ tools:
           items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
   - id: github.comment-on-pr
     version: 1
-    description: Post a comment on a pull request (GitHub); deduplicated by the action ledger
+    description: Post the review comment on a pull request, or edit the one it posted before (GitHub); deduplicated by the action ledger
     effect: write-dedupable
     source: github
     credential: github-comment-token
-    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO]}}
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-review}}
     input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
-    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}}}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
 secrets:
   - github-read-token
   - github-comment-token

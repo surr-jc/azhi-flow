@@ -29,6 +29,15 @@
             "minimum": 0,
             "maximum": 100
           },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ],
+            "description": "Your own grade of the harm for a confirmed finding (finding-verification skill); leave out for refuted and unverifiable"
+          },
           "evidence": {
             "type": "string",
             "minLength": 1,
