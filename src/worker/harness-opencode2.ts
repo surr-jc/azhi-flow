@@ -20,7 +20,7 @@ import { copilotAuth, MCP_CONNECT_MS, serverUrl, stopProcess, type HarnessInput,
 import { Opencode2Transcript } from './opencode2-transcript.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
-import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
+import { DCP_CONFIG, dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 
@@ -174,6 +174,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     };
     sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilotSignIn ? Object.values(copilotSignIn).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
     sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
+    if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version));
     if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
     const shell = win && /\.(cmd|bat)$/i.test(oc.path);
     proc = spawn(shell ? `"${oc.path}"` : oc.path, ['serve', '--port', '0', '--hostname', '127.0.0.1', '--print-logs'], { cwd: project, env, detached: !win, shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });

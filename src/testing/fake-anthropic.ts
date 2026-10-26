@@ -20,6 +20,8 @@ export interface FakeRequest {
 
 export async function startFakeAnthropic(o: { script: FakeStep[] | ((req: FakeRequest) => FakeStep[]); delayMs?: number; usage?: { input: number; output: number }; models?: string[] }) {
   const requests: FakeRequest[] = [];
+  // Tool call ids are unique per server, as a real provider's are (a harness that prunes context changes the turn count).
+  let toolCalls = 0;
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -47,7 +49,7 @@ export async function startFakeAnthropic(o: { script: FakeStep[] | ((req: FakeRe
         typeof v === 'string' ? v.replace(/\{\{chunk:(\d+)\}\}/g, (_, n) => shown[Number(n)] ?? 'c_00000000000000000000') : Array.isArray(v) ? v.map(fill) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fill(x)])) : v;
       const name = 'tool' in step ? (r.tools.find((t) => t === step.tool || t.endsWith(`_${step.tool}`)) ?? step.tool) : undefined;
       const usage = o.usage ?? { input: 100, output: 20 };
-      const block = 'tool' in step ? { type: 'tool_use', id: `toolu_${turn + 1}`, name, input: fill(step.input) } : { type: 'text', text: step.text };
+      const block = 'tool' in step ? { type: 'tool_use', id: `toolu_${++toolCalls}`, name, input: fill(step.input) } : { type: 'text', text: step.text };
       const stop = 'tool' in step ? 'tool_use' : 'end_turn';
       if (!r.stream) {
         res.setHeader('content-type', 'application/json');

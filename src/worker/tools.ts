@@ -123,6 +123,14 @@ export function installOpencode2(env: NodeJS.ProcessEnv = process.env): void {
 }
 
 /**
+ * The transcript note that tells the run page DCP is loaded for a step. The fixed id is how the page knows that a
+ * bare `compress` tool call is DCP pruning the context (gateway and package MCP tools are always prefixed).
+ */
+export function dcpNote(version: string): { id: 'dcp'; kind: 'note'; text: string; at: number } {
+  return { id: 'dcp', kind: 'note', text: `DCP ${version} context pruning is on for this step. When the model calls DCP's compress tool, older messages and tool output are replaced by a summary, so later model calls send fewer tokens.`, at: Date.now() };
+}
+
+/**
  * DCP's own config for a step. In 3.2.0 its deduplication and error-purging run only when the model calls its
  * `compress` tool, so that tool is allowed; update checks, notifications and slash commands are off.
  */

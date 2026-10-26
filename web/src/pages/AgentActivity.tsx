@@ -153,6 +153,9 @@ export function AgentActivity({ runId, nodes, detail: d, open, node, onNode, onE
   const elapsed = start && last ? Math.max(0, Math.round((last - start) / 1000)) : undefined;
   const maxTokens = Math.max(1, ...steps.map((s) => (s.tokens?.input ?? 0) + (s.tokens?.output ?? 0)));
   const failed = tools.filter((t) => t.status === 'error').length;
+  // DCP context pruning: the worker notes when it is loaded; each of its runs is a `compress` tool call.
+  const dcp = list.some(isDcpNote);
+  const prunes = dcp ? tools.filter((t) => t.tool === DCP_TOOL) : [];
   const filtered = filter !== 'all' || needle !== '';
   return (
     <div className="aa">
@@ -181,6 +184,7 @@ export function AgentActivity({ runId, nodes, detail: d, open, node, onNode, onE
         <div><dt>Cached</dt><dd>{steps.length ? num(sum((t) => t.cache_read)) : '—'}</dd></div>
         <div><dt>Cost</dt><dd>{cost ? money(cost) : '—'}</dd></div>
         <div><dt>Elapsed</dt><dd>{elapsed === undefined ? '—' : `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`}</dd></div>
+        {dcp ? <div><dt>Context pruning</dt><dd>DCP · {prunes.length === 1 ? '1 run' : `${prunes.length} runs`}{prunes.some((t) => t.status === 'error') ? <span className="bad-text"> · {prunes.filter((t) => t.status === 'error').length} failed</span> : null}</dd></div> : null}
       </dl>
 
       <div className="aa-tools">
@@ -207,7 +211,7 @@ export function AgentActivity({ runId, nodes, detail: d, open, node, onNode, onE
       ) : (
         <>
           <Feed label={`Activity of ${shown}`}>
-            {feed.map((b) => <Block key={b.key} block={b} start={start} maxTokens={maxTokens} fresh={fresh(b.key)} />)}
+            {feed.map((b) => <Block key={b.key} block={b} start={start} maxTokens={maxTokens} fresh={fresh(b.key)} dcp={dcp} />)}
             {state?.error && !running && filter === 'all' && !needle ? (
               <FeedItem icon="alert" tone="bad" offset={offsetOf(last, start)}><div className="af-card bad"><div className="af-head"><b>Step failed</b></div><p className="af-text">{state.error.class}: {state.error.message}</p></div></FeedItem>
             ) : null}
@@ -231,7 +235,11 @@ function StateMark({ state }: { state?: string }) {
 
 const time = (ms?: number) => (ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
 
-function Block({ block, start, maxTokens, fresh }: { block: Block; start?: number; maxTokens: number; fresh: boolean }) {
+/** DCP (the context-pruning OpenCode plugin): its note's fixed id, and the tool the model calls to run it. */
+const DCP_TOOL = 'compress';
+const isDcpNote = (e: TranscriptEntry) => e.kind === 'note' && e.id === 'dcp';
+
+function Block({ block, start, maxTokens, fresh, dcp }: { block: Block; start?: number; maxTokens: number; fresh: boolean; dcp: boolean }) {
   const e = block.entries[0]!;
   const off = offsetOf(e.at, start);
   const title = time(e.at);
@@ -261,7 +269,7 @@ function Block({ block, start, maxTokens, fresh }: { block: Block; start?: numbe
       return item('tool', failed ? 'bad' : running ? 'run' : 'tool', (
         <div className="af-card af-tools-card">
           {block.entries.length > 1 ? <div className="af-head"><b>{block.entries.length} tool calls</b><span className="muted small">{block.entries.filter((t) => t.status === 'completed').length} done{failed ? `, ${block.entries.filter((t) => t.status === 'error').length} failed` : ''}{running ? ', running' : ''}</span></div> : null}
-          {block.entries.map((t) => <ToolLine key={key(t)} e={t} single={block.entries.length === 1} />)}
+          {block.entries.map((t) => <ToolLine key={key(t)} e={t} single={block.entries.length === 1} dcp={dcp && t.tool === DCP_TOOL} />)}
         </div>
       ));
     }
@@ -279,22 +287,28 @@ function Block({ block, start, maxTokens, fresh }: { block: Block; start?: numbe
     case 'error':
       return item('alert', 'bad', <div className="af-card bad"><div className="af-head"><b>Error</b><span className="muted small">{title}</span></div><Markdown className="af-text" text={e.text ?? ''} /></div>);
     default:
+      if (isDcpNote(e)) return item('shrink', 'idle', <div className="af-card"><div className="af-head"><b>Context pruning</b><span className="badge">DCP</span><span className="muted small">{title}</span></div><p className="af-text">{e.text}</p></div>);
       return item('step', 'idle', <div className="af-step muted small">{e.text}</div>);
   }
 }
 
-/** One tool call: a line with its name, arguments and state; open it for the input and the result. */
-function ToolLine({ e, single }: { e: TranscriptEntry; single: boolean }) {
+/**
+ * One tool call: a line with its name, arguments and state; open it for the input and the result. A DCP run is
+ * marked as such and says what it did, since `compress` is the plugin pruning context, not a workflow tool.
+ */
+function ToolLine({ e, single, dcp }: { e: TranscriptEntry; single: boolean; dcp: boolean }) {
   const tone = e.status === 'completed' ? 'ok' : e.status === 'error' ? 'bad' : 'run';
   return (
     <details className={`af-tool ${tone}`} open={e.status === 'error' && single}>
       <summary>
         <span className={`af-st ${tone}`} role="img" aria-label={e.status === 'completed' ? 'done' : e.status === 'error' ? 'failed' : 'running'}>{tone === 'ok' ? <Icon name="check" size={12} /> : tone === 'bad' ? <Icon name="close" size={12} /> : null}</span>
         <b className="mono">{e.tool ?? 'tool'}</b>
-        <span className="muted af-args">{argLine(e.input)}</span>
+        {dcp ? <span className="badge" title="DCP context pruning">DCP</span> : null}
+        <span className="muted af-args">{dcp ? 'Context pruning' : argLine(e.input)}</span>
         <span className="muted small af-time">{time(e.at)}</span>
       </summary>
       <div className="af-io">
+        {dcp ? <p className="muted small">DCP replaced the messages in the given range with the summary in the input, so later model calls send fewer tokens.{e.status === 'error' ? ' This run failed, so nothing was pruned.' : ''}</p> : null}
         <div className="af-label">Input</div>
         <Formatted value={e.input ?? {}} plain />
         {e.status === 'error' ? <><div className="af-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="af-label">Result</div><Formatted value={e.output} plain /></> : <p className="muted small">Running…</p>}

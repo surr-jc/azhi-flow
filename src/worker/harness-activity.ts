@@ -17,7 +17,7 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree, windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
-import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
+import { DCP_CONFIG, dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
 import { runOpencode2 } from './harness-opencode2.js';
@@ -249,6 +249,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         // The step's transcript goes to the run page live, with this step's secrets taken out first.
         sink = new TranscriptSink(runApi, ctx.info.attempt, [key.value, input.runToken, password, workspaceToken, ...(copilot ? Object.values(copilotAuth(key.value)).filter((v): v is string => typeof v === 'string') : []), ...(chatgptSignIn ? [chatgptSignIn.access, chatgptSignIn.refresh] : [])]);
         sink.put({ id: 'system', kind: 'system', text: system, at: Date.now() });
+        if (dcpInstalled) sink.put(dcpNote(dcpInstalled.version));
         if (setup?.command) sink.put({ id: 'command', kind: 'note', text: `The profile's command /${setup.command} runs after the input.`, at: Date.now() });
         // On Windows there are no process groups (killTree walks the tree instead) and a detached child would open a
         // console window; an AZHI_OPENCODE_BIN that is a .cmd wrapper starts only through the shell (fixed arguments).
