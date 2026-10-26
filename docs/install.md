@@ -112,7 +112,10 @@ share.
 OpenCode plugin from npm into the tools folder (about 180 MB; `AZHI_TOOLS_DIR` moves it to another drive). It is
 AGPL-3.0-or-later, so Azhi does not ship it. When token saving is on and the worker has it, the step loads it with
 update checks, notifications and slash commands off. In DCP 3.2.0 the pruning (repeated reads, old failed calls)
-happens when the model calls DCP's `compress` tool, so that tool is allowed for the step. Check quality and cost
+happens when the model calls DCP's `compress` tool, so that tool is allowed for the step. DCP's settings come only
+from Azhi: DCP would also read a `.opencode/dcp.json` (and prompt overrides) from the step's folder and the folders
+above it, which for a workspace step is the checked-out repository, so the step hands DCP a folder of its own
+instead and a repository cannot change how DCP runs. Check quality and cost
 before turning it on for a workflow. See the plan in the project files for what else was considered. The same
 DCP 3.2.0 install works with OpenCode 2 (below): its package carries an OpenCode 2 build, which 2.x loads from
 the package folder.

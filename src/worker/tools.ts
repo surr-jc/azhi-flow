@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** Where Azhi keeps tools it provisions itself: AZHI_TOOLS_DIR, else ~/.azhi/tools (set it to another drive on a small disk). */
 export function toolsDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -133,3 +134,36 @@ export const DCP_CONFIG = {
   compress: { permission: 'allow', showCompression: false },
   strategies: { deduplication: { enabled: true }, purgeErrors: { enabled: true, turns: 4 } },
 };
+
+/**
+ * DCP also reads `.opencode/dcp.json(c)`, and with experimental.customPrompts its prompt overrides, from the nearest
+ * `.opencode` folder at or above the directory OpenCode hands it, and applies that last, over DCP_CONFIG. In a
+ * workspace step that directory is a checkout of an untrusted repository, and DCP 3.2.0 has no setting to skip it.
+ * So a step loads DCP through this wrapper, which hands DCP a folder of the step's own: its empty `.opencode` ends
+ * DCP's search there, before the checkout or any parent folder. DCP uses the directory only to find its config and
+ * prompts, and to shorten paths in its slash commands, which are off.
+ * OpenCode 1.x loads the wrapper's file (`path`), OpenCode 2 its package folder (`dir`).
+ */
+export function writeDcpWrapper(root: string, dcp: { path: string }): { path: string; dir: string } {
+  const dir = join(root, 'dcp-plugin');
+  const directory = join(dir, 'directory');
+  mkdirSync(join(directory, '.opencode'), { recursive: true });
+  // OpenCode 2 loads a plugin folder's `server.js` (DCP's own package has one), so the wrapper is that file.
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'azhi-dcp', private: true, type: 'module', main: 'server.js', exports: { '.': './server.js', './server': './server.js' } }));
+  writeFileSync(
+    join(dir, 'server.js'),
+    [
+      `import dcp from ${JSON.stringify(pathToFileURL(dcp.path).href)};`,
+      `const directory = ${JSON.stringify(directory)};`,
+      `const swap = (ctx, key, value) => new Proxy(ctx, { get: (target, k) => (k === key ? value : Reflect.get(target, k)) });`,
+      `// OpenCode 1.x hands the server plugin ctx.directory; OpenCode 2 hands setup ctx.location.directory.`,
+      `export default {`,
+      `  ...dcp,`,
+      `  server: (ctx, ...rest) => dcp.server(swap(ctx, 'directory', directory), ...rest),`,
+      `  setup: (ctx, ...rest) => dcp.setup(swap(ctx, 'location', { ...ctx.location, directory }), ...rest),`,
+      `};`,
+      '',
+    ].join('\n'),
+  );
+  return { path: join(dir, 'server.js'), dir };
+}

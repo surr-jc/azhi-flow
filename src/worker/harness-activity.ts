@@ -17,7 +17,7 @@ import { ErrorClass } from '../lib/errors.js';
 import { killTree, windowsSystemEnv } from '../lib/process.js';
 import { ApiClient } from './api-client.js';
 import type { WorkerCapabilities } from './capabilities.js';
-import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
+import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
 import { runOpencode2 } from './harness-opencode2.js';
@@ -158,7 +158,9 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         // Token saving adds search-first reading rules to the step's prompt (off unless the profile or the worker setting turns it on).
         const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
         // DCP prunes stale tool output when token saving is on and the plugin is installed on this worker (azhi setup --dcp).
-        const dcp = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+        // Its config is Azhi's only: the wrapper keeps DCP from reading a `.opencode/dcp.json` in the checkout or above it.
+        const dcpInstalled = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+        const dcp = dcpInstalled ? writeDcpWrapper(root, dcpInstalled) : undefined;
         if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(DCP_CONFIG));
         const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
         writeFileSync(
