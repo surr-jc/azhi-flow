@@ -118,7 +118,9 @@ describe.skipIf(!up)('model agent on OpenAI', () => {
   it('marks an OpenAI profile unsupported on the OpenCode executor', async () => {
     const dir = openaiPackage('model: {provider: openai, name: default}\ninstructions: Explain.\n');
     const wf = join(dir, 'workflow.yaml');
-    writeFileSync(wf, readFileSync(wf, 'utf8').replace('    profile: analyst@1\n', '    profile: analyst@1\n    executor: opencode\n'));
+    const yaml = readFileSync(wf, 'utf8').replace(/( {4}profile: analyst@1)(\r?\n)/, '$1$2    executor: opencode$2');
+    if (!yaml.includes('executor: opencode')) throw new Error('could not switch the fixture step to OpenCode');
+    writeFileSync(wf, yaml);
     const plan = await h.api.get<any>(`/v1/versions/${(await uploadDir(h.api, dir)).version.id}/plan`);
     const explain = plan.nodes.find((n: any) => n.id === 'explain');
     expect(explain.requirements).toContainEqual(expect.objectContaining({ name: 'model binding', mark: 'unsupported' }));

@@ -1,3 +1,4 @@
+import { delimiter } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { opencodeHarnessProblems } from '../src/agents/profile.js';
 import { DCP_CONFIG, DCP_VERSION, dcpPlugin, pathWithRipgrep, ripgrepBinary, ripgrepInstallHint, SEARCH_FIRST_GUIDANCE, tokenSavingOn, toolsDir } from '../src/worker/tools.js';
@@ -17,8 +18,9 @@ describe('token saving', () => {
   });
 
   it('puts the ripgrep folder on PATH only when it is missing from it', () => {
-    expect(pathWithRipgrep('/usr/bin:/bin', '/opt/azhi/tools/bin/rg')?.split(':')[0]).toBe('/opt/azhi/tools/bin');
-    expect(pathWithRipgrep('/usr/bin:/bin', '/usr/bin/rg')).toBe('/usr/bin:/bin');
+    const PATH = ['/usr/bin', '/bin'].join(delimiter);
+    expect(pathWithRipgrep(PATH, '/opt/azhi/tools/bin/rg')?.split(delimiter)[0]).toBe('/opt/azhi/tools/bin');
+    expect(pathWithRipgrep(PATH, '/usr/bin/rg')).toBe(PATH);
     expect(pathWithRipgrep('/usr/bin', undefined)).toBe('/usr/bin');
   });
 

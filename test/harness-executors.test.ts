@@ -25,7 +25,10 @@ function pkg(executor: string, provider: string): string {
   cpSync('test/fixtures/agent', dir, { recursive: true });
   writeFileSync(join(dir, 'profiles/analyst@1.yaml'), `model: {provider: ${provider}, name: default}\ninstructions: Explain the CI runs in one sentence.\n`);
   const wf = join(dir, 'workflow.yaml');
-  writeFileSync(wf, readFileSync(wf, 'utf8').replace('    profile: analyst@1\n', `    profile: analyst@1\n    executor: ${executor}\n`));
+  // A Windows checkout (core.autocrlf) has CRLF line ends; without a match the step silently runs on the model-agent.
+  const yaml = readFileSync(wf, 'utf8').replace(/( {4}profile: analyst@1)(\r?\n)/, `$1$2    executor: ${executor}$2`);
+  if (!yaml.includes(`executor: ${executor}`)) throw new Error(`could not switch the fixture step to ${executor}`);
+  writeFileSync(wf, yaml);
   return dir;
 }
 

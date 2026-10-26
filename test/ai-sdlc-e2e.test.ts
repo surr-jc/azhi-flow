@@ -13,7 +13,7 @@ import type { FakeStep } from '../src/testing/fake-anthropic.js';
 import { startFakeGit } from '../src/testing/fake-git.js';
 import { startFakeGithub } from '../src/testing/fake-github.js';
 import { startFakeOpenAI, type FakeOpenAIRequest as FakeRequest } from '../src/testing/fake-openai.js';
-import { opencodeBinary } from '../src/worker/capabilities.js';
+import { detectCapabilities, opencodeBinary } from '../src/worker/capabilities.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
@@ -40,6 +40,9 @@ const hasGit = (() => {
   }
 })();
 const up = (await temporalAvailable()) && Boolean(opencodeBinary()) && hasGit;
+/** The example's steps set memory limits, which a worker enforces only with prlimit on Linux; elsewhere the plan is refused. */
+const memoryLimits = detectCapabilities().limits.memory;
+if (up && !memoryLimits) console.warn('skipping the AI-SDLC example end to end: no worker on this platform can enforce memory limits (needs prlimit on Linux)');
 
 /** A tiny shop: total() ignores the discount. check.mjs is its test suite (and leaves a stray file). */
 function makeRepo(root: string) {
@@ -186,7 +189,7 @@ describe('AI-SDLC example: end-to-end fixtures', () => {
   });
 });
 
-describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
+describe.skipIf(!up || !memoryLimits)('AI-SDLC example with OpenCode', () => {
   let h: Harness;
   let fake: Awaited<ReturnType<typeof startFakeOpenAI>>;
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;
@@ -255,7 +258,7 @@ describe.skipIf(!up)('AI-SDLC example with OpenCode', () => {
     // Asynchronous: the server runs in this process, so a blocking call would stop it answering.
     const cli = (...args: string[]) =>
       new Promise<{ code: number; out: string }>((resolve) => {
-        execFile('npx', ['tsx', 'src/cli/main.ts', ...args], { env: { ...process.env, NO_PROXY: '127.0.0.1', AZHI_URL: h.server.url, AZHI_TOKEN: readFileSync(h.server.localTokenFile!, 'utf8').trim() } }, (e, stdout, stderr) =>
+        execFile(process.execPath, ['bin/azhi.js', ...args], { env: { ...process.env, NO_PROXY: '127.0.0.1', AZHI_URL: h.server.url, AZHI_TOKEN: readFileSync(h.server.localTokenFile!, 'utf8').trim() } }, (e, stdout, stderr) =>
           resolve({ code: e ? ((e as any).code as number) : 0, out: `${stdout}${stderr}` }),
         );
       });
