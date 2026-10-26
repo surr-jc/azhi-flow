@@ -12,7 +12,7 @@ import type { FakeStep } from '../src/testing/fake-anthropic.js';
 import { startFakeGit } from '../src/testing/fake-git.js';
 import { startFakeGithub } from '../src/testing/fake-github.js';
 import { startFakeOpenAI, type FakeOpenAIRequest as FakeRequest } from '../src/testing/fake-openai.js';
-import { opencodeBinary } from '../src/worker/capabilities.js';
+import { detectCapabilities, opencodeBinary } from '../src/worker/capabilities.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
@@ -36,6 +36,9 @@ const hasGit = (() => {
   }
 })();
 const up = (await temporalAvailable()) && Boolean(opencodeBinary()) && hasGit;
+/** The example's steps set memory limits, which a worker enforces only with prlimit on Linux; elsewhere the plan is refused. */
+const memoryLimits = detectCapabilities().limits.memory;
+if (up && !memoryLimits) console.warn('skipping the SDLC implement example end to end: no worker on this platform can enforce memory limits (needs prlimit on Linux)');
 
 /** A tiny shop: total() ignores the discount. check.mjs is its test suite (and leaves a stray file). */
 function makeRepo(root: string) {
@@ -166,7 +169,7 @@ describe('SDLC implement example: definition checks', () => {
   });
 });
 
-describe.skipIf(!up)('SDLC implement example with OpenCode', () => {
+describe.skipIf(!up || !memoryLimits)('SDLC implement example with OpenCode', () => {
   let h: Harness;
   let fake: Awaited<ReturnType<typeof startFakeOpenAI>>;
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;

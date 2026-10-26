@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { opencodeHarnessProblems } from '../src/agents/profile.js';
@@ -21,8 +21,9 @@ describe('token saving', () => {
   });
 
   it('puts the ripgrep folder on PATH only when it is missing from it', () => {
-    expect(pathWithRipgrep('/usr/bin:/bin', '/opt/azhi/tools/bin/rg')?.split(':')[0]).toBe('/opt/azhi/tools/bin');
-    expect(pathWithRipgrep('/usr/bin:/bin', '/usr/bin/rg')).toBe('/usr/bin:/bin');
+    const PATH = ['/usr/bin', '/bin'].join(delimiter);
+    expect(pathWithRipgrep(PATH, '/opt/azhi/tools/bin/rg')?.split(delimiter)[0]).toBe('/opt/azhi/tools/bin');
+    expect(pathWithRipgrep(PATH, '/usr/bin/rg')).toBe(PATH);
     expect(pathWithRipgrep('/usr/bin', undefined)).toBe('/usr/bin');
   });
 
