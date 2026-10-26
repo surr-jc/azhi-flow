@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dcpPlugin, ripgrepBinary, ripgrepVersion } from './tools.js';
+import { dcpPlugin, opencode2Binary, ripgrepBinary, ripgrepVersion } from './tools.js';
 
 export interface WorkerCapabilities {
   platform: NodeJS.Platform;
   arch: string;
-  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string }; ripgrep?: { version: string; path: string }; dcp?: { version: string; path: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
+  runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string; major?: 1 | 2 }; ripgrep?: { version: string; path: string }; dcp?: { version: string; path: string; dir?: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
 }
@@ -41,8 +41,10 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
   const bun = tryRun('bun', ['--version']);
   // Agent steps with a workspace clone with git.
   const git = tryRun('git', ['--version'])?.replace(/^git version\s+/, '');
-  const ocPath = opencodeBinary();
-  const oc = ocPath ? tryRun(ocPath, ['--version']) : undefined;
+  // AZHI_OPENCODE_MAJOR=2 runs OpenCode steps on OpenCode 2 (its own adapter); anything else keeps the pinned 1.x.
+  const major = process.env.AZHI_OPENCODE_MAJOR === '2' ? 2 : 1;
+  const ocPath = major === 2 ? opencode2Binary() : opencodeBinary();
+  const oc = ocPath ? opencodeVersion(tryRun(ocPath, ['--version'])) : undefined;
   const rgPath = oc ? ripgrepBinary() : undefined;
   const rg = rgPath ? ripgrepVersion(rgPath) : undefined;
   const dcp = oc ? dcpPlugin() : undefined;
@@ -56,7 +58,7 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     runtimes: {
       ...(python ? { python } : {}),
       ...(bun ? { bun: { version: bun } } : {}),
-      ...(oc && ocPath ? { opencode: { version: oc, path: ocPath } } : {}),
+      ...(oc && ocPath ? { opencode: { version: oc, path: ocPath, ...(major === 2 ? { major } : {}) } } : {}),
       ...(rg && rgPath ? { ripgrep: { version: rg, path: rgPath } } : {}),
       ...(dcp ? { dcp } : {}),
       ...(sdk ? { 'claude-agent-sdk': { version: sdk } } : {}),
@@ -66,6 +68,11 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     limits: { memory: process.platform === 'linux' && Boolean(tryRun('prlimit', ['--version'])), time: true },
     executors: ['script', ...(oc ? ['opencode'] : []), ...(sdk ? ['claude-agent-sdk'] : []), ...(codex ? ['codex'] : [])],
   };
+}
+
+/** The version from `opencode --version`: 1.x prints `1.18.34`, 2.x prints `opencode v2.1.4`. */
+export function opencodeVersion(out: string | undefined): string | undefined {
+  return out ? (/(\d+\.\d+\.\d+\S*)/.exec(out)?.[1] ?? out) : undefined;
 }
 
 /**

@@ -20,6 +20,7 @@ import type { WorkerCapabilities } from './capabilities.js';
 import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
 import { runClaudeAgentSdk } from './harness-claude.js';
 import { runCodex } from './harness-codex.js';
+import { runOpencode2 } from './harness-opencode2.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange, type WorkspaceSpec } from './workspace.js';
@@ -105,6 +106,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
       if (input.executor === 'codex') return runCodex(o, input);
       const oc = o.capabilities.runtimes.opencode;
       if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: 'this worker has no OpenCode', nonRetryable: true });
+      if (oc.major === 2) return runOpencode2(o, input);
       // Same trust check as scripts: the package's profile is what the harness runs.
       const pkg = await preparePackage(o, input.packageHash);
       const profileHarness = input.profile ? readProfileHarness(pkg.dir, input.profile) : undefined;
@@ -461,7 +463,7 @@ export async function keepRenewedSignIn(runApi: ApiClient, credential: string, h
   }
 }
 
-function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {
+export function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let out = '';
     const timer = setTimeout(() => reject(ApplicationFailure.create({ type: ErrorClass.transient, message: `opencode serve did not start: ${out.slice(-300)}` })), timeoutMs);
@@ -483,7 +485,7 @@ function serverUrl(proc: ChildProcess, timeoutMs: number): Promise<string> {
 }
 
 /** How long OpenCode may take to start the bridge and each MCP server. */
-const MCP_CONNECT_MS = 120_000;
+export const MCP_CONNECT_MS = 120_000;
 
 /** Waits until the gateway bridge and the profile's MCP servers are connected. */
 async function waitForBridge(client: OpencodeClient, names: string[], timeoutMs: number) {
@@ -500,7 +502,7 @@ async function waitForBridge(client: OpencodeClient, names: string[], timeoutMs:
   }
 }
 
-async function stopProcess(proc: ChildProcess) {
+export async function stopProcess(proc: ChildProcess) {
   if (proc.exitCode !== null || proc.signalCode !== null) return;
   const exited = new Promise((r) => proc.once('exit', r));
   try {

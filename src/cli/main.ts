@@ -895,17 +895,23 @@ program
   .command('setup')
   .description('Check this machine has what OpenCode steps need (OpenCode, ripgrep, git) and say how to install what is missing')
   .option('--dcp', 'also install the DCP context-pruning plugin for OpenCode steps (AGPL-3.0, so installed from npm here, not shipped with Azhi)')
-  .action(async (opts: { dcp?: boolean }) => {
+  .option('--opencode2', 'also install OpenCode 2 into the tools folder (used by workers that set AZHI_OPENCODE_MAJOR=2)')
+  .action(async (opts: { dcp?: boolean; opencode2?: boolean }) => {
     const { detectCapabilities } = await import('../worker/capabilities.js');
-    const { DCP_VERSION, dcpDir, dcpPlugin, installDcp, ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
+    const { DCP_VERSION, dcpDir, dcpPlugin, installDcp, installOpencode2, OPENCODE2_VERSION, opencode2Binary, opencode2Dir, ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
     if (opts.dcp && !dcpPlugin()) {
       console.log(`Installing @tarquinen/opencode-dcp ${DCP_VERSION} into ${dcpDir()} (about 180 MB; set AZHI_TOOLS_DIR to use another drive)`);
       installDcp();
     }
+    if (opts.opencode2 && !opencode2Binary()) {
+      console.log(`Installing @opencode/cli ${OPENCODE2_VERSION} into ${opencode2Dir()} (about 250 MB; set AZHI_TOOLS_DIR to use another drive)`);
+      installOpencode2();
+    }
     const rt = detectCapabilities().runtimes;
     const line = (ok: boolean, name: string, detail: string) => console.log(`${ok ? green('ok  ') : red('MISSING')} ${name}: ${detail}`);
     line(Boolean(rt.git), 'git', rt.git?.version ?? 'install git (needed to clone repositories for agent steps)');
-    line(Boolean(rt.opencode), 'opencode', rt.opencode ? `${rt.opencode.version} (${rt.opencode.path})` : 'run npm ci (it installs the pinned OpenCode), or set AZHI_OPENCODE_BIN');
+    const two = process.env.AZHI_OPENCODE_MAJOR === '2';
+    line(Boolean(rt.opencode), two ? 'opencode (2.x, AZHI_OPENCODE_MAJOR=2)' : 'opencode', rt.opencode ? `${rt.opencode.version} (${rt.opencode.path})` : two ? 'run azhi setup --opencode2, or set AZHI_OPENCODE2_BIN' : 'run npm ci (it installs the pinned OpenCode), or set AZHI_OPENCODE_BIN');
     if (rt.opencode) line(Boolean(rt.ripgrep), 'ripgrep', rt.ripgrep ? `${rt.ripgrep.version} (${rt.ripgrep.path})` : ripgrepInstallHint());
     else console.log(dim(`ripgrep is checked once OpenCode is present. Tools folder: ${toolsDir()} (AZHI_TOOLS_DIR to change it)`));
     if (rt.opencode) console.log(`${rt.dcp ? green('ok  ') : dim('--  ')} dcp (optional): ${rt.dcp ? `${rt.dcp.version} (used when token saving is on)` : `not installed; run azhi setup --dcp`}`);

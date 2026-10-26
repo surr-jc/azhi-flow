@@ -28,6 +28,7 @@
     "@marcbachmann/cel-js": "8.0.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@opencode-ai/sdk": "1.18.34",
+    "@opencode/client": "2.1.4",
     "@temporalio/activity": "1.24.0",
     "@temporalio/client": "1.24.0",
     "@temporalio/common": "1.24.0",

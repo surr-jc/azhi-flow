@@ -70,13 +70,16 @@ export function dcpDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(toolsDir(env), 'dcp');
 }
 
-/** The installed plugin (entry file and version) when it is the pinned version. */
-export function dcpPlugin(env: NodeJS.ProcessEnv = process.env): { version: string; path: string } | undefined {
+/**
+ * The installed plugin when it is the pinned version: its entry file (OpenCode 1.x loads that) and its package folder
+ * (OpenCode 2 loads only a folder, and DCP's package carries its own OpenCode 2 build).
+ */
+export function dcpPlugin(env: NodeJS.ProcessEnv = process.env): { version: string; path: string; dir: string } | undefined {
   const root = join(dcpDir(env), 'node_modules', ...DCP_PACKAGE.split('/'));
   try {
     const version = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version?: string }).version;
     const entry = join(root, 'dist', 'index.js');
-    return version === DCP_VERSION && existsSync(entry) ? { version, path: entry } : undefined;
+    return version === DCP_VERSION && existsSync(entry) ? { version, path: entry, dir: root } : undefined;
   } catch {
     return undefined;
   }
@@ -86,6 +89,36 @@ export function installDcp(env: NodeJS.ProcessEnv = process.env): void {
   const dir = dcpDir(env);
   // Scripts off: nothing from the package's dependency tree runs at install time.
   execFileSync('npm', ['install', '--prefix', dir, `${DCP_PACKAGE}@${DCP_VERSION}`, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', shell: process.platform === 'win32', timeout: 600_000 });
+}
+
+/**
+ * OpenCode 2 (npm @opencode/cli), used when a worker sets AZHI_OPENCODE_MAJOR=2. Not an npm dependency of Azhi (each
+ * platform binary is about 250 MB): `azhi setup --opencode2` installs this exact version into the tools folder.
+ */
+export const OPENCODE2_PACKAGE = '@opencode/cli';
+export const OPENCODE2_VERSION = '2.1.4';
+
+export function opencode2Dir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(toolsDir(env), 'opencode2');
+}
+
+/**
+ * AZHI_OPENCODE2_BIN, the copy in the tools folder, or `opencode2` on PATH (the package's second command name).
+ * The install runs without scripts, so the program is taken from the platform package npm put next to it; the
+ * baseline build is the fallback for CPUs without AVX2 (AZHI_OPENCODE2_BIN picks one by hand).
+ */
+export function opencode2Binary(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, arch: string = process.arch): string | undefined {
+  if (env.AZHI_OPENCODE2_BIN) return env.AZHI_OPENCODE2_BIN;
+  const os = platform === 'win32' ? 'windows' : platform;
+  const exe = platform === 'win32' ? 'opencode.exe' : 'opencode';
+  const modules = join(opencode2Dir(env), 'node_modules', '@opencode');
+  const candidates = [join(modules, 'cli', 'bin', exe), ...['', '-musl', '-baseline', '-baseline-musl'].map((v) => join(modules, `cli-${os}-${arch}${v}`, 'bin', exe))];
+  return candidates.find((p) => existsSync(p)) ?? which('opencode2', env);
+}
+
+export function installOpencode2(env: NodeJS.ProcessEnv = process.env): void {
+  // Scripts off, like DCP: the platform binary arrives as an optional dependency, so nothing needs to run at install.
+  execFileSync('npm', ['install', '--prefix', opencode2Dir(env), `${OPENCODE2_PACKAGE}@${OPENCODE2_VERSION}`, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { stdio: 'inherit', shell: process.platform === 'win32', timeout: 900_000 });
 }
 
 /**

@@ -57,8 +57,8 @@ function splitFrontmatter(text: string): { description?: string; body: string } 
 const nameOf = (p: string) => basename(p).replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9-]+/g, '-');
 const markdown = (meta: Record<string, unknown>, body: string) => `---\n${stringify(meta).trim()}\n---\n${body}\n`;
 
-/** OpenCode's own secrets in its environment, never passed on to a package's MCP servers. */
-export const OPENCODE_PRIVATE_ENV = ['OPENCODE_AUTH_CONTENT', 'OPENCODE_SERVER_PASSWORD'];
+/** OpenCode's own secrets in its environment, never passed on to a package's MCP servers (OPENCODE_PASSWORD is 2.x's name). */
+export const OPENCODE_PRIVATE_ENV = ['OPENCODE_AUTH_CONTENT', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_PASSWORD'];
 export const MCP_LAUNCHER = fileURLToPath(new URL('../../bin/azhi-mcp-launch.js', import.meta.url));
 
 export function writeOpencodeSetup(h: OpencodeHarness, o: { pkgDir: string; configDir: string; system: string; gitEnv: NodeJS.ProcessEnv; workspace?: string; platform?: NodeJS.Platform }): OpencodeSetup {

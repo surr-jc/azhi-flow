@@ -113,7 +113,18 @@ OpenCode plugin from npm into the tools folder (about 180 MB; `AZHI_TOOLS_DIR` m
 AGPL-3.0-or-later, so Azhi does not ship it. When token saving is on and the worker has it, the step loads it with
 update checks, notifications and slash commands off. In DCP 3.2.0 the pruning (repeated reads, old failed calls)
 happens when the model calls DCP's `compress` tool, so that tool is allowed for the step. Check quality and cost
-before turning it on for a workflow. See the plan in the project files for what else was considered.
+before turning it on for a workflow. See the plan in the project files for what else was considered. The same
+DCP 3.2.0 install works with OpenCode 2 (below): its package carries an OpenCode 2 build, which 2.x loads from
+the package folder.
+
+**OpenCode 2 (preview, off by default).** A worker started with `AZHI_OPENCODE_MAJOR=2` runs OpenCode steps on
+OpenCode 2 instead of the pinned 1.x, through its own adapter. `npx azhi setup --opencode2` installs the pinned
+`@opencode/cli` into the tools folder (about 250 MB; it is not an npm dependency of Azhi), or set
+`AZHI_OPENCODE2_BIN`. Steps keep the same isolation, gateway bridge, profile harness, write mode and token saving.
+Differences: Copilot and ChatGPT sign-ins go in through OpenCode 2's credential API and sit in the step's own
+database (inside the step folder, deleted afterwards) instead of only in memory, and each turn is capped by
+OpenCode 2's agent steps because 2.x has no repeated-call guard. Not yet checked with real Copilot or ChatGPT
+accounts; `.claude/plans/opencode-2-migration.md` lists what was verified.
 
 ## Checking the install
 
