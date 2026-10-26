@@ -20,7 +20,7 @@ import { copilotAuth, MCP_CONNECT_MS, serverUrl, stopProcess, type HarnessInput,
 import { Opencode2Transcript } from './opencode2-transcript.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
-import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn } from './tools.js';
+import { DCP_CONFIG, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 
@@ -92,7 +92,9 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     if (chatgpt && !chatgptSignIn) throw ApplicationFailure.create({ type: ErrorClass.authorization, message: `credential ${input.credential} is not a ChatGPT sign-in; sign in with \`azhi chatgpt login\``, nonRetryable: true });
     if (!copilot && !chatgpt && isClaudePlanToken(key.value)) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: CLAUDE_PLAN_ONLY_SDK, nonRetryable: true });
     const system = tokenSavingOn(profileHarness?.token_saving) ? `${input.system}\n\n${SEARCH_FIRST_GUIDANCE}` : input.system;
-    const dcp = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+    // Its config is Azhi's only: the wrapper keeps DCP from reading a `.opencode/dcp.json` in the checkout or above it.
+    const dcpInstalled = tokenSavingOn(profileHarness?.token_saving) ? o.capabilities.runtimes.dcp : undefined;
+    const dcp = dcpInstalled ? writeDcpWrapper(root, dcpInstalled) : undefined;
     if (dcp) writeFileSync(join(configDir, 'dcp.json'), JSON.stringify(DCP_CONFIG));
     const setup = profileHarness ? writeOpencodeSetup(profileHarness, { pkgDir: pkg.dir, configDir, system, gitEnv: isolatedGitEnv(home), workspace: input.workspace ? project : undefined }) : undefined;
     const agent = setup?.agent ?? AGENT;
@@ -145,8 +147,8 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
         // A profile's agent comes from its markdown file; without a profile the Azhi system prompt is this agent's prompt
         // (OpenCode 2 prompts take no system text). The title agent is off: its extra model call is not in the messages.
         agents: { [agent]: { ...(setup ? {} : { description: 'Azhi agent step', mode: 'primary', system }), steps: stepsFor(input.maxToolCalls) }, title: { disabled: true } },
-        // OpenCode 2 loads a plugin only from its package folder; DCP's carries an OpenCode 2 build.
-        ...(dcp?.dir ? { plugins: [pathToFileURL(dcp.dir).href] } : {}),
+        // OpenCode 2 loads a plugin only from a folder (its server.js): the wrapper's, which loads DCP's OpenCode 2 build.
+        ...(dcp ? { plugins: [pathToFileURL(dcp.dir).href] } : {}),
       }),
     );
 

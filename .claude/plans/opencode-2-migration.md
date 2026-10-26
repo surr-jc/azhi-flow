@@ -112,7 +112,8 @@ Found on the way (not OpenCode 2 issues, not fixed here except the first):
   cannot run on native Windows. Write-mode scoping was verified at the OpenCode level instead (`gaps-write.json`).
 - `test/token-saving.test.ts` hard-codes `:` as the PATH separator (fails on Windows).
 - DCP reads `.opencode/dcp.json` from the checked-out repository and its parents (1.x and 2.x alike), so a
-  repository can change DCP's settings for a step.
+  repository could change DCP's settings for a step. Fixed: both adapters load DCP through `writeDcpWrapper`
+  (tools.ts), which hands DCP a folder of the step's own; conformance with DCP passes on both majors.
 
 ## Code changes needed
 
