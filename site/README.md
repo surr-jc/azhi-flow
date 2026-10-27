@@ -25,6 +25,10 @@ SITE_URL=https://surr-jc.github.io SITE_BASE=/azhi-flow npm run build
 SITE_BASE=/azhi-flow npm run check:links
 ```
 
+The same workflow converts the pages to GitHub Wiki Markdown (`npm run build:wiki`, output in `site/wiki-dist`)
+and pushes them to the repository wiki on `main`. The wiki is generated: edit `src/content/docs`, not the wiki.
+One-time setup: enable **Settings > Features > Wikis** and save a first page so the wiki repository exists.
+
 Full details, custom domains and troubleshooting: `src/content/docs/reference/hosting.mdx` (published as
 "Host this site").
 

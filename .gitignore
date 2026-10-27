@@ -14,3 +14,4 @@ docs/demo/out/*
 .opencode/
 site/.astro/
 !site/package-lock.json
+site/wiki-dist/

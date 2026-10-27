@@ -1,7 +1,8 @@
 name: Docs site
 
-# Builds the Astro Starlight site in site/ and, on main, publishes it to GitHub Pages.
-# One-time setup: Settings > Pages > Source: "GitHub Actions". See site/README.md.
+# Builds the Astro Starlight site in site/ and, on main, publishes it to GitHub Pages and syncs the
+# same pages to the GitHub Wiki. One-time setup: Settings > Pages > Source: "GitHub Actions", and create
+# the first wiki page so <repo>.wiki.git exists. See site/README.md.
 
 on:
   push:
@@ -91,3 +92,36 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  wiki:
+    # The wiki mirrors the site pages; it is overwritten on every publish, so edit site/src/content/docs instead.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Convert pages to wiki Markdown
+        run: node site/scripts/build-wiki.mjs "$RUNNER_TEMP/wiki-out"
+
+      - name: Sync to the wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" "$RUNNER_TEMP/wiki"
+          cd "$RUNNER_TEMP/wiki"
+          find . -path ./.git -prune -o -type f -name '*.md' -print0 | xargs -0 git rm -q --
+          cp "$RUNNER_TEMP"/wiki-out/*.md .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "docs: sync wiki from ${GITHUB_SHA::7}"
+          git push
