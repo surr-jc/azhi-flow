@@ -59,8 +59,8 @@ page use relative links for the same reason.
 
 On `main` (and manual runs) the `wiki` job also converts every page to Markdown with `site/scripts/build-wiki.mjs`
 and pushes it to the repository wiki: one wiki page per site page (`concepts/taint` becomes `concepts-taint`), the
-site index as `Home`, and the sidebar groups as `_Sidebar`. Callouts become blockquotes, tabs become headings and
-site links become wiki links.
+site index as `Home`, and the sidebar groups as `_Sidebar`. Tabs become headings and
+site links become wiki links. Callouts use GitHub alert styling, cards become a two-column table, the status tags keep their green, amber and grey markers, and the logo is copied into `images/`. GitHub wikis do not allow custom CSS or fonts, so the rest of the site's styling cannot carry over.
 
 The wiki is overwritten on every publish, so edit `site/src/content/docs`, never the wiki. One-time setup: enable
 **Settings › Features › Wikis** and create a first page by hand so the wiki repository exists. Preview locally
