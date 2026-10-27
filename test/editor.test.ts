@@ -25,8 +25,8 @@ describe.skipIf(!up)('workflow editor', () => {
   beforeAll(async () => {
     if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execSync('npm run build:web', { stdio: 'ignore' });
     h = await startHarness({ worker: false });
-    for (const t of parse(readFileSync('examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
-    const r = await uploadDir(h.api, 'examples/sdlc');
+    for (const t of parse(readFileSync('test/fixtures/examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
+    const r = await uploadDir(h.api, 'test/fixtures/examples/sdlc');
     expect(r.ok).toBe(true);
     base = r.version;
     await h.api.post(`/v1/versions/${base.id}/publish`, {});
@@ -64,13 +64,36 @@ describe.skipIf(!up)('workflow editor', () => {
     expect(v.definition.nodes.at(-1)).toMatchObject({ id: 'sign_off', depends_on: ['retro'] });
     expect(v.manifest.files.map((f: any) => f.path)).toEqual(source.files.map((f: any) => f.path));
     const kept = (await h.api.get<any>(`/v1/versions/${saved.version.id}/source`)).files.find((f: any) => f.path === 'templates/retro.md');
-    expect(kept.text).toBe(readFileSync('examples/sdlc/templates/retro.md', 'utf8'));
+    expect(kept.text).toBe(readFileSync('test/fixtures/examples/sdlc/templates/retro.md', 'utf8'));
     // A draft is not published: publishing still needs the author's signature.
     await expect(h.api.post(`/v1/versions/${saved.version.id}/publish`, {})).rejects.toThrow(/signature/i);
 
     const u = await h.api.post<{ token: string }>('/v1/users', { display_name: 'op', role: 'operator' });
     await expect(new ApiClient(h.server.url, u.token).post(`/v1/versions/${base.id}/drafts`, { definition: edited })).rejects.toThrow(/author/);
     expect((await h.api.get<any[]>('/v1/audit')).some((e) => e.kind === 'workflow.version_created' && e.data.version_id === saved.version.id)).toBe(true);
+  });
+
+  it('the harness builder: lists executors, and checks and saves profiles with the draft', async () => {
+    const ex = await h.api.get<any>('/v1/executors');
+    expect(ex.executors.map((e: any) => e.id)).toEqual(expect.arrayContaining(['model-agent', 'opencode']));
+    expect(ex.executors.find((e: any) => e.id === 'opencode').providers).toEqual(['anthropic', 'github-copilot', 'openai-chatgpt']);
+
+    const profile = 'model: {provider: anthropic, name: default, credential: anthropic-api-key}\ninstructions: Summarise the ticket.\n';
+    const withNode = { ...def, nodes: [...def.nodes, { id: 'summary', type: 'agent', profile: 'summariser@1', output_schema: { type: 'object' } }] };
+    // Without the profile the draft does not compile; with it the check passes.
+    expect((await h.api.post<any>(`/v1/versions/${base.id}/check`, { definition: withNode })).ok).toBe(false);
+    const ok = await h.api.post<any>(`/v1/versions/${base.id}/check`, { definition: withNode, profiles: { 'profiles/summariser@1.yaml': profile } });
+    expect(ok.ok).toBe(true);
+
+    const bad = await h.api.post<any>(`/v1/versions/${base.id}/check`, { definition: withNode, profiles: { 'profiles/summariser@1.yaml': 'model: {provider: nope}\ninstructions: x\n' } });
+    expect(bad).toMatchObject({ ok: false, diagnostics: [expect.objectContaining({ code: 'profile_invalid' })] });
+    const path = await h.api.post<any>(`/v1/versions/${base.id}/check`, { definition: def, profiles: { 'elsewhere.yaml': profile } });
+    expect(path.diagnostics[0].code).toBe('profile_path');
+
+    const saved = await h.api.post<any>(`/v1/versions/${base.id}/drafts`, { definition: withNode, profiles: { 'profiles/summariser@1.yaml': profile } });
+    expect(saved.ok).toBe(true);
+    const files = (await h.api.get<any>(`/v1/versions/${saved.version.id}/source`)).files;
+    expect(files.find((f: any) => f.path === 'profiles/summariser@1.yaml').text).toBe(profile);
   });
 
   async function open(path: string): Promise<Page> {
@@ -110,6 +133,41 @@ describe.skipIf(!up)('workflow editor', () => {
     expect(v.draft).toBe(true);
     expect(v.definition.nodes.find((n: any) => n.id === 'sign_off')).toMatchObject({ type: 'approval', depends_on: ['retro'] });
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
+    await page.close();
+    expect(errors).toEqual([]);
+  });
+  it('edits an agent step in the harness builder and saves its profile with the draft', async () => {
+    const page = await open('/ui/workflows/sdlc');
+    await page.getByRole('link', { name: 'Edit', exact: true }).click();
+    await page.getByText('compiles').waitFor();
+    await page.getByRole('button', { name: 'Add Agent step' }).click();
+    const region = page.getByRole('group', { name: 'Harness' });
+    await region.waitFor();
+    // Pick OpenCode: its capabilities show, and a new profile is created and edited.
+    await region.locator('select').first().selectOption('opencode');
+    await page.getByText('Built-in tools: switched off by permission rules').waitFor();
+    await region.getByLabel('New profile name').fill('triage@1');
+    await region.getByRole('button', { name: 'New profile' }).click();
+    await region.getByLabel('Instructions').fill('Triage the ticket and say how urgent it is.');
+    await region.getByLabel('Max turns').fill('4');
+    // A populated credential remains untouched when changing providers.
+    await region.getByLabel('Provider').selectOption('github-copilot');
+    await expect.poll(() => region.getByLabel('Key secret').inputValue()).toBe('anthropic-api-key');
+    // An empty credential receives the selected provider's default secret.
+    await region.getByLabel('Key secret').fill('');
+    await region.getByLabel('Provider').selectOption('openai-chatgpt');
+    await expect.poll(() => region.getByLabel('Key secret').inputValue()).toBe('openai-chatgpt-auth');
+    await expect.poll(() => region.locator('label').filter({ hasText: /^Model/ }).locator('select').locator('option').allTextContents()).toContain('gpt-5.5');
+    await region.locator('label').filter({ hasText: /^Model/ }).locator('select').selectOption('gpt-5.5');
+    await page.getByText('compiles').waitFor();
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.waitForURL(/\/ui\/workflows\/sdlc\?version=wfv_/);
+    const id = new URL(page.url()).searchParams.get('version')!;
+    const files = (await h.api.get<any>(`/v1/versions/${id}/source`)).files;
+    const text = files.find((f: any) => f.path === 'profiles/triage@1.yaml').text as string;
+    expect(parse(text)).toMatchObject({ instructions: 'Triage the ticket and say how urgent it is.', max_turns: 4, model: { provider: 'openai-chatgpt', name: 'gpt-5.5', credential: 'openai-chatgpt-auth' } });
+    const v = await h.api.get<any>(`/v1/versions/${id}`);
+    expect(v.definition.nodes.find((n: any) => n.profile === 'triage@1')).toMatchObject({ type: 'agent', executor: 'opencode' });
     await page.close();
     expect(errors).toEqual([]);
   });

@@ -7,6 +7,7 @@ import { isValueExpr, type JsonSchema, type NodeDef, type ParallelNode, type Val
 import type { ToolCatalog } from '../gateway/types.js';
 import { parseDuration } from '../lib/duration.js';
 import { contentHash } from '../lib/hash.js';
+import { modelDefaultsProblems, opencodeHarnessProblems, parseProfile, type AgentProfile } from '../agents/profile.js';
 import {
   APPROVAL_OUTPUT_SCHEMA,
   COMPILER_VERSION,
@@ -15,6 +16,8 @@ import {
   NOTIFY_OUTPUT_SCHEMA,
   REPORT_OUTPUT_SCHEMA,
   RETRIEVE_OUTPUT_SCHEMA,
+  SUBWORKFLOW_OUTPUT_SCHEMA,
+  WORKSPACE_CHANGE_SCHEMA,
   type ExecutionPlan,
   type PlanNode,
 } from './plan.js';
@@ -37,9 +40,9 @@ export interface CompileResult {
   plan?: ExecutionPlan;
 }
 
-export const ALPHA_NODE_TYPES: NodeDef['type'][] = ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'approval', 'report', 'notify'];
+export const ALPHA_NODE_TYPES: NodeDef['type'][] = ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'loop', 'subworkflow', 'approval', 'report', 'notify'];
 
-const REF_ROOTS = new Set(['inputs', 'nodes', 'config', 'item', 'run']);
+const REF_ROOTS = new Set(['inputs', 'nodes', 'config', 'item', 'state', 'iteration', 'run']);
 
 interface ExprSite {
   kind: 'ref' | 'cel' | 'map';
@@ -65,14 +68,17 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
   switch (n.type) {
     case 'tool':
       return { arguments: n.arguments as Value };
-    case 'script':
     case 'agent':
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref } : { input: n.input };
+    case 'script':
     case 'subworkflow':
       return { input: n.input };
     case 'retrieve':
       return { query: n.query, filters: n.filters as Value };
     case 'parallel':
       return { for_each: n.for_each, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
+    case 'loop':
+      return { initial: n.initial, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'approval':
       return { message: n.message, payload: n.payload };
     case 'report':
@@ -115,6 +121,8 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     }
   }
 
+  for (const m of modelDefaultsProblems(def.model_defaults)) err('invalid_model_defaults', m, undefined, '/model_defaults');
+
   // Node identity
   const byId = new Map<string, NodeDef>();
   for (const n of def.nodes) {
@@ -129,6 +137,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   const dataDeps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set<string>()]));
   for (const n of def.nodes) {
     for (const d of n.depends_on ?? []) if (!byId.has(d)) err('unknown_dependency', `depends_on '${d}' is not a node`, n.id);
+    if (n.merge && n.type === 'condition') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
   }
   const routeOf = new Map<string, { condition: string; route: string }>();
   for (const n of def.nodes) {
@@ -151,17 +160,22 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   for (const n of def.nodes) {
     const refs: Array<{ site: ExprSite; segments: string[] }> = [];
     const inParallel = n.type === 'parallel';
+    const inLoop = n.type === 'loop';
     for (const [field, value] of Object.entries(nodeValues(n))) {
       for (const site of collectExprs(value, field)) {
         if (site.kind === 'ref') {
           const segments = site.text.split('.');
           const root = segments[0]!;
           if (!REF_ROOTS.has(root)) {
-            err('invalid_ref', `ref '${site.text}' must start with inputs, nodes, config, item or run`, n.id, site.path);
+            err('invalid_ref', `ref '${site.text}' must start with inputs, nodes, config, item, state, iteration or run`, n.id, site.path);
             continue;
           }
           if (root === 'item' && !(inParallel && site.path.startsWith('node.'))) {
             err('invalid_ref', `'item' is only available inside a parallel node's body`, n.id, site.path);
+            continue;
+          }
+          if ((root === 'state' || root === 'iteration') && !(inLoop && site.path.startsWith('node.'))) {
+            err('invalid_ref', `'${root}' is only available inside a loop node's body`, n.id, site.path);
             continue;
           }
           if (root === 'nodes') {
@@ -243,13 +257,15 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     return undefined;
   };
 
-  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || (n.type === 'parallel' && n.node.type === 'tool'))) {
+  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || n.type === 'loop') && n.node.type === 'tool'))) {
     warn('catalog_unavailable', 'tool catalog not available: tool references, arguments and projections were not checked');
   }
 
   for (const id of order.order) {
     const n = byId.get(id)!;
     let outputSchema: JsonSchema | undefined;
+    /** What downstream refs see, when it differs from what the node itself produces (write-mode workspaces). */
+    let refSchema: JsonSchema | undefined;
     let toolInfo: PlanNode['tool'];
 
     const typeOfRef = (segments: string[], site: ExprSite): JsonSchema | undefined => {
@@ -259,6 +275,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         if (!r.ok) err('ref_type', `ref '${site.text}': ${r.error}`, n.id, site.path);
         return r.ok ? r.schema : undefined;
       }
+      if ((root === 'state' || root === 'iteration') && n.type === 'loop') return root === 'iteration' ? { type: 'integer' } : undefined;
       if (root === 'item' && n.type === 'parallel') {
         const items = forEachSchema(n);
         const r = resolvePath(items, segments.slice(1));
@@ -328,7 +345,40 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         break;
       case 'agent': {
         outputSchema = loadSchema(n.output_schema, n.id, 'output_schema');
-        if (opts.pkg && opts.pkg.readText(profilePath(n.profile)) === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
+        const profileText = opts.pkg?.readText(profilePath(n.profile));
+        if (opts.pkg && profileText === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
+        if (n.workspace && n.executor !== 'opencode') err('workspace_unsupported', `a workspace needs executor: opencode (got ${n.executor ?? 'model-agent'})`, n.id, 'workspace');
+        if (n.workspace?.test && n.workspace.mode !== 'write') err('workspace_test_needs_write', 'workspace.test runs after the agent changes the checkout, so it needs mode: write', n.id, 'workspace.test');
+        if (n.workspace?.test && /\{\{\w+\}\}/.test(n.workspace.test.command)) warn('unfilled_setting', `workspace.test.command is still a setting placeholder (${n.workspace.test.command}); the example install fills it, or edit it`, n.id, 'workspace.test.command');
+        if (n.workspace?.test?.timeout) {
+          try {
+            parseDuration(n.workspace.test.timeout);
+          } catch {
+            err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
+          }
+        }
+        if (n.workspace?.mode === 'write') {
+          // The worker fills `workspace` with what really changed in the checkout; the agent may not claim it.
+          const props = (outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+          if (outputSchema && (outputSchema as { type?: unknown }).type !== 'object') err('workspace_output', 'a write-mode workspace step needs an object output_schema (the worker adds a workspace field)', n.id, 'output_schema');
+          else if (props && 'workspace' in props) err('workspace_output', "output_schema may not declare 'workspace': the worker sets it to the change it found in the checkout", n.id, 'output_schema');
+          else if (outputSchema) {
+            const required = (outputSchema as { required?: string[] }).required ?? [];
+            refSchema = { ...outputSchema, properties: { ...(props ?? {}), workspace: WORKSPACE_CHANGE_SCHEMA }, required: [...required, 'workspace'] } as JsonSchema;
+          }
+        }
+        if (opts.pkg && profileText !== undefined) {
+          let harness: AgentProfile['harness'];
+          try {
+            harness = parseProfile(profileText, profilePath(n.profile)).harness;
+          } catch {
+            // The run plan reports a profile that does not parse; here only its harness section is checked.
+          }
+          if (harness?.opencode) {
+            if (n.executor !== 'opencode') warn('harness_ignored', `profile '${n.profile}' has an OpenCode section, which ${n.executor ?? 'model-agent'} ignores`, n.id, 'profile');
+            for (const p of opencodeHarnessProblems(harness.opencode, (f) => opts.pkg!.readText(f))) err('invalid_profile', `${n.profile}: ${p}`, n.id, 'profile');
+          }
+        }
         const agentTools: NonNullable<PlanNode['agentTools']> = [];
         for (const ref of n.tools ?? []) {
           const spec = opts.catalog?.get(ref);
@@ -368,10 +418,26 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
         };
         break;
       }
+      case 'loop': {
+        let inner: JsonSchema | undefined;
+        if (n.node.type === 'tool') inner = checkTool(n.node.tool, n.node.arguments, n.node.project, 'node.arguments');
+        else if (n.node.type === 'script') {
+          checkScript(n.node.runtime, n.node.entrypoint, n.id);
+          inner = loadSchema(n.node.output_schema, n.id, 'node.output_schema');
+        }
+        outputSchema = {
+          type: 'object',
+          properties: { state: inner ?? {}, iterations: { type: 'array', items: inner ?? {} }, count: { type: 'integer' }, exited: { type: 'boolean' } },
+        };
+        break;
+      }
+      case 'subworkflow':
+        outputSchema = SUBWORKFLOW_OUTPUT_SCHEMA;
+        break;
       default:
         outputSchema = undefined;
     }
-    outputs.set(id, outputSchema);
+    outputs.set(id, refSchema ?? outputSchema);
 
     const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.type === 'approval' && n.expires_in ? n.expires_in : n.timeout;
     let timeoutMs = DEFAULT_TIMEOUTS[n.type];

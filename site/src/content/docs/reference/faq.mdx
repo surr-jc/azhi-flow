@@ -1,0 +1,68 @@
+---
+title: FAQ
+description: Short answers to common questions about Azhi Flow.
+---
+
+## Is Azhi Flow a replacement for Claude Code, OpenCode or Copilot?
+
+No. Those are interactive coding tools. Azhi runs the same kind of work **repeatedly, unattended and auditable**,
+and can run OpenCode and the Claude Agent SDK *as steps*. See [How it compares](/compare/).
+
+## Is it production ready?
+
+It is **alpha**. Phases 0 to 3 are done; the first release (phase 4) is only outlined. Workers are supported on
+Linux only. See [Project status](/status/).
+
+## Does it work on my Mac / on Windows?
+
+Both are tested and working. Windows works inside WSL2 for the team install, and natively in experimental
+[local mode](/install/local-mode/). On macOS the server runs in Docker and a development worker runs natively;
+workers are not certified there. See the [setup guides](/install/).
+
+## Do I need Docker?
+
+Not for [local mode](/install/local-mode/) (Linux and native Windows). The team install uses Docker for PostgreSQL,
+Temporal and the server.
+
+## Which models can I use?
+
+Anthropic, OpenAI and GitHub Copilot models, plus ChatGPT and Claude plan sign-ins through the right executor.
+See [Choose providers and models](/guides/models/).
+
+## Can I use my existing subscription instead of API keys?
+
+Yes, within each provider's terms, for your own use. See [Use a subscription, not API keys](/guides/subscriptions/).
+
+## What stops a prompt injection from making the agent post somewhere bad?
+
+The [taint rule](/concepts/taint/): a write after an agent that read untrusted data must be gated by an approval or
+a CEL guard, or the workflow fails to compile. It gates writes; it does not make the agent's analysis immune to
+being misled.
+
+## Will a crash cause a duplicate Slack message or issue?
+
+The [ledger](/concepts/ledger/) is designed so it does not: retries find the earlier action, dedupable writes are
+looked up on the target, and unsafe writes stop for an operator. The alpha demo kills the gateway mid-post and
+shows exactly one message.
+
+## How do you know what it costs?
+
+Per-turn usage and cost from declared pricing. If the price is unknown, the cost is **unavailable**, never guessed,
+and spend limits say they are a lower bound. See [Cost and token control](/features/cost/).
+
+## Can it merge my PRs?
+
+No. Nothing in Azhi merges, closes or force-pushes. AI-SDLC opens **draft** PRs after a person approves.
+
+## Where do my secrets go?
+
+Encrypted, per workspace, write-only in the UI and API. They never enter packages. See
+[Security and trust](/concepts/security/).
+
+## What is the license?
+
+Apache-2.0 for the core.
+
+## What does the name mean?
+
+ஆழி (*aazhi*) is Tamil for "sea". The logo is the letter ழ (*zha*), drawn as one continuous line.

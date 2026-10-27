@@ -1,0 +1,69 @@
+---
+title: Example workflows
+description: The installable workflows that ship with Azhi Flow, what each does and what it needs.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Install any example from Mission Control's **Examples** page or the CLI. Check what it needs first:
+
+```bash
+npx azhi example list
+npx azhi example needs ai-sdlc-v2
+npx azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...
+```
+
+| Example | What it does | Executor |
+|---|---|---|
+| `quality-report` (the flagship) | Weekly report: tools and a Python script compute metrics; an agent explains them with numbered citations; Slack post gated by a CEL guard. **Its tools return fixture data** | model agent |
+| `ci-digest` | CI digest to Slack; the smallest end-to-end example | none (no model) |
+| [`ai-sdlc-v2`](/examples/ai-sdlc-v2/) | GitHub issue → readiness check → plan → build → independent review and verification → approval → draft PR | OpenCode |
+| `pr-review` | Four read-only reviewers in fresh checkouts, a verifier on a different model family, triage by script, one sticky PR comment | OpenCode (Copilot models) |
+| `issue-investigation` | Evidence-backed root-cause analysis with a challenger; an approval gates the comment | OpenCode |
+| `issue-splitter` / `issue-splitter-jira` | Sizes a ticket against the code; if too big, splits into ordered, linked sub-issues after approval | agent |
+| `doubler`, `caller`, `loop-demo` | Tiny fixtures for subworkflows and loops | none |
+
+## `quality-report`: the flagship
+
+```text
+ci_runs ┐
+flaky   ├─► metrics (script) ─► analyse (agent + dataset) ─► report ─► post (Slack, guarded)
+incidents┘
+```
+
+Numbers come from the script and are authoritative; the agent explains them. Every claim cites an immutable
+excerpt, with per-source as-of times.
+
+## `pr-review`
+
+```text
+pr ─┬─ correctness ─┐
+    ├─ security ────┤
+    ├─ tests ───────┼─ verify ─ triage ─ summarize ─ report ─┬─ post (PR comment)
+    └─ quality ─────┘                                         └─ notify (Slack)
+```
+
+- Each reviewer works in its **own fresh checkout** of `refs/pull/<n>/head`, with read-only tools only
+  (`read`, `grep`, `glob`, `skill`), an isolated git and `HOME`, and a read-only token that is never written.
+- `verify` (a different model family) tries to refute every finding; `triage` keeps those confirmed at **80+**.
+- A closed or merged PR skips every later step unless `allow_closed` is true.
+- The comment is ledgered, deduplicated, guarded to the PR under review, and **sticky**: a later run edits it.
+- Runs on GitHub Copilot models: `azhi copilot login`.
+
+## `issue-investigation`
+
+`issue → investigate → challenge → calibrate → report → (approve → post)`. The RCA holds severity, complexity and
+confidence with reasons, origin (regression, long-standing, original, unknown), a 5-whys chain with `path:line`
+evidence, and a proposed fix with tests to add.
+
+## `issue-splitter`
+
+Rules, not the agent alone, decide **single or split**: a split needs 2+ proposed slices *and* any of more than one
+deliverable, more than `split_max_files` (5) files, or a sensitive area in more than 2 files. A person approves and
+may leave slices out. Something that is not code stops, and nothing is created. Run it **before** the delivery
+workflow.
+
+<Aside type="note">
+The older delivery workflows (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered. They live on as test
+fixtures; their docs remain for the engine features they describe.
+</Aside>

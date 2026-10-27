@@ -73,6 +73,7 @@ export interface RunRow {
   flags: Record<string, any>;
   trigger: string;
   test?: boolean;
+  inputs?: Record<string, unknown>;
   created_at: string;
   ended_at: string | null;
   workflow: string;
@@ -108,6 +109,8 @@ export interface Spend {
   turns: number;
   unpriced_turns: number;
   amount: number;
+  /** GitHub Copilot AI Credits; null without Copilot turns. */
+  credits?: number | null;
   currency: string;
   complete: boolean;
   input_tokens: number | null;
@@ -121,6 +124,10 @@ export interface Overview {
   approvals: { pending: number; mine: number };
   spend: { today: Spend; week: Spend };
   schedules: ScheduleRow[];
+  /** Runs started per UTC day (YYYY-MM-DD) over the last 28 days; days without runs are absent. */
+  runs_by_day: Array<{ day: string; started: number; ended: number; succeeded: number; failed: number }>;
+  /** Runs started per workflow over the last 14 days, busiest first. */
+  runs_by_workflow: Array<{ workflow: string; runs: number; succeeded: number }>;
 }
 
 export interface ScheduleRow {
@@ -160,7 +167,42 @@ export interface RunPlan {
   package_hash: string;
   signer: { publisher?: string; verified: boolean; error?: string };
   ok: boolean;
-  nodes: Array<{ id: string; type: string; executor?: string; requirements: Array<{ name: string; mark: string; detail: string }>; coverage: Array<{ action: string; enforcement: string; detail: string }>; tainted?: string }>;
+  nodes: Array<{ id: string; type: string; executor?: string; requirements: Array<{ name: string; mark: string; detail: string }>; coverage: Array<{ action: string; enforcement: string; detail: string }>; tainted?: string; model?: { provider: string; name: string | null; source: 'profile' | 'server_default' | 'workflow_default' | 'run_choice' } }>;
   blockers: Array<{ code: string; message: string; node?: string }>;
   missing_grants: Array<{ kind: string; name: string; node: string }>;
+}
+
+export interface PreflightCheck {
+  id: string;
+  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  status: 'ok' | 'warn' | 'fail' | 'skipped';
+  target: string;
+  node?: string;
+  message: string;
+  fix?: string;
+}
+export interface PreflightReport { ok: boolean; checks: PreflightCheck[] }
+
+export type Theme = 'system' | 'light' | 'dark';
+const THEME_KEY = 'azhi-theme';
+
+/** The theme chosen in this browser (a convenience; the system setting is the default). */
+export function getTheme(): Theme {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return t === 'light' || t === 'dark' ? t : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+export function applyTheme(t: Theme): void {
+  if (t === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  try {
+    if (t === 'system') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, t);
+  } catch {
+    /* storage blocked: the choice lasts for this page */
+  }
 }

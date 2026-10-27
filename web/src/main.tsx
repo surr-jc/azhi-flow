@@ -1,11 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { ApiError, isAuthError, setToken, takeTokenFromHash } from './api';
+import { ApiError, applyTheme, getTheme, isAuthError, setToken, takeTokenFromHash } from './api';
 import { App } from './App';
 import { Router } from './router';
+import '@fontsource-variable/public-sans';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 
 takeTokenFromHash();
+applyTheme(getTheme());
 
 const client = new QueryClient({
   defaultOptions: {

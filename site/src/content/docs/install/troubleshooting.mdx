@@ -1,0 +1,25 @@
+---
+title: Troubleshooting
+description: Symptoms, causes and fixes for installing and running Azhi Flow.
+---
+
+Start with `npx azhi doctor`. It checks the server, database, Temporal, workers online and live interpreter
+builds. `npx azhi setup` checks the machine for what OpenCode steps need.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Web page does not load on Windows (WSL2) | Port not published or forwarding off | `docker ps` should show 7400 published; wait ~15 s after the installer; check `localhostForwarding` in `%UserProfile%\.wslconfig` |
+| Slow installs or broken file permissions in WSL2 | Repo cloned under `/mnt/c` | Clone into the Linux filesystem (`~/azhi-flow`) |
+| `node` not recognized right after installing | The current window has the old PATH | Open a new PowerShell window |
+| Web UI asks for a token | The browser needs the local owner token | Open the link printed by `npx azhi open` |
+| Port 7410 (or 7400) already in use | An earlier `azhi up` is still running | `npx azhi down`, then start again, or pick `--port` |
+| `npm warn allow-scripts` for `@swc/core`, `esbuild`, `opencode-ai`, `protobufjs` | npm 11 no longer runs install scripts until approved | `npm approve-scripts --allow-scripts-pending`, review, then `npm install` again. Startup works without it |
+| Server crashes on start with `ENOENT ... /app/examples` | Install predates the commit that put `examples/` in the Docker image | Update the repo and re-run `deploy/install.sh` to rebuild |
+| Database auth fails after reinstall | `deploy/.env` was deleted while the volume exists | The database keeps the password it was created with. Restore the original `deploy/.env` |
+| Docker Hub rate-limits the image pull | Anonymous pull limits | `AZHI_NODE_IMAGE=mirror.gcr.io/library/node:22-bookworm-slim deploy/install.sh` |
+| Run refused: `limits.memory_mb` unsupported | macOS and Windows lack `prlimit` | Use a Linux worker, or remove the limit from that script node |
+| Run refused with blockers | The run plan found something unsupported or missing | `npx azhi plan <path>` lists each blocker |
+| OpenCode downloads ripgrep on every step, or fails offline | No `rg` on the worker | Install ripgrep (see [Workers](/install/workers/)); `azhi doctor` flags it |
+| `npx azhi` finds no server | `AZHI_URL` / saved login points elsewhere | `npx azhi login --url ... --token ...` or unset `AZHI_URL` |
+| Windows: `azhi down` ends abruptly | There is no SIGTERM on Windows | Expected. The database and Temporal recover on the next start |
+| Mixed-up dashes in pasted commands | Word processors turn `-` into `—` | Type plain hyphens |

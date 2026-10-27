@@ -5,3 +5,13 @@ dist/
 .env
 coverage/
 .scratch/
+package-lock.json
+docs/demo/out/*
+
+# Claude Code dev layer
+.claude/work/
+.claude/logs/
+.opencode/
+site/.astro/
+!site/package-lock.json
+site/wiki-dist/

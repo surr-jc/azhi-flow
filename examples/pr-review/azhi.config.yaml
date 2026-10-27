@@ -1,0 +1,63 @@
+# Admin configuration for the PR review example: `azhi apply examples/pr-review/azhi.config.yaml`.
+# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise add
+#    api_url: https://<host>/api/v3 to both tools and set `host` on the workflow's workspace
+#    (`azhi example install pr-review --api-url ...` does both).
+#    slack_channel (setting) and slack-bot-token (secret): the review summary goes to Slack when the
+#    reviewers have comments.
+# 2. Secrets (values never go in a package or run state):
+#    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read
+#                          the PR and to clone the repository on the worker
+#    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
+#                          comment step (the review is posted automatically, and later runs edit that comment)
+#    github-copilot-token  your GitHub Copilot sign-in; the reviewers run on Copilot models through
+#                          OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the review summary is posted to when the reviewers have comments (the bot must be in it).
+    placeholder: C0123ABCD
+tools:
+  - id: github.get-pull-request
+    version: 1
+    description: One pull request with its refs and changed files (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.pull-request, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        draft: {type: boolean}
+        mergeable: {type: [boolean, 'null']}
+        mergeable_state: {type: string}
+        url: {type: string}
+        base_ref: {type: string}
+        base_sha: {type: string}
+        head_ref: {type: string}
+        head_sha: {type: string}
+        additions: {type: integer}
+        deletions: {type: integer}
+        changed_files:
+          type: array
+          items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
+  - id: github.comment-on-pr
+    version: 1
+    description: Post the review comment on a pull request, or edit the one it posted before (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-comment-token
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-review}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
+secrets:
+  - github-read-token
+  - github-comment-token
+  - github-copilot-token
+  - slack-bot-token

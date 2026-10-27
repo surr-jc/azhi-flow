@@ -1,0 +1,62 @@
+---
+title: Security and trust
+description: Signed packages, worker trust policies, write-only secrets, isolation, redaction and authentication.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Packages are signed
+
+Every upload is signed with an **Ed25519 per-publisher key**. The workspace root key signs a certificate binding
+the publisher's public key to their user ID. Workers verify the chain to the workspace root, then the package
+signature and hash, then apply their trust policy.
+
+| Worker trust policy | Runs packages from |
+|---|---|
+| `self` | The worker's own publisher only |
+| `authors:<ids>` | The listed publishers |
+| `workspace-publishers` | Any publisher certified by the workspace root |
+
+A refused package never creates a run. The plan says so first. Publishing from the web editor still needs your
+signature: drafts are unsigned.
+
+## Secrets
+
+- Stored encrypted per workspace. Credentials **never enter packages**.
+- **Write-only** in the UI and API: you can set a value, never read it back. The UI shows only name, version and
+  when it changed.
+- Agent transcripts are [redacted twice](/concepts/context-manifest/) for secrets and token-shaped strings.
+- The library never stores secrets; definitions name environment variables such as `{env:DOCS_API_KEY}`.
+
+## Isolation of agent steps
+
+- Fresh checkout, isolated git and `HOME`, deleted after the step.
+- OpenCode built-in tools restricted: only `read`, `grep`, `glob` and `skill` can be allowed for reviewers;
+  every permission is `deny`; reads outside the step folder are refused.
+- Command templates may not contain `$ARGUMENTS`, `$1`-style placeholders or `` !`shell` `` lines, because
+  OpenCode would run them on untrusted input.
+- A package file cannot switch tools or permissions back on; Azhi writes the agent frontmatter itself.
+- Script memory limits are enforced with `prlimit` on Linux.
+
+## Authentication and roles
+
+REST API with a local owner token, or **OIDC** for a team (`AZHI_AUTH_MODE`, `AZHI_OIDC_*`). New OIDC users start
+as viewers unless invited by email. There are five roles: `owner`, `admin`, `author`, `operator` and `viewer`.
+For example, building with chat needs `author`, and registering tools and managing MCP connections needs `admin`.
+The CLI, Mission Control and the API share the same role checks, and an audit log records who changed secrets, published, approved or changed schedules and trust policies.
+
+Mission Control holds the token in the tab (sessionStorage), passes it once in the URL fragment through
+`azhi open`, never in a URL the server logs, and serves with a strict CSP and no third-party scripts or fonts.
+
+## Network egress
+
+The library's marketplace features only call `registry.modelcontextprotocol.io`, `raw.githubusercontent.com` and
+`api.github.com`, and an admin can turn them off for air-gapped installs.
+
+## What is not covered
+
+<Aside type="caution">
+- MCP servers a harness profile starts itself are **unobservable**: not in the gateway, not in the ledger.
+- A `local` MCP server is a program that runs on a worker. Import only ones you trust.
+- Alpha software: it has not had an external security audit.
+</Aside>

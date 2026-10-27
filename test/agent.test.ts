@@ -53,6 +53,16 @@ describe.skipIf(!up)('model agent', () => {
     expect(last.items.every((i: any) => i.content === undefined && i.content_hash.startsWith('sha256:'))).toBe(true);
     expect(last.token_source).toBe('reported');
     expect(last.tainted).toBe(true); // ci.list-runs output is not marked trusted
+
+    // The run page's transcript: prompts, the tool call and its result, the repair, the accepted output.
+    const tx = await h.api.get<any>(`/v1/runs/${d.run.id}/transcript?node=explain`);
+    const entries = tx.entries.sort((a: any, b: any) => a.ord - b.ord);
+    expect(entries.slice(0, 2).map((e: any) => e.kind)).toEqual(['system', 'user']);
+    expect(entries.find((e: any) => e.kind === 'tool' && e.tool !== 'submit_output')).toMatchObject({ status: 'completed', output: expect.stringContaining('r3') });
+    const submits = entries.filter((e: any) => e.tool === 'submit_output');
+    expect(submits.map((e: any) => e.status)).toEqual(['error', 'completed']);
+    expect(submits[0].error).toContain('contract_violation');
+    expect(entries.filter((e: any) => e.kind === 'step')).toHaveLength(3);
   });
 
   it('plans the model binding and refuses a run with no provider credential', async () => {

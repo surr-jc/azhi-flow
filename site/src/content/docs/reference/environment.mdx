@@ -1,0 +1,70 @@
+---
+title: Environment variables
+description: The AZHI_* variables for the installer, server, workers, models and OpenCode steps.
+---
+
+Set server variables in `deploy/.env` (team install) or in the shell before `azhi up` (local mode). Set worker
+variables on the worker host.
+
+## Installer (`deploy/install.sh`)
+
+| Variable | Default | Use |
+|---|---|---|
+| `AZHI_PORT` | `7400` | API and web run page port |
+| `AZHI_PG_PORT`, `AZHI_TEMPORAL_PORT` | `5432`, `7233` | Published ports |
+| `AZHI_TEMPORAL_VERSION` | `1.29.1` | Temporal server image tag |
+| `AZHI_NODE_IMAGE` | `node:22-bookworm-slim` | Base image (mirror it when Docker Hub rate-limits) |
+| `AZHI_SKIP_BUILD` | unset | `1` uses an already-loaded `azhi-flow/server` image |
+| `AZHI_COMPOSE_PROJECT` | `azhi` | Run a second, isolated stack on one host |
+
+## Connecting the CLI and workers
+
+| Variable | Use |
+|---|---|
+| `AZHI_URL`, `AZHI_TOKEN` | Server URL and token, instead of `azhi login` |
+| `AZHI_TEMPORAL_ADDRESS` | Temporal address, for example `localhost:7233` |
+| `AZHI_DATABASE_URL` | `postgres://...`, or `pglite://...` for an embedded database |
+
+## Authentication
+
+| Variable | Default | Use |
+|---|---|---|
+| `AZHI_AUTH_MODE` | `local` | Switch to OIDC for a team |
+| `AZHI_OIDC_ISSUER`, `AZHI_OIDC_AUDIENCE` | unset | OIDC tokens (accepted in `local` mode too, alongside the owner token) |
+| `AZHI_OIDC_CLIENT_ID`, `AZHI_OIDC_CLIENT_SECRET`, `AZHI_OIDC_SCOPES` | unset, unset, `openid email profile` | Browser sign-in to Mission Control. Register `<AZHI_PUBLIC_URL>/v1/auth/callback` as the redirect URI. New users start as viewers unless invited by email |
+
+## Models and cost
+
+| Variable | Use |
+|---|---|
+| `AZHI_ANTHROPIC_MODEL`, `AZHI_OPENAI_MODEL`, `AZHI_COPILOT_MODEL`, `AZHI_CHATGPT_MODEL` | The model for profiles that say `name: default` (`AZHI_CHATGPT_MODEL` defaults to `gpt-5.5`) |
+| `AZHI_OPENAI_RATES` | `model=input/cached/output,...` in USD per million tokens |
+| `AZHI_BUILDER_PROVIDER`, `AZHI_BUILDER_MODEL` | Default provider and model for Build with chat |
+
+## Server behavior
+
+| Variable | Use |
+|---|---|
+| `AZHI_MAX_RUNS_PER_REPO` | Server default for concurrent runs on one repository (default 2; `0` means no limit) |
+| `AZHI_AGENT_TRANSCRIPTS` | `0` stops storing agent transcripts |
+| `AZHI_GITHUB_TOKEN` | Lifts the 60 requests per hour GitHub limit for the Library marketplaces |
+| `AZHI_SLACK_API_URL` | Point Slack calls at a fake API for local runs |
+
+## Worker tools (OpenCode steps)
+
+| Variable | Use |
+|---|---|
+| `AZHI_TOOLS_DIR` | Where `azhi setup` installs tools (default `~/.azhi/tools`) |
+| `AZHI_RG_BIN` | Path to ripgrep |
+| `AZHI_OPENCODE_BIN` | Path to the OpenCode binary. If set, it must exist |
+| `AZHI_OPENCODE_TOKEN_SAVING` | `on` adds search-first reading rules to OpenCode prompts (off by default) |
+| `AZHI_DCP_MIN_CONTEXT`, `AZHI_DCP_MAX_CONTEXT` | When DCP starts and presses to compress: a token count (`30000`) or a share of the window (`40%`) |
+| `AZHI_OPENCODE_MAJOR` | `2` runs OpenCode steps on the OpenCode 2 preview |
+| `AZHI_OPENCODE2_BIN` | Path to the OpenCode 2 binary |
+
+## Tests
+
+| Variable | Use |
+|---|---|
+| `AZHI_TEST_DATABASE_URL` | Test database. `pglite://` runs `npm run test:local` without Docker |
+| `AZHI_DEMO_DATABASE_URL` | Admin connection for `npm run demo` |

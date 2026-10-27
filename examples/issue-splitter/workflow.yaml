@@ -1,0 +1,357 @@
+# issue-splitter: size a ticket against the code, and split it into linked sub-issues when it is too big for
+# one pull request. The work for the ai-sdlc delivery workflow: run this first, then deliver each issue.
+#   input         an existing GitHub issue (issue: 27 or owner/name#27), or a request typed as free text
+#   ticket        the request as one plain ticket
+#   analyze       an agent reads the repository and reports facts: deliverables, files, sensitive areas, risk,
+#                 and (when the work is wide) ordered slices that each pass a definition-of-ready check
+#   scope_gate    not a code change: stop, tell Slack, create nothing
+#   weight        RULES, not the agent alone, decide single or split: more than one deliverable, more files
+#                 than split_max_files, or a sensitive area in more than split_sensitive_max_files files
+#   plan_review   a person approves the plan, and may leave slices out; nothing is written before this
+#   then          split an existing issue: create one sub-issue per slice, linked under it, and comment on it
+#                 split free text: create an umbrella issue, then the sub-issues under it
+#                 single existing issue: add a scope comment and the ready label
+#                 single free text: create one issue
+# Ticket and repository text are untrusted: the analyst is tainted, every write happens after the approval,
+# through ledgered gateway tools, behind CEL guards that pin the repository and the parent. Nothing is
+# merged or closed, and no issue is edited beyond a comment and a label.
+schema_version: "2.0"
+id: issue-splitter
+name: Issue splitter (GitHub)
+description: Size an issue or a request against the code and, when it is too big for one pull request, split it into ordered, linked sub-issues after a person approves the plan; otherwise mark it ready.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The repository the issues live in, owner/name"}
+    issue: {type: string, title: Existing issue, maxLength: 300, description: "An issue number (27), owner/name#27 or its URL. Leave empty to describe a request instead."}
+    text: {type: string, title: Request, maxLength: 20000, description: "Free text to analyze when there is no issue yet. Ignored when an issue is given."}
+    base_branch: {type: string, title: Base branch, maxLength: 200, description: "Branch the analysis reads; leave empty for the default branch"}
+  required: [repo]
+  anyOf:
+    - {required: [issue], properties: {issue: {minLength: 1}}}
+    - {required: [text], properties: {text: {minLength: 1}}}
+config:
+  # Filled in by the example install (setting slack_channel).
+  channel: "{{slack_channel}}"
+  # The weight rules. A ticket is split only when the analyst also proposed 2 or more slices.
+  split_max_files: 5
+  split_sensitive_max_files: 2
+  # Labels. ready marks a ticket the delivery workflow can pick up; set it to "" to skip it.
+  ready_label: ready
+  split_label: azhi-split
+nodes:
+  - id: source
+    type: condition
+    description: An existing issue, or a request typed as free text.
+    expression: "has(inputs.issue) && inputs.issue != '' ? 'issue' : 'text'"
+    routes: {issue: [github_issue], text: [text_pass]}
+
+  - id: github_issue
+    type: tool
+    description: Read the issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {cel: "inputs.issue.matches('^[0-9]+$') ? inputs.repo + '#' + inputs.issue : inputs.issue"}}
+
+  - id: text_pass
+    type: condition
+    description: No issue to read - the request is the text. Marks that branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  # The join reads nothing from before the branches: a merge node runs when any input got through.
+  - id: ticket
+    type: script
+    description: The request as one plain ticket (an issue's key, title and body, or the text's first line as the title).
+    runtime: python
+    entrypoint: scripts/ticket.py
+    merge: any
+    depends_on: [text_pass]
+    input: {map: "{'repo': inputs.repo, 'text': has(inputs.text) ? inputs.text : '', 'issue': has(nodes.github_issue) ? nodes.github_issue.output : null}"}
+    output_schema: schemas/ticket.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: analyze
+    type: agent
+    description: Size the ticket against the code - deliverables, files, sensitive areas, risk - and propose slices when it is wide (scope-analysis and definition-of-ready skills).
+    executor: opencode
+    profile: scope-analyst@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'ticket': nodes.ticket.output, 'repository': inputs.repo, 'limits': {'split_max_files': config.split_max_files, 'split_sensitive_max_files': config.split_sensitive_max_files, 'max_slices': 6}}"}
+    output_schema: schemas/scope.json
+    timeout: 25m
+    budget: {max_tool_calls: 12}
+
+  - id: scope_gate
+    type: condition
+    description: Only a code change goes on; anything else stops here and nothing is created.
+    expression: "nodes.analyze.output.is_code ? 'plan' : 'stop'"
+    routes: {plan: [weight], stop: [stop_message]}
+    default: stop
+
+  - id: stop_message
+    type: report
+    description: Why this is not something to split.
+    template: templates/stop.md
+    input: {map: "{'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output}"}
+
+  - id: stop_notify
+    type: notify
+    description: Tell the channel nothing was created, and why.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.stop_message.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: weight
+    type: condition
+    description: "Single or split, by rules: more than one deliverable, more files than split_max_files, or a sensitive area in more than split_sensitive_max_files files - and only when the analyst found at least 2 slices."
+    expression: "size(nodes.analyze.output.slices) >= 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files || (nodes.analyze.output.touches_sensitive && nodes.analyze.output.est_files > config.split_sensitive_max_files)) ? 'split' : 'single'"
+    routes: {single: [], split: []}
+    default: single
+
+  - id: plan_review
+    type: approval
+    description: A person approves the plan before anything is created, and may leave slices out. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: author
+    message: {cel: "nodes.weight.output.route == 'split' ? 'Split ' + (nodes.ticket.output.key != '' ? nodes.ticket.output.key : nodes.ticket.output.title) + ' into ' + string(size(nodes.analyze.output.slices)) + ' issues' + (nodes.ticket.output.kind == 'issue' ? ' under it' : ', with a new issue tracking them') + '? Name the slices to leave out, if any.' : (nodes.ticket.output.kind == 'issue' ? 'Add a scope comment and the ' + config.ready_label + ' label to ' + nodes.ticket.output.key + '?' : 'Create one issue for ' + nodes.ticket.output.title + '?')"}
+    payload: {map: "{'ticket': {'key': nodes.ticket.output.key, 'title': nodes.ticket.output.title, 'url': nodes.ticket.output.url}, 'decision': nodes.weight.output.route, 'analysis': {'summary': nodes.analyze.output.summary, 'deliverables': nodes.analyze.output.deliverables, 'est_files': nodes.analyze.output.est_files, 'touches_sensitive': nodes.analyze.output.touches_sensitive, 'has_migration': nodes.analyze.output.has_migration, 'risk': nodes.analyze.output.risk, 'reasons': nodes.analyze.output.reasons}, 'slices': nodes.analyze.output.slices, 'single': nodes.analyze.output.single, 'note': nodes.weight.output.route == 'single' && size(nodes.analyze.output.slices) < 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files) ? 'The size rules say this is big, but no way to split it was found: it is treated as one issue.' : ''}"}
+    decision_schema:
+      type: object
+      properties:
+        drop: {type: string, maxLength: 40, pattern: "^[0-9, ]*$", title: Slices to leave out, description: "Slice numbers from the plan, for example 2,4. Leave empty to create them all. Applies to a split only."}
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: final_plan
+    type: script
+    description: The issues to write, with their bodies, after the approver's choices (slices left out are removed, dependencies noted).
+    runtime: python
+    entrypoint: scripts/final_plan.py
+    input: {map: "{'weight': nodes.weight.output.route, 'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output, 'drop': has(nodes.plan_review.output.data.drop) ? nodes.plan_review.output.data.drop : '', 'ready_label': config.ready_label, 'split_label': config.split_label}"}
+    output_schema: schemas/final_plan.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: mode
+    type: condition
+    description: Which branch writes - comment and label an existing issue, create one issue, split an existing issue, or split free text under a new umbrella.
+    expression: nodes.final_plan.output.mode
+    routes:
+      single_existing: [single_comment, single_label]
+      single_new: [single_create]
+      split_existing: [parent_existing]
+      split_new: [parent_create]
+      none: []
+    default: none
+
+  # ---- A single issue that already exists: comment and label ------------------------------------
+  - id: single_comment
+    type: tool
+    description: Leave the scope analysis as a comment on the issue.
+    tool: github.comment-on-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: nodes.ticket.output.number}, body: {ref: nodes.final_plan.output.comment}}
+    guard: "args.repo == inputs.repo && args.number == nodes.ticket.output.number"
+
+  - id: single_label
+    type: tool
+    description: Mark the issue ready for the delivery workflow.
+    tool: github.label-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: nodes.ticket.output.number}, labels: {ref: nodes.final_plan.output.labels}}
+    guard: "args.repo == inputs.repo && args.number == nodes.ticket.output.number"
+
+  # ---- A single issue from free text ------------------------------------------------------------
+  - id: single_create
+    type: tool
+    description: Create one issue from the request.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {ref: nodes.final_plan.output.single.title}
+      body: {ref: nodes.final_plan.output.single.body}
+      labels: {ref: nodes.final_plan.output.single.labels}
+    guard: "args.repo == inputs.repo"
+
+  # ---- A split: the parent, then one sub-issue per slice (up to 6, in order) ---------------------
+  - id: parent_existing
+    type: condition
+    description: The parent is the issue the run started from. Marks that branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  - id: parent_create
+    type: tool
+    description: Create the umbrella issue that tracks the slices (free text only).
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {ref: nodes.final_plan.output.umbrella.title}
+      body: {ref: nodes.final_plan.output.umbrella.body}
+      labels: {ref: nodes.final_plan.output.umbrella.labels}
+    guard: "args.repo == inputs.repo"
+
+  - id: parent
+    type: script
+    description: The parent every slice goes under - the issue given, or the umbrella just created.
+    runtime: python
+    entrypoint: scripts/parent.py
+    merge: any
+    depends_on: [parent_existing]
+    input: {map: "{'issue': has(inputs.issue) ? inputs.issue : '', 'created': has(nodes.parent_create) ? nodes.parent_create.output : null, 'repo': inputs.repo}"}
+    output_schema: schemas/parent.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: issue_1
+    type: tool
+    description: Create sub-issue 1, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[0].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[0].body"}
+      labels: {cel: "nodes.final_plan.output.issues[0].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  - id: has_2
+    type: condition
+    description: Is there a slice 2?
+    expression: "size(nodes.final_plan.output.issues) >= 2 ? 'yes' : 'no'"
+    depends_on: [issue_1]
+    routes: {yes: [issue_2], no: []}
+    default: 'no'
+
+  - id: issue_2
+    type: tool
+    description: Create sub-issue 2, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[1].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[1].body"}
+      labels: {cel: "nodes.final_plan.output.issues[1].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  - id: has_3
+    type: condition
+    description: Is there a slice 3?
+    expression: "size(nodes.final_plan.output.issues) >= 3 ? 'yes' : 'no'"
+    depends_on: [issue_2]
+    routes: {yes: [issue_3], no: []}
+    default: 'no'
+
+  - id: issue_3
+    type: tool
+    description: Create sub-issue 3, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[2].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[2].body"}
+      labels: {cel: "nodes.final_plan.output.issues[2].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  - id: has_4
+    type: condition
+    description: Is there a slice 4?
+    expression: "size(nodes.final_plan.output.issues) >= 4 ? 'yes' : 'no'"
+    depends_on: [issue_3]
+    routes: {yes: [issue_4], no: []}
+    default: 'no'
+
+  - id: issue_4
+    type: tool
+    description: Create sub-issue 4, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[3].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[3].body"}
+      labels: {cel: "nodes.final_plan.output.issues[3].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  - id: has_5
+    type: condition
+    description: Is there a slice 5?
+    expression: "size(nodes.final_plan.output.issues) >= 5 ? 'yes' : 'no'"
+    depends_on: [issue_4]
+    routes: {yes: [issue_5], no: []}
+    default: 'no'
+
+  - id: issue_5
+    type: tool
+    description: Create sub-issue 5, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[4].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[4].body"}
+      labels: {cel: "nodes.final_plan.output.issues[4].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  - id: has_6
+    type: condition
+    description: Is there a slice 6?
+    expression: "size(nodes.final_plan.output.issues) >= 6 ? 'yes' : 'no'"
+    depends_on: [issue_5]
+    routes: {yes: [issue_6], no: []}
+    default: 'no'
+
+  - id: issue_6
+    type: tool
+    description: Create sub-issue 6, linked under the parent.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {cel: "nodes.final_plan.output.issues[5].title"}
+      body: {cel: "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[5].body"}
+      labels: {cel: "nodes.final_plan.output.issues[5].labels"}
+      parent: {ref: nodes.parent.output.number}
+    guard: "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+
+  # ---- Join: what happened, as words -------------------------------------------------------------
+  # Reads only the write steps and the plan, nothing from before the approval, so a stop or a rejection
+  # ends the run without it.
+  - id: outcome
+    type: script
+    description: The Slack message and the comment for the parent, from what was actually created.
+    runtime: python
+    entrypoint: scripts/outcome.py
+    merge: any
+    input: {map: "{'mode': nodes.final_plan.output.mode, 'label': nodes.final_plan.output.label, 'dropped': nodes.final_plan.output.dropped, 'parent': has(nodes.parent) ? nodes.parent.output : null, 'created': [has(nodes.issue_1) ? nodes.issue_1.output : null, has(nodes.issue_2) ? nodes.issue_2.output : null, has(nodes.issue_3) ? nodes.issue_3.output : null, has(nodes.issue_4) ? nodes.issue_4.output : null, has(nodes.issue_5) ? nodes.issue_5.output : null, has(nodes.issue_6) ? nodes.issue_6.output : null], 'single': has(nodes.single_create) ? nodes.single_create.output : null, 'labelled': has(nodes.single_label) ? nodes.single_label.output : null, 'commented': has(nodes.single_comment) ? nodes.single_comment.output : null}"}
+    output_schema: schemas/outcome.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: comment_gate
+    type: condition
+    description: Leave a summary on the parent only after a split.
+    expression: "nodes.final_plan.output.mode == 'split_existing' || nodes.final_plan.output.mode == 'split_new' ? 'yes' : 'no'"
+    depends_on: [outcome]
+    routes: {yes: [parent_comment], no: []}
+    default: 'no'
+
+  - id: parent_comment
+    type: tool
+    description: List the sub-issues on the parent.
+    tool: github.comment-on-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: nodes.parent.output.number}, body: {ref: nodes.outcome.output.parent_comment}}
+    guard: "args.repo == inputs.repo && args.number == nodes.parent.output.number"
+
+  - id: notify
+    type: notify
+    description: Tell the channel what was created.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.outcome.output.message}
+    guard: "args.channel == config.channel"

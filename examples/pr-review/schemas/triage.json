@@ -1,0 +1,56 @@
+{
+  "type": "object",
+  "properties": {
+    "reviews": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "unverified": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "stats": {
+      "type": "object",
+      "properties": {
+        "found": {
+          "type": "integer"
+        },
+        "kept": {
+          "type": "integer"
+        },
+        "unverified": {
+          "type": "integer"
+        },
+        "dropped": {
+          "type": "integer"
+        },
+        "min_confidence": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "found",
+        "kept",
+        "unverified",
+        "dropped",
+        "min_confidence"
+      ]
+    }
+  },
+  "required": [
+    "reviews",
+    "unverified",
+    "dropped",
+    "stats"
+  ]
+}

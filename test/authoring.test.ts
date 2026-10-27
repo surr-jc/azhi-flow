@@ -26,7 +26,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
   beforeAll(async () => {
     if (!existsSync('src/web/dist/index.html') || process.env.AZHI_BUILD_WEB) execSync('npm run build:web', { stdio: 'ignore' });
     h = await startHarness({ worker: false });
-    for (const t of parse(readFileSync('examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
+    for (const t of parse(readFileSync('test/fixtures/examples/sdlc/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     for (const t of parse(readFileSync('examples/ci-digest/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     token = readFileSync(h.server.localTokenFile!, 'utf8').trim();
     browser = await chromium.launch({ executablePath: CHROMIUM });
@@ -45,10 +45,10 @@ describe.skipIf(!up)('authoring in mission control', () => {
     return page;
   }
 
-  it('uploads a package folder as an unsigned draft and shows its files', async () => {
+  it('uploads a package folder as a draft signed in the browser and shows its files', async () => {
     const page = await open('/ui/workflows');
     await page.getByRole('link', { name: 'Upload a workflow' }).click();
-    await page.getByLabel('Package folder').setInputFiles('examples/sdlc');
+    await page.getByLabel('Package folder').setInputFiles('test/fixtures/examples/sdlc');
     await page.getByRole('cell', { name: 'profiles/architect@1.yaml' }).waitFor();
     // The local tool config never goes into a package.
     expect(await page.getByRole('cell', { name: 'azhi.config.yaml' }).count()).toBe(0);
@@ -56,14 +56,15 @@ describe.skipIf(!up)('authoring in mission control', () => {
     await page.waitForURL(/\/ui\/workflows\/sdlc\?version=wfv_/);
     const id = new URL(page.url()).searchParams.get('version')!;
     const v = await h.api.get<any>(`/v1/versions/${id}`);
-    expect(v).toMatchObject({ draft: true, signature: null });
+    // Signed with this browser's publisher key (WebCrypto Ed25519), so workers will run it.
+    expect(v).toMatchObject({ draft: true, signature: { package_hash: v.package_hash, publisher: 'usr_local', workflow: 'sdlc' } });
     expect(v.manifest.files.map((f: any) => f.path)).toContain('templates/retro.md');
-    await page.getByText('This draft is not signed').waitFor();
-
-    await page.getByText('Files in this version').click();
+    // The draft is published from the page header; its files open from the settings dock beside the canvas.
+    await page.getByRole('button', { name: /^Publish v\d+$/ }).waitFor();
+    await page.getByRole('button', { name: /Version and files/ }).click();
     expect(await page.getByLabel('Contents of workflow.yaml').innerText()).toContain('id: sdlc');
     await page.getByRole('button', { name: 'templates/retro.md' }).click();
-    expect((await page.getByLabel('Contents of templates/retro.md').innerText()).trim()).toBe(readFileSync('examples/sdlc/templates/retro.md', 'utf8').trim());
+    expect((await page.getByLabel('Contents of templates/retro.md').innerText()).trim()).toBe(readFileSync('test/fixtures/examples/sdlc/templates/retro.md', 'utf8').trim());
     await page.close();
   });
 
@@ -85,7 +86,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
     await page.getByText('published', { exact: true }).waitFor();
     expect((await h.api.get<any>(`/v1/versions/${draft.id}`)).draft).toBe(false);
 
-    await page.getByText('Schedule', { exact: true }).click();
+    await page.getByRole('button', { name: /Trigger/ }).click();
     await page.getByLabel('Cron').fill('30 8 * * 1-5');
     await page.getByLabel('Timezone').fill('Asia/Kolkata');
     await page.locator('#s-team').fill('payments');
@@ -135,7 +136,7 @@ describe.skipIf(!up)('authoring in mission control', () => {
     const page = await open('/ui/tools');
     await page.getByRole('button', { name: 'Register a tool' }).click();
     await page.getByRole('button', { name: 'Register tool' }).click();
-    await page.getByText('Saved tracker.get-ticket@1, revision 2.').waitFor();
+    await page.getByText('Saved tracker.get-ticket@1, revision 1.').waitFor();
 
     const spec = (await h.api.get<any[]>('/v1/tools')).find((t) => t.id === 'ci.list-runs');
     await page.getByRole('row', { name: new RegExp(`ci\\.list-runs@${spec.version}`) }).getByRole('button', { name: 'Change' }).click();

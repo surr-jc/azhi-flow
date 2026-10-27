@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { signVersion } from '../signing';
 import { useRoute } from '../router';
 import { ErrorNote, PageHead, Panel, Table } from '../ui';
 
@@ -49,7 +50,10 @@ export function UploadPackage() {
     mutationFn: async () => {
       const files: Record<string, string> = {};
       for (const f of picked) files[f.path] = await base64(f.file);
-      return api<{ ok: boolean; diagnostics: Diagnostic[]; version?: { id: string; workflow: string; version: number } }>('/v1/packages', { method: 'POST', body: { workflow, files } });
+      const r = await api<{ ok: boolean; diagnostics: Diagnostic[]; version?: { id: string; workflow: string; version: number } }>('/v1/packages', { method: 'POST', body: { workflow, files } });
+      // Workers run signed packages only. If this browser can't sign, the workflow page offers it again.
+      if (r.ok && r.version) await signVersion(r.version.id).catch(() => undefined);
+      return r;
     },
     onSuccess: (r) => {
       if (!r.ok || !r.version) return;
@@ -65,7 +69,7 @@ export function UploadPackage() {
 
   return (
     <>
-      <PageHead title="Upload a workflow" sub="Pick the package folder (the one with workflow.yaml, its profiles, schemas, templates and scripts). It is checked by the compiler and saved as a new unsigned draft version." />
+      <PageHead title="Upload a workflow" sub="Pick the package folder (the one with workflow.yaml, its profiles, schemas, templates and scripts). It is checked by the compiler, saved as a new draft version and signed with this browser's publisher key." />
       <Panel>
         <div className="row">
           <label className="button">

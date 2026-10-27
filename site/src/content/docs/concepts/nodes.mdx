@@ -1,0 +1,78 @@
+---
+title: Node types
+description: The eleven node types of an Azhi workflow, what each does, and whether it uses a model.
+---
+
+A workflow is a graph of nodes in YAML (schema 2.0). Expressions use [CEL](https://cel.dev); there is no
+JavaScript eval anywhere.
+
+| Node | Does | Uses a model? |
+|---|---|---|
+| `tool` | Calls a registered tool through the gateway (HTTP API, MCP server). Arguments can use `ref` and CEL; `project` keeps only the fields you list | No |
+| `script` | Runs Python (via uv) or Bun on a worker, with input, `output_schema` and `limits` (time, memory on Linux) | No |
+| `agent` | Runs a profile (instructions, model, limits) on an executor, with gateway-only tools, validated output and a budget | **Yes** |
+| `retrieve` | Hybrid search over a knowledge dataset (`top_k`), returning excerpts with ids for citation | No (lexical-hash embedder in alpha) |
+| `condition` | Branches on a CEL expression | No |
+| `parallel` | Bounded fan-out of branches | No |
+| `loop` | Repeats one `tool` or `script`, up to `max_iterations`, until a CEL `exit` | No |
+| `subworkflow` | Runs a published workflow as a child run, with its own plan, ledger and run page | Depends on the child |
+| `approval` | Waits for a person to approve or reject, optionally with structured decision data | No |
+| `report` | Renders a Markdown template into a run artifact | No |
+| `notify` | Sends a message (for example Slack), recorded in the ledger | No |
+
+Only the `agent` node spends tokens. Everything else is deterministic.
+
+## A taste of the syntax
+
+```yaml
+nodes:
+  - id: ci_runs
+    type: tool
+    tool: ci.list-runs@1
+    arguments: {team: {ref: inputs.team}, since: {cel: "string(now - duration('336h'))"}}
+    project: [id, status, branch, started_at, finished_at, failed_tests]
+  - id: metrics
+    type: script
+    runtime: python
+    entrypoint: scripts/metrics.py
+    input: {map: "{'runs': nodes.ci_runs.output}"}
+    output_schema: schemas/metrics.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: analyse
+    type: agent
+    profile: quality-analyst@1
+    datasets: [quality-guidelines@approved]
+    output_schema: schemas/analysis.json
+    budget: {max_output_tokens: 4000, max_tool_calls: 0}
+```
+
+(From `examples/quality-report/workflow.yaml`, abridged.)
+
+## Loops
+
+```yaml
+- id: refine
+  type: loop
+  initial: {n: 0}
+  max_iterations: 5            # 1 to 1000
+  exit: "state.n >= 3"         # CEL, checked after every iteration
+  on_max: fail                 # or continue; default fail
+  node: {type: script, runtime: python, entrypoint: scripts/step.py, input: {map: "{'n': state.n}"}}
+```
+
+Each iteration is an ordinary attempt with its own ledger ordinal, so writes inside a loop are deduplicated per
+iteration. Agents as a loop body, and several steps in one body, are not supported; use a subworkflow.
+
+## Subworkflows
+
+```yaml
+- id: review
+  type: subworkflow
+  workflow: doubler            # a workflow id, or id@version
+  input: {x: 21}
+```
+
+The child is a run of its own, started as a Temporal child workflow. Cancelling the parent cancels the child.
+A workflow cannot call itself directly or through its chain, nesting stops at four levels, and the child's output
+is treated as untrusted for the [taint rule](/concepts/taint/). Parallel fan-out of subworkflows and quorum joins
+are not built.

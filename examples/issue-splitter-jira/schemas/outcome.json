@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "parent_comment": {
+      "type": "string"
+    },
+    "parent_key": {
+      "type": "string"
+    },
+    "created": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "message",
+    "parent_comment",
+    "parent_key",
+    "created"
+  ],
+  "additionalProperties": false
+}

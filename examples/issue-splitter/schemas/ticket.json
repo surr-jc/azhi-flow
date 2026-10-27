@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": {
+      "enum": [
+        "issue",
+        "text"
+      ]
+    },
+    "key": {
+      "type": "string"
+    },
+    "number": {
+      "type": "integer"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "url": {
+      "type": "string"
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "key",
+    "number",
+    "title",
+    "description",
+    "labels",
+    "url",
+    "comments"
+  ],
+  "additionalProperties": false
+}

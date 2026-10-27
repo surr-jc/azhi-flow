@@ -10,6 +10,7 @@ const common = {
   type: { type: 'string' },
   description: { type: 'string' },
   depends_on: { type: 'array', items: id, uniqueItems: true },
+  merge: { enum: ['any'] },
   timeout: duration,
   retry: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1, maximum: 10 } }, additionalProperties: false },
 };
@@ -70,6 +71,11 @@ export const workflowSchema = {
     },
     inputs: { type: 'object' },
     config: { type: 'object' },
+    model_defaults: {
+      type: 'object',
+      properties: { provider: { enum: ['anthropic', 'openai', 'github-copilot', 'openai-chatgpt'] }, name: { type: 'string', minLength: 1, maxLength: 160 } },
+      additionalProperties: false,
+    },
     nodes: {
       type: 'array',
       minItems: 1,
@@ -133,6 +139,30 @@ export const workflowSchema = {
           additionalProperties: false,
         },
         requires: { type: 'object', properties: { enforced_restrictions: { type: 'boolean' } }, additionalProperties: false },
+        workspace: {
+          type: 'object',
+          properties: {
+            repo: { $ref: '#/$defs/value' },
+            ref: { $ref: '#/$defs/value' },
+            base_ref: { $ref: '#/$defs/value' },
+            host: { type: 'string', pattern: '^https?://' },
+            credential: { type: 'string' },
+            depth: { type: 'integer', minimum: 1 },
+            mode: { enum: ['read', 'write'] },
+            test: {
+              type: 'object',
+              properties: {
+                command: { type: 'string', minLength: 1, maxLength: 1000 },
+                timeout: duration,
+                attempts: { type: 'integer', minimum: 1, maximum: 5 },
+              },
+              required: ['command'],
+              additionalProperties: false,
+            },
+          },
+          required: ['repo', 'ref'],
+          additionalProperties: false,
+        },
       },
       ['profile', 'output_schema'],
     ),
@@ -170,7 +200,17 @@ export const workflowSchema = {
       },
       ['for_each', 'node'],
     ),
-    loop: node('loop', { max_iterations: { type: 'integer', minimum: 1 }, exit: { type: 'string' } }, ['max_iterations', 'exit']),
+    loop: node(
+      'loop',
+      {
+        node: { type: 'object', properties: { type: { enum: ['tool', 'script'] } }, required: ['type'] },
+        initial: { $ref: '#/$defs/value' },
+        max_iterations: { type: 'integer', minimum: 1, maximum: 1000 },
+        exit: { type: 'string' },
+        on_max: { enum: ['fail', 'continue'] },
+      },
+      ['node', 'max_iterations', 'exit'],
+    ),
     subworkflow: node('subworkflow', { workflow: { type: 'string' }, input: { $ref: '#/$defs/value' } }, ['workflow']),
     approval: node('approval', {
       role: { enum: ['owner', 'admin', 'author', 'operator'] },

@@ -12,7 +12,9 @@ import {
   condition,
   defineQuery,
   defineSignal,
+  executeChild,
   isCancellation,
+  ParentClosePolicy,
   proxyActivities,
   setHandler,
   sleep,
@@ -20,11 +22,13 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { AgentNode, ApprovalNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, ToolNode } from '../definition/types.js';
+import type { AgentNode, ApprovalNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
+import { parseDuration } from '../lib/duration.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
 import { resolveValue, type ValueScope } from './values.js';
+import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
 export const approvalSignal = defineSignal<[ApprovalSignal]>('approval');
@@ -104,7 +108,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   }
   const asOf: Record<string, string> = {};
   const scope = (): ValueScope => ({ inputs: input.inputs, nodes: outputs, config: plan.config, now: snapshot.reference_time, run: { id: runId, attempt: workflowInfo().attempt } });
-  const allowedTools = [...new Set(plan.nodes.flatMap((n) => (n.tool ? [n.tool.ref] : [])))];
+  // The run token is shared by activities, while each gateway call still verifies the calling
+  // node. Include both deterministic tool nodes and agent-declared tools so harness bridges such
+  // as OpenCode can invoke the catalog tools assigned to their own agent node.
+  const allowedTools = [...new Set(plan.nodes.flatMap((n) => [...(n.tool ? [n.tool.ref] : []), ...(n.agentTools ?? []).map((t) => t.ref)]))];
   let deliveryFailed = false;
   let fatal: NodeError | undefined;
 
@@ -114,7 +121,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     if (extra.error) status.error = extra.error;
     await bookkeeping.recordRun(runId, workspaceId, { state, flags: status.flags, ...(extra.error ? { error: extra.error } : {}), event: { kind: extra.event ?? `run.${state}` } });
   };
-  const setNode = async (id: string, s: NodeStatus, data: { output?: unknown; error?: NodeError; route?: string } = {}) => {
+  const setNode = async (id: string, s: NodeStatus, data: { output?: unknown; error?: NodeError; route?: string; attempt?: boolean } = {}) => {
     status.nodes[id] = { status: s, ...(data.error ? { error: data.error } : {}), ...(data.route ? { route: data.route } : {}) };
     await bookkeeping.recordNode(runId, workspaceId, id, s, data);
   };
@@ -138,30 +145,49 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     });
 
   /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
-  const runHarness = async (node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
+  const runHarness = async (executor: string, node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
     try {
+      const ws = def.workspace;
+      const workspace = ws
+        ? {
+            host: ws.host ?? 'https://github.com',
+            repo: String(resolveValue(ws.repo, s) ?? ''),
+            ref: String(resolveValue(ws.ref, s) ?? ''),
+            ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
+            ...(ws.credential ? { credential: ws.credential } : {}),
+            ...(ws.depth ? { depth: ws.depth } : {}),
+            ...(ws.mode === 'write' ? { mode: 'write' as const } : {}),
+            ...(ws.mode === 'write' && ws.test ? { test: { command: ws.test.command, timeoutMs: ws.test.timeout ? parseDuration(ws.test.timeout) : 600_000, attempts: ws.test.attempts ?? 1 } } : {}),
+          }
+        : undefined;
       const prep = await act.harnessPrepare({
         runId,
         workspaceId,
         nodeId: node.id,
         packageHash: snapshot.package_hash,
         profile: def.profile,
+        executor,
         outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
         tools: tools as never,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+        ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
       });
-      const queue = await selectWorker(node.id, 'opencode', 1);
-      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential]);
+      const queue = await selectWorker(node.id, executor, 1);
+      const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
         workspaceId,
         nodeId: node.id,
         packageHash: snapshot.package_hash,
+        executor: executor as HarnessExecutor,
+        provider: prep.provider,
         runToken,
         credential: prep.credential,
         providerUrl: prep.providerUrl,
+        ...(prep.endpointModels ? { endpointModels: prep.endpointModels } : {}),
         model: prep.model,
         system: prep.system,
         prompt: prep.prompt,
@@ -169,11 +195,13 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         outputSchema: prep.outputSchema,
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
+        profile: def.profile,
+        ...(workspace ? { workspace } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
-      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor: 'opencode', tainted: plan.taint.tainted[node.id], result: { ...r, ...(error ? { error } : {}) } });
-      // OpenCode reports usage per message but not for its own side calls, so totals are partial.
+      await bookkeeping.harnessRecord({ runId, workspaceId, nodeId: node.id, packageHash: snapshot.package_hash, profile: def.profile, executor, tainted: plan.taint.tainted[node.id], ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}), result: { ...r, ...(error ? { error } : {}) } });
+      // Harnesses make side calls of their own (titles, compaction) that they may not report, so totals are partial.
       if (!status.flags.usage_incomplete) await setState(status.state, { flags: { ...status.flags, usage_incomplete: true }, event: 'run.usage_incomplete' });
       if (error) throw ApplicationFailure.create({ type: error.class, message: error.message, nonRetryable: true });
       return r.output;
@@ -185,12 +213,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
 
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
     const executor = def.executor ?? 'model-agent';
-    if (executor !== 'model-agent' && executor !== 'opencode') {
+    if (executor !== 'model-agent' && !isHarness(executor)) {
       throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${executor}' is not available on this interpreter build`, nonRetryable: true });
     }
     const act = agentOn(gatewayQueue, node);
     const tools = (node.agentTools ?? []).map((t) => ({ ref: t.ref, effect: t.effect, safeForTainted: t.safeForTainted, revision: snapshot.tool_revisions[t.ref] ?? t.revision }));
-    if (executor === 'opencode') return runHarness(node, def, s, act, tools);
+    if (isHarness(executor)) return runHarness(executor, node, def, s, act, tools);
     const deadline = Date.now() + node.timeoutMs;
     try {
       let state = await act.agentBegin({
@@ -204,6 +232,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
+        ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
       });
       for (;;) {
         if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });
@@ -299,7 +328,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
           entrypoint: def.entrypoint,
           lockfile: def.lockfile,
           input: value,
-          outputSchema: (node.type === 'parallel' ? undefined : node.outputSchema) ?? def.output_schema,
+          outputSchema: (node.type === 'parallel' || node.type === 'loop' ? undefined : node.outputSchema) ?? def.output_schema,
           limits: { timeMs: node.timeoutMs, memoryMb: def.limits?.memory_mb },
           runToken,
           attempt,
@@ -414,6 +443,48 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         }
         return { output: { items: results, completed, failed } };
       }
+      case 'loop': {
+        const def = node.def as LoopNode;
+        let state = resolveValue(def.initial, s);
+        const iterations: unknown[] = [];
+        let exited = false;
+        for (let i = 0; i < def.max_iterations && !exited; i++) {
+          const scoped = { ...s, state: state ?? null, iteration: i };
+          const out =
+            def.node.type === 'tool'
+              ? await runTool(node, def.node as Omit<ToolNode, 'id'>, scoped, i)
+              : await runScript(node, def.node as Omit<ScriptNode, 'id'>, resolveValue((def.node as ScriptNode).input, scoped), i);
+          state = out;
+          iterations.push(out);
+          // After the iteration, `state` is its output and `iteration` the number completed.
+          exited = evaluateCel(def.exit, { ...s, state: out, iteration: i + 1 }) === true;
+        }
+        if (!exited && (def.on_max ?? 'fail') === 'fail') {
+          throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}' reached max_iterations (${def.max_iterations}) without meeting its exit condition: ${def.exit}`, nonRetryable: true });
+        }
+        return { output: { state: state ?? null, iterations, count: iterations.length, exited } };
+      }
+      case 'subworkflow': {
+        const def = node.def as SubworkflowNode;
+        const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: (resolveValue(def.input, s) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
+        // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
+        await executeChild('azhiRun', {
+          workflowId: prep.run.runId,
+          taskQueue: workflowInfo().taskQueue,
+          args: [prep.run],
+          parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
+          workflowExecutionTimeout: node.timeoutMs + 60_000,
+        });
+        const result = await gateway(node).childResult(workspaceId, prep.run.runId);
+        if (result.state !== 'succeeded') {
+          throw ApplicationFailure.create({
+            type: result.error?.class ?? 'internal',
+            message: `subworkflow '${prep.workflow}' (run ${prep.run.runId}) ended ${result.state}${result.error ? `: ${result.error.message}` : ''}`,
+            nonRetryable: true,
+          });
+        }
+        return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state: result.state, nodes: result.nodes } };
+      }
       case 'retrieve': {
         const def = node.def as RetrieveNode;
         if (def.filters && Object.keys(def.filters).length) {
@@ -448,7 +519,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       if (cond?.status === 'skipped' || cond?.route !== node.route.route) return true;
     }
     // A rejected approval skips everything downstream of it.
-    return node.deps.some((d) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed' || rejected.has(d));
+    const blocked = (d: string) => status.nodes[d]?.status === 'skipped' || status.nodes[d]?.status === 'failed' || rejected.has(d);
+    // A merge node joins alternative branches: it runs when any upstream node got through.
+    if (node.def.merge === 'any') return node.deps.length > 0 && node.deps.every(blocked);
+    return node.deps.some(blocked);
   };
 
   const runNode = async (node: PlanNode) => {
@@ -456,7 +530,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     try {
       const r = await execute(node);
       outputs[node.id] = { output: r.output };
-      await setNode(node.id, 'succeeded', { output: r.output, route: r.route });
+      await setNode(node.id, 'succeeded', { output: r.output, route: r.route, attempt: node.type === 'loop' || node.type === 'subworkflow' });
     } catch (err) {
       if (isCancellation(err)) {
         status.nodes[node.id] = { status: 'cancelled' };

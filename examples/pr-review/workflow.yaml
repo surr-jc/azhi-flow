@@ -1,0 +1,167 @@
+# Pull request review with OpenCode agents. Each reviewer runs OpenCode in its own fresh checkout
+# of the PR (cloned on a worker into a temporary folder with a read-only token, deleted after),
+# with its own agent prompt, review command, skills, read-only tools and a repo-facts MCP server.
+# A verifier on a different model then tries to refute every finding in its own checkout and scores its
+# confidence; a plain script keeps only the findings it confirmed at or above config.min_confidence
+# (80), lists the ones it could not settle as "check by hand", and drops the rest. A summarizer
+# merges what is left into one structured review. The review is always posted as a PR
+# comment, and when the reviewers have comments a short summary goes to Slack. Set input post to
+# false for a dry run (nothing is posted or sent).
+schema_version: "2.0"
+id: pr-review
+name: Pull request review (OpenCode)
+description: Correctness, security and tests reviewers in isolated checkouts, a summarizer, a PR comment posted automatically, and a Slack notification when there are comments.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, description: "owner/name, for example acme/payments"}
+    pr: {type: integer, title: Pull request number}
+    post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
+    allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
+  required: [repo, pr]
+config:
+  # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
+  channel: "{{slack_channel}}"
+  # A finding reaches the review only when the verifier confirmed it with at least this confidence (0 to 100).
+  min_confidence: 80
+nodes:
+  - id: pr
+    type: tool
+    description: Read the pull request and its changed files from GitHub.
+    tool: github.get-pull-request@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
+  - id: should_review
+    type: condition
+    description: Review only open pull requests (unless allow_closed is set); a closed or merged one skips every later step, so nothing is spent, posted or sent.
+    expression: "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'"
+    routes: {review: [correctness, security, tests, quality], skip: []}
+    default: skip
+
+  - id: correctness
+    type: agent
+    description: Look for bugs the change introduces.
+    executor: opencode
+    profile: correctness-reviewer@1
+    workspace: &checkout
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      # The base commit GitHub recorded for the PR, not the live base branch: once a PR is merged the
+      # branch already contains its commits and the diff against it is empty.
+      base_ref: {ref: nodes.pr.output.base_sha}
+      credential: github-read-token
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: security
+    type: agent
+    description: Look for security problems in the change.
+    executor: opencode
+    profile: security-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: tests
+    type: agent
+    description: Check the change's tests and style.
+    executor: opencode
+    profile: tests-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: quality
+    type: agent
+    description: Check the change's code quality and maintainability (thermo-nuclear-code-quality-review skill).
+    executor: opencode
+    profile: quality-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output}"}
+    output_schema: schemas/findings.json
+    timeout: 15m
+    budget: {max_tool_calls: 10}
+
+  - id: verify
+    type: agent
+    description: Try to refute every finding in a fresh checkout and score the confidence (finding-verification skill, a different model).
+    executor: opencode
+    profile: finding-verifier@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
+    output_schema: schemas/verification.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+
+  - id: triage
+    type: script
+    description: Keep the confirmed findings at or above the confidence bar, set aside the unverifiable ones and drop the refuted ones (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/triage.py
+    input: {map: "{'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output], 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"}
+    output_schema: schemas/triage.json
+    limits: {time: 2m, memory_mb: 512}
+
+  - id: summarize
+    type: agent
+    description: Merge the findings into one review with a verdict and a comment body.
+    executor: opencode
+    profile: review-summarizer@1
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title, 'mergeable_state': nodes.pr.output.mergeable_state}, 'reviews': nodes.triage.output.reviews, 'unverified': nodes.triage.output.unverified, 'stats': nodes.triage.output.stats}"}
+    output_schema: schemas/review.json
+    timeout: 10m
+    budget: {max_tool_calls: 2}
+
+  - id: report
+    type: report
+    description: The review as a run artifact.
+    template: templates/review.md
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'verification': nodes.triage.output.stats, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"}
+
+  - id: slack_message
+    type: report
+    description: "The short Slack message: verdict, summary and the findings."
+    template: templates/slack.md
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty'}}"}
+
+  - id: should_post
+    type: condition
+    description: Post the review unless this is a dry run (post set to false).
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : 'post'"
+    depends_on: [summarize]
+    routes: {post: [post], skip: []}
+    default: post
+
+  - id: should_notify
+    type: condition
+    description: Tell Slack when the reviewers had comments, and only when posting.
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : (size(nodes.summarize.output.findings) > 0 ? 'notify' : 'skip')"
+    depends_on: [summarize]
+    routes: {notify: [notify], skip: []}
+    default: skip
+
+  - id: post
+    type: tool
+    description: Post the review as a comment on the pull request, or edit the review comment an earlier run posted there.
+    tool: github.comment-on-pr@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, body: {ref: nodes.summarize.output.body}}
+    # Taint gate (ADR-10): the reviewers read untrusted code, so the comment may only go to the
+    # pull request under review. This guard replaces the approval step: the review always posts.
+    guard: "args.repo == inputs.repo && args.number == inputs.pr"
+
+  - id: notify
+    type: notify
+    description: Slack message with the verdict and the reviewers' comments.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.slack_message.output.markdown}
+    # Taint gate: the message may only go to the configured channel.
+    guard: "args.channel == config.channel"

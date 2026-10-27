@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Popup } from './components/Popup';
 import type { JsonSchema } from './api';
 import { Link } from './router';
 
@@ -16,8 +17,10 @@ export function ago(t: string | null | undefined): string {
 
 export function money(amount: number | null | undefined, currency = 'USD', complete = true) {
   if (amount === null || amount === undefined) return 'unknown';
-  const v = amount === 0 || amount >= 1 ? amount.toFixed(2) : amount.toFixed(4);
-  return `${complete ? '' : '≥ '}${currency === 'USD' ? '$' : `${currency} `}${v}`;
+  const sign = currency === 'USD' ? '$' : `${currency} `;
+  // Money always shows 2 decimals; a non-zero amount under a cent says so instead of rounding to zero.
+  if (amount > 0 && amount < 0.01) return `${complete ? '' : '≥ '}< ${sign}0.01`;
+  return `${complete ? '' : '≥ '}${sign}${amount.toFixed(2)}`;
 }
 
 export const Badge = ({ children, tone }: { children: ReactNode; tone?: string }) => <span className={`badge ${tone ?? ''}`}>{children}</span>;
@@ -25,10 +28,11 @@ export const Badge = ({ children, tone }: { children: ReactNode; tone?: string }
 const STATE_TONE: Record<string, string> = {
   succeeded: 'ok', failed: 'bad', delivery_failed: 'bad', expired: 'bad', waiting: 'warn', cancelling: 'warn', cancelled: 'idle', running: 'run', queued: 'run',
 };
-export const StateBadge = ({ state }: { state: string }) => <Badge tone={`${STATE_TONE[state] ?? 'idle'} s-${state}`}>{state.replace('_', ' ')}</Badge>;
+export const StateBadge = ({ state }: { state: string }) => <Badge tone={`s ${STATE_TONE[state] ?? 'idle'} s-${state}`}>{state.replaceAll('_', ' ')}</Badge>;
+export const stateTone = (state: string) => STATE_TONE[state] ?? 'idle';
 
-export function Table({ head, children, empty }: { head: ReactNode[]; children: ReactNode[]; empty?: string }) {
-  if (!children.length && empty) return <p className="muted">{empty}</p>;
+export function Table({ head, children, empty, hint, action }: { head: ReactNode[]; children: ReactNode[]; empty?: string; hint?: ReactNode; action?: ReactNode }) {
+  if (!children.length && empty) return <div className="empty"><p className="empty-title">{empty}</p>{hint ? <p className="muted">{hint}</p> : null}{action}</div>;
   return (
     <div className="table-wrap">
       <table>
@@ -78,8 +82,51 @@ export function Stat({ label, value, hint, tone, to }: { label: string; value: R
   return to ? <Link to={to} className="stat">{body}</Link> : <div className="stat">{body}</div>;
 }
 
-export const Loading = () => <p className="muted">Loading…</p>;
-export const ErrorNote = ({ error }: { error: unknown }) => (error ? <div className="error" role="alert">{(error as Error).message}</div> : null);
+/** Nothing under 100ms (it would only flicker); after that a skeleton the shape of the content that is coming. */
+export function Loading({ lines = 3 }: { lines?: number }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setShown(true), 100);
+    return () => window.clearTimeout(t);
+  }, []);
+  if (!shown) return null;
+  return (
+    <div className="skeleton" role="status" aria-busy="true" aria-label="Loading">
+      {Array.from({ length: lines }, (_, i) => <i key={i} />)}
+    </div>
+  );
+}
+
+/** The error text plus a one-click copy of the details, for pasting into a support request. */
+export function ErrorNote({ error }: { error: unknown }) {
+  const [copied, setCopied] = useState(false);
+  if (!error) return null;
+  const message = (error as Error).message;
+  const copy = () => navigator.clipboard?.writeText(message).then(() => setCopied(true), () => undefined);
+  return (
+    <div className="error" role="alert">
+      {message}
+      <button type="button" className="link copy-details" onClick={copy}>{copied ? 'Copied' : 'Copy error details'}</button>
+    </div>
+  );
+}
+
+export interface ConfirmOptions { title: string; text?: ReactNode; confirm: string }
+
+/** A confirmation that names what is affected: `const [ask, dialog] = useConfirm(); … (await ask({...})) && go()`. Render `dialog` once. Cancel has focus first and Escape cancels. */
+export function useConfirm() {
+  const [open, setOpen] = useState<ConfirmOptions | null>(null);
+  const done = useRef<((yes: boolean) => void) | null>(null);
+  const ask = useCallback((o: ConfirmOptions) => new Promise<boolean>((resolve) => { done.current = resolve; setOpen(o); }), []);
+  const close = (yes: boolean) => { done.current?.(yes); done.current = null; setOpen(null); };
+  const dialog = open ? (
+    <Popup title={open.title} size="narrow" initialFocus="[data-cancel]" onClose={() => close(false)}
+      footer={<><button type="button" data-cancel onClick={() => close(false)}>Cancel</button><button type="button" className="danger solid" onClick={() => close(true)}>{open.confirm}</button></>}>
+      {open.text ? <p className="confirm-text">{open.text}</p> : null}
+    </Popup>
+  ) : null;
+  return [ask, dialog] as const;
+}
 
 export function Json({ value }: { value: unknown }) {
   if (value === undefined) return <span className="muted">—</span>;
@@ -98,8 +145,13 @@ export function formValues(schema: JsonSchema | null | undefined, raw: Record<st
   const out: Record<string, unknown> = {};
   for (const [name, prop] of Object.entries(schema?.properties ?? {})) {
     const v = raw[name];
-    if (v === undefined || v === '') continue;
     const t = typeOf(prop);
+    // An untouched checkbox shows unchecked, so a required yes/no field left alone means no.
+    if (v === undefined && t === 'boolean' && schema?.required?.includes(name)) {
+      out[name] = false;
+      continue;
+    }
+    if (v === undefined || v === '') continue;
     if (t === 'boolean') out[name] = Boolean(v);
     else if (t === 'number' || t === 'integer') {
       const n = Number(v);

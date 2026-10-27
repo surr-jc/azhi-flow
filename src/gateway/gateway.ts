@@ -87,6 +87,8 @@ export async function callTool(ctx: AppContext, req: ToolCallRequest): Promise<T
   if (spec.credential && !credential) throw new AzhiError(ErrorClass.authorization, `credential '${spec.credential}' for ${req.tool} is not set`);
   const exec = executorFor(spec);
   const execCtx: ExecContext = {
+    app: ctx,
+    workspaceId: req.workspaceId,
     credential: credential?.value,
     timeoutMs: spec.timeout ? parseDuration(spec.timeout) : 30_000,
     slackApiUrl: ctx.settings.slackApiUrl,

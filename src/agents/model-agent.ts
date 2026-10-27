@@ -11,8 +11,12 @@ import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
+import { CLAUDE_PLAN_ONLY_SDK, EXECUTORS, isClaudePlanToken } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
-import { DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile } from './profile.js';
+import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
+import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
+import { applyModelDefaults, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile, type ModelDefaults } from './profile.js';
+import { OPENAI_PRICING_REVISION, openaiCost, openaiRate } from './openai-pricing.js';
 import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider, SUBMIT_TOOL, toolName, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from './providers.js';
 
 /**
@@ -24,15 +28,15 @@ import { anthropicProvider, openaiProvider, PROVIDER_DEFAULTS, scriptedProvider,
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 (addFormats as unknown as (a: Ajv2020) => void)(ajv);
 
-export const MAX_REPAIRS = 2;
-export const MAX_REPEATED_FAILURES = 2;
+export { MAX_REPAIRS, MAX_REPEATED_FAILURES };
 
 const PLATFORM_RULES = `You are one agent node in an Azhi Flow workflow.
 - Numbers in your input come from scripts and tools and are authoritative. Quote them; never recalculate or change them.
 - Use only the tools provided. Every call goes through a governed gateway that may refuse it.
 - When you are done, call ${SUBMIT_TOOL} exactly once with a result that matches its schema.
 - If the evidence is insufficient, say so in your result instead of guessing.
-- Cite retrieved excerpts by their chunk id.`;
+- Cite retrieved excerpts by their chunk id.
+- Write free-text string fields (summaries, explanations, designs, findings) in GitHub-flavored Markdown: short paragraphs, lists, tables and code spans where they help. Keep identifiers, enums, URLs, numbers and every other structured field exactly as the schema asks, with no Markdown.`;
 
 export interface ManifestItem {
   kind: 'instructions' | 'profile' | 'output_schema' | 'tool_schema' | 'input' | 'chunk' | 'tool_result' | 'repair';
@@ -73,6 +77,8 @@ interface Transcript {
   items: ManifestItem[];
   /** Chunk IDs the agent was shown; citing anything else is a contract violation. */
   chunkIds?: string[];
+  /** The provider and model chosen for the run, applied to a profile that says `name: default`. */
+  modelDefaults?: ModelDefaults;
 }
 
 export interface AgentState {
@@ -102,6 +108,8 @@ export interface AgentBeginInput {
   /** Datasets the context builder retrieves from, pinned in the run snapshot. */
   datasets?: Array<{ ref: string; revision: number }>;
   principal?: { userId: string; role: string };
+  /** Run-level provider and model for profiles that say `name: default`. */
+  modelDefaults?: ModelDefaults;
 }
 
 export interface AgentTurnInput {
@@ -130,10 +138,10 @@ function item(kind: ManifestItem['kind'], source: string, reason: string, conten
   return { kind, source, reason, tokens: estimateTokens(content), content_hash: `sha256:${sha256(content)}`, ...(storeContent ? { content } : {}) };
 }
 
-async function loadProfile(ctx: AppContext, workspaceId: string, packageHash: string, profile: string): Promise<{ path: string; profile: AgentProfile; text: string }> {
+async function loadProfile(ctx: AppContext, workspaceId: string, packageHash: string, profile: string, defaults?: ModelDefaults | null): Promise<{ path: string; profile: AgentProfile; text: string }> {
   const path = profilePath(profile);
   const text = (await packageFile(ctx, workspaceId, packageHash, path)).toString('utf8');
-  return { path, profile: parseProfile(text, path), text };
+  return { path, profile: applyModelDefaults(parseProfile(text, path), defaults), text };
 }
 
 export function resolveModelName(ctx: AppContext, profile: AgentProfile): string {
@@ -149,10 +157,13 @@ export function resolveModelName(ctx: AppContext, profile: AgentProfile): string
 async function providerFor(ctx: AppContext, workspaceId: string, profile: AgentProfile): Promise<ModelProvider> {
   if (profile.model.provider === 'scripted') return scriptedProvider(profile.script ?? []);
   const provider = profile.model.provider;
+  if (provider === 'github-copilot') throw new AzhiError(ErrorClass.unsupportedCapability, 'GitHub Copilot models run through OpenCode: give this step executor: opencode');
+  if (provider === 'openai-chatgpt') throw new AzhiError(ErrorClass.unsupportedCapability, 'ChatGPT plan models run through OpenCode: give this step executor: opencode');
   const d = PROVIDER_DEFAULTS[provider];
   const credential = profile.model.credential ?? d.credential;
   const key = await resolveSecret(ctx, workspaceId, credential);
   if (!key) throw new AzhiError(ErrorClass.authorization, `credential '${credential}' for the ${provider} provider is not set`);
+  if (provider === 'anthropic' && isClaudePlanToken(key.value)) throw new AzhiError(ErrorClass.unsupportedCapability, CLAUDE_PLAN_ONLY_SDK);
   const make = provider === 'openai' ? openaiProvider : anthropicProvider;
   return make({ apiUrl: d.apiUrl(ctx.settings), apiKey: key.value });
 }
@@ -182,9 +193,9 @@ function loadTranscript(ctx: AppContext, hash: string): Transcript {
 }
 
 /** Assembles the context (stable parts first, for prefix caching) and the first manifest items. */
-export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<AgentState> {
+export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { transcript?: boolean } = {}): Promise<AgentState> {
   const store = ctx.settings.storeContextContent;
-  const { path, profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
+  const { path, profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile, i.modelDefaults);
   const model = resolveModelName(ctx, profile);
   const items: ManifestItem[] = [item('instructions', 'platform', 'always included', PLATFORM_RULES, store), item('profile', path, `agent profile ${i.profile}`, profile.instructions, store)];
 
@@ -227,7 +238,13 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<A
     messages: [{ role: 'user', content: [{ type: 'text', text: user }] }],
     items,
     chunkIds: (i.chunks ?? []).map((c) => c.id),
+    ...(i.modelDefaults?.provider ? { modelDefaults: i.modelDefaults } : {}),
   };
+  // A harness step records its own transcript (its harness rewrites the prompt), so only the model agent's goes here.
+  if (opts.transcript !== false) await showTranscript(ctx, i, [
+    { id: 'system', kind: 'system', text: t.system, at: Date.now() },
+    { id: 'u0', kind: 'user', text: user, at: Date.now() },
+  ]);
   return { transcript: saveTranscript(ctx, t), turn: 0, toolCalls: 0, outputTokens: 0, cost: 0, repairs: 0, failures: {} };
 }
 
@@ -235,7 +252,7 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput): Promise<A
 export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fence: number; signal?: AbortSignal }): Promise<AgentTurnResult> {
   const store = ctx.settings.storeContextContent;
   const t = loadTranscript(ctx, i.state.transcript);
-  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, t.profile);
+  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, t.profile, t.modelDefaults);
   const turn = i.state.turn + 1;
   const maxTurns = profile.max_turns ?? DEFAULT_MAX_TURNS;
   if (turn > maxTurns) throw new AzhiError(ErrorClass.contractViolation, `the agent produced no valid output within ${maxTurns} turns`);
@@ -247,7 +264,10 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
 
   // Usage and cost: unknown stays null, cost is estimated only from declared pricing.
   const usageKnown = res.usage.input_tokens !== null && res.usage.output_tokens !== null;
-  const cost = estimateCost(res.usage, profile.pricing);
+  // OpenAI turns fall back to the built-in / configured OpenAI rates when the profile declares none.
+  const oa = profile.model.provider === 'openai' ? openaiRate(t.model, profile.pricing, ctx.settings) : undefined;
+  const cost = oa ? openaiCost(res.usage, oa.rate) : estimateCost(res.usage, profile.pricing);
+  const pricingRevision = oa && !profile.pricing?.revision ? (oa.source === 'configured' ? 'configured rate' : oa.source === 'builtin' ? OPENAI_PRICING_REVISION : 'unversioned') : (profile.pricing?.revision ?? 'unversioned');
   await ctx.pool.query(
     `INSERT INTO usage_records(workspace_id, run_id, node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_label, pricing_revision)
      VALUES ($1,$2,$3,1,$4,'model-agent',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
@@ -266,9 +286,9 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
       res.usage.cache_write_tokens,
       res.usage.reasoning_tokens,
       cost,
-      cost === null ? null : profile.pricing!.currency,
+      cost === null ? null : (profile.pricing?.currency ?? 'USD'),
       cost === null ? 'unavailable' : 'estimated',
-      cost === null ? null : profile.pricing!.revision,
+      cost === null ? null : pricingRevision,
     ],
   );
   const estimated = t.items.reduce((n, x) => n + x.tokens, 0);
@@ -293,6 +313,16 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
   }
 
   t.messages.push({ role: 'assistant', content: res.content });
+  const shown = new Map<string, TranscriptEntry>();
+  const said: TranscriptEntry[] = res.content.flatMap((b, n): TranscriptEntry[] => {
+    if (b.type === 'text' && b.text) return [{ id: `t${turn}-${n}`, kind: 'assistant', text: b.text, model: res.model, at: Date.now() }];
+    if (b.type !== 'tool_use') return [];
+    const e: TranscriptEntry = { id: `tool-${turn}-${b.id}`, kind: 'tool', tool: b.name, status: 'running', input: b.input, at: Date.now() };
+    shown.set(b.id, e);
+    return [e];
+  });
+  said.push({ id: `step-${turn}`, kind: 'step', model: res.model, tokens: { input: res.usage.input_tokens ?? undefined, output: res.usage.output_tokens ?? undefined, cache_read: res.usage.cache_read_tokens ?? undefined, cache_write: res.usage.cache_write_tokens ?? undefined, reasoning: res.usage.reasoning_tokens ?? undefined }, at: Date.now() });
+  await showTranscript(ctx, i, said);
   const results: Block[] = [];
   let output: unknown;
   let done = false;
@@ -387,8 +417,28 @@ export async function agentTurn(ctx: AppContext, i: AgentTurnInput, opts: { fenc
     t.items.push(item('repair', 'platform', 'no output submitted', reminder, store));
   }
   if (!done) t.messages.push({ role: 'user', content: results });
+  await showTranscript(
+    ctx,
+    i,
+    results.flatMap((b, n): TranscriptEntry[] => {
+      if (b.type === 'text') return [{ id: `u${turn}-${n}`, kind: 'user', text: b.text, at: Date.now() }];
+      if (b.type !== 'tool_result') return [];
+      const e = shown.get(b.tool_use_id);
+      return e ? [{ ...e, status: b.is_error ? 'error' : 'completed', ...(b.is_error ? { error: b.content } : { output: b.content }) }] : [];
+    }),
+  );
   state.transcript = saveTranscript(ctx, t);
   return { state, done, ...(done ? { output } : {}), usageKnown };
+}
+
+/** Adds entries to the step's transcript for the run page; never fails the turn. */
+async function showTranscript(ctx: AppContext, i: { workspaceId: string; runId: string; nodeId: string }, entries: TranscriptEntry[]) {
+  if (!ctx.settings.agentTranscripts || !entries.length) return;
+  try {
+    await writeTranscript(ctx.pool, { workspaceId: i.workspaceId, runId: i.runId, nodeId: i.nodeId, attempt: 1 }, entries, redactor([]));
+  } catch {
+    /* the transcript is a view; the turn's own records are what count */
+  }
 }
 
 /** Tool output for agent context: within the 8 KiB ceiling, or a summary plus the artifact handle. */
@@ -410,16 +460,28 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
  * the system prompt, the input and retrieved excerpts as the prompt, the node's gateway tools.
  * The manifest adds one item for what the harness owns and Azhi cannot see.
  */
-export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, executor: string) {
-  const state = await agentBegin(ctx, i);
+export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string } }, executor: string) {
+  const state = await agentBegin(ctx, i, { transcript: false });
   const t = loadTranscript(ctx, state.transcript);
-  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile);
-  // The adapter configures OpenCode's Anthropic provider only; the run plan marks other providers unsupported.
-  if (profile.model.provider !== 'anthropic') throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs an anthropic profile, not ${profile.model.provider}`);
+  const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile, i.modelDefaults);
+  // The run plan marks providers an adapter cannot drive as unsupported; this is the same check at run time.
+  const provider = profile.model.provider;
+  if (provider === 'scripted' || !EXECUTORS[executor]?.providers.includes(provider)) {
+    throw new AzhiError(ErrorClass.unsupportedCapability, `the ${executor} executor needs a ${EXECUTORS[executor]?.providers.join(' or ') ?? 'supported'} profile, not ${provider}`);
+  }
   const items = [
     ...t.items,
     { kind: 'instructions' as const, source: executor, reason: 'harness-owned system prompt, built-in tool schemas and compaction; not observable', tokens: 0, content_hash: 'unobservable' },
   ];
+  const oc = executor === 'opencode' ? profile.harness?.opencode : undefined;
+  if (oc) {
+    const files = [oc.agent, oc.command, ...(oc.skills ?? []).map((d) => `${d.replace(/\/$/, '')}/SKILL.md`)].filter((f): f is string => Boolean(f));
+    const content = (await Promise.all(files.map(async (f) => `${f}\n${(await packageFile(ctx, i.workspaceId, i.packageHash, f)).toString('utf8')}`))).join('\n');
+    items.push({ kind: 'instructions', source: `package: ${files.join(', ')}`, reason: 'OpenCode agent prompt, command template and skills (a skill enters the context only when the agent loads it)', tokens: estimateTokens(content), content_hash: `sha256:${sha256(content)}` });
+  }
+  if (i.workspace) {
+    items.push({ kind: 'input', source: `workspace ${i.workspace.repo}@${i.workspace.ref}${i.workspace.baseRef ? ` (base ${i.workspace.baseRef})` : ''}`, reason: 'cloned on the worker; the files the agent reads are untrusted and not observable here', tokens: 0, content_hash: 'unobservable' });
+  }
   await ctx.pool.query(
     `INSERT INTO context_manifests(workspace_id, run_id, node_id, attempt, turn, tainted, items, total_tokens, token_source) VALUES ($1,$2,$3,1,1,$4,$5,NULL,'estimated')
      ON CONFLICT (run_id, node_id, attempt, turn) DO UPDATE SET items=EXCLUDED.items`,
@@ -432,8 +494,10 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput, execut
     tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
     outputSchema: t.outputSchema,
     model: t.model,
-    credential: profile.model.credential ?? 'anthropic-api-key',
-    providerUrl: ctx.settings.anthropicApiUrl,
+    credential: profile.model.credential ?? PROVIDER_DEFAULTS[provider].credential,
+    providerUrl: PROVIDER_DEFAULTS[provider].apiUrl(ctx.settings),
+    provider,
+    ...(provider === 'github-copilot' && ctx.settings.copilotApiUrl ? { endpointModels: [...new Set([ctx.settings.copilotModel, ...ctx.settings.copilotEndpointModels, ...(i.modelDefaults?.name ? [t.model] : [])])] } : {}),
   };
 }
 

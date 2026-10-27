@@ -1,0 +1,23 @@
+# Holds each run open at an approval, then works in a checkout of inputs.repo: for the per-repository run limit.
+schema_version: "2.0"
+id: repo-limit
+inputs:
+  type: object
+  properties: {repo: {type: string}}
+  required: [repo]
+nodes:
+  - id: approve
+    type: approval
+    role: operator
+    message: Build it?
+    expires_in: 1h
+    on_expiry: reject
+  - id: build
+    type: agent
+    depends_on: [approve]
+    executor: opencode
+    profile: coder@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: HEAD
+    output_schema: schemas/out.json

@@ -1,0 +1,70 @@
+---
+title: Local mode (no Docker)
+description: "Run Azhi Flow on one machine with a single command: embedded PostgreSQL, Temporal's dev server, the server and a worker in one process."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental">
+Local mode is for one person on one machine. The team install stays the supported production setup.
+</Aside>
+
+`azhi up` starts, in one process:
+
+- an **embedded PostgreSQL** (PGlite, real Postgres compiled to WebAssembly, with pgvector),
+- **Temporal's single-binary dev server**, downloaded once into `~/.azhi/bin` and checksum-verified,
+- the Azhi **server** and a **worker**.
+
+All state lives under `~/.azhi` (`%USERPROFILE%\.azhi` on Windows).
+
+## Requirements
+
+Git and Node.js 22+, plus Python for script nodes. No Docker.
+
+## Run it
+
+The same commands work in bash and PowerShell:
+
+```bash
+git clone -b dev https://github.com/surr-jc/azhi-flow
+cd azhi-flow
+npm ci
+npx azhi up              # prints the web UI link; Ctrl+C or `npx azhi down` to stop
+```
+
+In another terminal, `npx azhi` commands find the local server without `azhi login`, unless `AZHI_URL` /
+`AZHI_TOKEN` or a saved login points elsewhere.
+
+### If port 7400 is taken
+
+```bash
+npx azhi up --port 7410
+export AZHI_URL=http://127.0.0.1:7410        # bash
+```
+
+```powershell
+$env:AZHI_URL = "http://127.0.0.1:7410"      # PowerShell
+```
+
+Set the model the same way (`AZHI_ANTHROPIC_MODEL`) before `azhi up`.
+
+## Limits
+
+| Limit | Detail |
+|---|---|
+| Single-writer database | No second server process on the same data |
+| Memory limits | `limits.memory_mb` is enforced only on Linux |
+| macOS | Not yet tested |
+| OpenCode on native Windows | New and not yet checked by a live run. `npm ci` installs OpenCode; add ripgrep, then `npx azhi setup` checks both |
+| Packaging | There is no global npm package yet; run from a checkout |
+
+## Platform status
+
+| Platform | Local mode |
+|---|---|
+| Linux | Works |
+| Windows (native) | Works; verified on Windows 11 |
+| macOS | Untested |
+
+For step-by-step Windows instructions and what the first start prints, see the
+[Windows guide](/install/windows/).

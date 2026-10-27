@@ -1,0 +1,36 @@
+---
+title: Glossary
+description: The terms Azhi Flow uses, in one place.
+---
+
+| Term | Meaning |
+|---|---|
+| **Action** | One logical external write, with a stable id across attempts. Tracked in the [ledger](/concepts/ledger/) |
+| **Agent node** | A node that runs a model through an executor. The only node type that spends tokens |
+| **Approval** | A node that waits for a person to approve or reject |
+| **Blocker** | A run-plan finding that refuses a run before anything executes |
+| **CEL** | Common Expression Language. Used for all expressions; no JavaScript eval |
+| **Context manifest** | The per-turn record of what the model saw. See [context manifest](/concepts/context-manifest/) |
+| **Coverage** | How a policy is held: enforced, harness-enforced or unobservable |
+| **Dataset** | A set of Markdown and text documents published as an immutable, tagged, searchable revision |
+| **Dedupe key** | The key used to find an already-performed write on the target |
+| **Effect class** | A tool's write semantics: `write-idempotent`, `write-dedupable` or `write-unsafe` |
+| **Executor** | What runs an agent node: model agent, OpenCode, Claude Agent SDK (Codex experimental) |
+| **Fixture** | Recorded node outputs used by `azhi test-node` |
+| **Gateway** | The component every tool call passes through: projection, observation records, ledger, policy |
+| **Guard** | A CEL expression on a write that constrains its arguments. One way to satisfy the taint rule |
+| **Harness** | A coding agent runtime such as OpenCode or the Claude Agent SDK |
+| **Interpreter** | The Temporal workflow that walks a compiled workflow graph |
+| **Library** | Versioned, reusable MCP servers, agents, skills and commands |
+| **Mission Control** | The Azhi web app |
+| **Package** | A folder with `workflow.yaml` and its files. Signed on publish |
+| **Profile** | A versioned agent definition: instructions, model, limits, harness setup |
+| **Projection** | Keeping only the fields of a tool's output that a node needs |
+| **Publisher** | A user with a signing key certified by the workspace root |
+| **Run plan** | What `azhi plan` shows. See [run plan](/concepts/run-plan/) |
+| **Sticky comment** | A comment a later run edits instead of adding another |
+| **Taint** | The mark on data that came from untrusted input. See [taint](/concepts/taint/) |
+| **Trust policy** | What a worker accepts: `self`, `authors:<ids>`, `workspace-publishers` |
+| **Unobservable** | Azhi cannot see whether something holds, and says so |
+| **Worker** | A host process that executes scripts and harness steps |
+| **Workspace** | The unit that owns users, secrets, tools, datasets and runs |

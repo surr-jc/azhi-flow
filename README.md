@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-horizontal-dark.svg">
+  <img src="docs/brand/logo-horizontal.svg" alt="Azhi Flow" height="56">
+</picture>
+
 # Azhi Flow
 
 Governed, durable agent workflows that say plainly what they can and cannot guarantee.
@@ -5,6 +10,9 @@ Governed, durable agent workflows that say plainly what they can and cannot guar
 Every run shows what the agent saw, what it was allowed to do, what it actually did, and what it cost,
 and says plainly where it cannot know. See Product Specification v2.0 and the Azhi Flow Implementation
 Plan for the design.
+
+What Azhi is, the problems it solves, cost and token optimization, and how it compares with
+OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/positioning.md).
 
 ## Status
 
@@ -33,12 +41,53 @@ Plan for the design.
 - The taint rule: an ungated write after an agent that read untrusted data fails to compile.
 - The built-in model agent (Anthropic or OpenAI, chosen per profile, plus a scripted provider for fixtures): gateway-only tools,
   validated output with two repairs, budgets, usage with null for unknown, a context manifest per turn.
+- Parallel runs, including several runs of the same workflow, each harness step in its own fresh
+  checkout. At most 2 runs work on one repository at once (the rest wait in order); change it per
+  workspace with `azhi settings concurrency` or the Workers page, or the server default with
+  `AZHI_MAX_RUNS_PER_REPO` (0: no limit).
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
 - The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to
   immutable excerpts and per-source as-of times.
 - OpenCode as a second executor, with the gateway bridged over MCP and its built-in tools off;
   `npm run compare` runs 30 fixtures through both executors and writes a report.
+- AI-SDLC v2 feature delivery (`examples/ai-sdlc-v2`), the delivery workflow in the marketplace: a
+  GitHub issue to a pull request. It checks the ticket is ready, runs the tests on the untouched base
+  branch first, plans the change in one pass (you approve the design), builds it in a writable checkout
+  with the project's tests, has an independent reviewer and a verifier challenge it with one fix round,
+  and after a person approves the release pushes an `azhi/` branch and opens a pull request that says how
+  much was verified. `azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...`. See
+  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). The earlier delivery workflows
+  (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
+  `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
+  [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
+- Issue splitter (`examples/issue-splitter` for GitHub, `examples/issue-splitter-jira` for Jira): sizes an
+  issue, or a request typed as text, against the code and, when it is too big for one pull request, splits it
+  into ordered sub-issues (sub-tasks in Jira) linked under it, after a person approves the plan and may leave
+  slices out. Rules, not the agent alone, decide single or split; a small one gets a scope comment and a `ready`
+  label; something that is not code stops. Run it before the delivery workflow.
+  `azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=...`. See
+  [docs/issue-splitter.md](docs/issue-splitter.md).
+- Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
+  fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
+  deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from
+  its profile, on GitHub Copilot models (your Copilot subscription, signed in with `azhi copilot login`
+  or from the web UI); an approval gates the PR comment. Set up from Mission Control's Examples page or
+  `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
+  See [docs/pr-review.md](docs/pr-review.md).
+- Provider and model for the default-model steps, chosen per workflow (editor) or per run (runner, `azhi run
+  --provider/--model`); steps that name their own model keep it. Examples list what they need before you
+  install (`azhi example needs`, the marketplace's *Before you install*). See [docs/model-defaults.md](docs/model-defaults.md).
+- Result confidence: the pull request review and the issue analysis check their own work. A verifier or
+  challenger on a different model family tries to refute each finding or root cause in its own checkout,
+  and only what survives at 80 out of 100 reaches the review or is called high confidence. What is
+  measured and what is not: [docs/confidence.md](docs/confidence.md).
+- Issue root-cause analysis with an OpenCode agent (`examples/issue-investigation`): an investigator
+  in a fresh checkout of the repository, with a root-cause-analysis skill and a read-only git
+  history MCP server, returns severity, complexity and confidence with reasons, a 5-whys chain with
+  `file:line` evidence and a proposed fix with tests; an approval gates the issue comment.
+  `azhi example install issue-investigation --repo OWNER/REPO`. See
+  [docs/issue-investigation.md](docs/issue-investigation.md).
 - Mission control, the web app (`azhi open`): what is running, waiting and failing, approvals to
   decide, alerts, model spend, schedules, workers, secrets (write-only) and each run's graph,
   timeline, ledger, policy coverage, context manifest and usage, live over SSE. Starting runs,
@@ -86,7 +135,9 @@ In another terminal, `npx azhi` commands find the local server without `azhi log
 in bash, `$env:AZHI_URL = "http://127.0.0.1:7410"` in PowerShell). Set the model the same way
 (`AZHI_ANTHROPIC_MODEL`) before `azhi up`. Limits: a single-writer database, no second server
 process on the same data, and script memory limits only on Linux. macOS is not yet tested; see
-[docs/local-mode-plan.md](docs/local-mode-plan.md).
+[docs/local-mode-plan.md](docs/local-mode-plan.md). OpenCode steps also run on native Windows
+(`npm ci` installs OpenCode; add ripgrep with `winget install BurntSushi.ripgrep.MSVC`, then
+`npx azhi setup` checks both); this is new and not yet checked by a live run on Windows.
 
 ### Linux
 
@@ -207,7 +258,8 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 |---------|--------------|
 | `azhi init [dir] [-t template]` | Create a package from a template: `quality-report` (default), `ci-digest` or `sdlc` (feature delivery with design and release gates) |
 | `azhi validate [path]` | Compile a package locally; `-c azhi.config.yaml` checks tools too |
-| `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results |
+| `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results; `--provider`/`--model` choose the model for default-model steps |
+| `azhi example needs <id>` | What an example needs before it can be installed: required and optional settings, repositories, secrets |
 | `azhi publish [path]` | Publish a version; its `trigger.schedule` becomes the workflow's schedule |
 | `azhi plan [path]` | The run plan: capability marks, policy coverage, taint paths, missing grants, blockers |
 | `azhi test-node <node> [path] -f fixture.json` | Run one node on fixture outputs with writes mocked (a test run) |
@@ -217,6 +269,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
+| `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |
 | `azhi schedule <workflow> --cron ... --timezone ...` | Set or change a schedule |
 | `azhi doctor` | Database, Temporal, workers online, live interpreter builds (max 3) |

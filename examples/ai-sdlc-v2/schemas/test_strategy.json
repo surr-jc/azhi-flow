@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "failure_class": {"enum": ["native_binding", "missing_service", "missing_browser", "missing_credentials", "dependency_install", "compile_error", "genuine_failures", "unknown"]},
+    "evidence": {"type": "string", "maxLength": 400, "description": "The line from the output that shows the cause"},
+    "recommended": {"enum": ["full", "static_checks", "none"]},
+    "reason": {"type": "string", "maxLength": 500},
+    "covers": {"type": "string", "maxLength": 400, "description": "What the recommended fallback proves"},
+    "does_not_cover": {"type": "string", "maxLength": 400, "description": "What it does not prove"},
+    "blocked_suites": {"type": "string", "maxLength": 80, "description": "A count, or unknown"},
+    "runnable_suites": {"type": "string", "maxLength": 80, "description": "A count, or unknown"},
+    "basis": {"type": "string", "maxLength": 300, "description": "How the suites were counted"},
+    "remediation": {"type": "string", "maxLength": 500}
+  },
+  "required": ["failure_class", "evidence", "recommended", "reason", "covers", "does_not_cover", "blocked_suites", "runnable_suites", "basis", "remediation"],
+  "additionalProperties": false
+}

@@ -1,5 +1,7 @@
 import { Command } from 'commander';
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compile } from '../compiler/compile.js';
@@ -16,7 +18,8 @@ import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
 import { printContext, printInspect } from './inspect.js';
-import { signForUpload } from './signing-client.js';
+import { publisherKey, signForUpload } from './signing-client.js';
+import { signPackage } from '../security/signing.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
@@ -132,11 +135,15 @@ program
   .option('-i, --input <key=value>', 'input value (JSON or string); repeatable', collect)
   .option('--inputs <file>', 'JSON file with inputs')
   .option('--published', 'run a published version (workflow, workflow@3) instead of uploading')
+  .option('--provider <provider>', 'provider for steps whose profile says `name: default` (anthropic, openai, github-copilot or openai-chatgpt); steps that name a model keep it')
+  .option('--model <id>', 'model for those steps (needs --provider); without it the provider\'s server default model')
+  .option('--no-preflight', 'start without first checking secrets, tools and GitHub access')
   .option('-w, --wait', 'wait for the run to finish and print the result')
-  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean }) => {
+  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string; preflight?: boolean }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
     const api = client();
-    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs) });
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.preflight === false ? {} : { preflight: true }), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
     console.log(`run ${bold(run_id)} queued`);
     if (!opts.wait) return;
     let cursor = 0;
@@ -200,10 +207,14 @@ program
   .description('Show the run plan: capability marks, policy coverage, taint paths, missing grants and blockers')
   .argument('[path]', 'package directory, or workflow@version with --published', '.')
   .option('--published', 'plan a published version instead of uploading')
+  .option('--provider <provider>', 'show the plan for a run that chooses this provider for `name: default` steps')
+  .option('--model <id>', 'and this model (needs --provider)')
   .option('--json', 'print raw JSON')
-  .action(async (path: string, opts: { published?: boolean; json?: boolean }) => {
+  .action(async (path: string, opts: { published?: boolean; json?: boolean; provider?: string; model?: string }) => {
+    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
     const version = opts.published ? path : (await upload(path)).id;
-    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan`);
+    const qs = opts.provider ? `?provider=${encodeURIComponent(opts.provider)}${opts.model ? `&model=${encodeURIComponent(opts.model)}` : ''}` : '';
+    const plan = await client().get<RunPlanReport>(`/v1/versions/${encodeURIComponent(version)}/plan${qs}`);
     if (opts.json) console.log(JSON.stringify(plan, null, 2));
     else printPlan(plan);
     process.exitCode = plan.ok ? 0 : 1;
@@ -274,6 +285,25 @@ program
   });
 
 program
+  .command('delete')
+  .description('Delete a workflow revision (slug@3) or a whole workflow (slug); needs an admin token')
+  .argument('<ref>', 'slug@version to delete one revision, or slug to delete the workflow and every revision')
+  .option('--purge-runs', 'also delete the runs on it (without this, a workflow with runs is refused)')
+  .action(async (ref: string, opts: { purgeRuns?: boolean }) => {
+    const api = client();
+    const qs = opts.purgeRuns ? '?purge_runs=true' : '';
+    const [slug, ver] = ref.split('@');
+    if (ver) {
+      const v = await api.get<{ id: string }>(`/v1/versions/${encodeURIComponent(ref)}`);
+      const r = await api.del<{ runs_deleted: number; workflow_deleted: boolean }>(`/v1/versions/${v.id}${qs}`);
+      console.log(`${green('deleted')} ${ref}${r.runs_deleted ? ` and ${r.runs_deleted} run(s)` : ''}${r.workflow_deleted ? ' (that was the last revision, so the workflow is gone)' : ''}`);
+    } else {
+      const r = await api.del<{ versions_deleted: number; runs_deleted: number }>(`/v1/workflows/${encodeURIComponent(slug!)}${qs}`);
+      console.log(`${green('deleted')} ${slug}: ${r.versions_deleted} revision(s)${r.runs_deleted ? `, ${r.runs_deleted} run(s)` : ''}`);
+    }
+  });
+
+program
   .command('apply')
   .description('Apply an admin config: register tools and schedules, check secrets')
   .argument('<file>', 'azhi.config.yaml')
@@ -292,6 +322,375 @@ program
       const set = new Set((await api.get<Array<{ name: string }>>('/v1/secrets')).map((s) => s.name));
       for (const name of cfg.secrets) console.log(`secret ${name}: ${set.has(name) ? green('set') : yellow('missing (azhi secret set ' + name + ')')}`);
     }
+  });
+
+const example = program.command('example').description('Set up the example workflows that ship with the server');
+
+interface ExampleNeeds {
+  id: string;
+  name: string;
+  needs_repos: boolean;
+  requirements: {
+    settings: Array<{ name: string; title: string; description?: string; placeholder?: string; required: boolean; needed_for?: string; value: string | null; default: string | null; ready: boolean }>;
+    secrets: Array<{ name: string; set: boolean }>;
+    repos: { needed: boolean; ready: boolean };
+    ready: boolean;
+  };
+}
+
+/** What an example needs before it can be installed, as a checklist; `given` are the --set values of this command. */
+function printNeeds(e: ExampleNeeds, given: Record<string, string> = {}, haveRepos = false): string[] {
+  const r = e.requirements;
+  const lacking: string[] = [];
+  console.log(bold(`Before you install ${e.id}, have ready:`));
+  for (const s of r.settings) {
+    const have = given[s.name] ?? s.value ?? s.default;
+    const state = have ? green(`${given[s.name] ? 'given' : s.value ? 'set' : 'default'}: ${have}`) : s.required ? red('needed') : dim('optional');
+    console.log(`  ${s.required ? 'required' : 'optional'}  ${bold(s.name)} (${s.title}) ${state}${!s.required && s.needed_for ? dim(` - only for ${s.needed_for}`) : ''}`);
+    if (!have && s.description) console.log(dim(`            ${s.description}`));
+    if (s.required && !have) lacking.push(`--set ${s.name}=${s.placeholder ?? '...'}`);
+  }
+  if (r.repos.needed) {
+    const ok = r.repos.ready || haveRepos;
+    console.log(`  required  ${bold('repositories')} its GitHub tools may use ${ok ? green('given') : red('needed')}`);
+    if (!ok) lacking.push('--repo OWNER/NAME');
+  }
+  for (const s of r.secrets) console.log(`  secret    ${bold(s.name)} ${s.set ? green('set') : yellow(`not set yet (azhi secret set ${s.name}); needed to run, not to install`)}`);
+  return lacking;
+}
+
+example
+  .command('needs')
+  .description('Show what an example needs before it can be installed: settings (required or optional), repositories and secrets')
+  .argument('<id>', 'example id, for example ai-sdlc-v2')
+  .action(async (id: string) => {
+    const e = (await client().get<ExampleNeeds[]>('/v1/examples')).find((x) => x.id === id);
+    if (!e) throw new Error(`no example named '${id}'`);
+    const lacking = printNeeds(e);
+    if (lacking.length) console.log(`\ninstall with: ${bold(`azhi example install ${id} ${lacking.join(' ')}`)}`);
+    process.exitCode = lacking.length ? 1 : 0;
+  });
+example
+  .command('list')
+  .description('List the examples, the tools they register and the secrets they need')
+  .action(async () => {
+    const rows = await client().get<Array<{ id: string; name: string; needs_repos: boolean; secrets: Array<{ name: string; set: boolean }>; settings?: Array<{ name: string }> }>>('/v1/examples');
+    table([['EXAMPLE', 'NAME', 'NEEDS', 'SECRETS'], ...rows.map((e) => [e.id, e.name, [e.needs_repos ? '--repo' : '', ...(e.settings ?? []).map((x) => `--set ${x.name}=`)].filter(Boolean).join(' '), e.secrets.map((x) => `${x.name}${x.set ? '' : ' (missing)'}`).join(', ')])]);
+  });
+example
+  .command('install')
+  .description('Register the example\'s tools, save it as a signed draft and list the secrets it needs')
+  .argument('<id>', 'example id, for example pr-review')
+  .option('--repo <owner/name>', 'repository its GitHub tools may use; repeatable', collect)
+  .option('--api-url <url>', 'GitHub Enterprise API, for example https://ghe.example.com/api/v3 (default https://api.github.com)')
+  .option('--git-url <url>', 'git host the checkouts clone from (default: the one that goes with --api-url, else https://github.com)')
+  .option('--set <name=value>', 'an example setting, for example jira_url=https://acme.atlassian.net; repeatable', collect)
+  .action(async (id: string, opts: { repo?: string[]; apiUrl?: string; gitUrl?: string; set?: string[] }) => {
+    const api = client();
+    const settings: Record<string, string> = {};
+    for (const kv of opts.set ?? []) {
+      const at = kv.indexOf('=');
+      if (at < 1) throw new Error(`--set takes name=value, got '${kv}'`);
+      settings[kv.slice(0, at).trim()] = kv.slice(at + 1).trim();
+    }
+    // Say what is needed first, and stop before anything is registered when a required value is missing.
+    const needs = (await api.get<ExampleNeeds[]>('/v1/examples')).find((x) => x.id === id);
+    if (!needs) throw new Error(`no example named '${id}'`);
+    const lacking = printNeeds(needs, settings, Boolean(opts.repo?.length));
+    if (lacking.length) {
+      console.error(red(`\nnot installed: ${lacking.length === 1 ? 'a required value is' : 'required values are'} missing`));
+      console.error(`run again with: ${bold(`azhi example install ${id} ${[...(opts.repo ?? []).map((r) => `--repo ${r}`), ...(opts.set ?? []).map((s) => `--set ${s}`), ...lacking].join(' ')}`)}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log('');
+    const r = await api.post<{ ok: boolean; diagnostics: any[]; version?: { id: string; workflow: string; version: number }; tools: Array<{ ref: string; revision: number; changed: boolean }>; secrets?: Array<{ name: string; set: boolean }>; settings?: Array<{ name: string; value: string | null }> }>(
+      `/v1/examples/${encodeURIComponent(id)}/install`,
+      { ...(opts.repo?.length ? { repos: opts.repo } : {}), ...(opts.apiUrl ? { api_url: opts.apiUrl } : {}), ...(opts.gitUrl ? { git_url: opts.gitUrl } : {}), ...(opts.set?.length ? { settings } : {}) },
+    );
+    for (const t of r.tools) console.log(`  ${t.changed ? green('+') : dim('=')} tool ${t.ref} (revision ${t.revision})`);
+    if (!r.ok || !r.version) {
+      printDiagnostics(r.diagnostics);
+      process.exitCode = 1;
+      return;
+    }
+    // Workers run signed packages only: sign the draft with this machine's publisher key.
+    const source = await api.get<{ package_hash: string }>(`/v1/versions/${r.version.id}/source`);
+    const key = await publisherKey(api);
+    await api.post(`/v1/versions/${r.version.id}/signature`, { signature: signPackage(key.private_key, key.certificate, source.package_hash, r.version.workflow) });
+    console.log(`${green('installed')} ${r.version.workflow} v${r.version.version} (signed draft ${r.version.id})`);
+    for (const x of r.settings ?? []) console.log(`  setting ${x.name}: ${x.value ? green(x.value) : yellow(`not set (--set ${x.name}=...)`)}`);
+    for (const x of r.secrets ?? []) console.log(`  secret ${x.name}: ${x.set ? green('set') : yellow(`missing (azhi secret set ${x.name})`)}`);
+    console.log(`run it: ${bold(`azhi run ${r.version.id} --published -i ...`)}`);
+  });
+
+const github = program.command('github').description('GitHub access for the GitHub tools and repository checkouts');
+github
+  .command('login')
+  .description('Use the GitHub CLI login (gh auth login, on the machine the server runs on) for the GitHub secrets, instead of storing a token')
+  .option('--secret <name...>', 'secrets that should use it', ['github-read-token', 'github-write-token'])
+  .option('--hostname <host>', 'GitHub host (an Enterprise server), default github.com', 'github.com')
+  .action(async (opts: { secret: string[]; hostname: string }) => {
+    const r = await client().post<{ host: string; login: string | null; scopes: string[]; secrets: string[]; warning?: string }>('/v1/github/cli-login', { secrets: opts.secret, host: opts.hostname });
+    console.log(`${green('using the GitHub CLI login')} of ${bold(r.login ?? 'unknown')} on ${r.host} for: ${r.secrets.join(', ')}`);
+    console.log(dim(`scopes: ${r.scopes.join(', ') || 'none listed'}. No token is stored: it is asked of gh each time a step needs it.`));
+    console.log(dim('It acts as you, so the repository list of each tool decides which repositories a workflow may use.'));
+    if (r.warning) console.log(yellow(r.warning));
+  });
+
+const chatgpt = program.command('chatgpt').description('OpenAI models on your ChatGPT plan, for OpenCode steps');
+chatgpt
+  .command('login')
+  .description('Sign in with your ChatGPT plan and store the sign-in as a workspace secret (never shown)')
+  .option('--secret <name>', 'secret to store it in', 'openai-chatgpt-auth')
+  .action(async (opts: { secret: string }) => {
+    const api = client();
+    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/chatgpt/login', { secret: opts.secret });
+    console.log(`Open ${bold(l.verification_uri)} and enter the code ${bold(l.user_code)}`);
+    console.log(dim(`waiting for OpenAI (the code expires in ${Math.round(l.expires_in / 60)} minutes)...`));
+    let interval = l.interval;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await api.post<{ status: string; interval?: number; version?: number; message?: string; account?: string }>(`/v1/chatgpt/login/${l.id}`, {});
+      if (r.status === 'done') {
+        console.log(`${green('signed in')} with your ChatGPT plan; saved as secret ${opts.secret} (version ${r.version})`);
+        if (r.account === 'missing') console.log(yellow('OpenAI did not name a ChatGPT account in the sign-in; if steps are refused, sign in again.'));
+        console.log(dim('Azhi renews this sign-in itself. Do not paste it into your own OpenCode or Codex: each renewal cancels the other\'s.'));
+        return;
+      }
+      if (r.status !== 'pending') {
+        console.error(red(`not signed in: ${r.message ?? r.status}`));
+        process.exitCode = 1;
+        return;
+      }
+      interval = r.interval ?? interval;
+    }
+  });
+chatgpt
+  .command('check')
+  .description('Renew the saved ChatGPT sign-in once and say whether it works')
+  .option('--secret <name>', 'secret holding it', 'openai-chatgpt-auth')
+  .action(async (opts: { secret: string }) => {
+    const r = await client().post<{ ok: boolean; message: string }>('/v1/chatgpt/check', { secret: opts.secret });
+    console.log(r.ok ? green(r.message) : red(r.message));
+    if (!r.ok) process.exitCode = 1;
+  });
+
+const copilot = program.command('copilot').description('GitHub Copilot models for OpenCode steps');
+copilot
+  .command('login')
+  .description('Sign in to GitHub Copilot and store the sign-in as a workspace secret (never shown)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--enterprise-url <host>', 'your company\'s GitHub Enterprise address, for example octo.ghe.com (default github.com)')
+  .action(async (opts: { secret: string; enterpriseUrl?: string }) => {
+    const api = client();
+    const l = await api.post<{ id: string; user_code: string; verification_uri: string; interval: number; expires_in: number }>('/v1/copilot/login', { secret: opts.secret, ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}) });
+    console.log(`Open ${bold(l.verification_uri)} and enter the code ${bold(l.user_code)}`);
+    console.log(dim(`waiting for GitHub (the code expires in ${Math.round(l.expires_in / 60)} minutes)...`));
+    let interval = l.interval;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await api.post<{ status: string; interval?: number; version?: number; message?: string }>(`/v1/copilot/login/${l.id}`, {});
+      if (r.status === 'done') {
+        console.log(`${green('signed in')} to GitHub Copilot; saved as secret ${opts.secret} (version ${r.version})`);
+        return;
+      }
+      if (r.status !== 'pending') {
+        console.error(red(`not signed in: ${r.message ?? r.status}`));
+        process.exitCode = 1;
+        return;
+      }
+      interval = r.interval ?? interval;
+    }
+  });
+
+copilot
+  .command('import')
+  .description('Reuse a GitHub Copilot sign-in this machine already has (OpenCode\'s auth.json, GITHUB_TOKEN, the gh tool): tries each and keeps the one Copilot accepts; nothing is printed')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
+  .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
+    const candidates: Array<{ name: string; auth: string }> = [];
+    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
+    if (existsSync(file)) {
+      try {
+        const j = JSON.parse(readFileSync(file, 'utf8'));
+        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
+          const e = j[k];
+          const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
+          candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
+          // Some OpenCode versions send the entry's `access` token rather than `refresh`.
+          if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
+        }
+      } catch {
+        console.error(dim(`${file} is not JSON; skipped`));
+      }
+    } else {
+      console.error(dim(`no OpenCode sign-in file at ${file}`));
+    }
+    for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
+    try {
+      const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();
+      if (t) candidates.push({ name: 'the gh tool (gh auth token)', auth: t });
+    } catch {
+      // gh not installed or not signed in
+    }
+    if (!candidates.length) {
+      console.error(red('No sign-in found: no github-copilot entry in the OpenCode file, no GITHUB_TOKEN, and gh is not signed in. Use: azhi copilot login'));
+      process.exitCode = 1;
+      return;
+    }
+    const r = await client().post<{ secret: string; version?: number; from: string | null; enterprise?: string; tried: Array<{ name: string; ok: boolean; message: string }>; check?: { message: string } }>('/v1/copilot/import', {
+      secret: opts.secret,
+      candidates,
+      ...(opts.enterpriseUrl ? { enterprise_url: opts.enterpriseUrl } : {}),
+    });
+    for (const t of r.tried) console.log(`  ${t.ok ? green('works ') : red('failed')} ${t.name}${t.ok ? '' : `: ${t.message}`}`);
+    if (!r.from) {
+      console.error(red('None of them is accepted by GitHub Copilot, so nothing was saved. Send the lines above, or sign in with: azhi copilot login'));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${green('imported')} ${r.from}${r.enterprise ? ` for ${r.enterprise}` : ''}; saved as secret ${r.secret} (version ${r.version})`);
+    console.log(green(r.check!.message));
+  });
+
+copilot
+  .command('inspect')
+  .description('Show the shape of the GitHub Copilot sign-in in OpenCode\'s auth.json (field names, lengths, token kind); never the tokens')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .action((opts: { file?: string }) => {
+    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
+    if (!existsSync(file)) {
+      console.error(red(`${file} not found`));
+      process.exitCode = 1;
+      return;
+    }
+    const kind = (v: unknown) => {
+      if (typeof v !== 'string') return typeof v;
+      const m = /^(gh[a-z]_|tid=|github_pat_)/.exec(v);
+      return `${m ? m[1] : 'unrecognised prefix'}... (${v.length} characters)`;
+    };
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    for (const k of Object.keys(j)) {
+      const e = j[k];
+      if (!e || typeof e !== 'object') continue;
+      console.log(bold(k));
+      for (const f of Object.keys(e)) {
+        const v = e[f];
+        const shown = f === 'refresh' || f === 'access' || f === 'key' ? (f === 'access' && v === e.refresh ? 'same as refresh' : kind(v)) : f === 'expires' && typeof v === 'number' ? (v ? `${v} (${new Date(v).toISOString()})` : '0 (no expiry)') : f === 'enterpriseUrl' || f === 'type' ? String(v) : typeof v;
+        console.log(`  ${f}: ${shown}`);
+      }
+    }
+  });
+
+copilot
+  .command('check')
+  .description('Ask GitHub whether the saved Copilot sign-in works')
+  .option('--secret <name>', 'secret holding it', 'github-copilot-token')
+  .action(async (opts: { secret: string }) => {
+    const r = await client().post<{ ok: boolean; message: string; steps?: Array<{ name: string; status: number | string; detail: string }> }>('/v1/copilot/check', { secret: opts.secret });
+    for (const st of r.steps ?? []) console.log(`  ${dim(String(st.status).padEnd(5))} ${st.name}: ${st.detail}`);
+    console.log(r.ok ? green(r.message) : red(r.message));
+    if (!r.ok) process.exitCode = 1;
+  });
+
+copilot
+  .command('quota')
+  .description('Show your own Copilot allowance (AI credits used and left), as VS Code shows it')
+  .option('--secret <name>', 'secret holding the sign-in', 'github-copilot-token')
+  .option('--shape', 'also print the field names GitHub sends (no token, no text values)')
+  .action(async (opts: { secret: string; shape?: boolean }) => {
+    const r = await client().get<{ ok: boolean; message: string; plan?: string; reset_date?: string; quotas: Array<{ name: string; entitlement: number | null; remaining: number | null; used: number | null; percent_remaining: number | null; unlimited: boolean; overage_permitted: boolean | null; overage_count: number | null }>; shape?: unknown }>(`/v1/copilot/quota?secret=${encodeURIComponent(opts.secret)}`);
+    if (!r.ok) {
+      console.error(red(r.message));
+      process.exitCode = 1;
+      return;
+    }
+    if (r.plan) console.log(`plan ${r.plan}${r.reset_date ? `, resets ${r.reset_date}` : ''}`);
+    for (const q of r.quotas) {
+      if (q.unlimited) console.log(`  ${q.name.padEnd(22)} unlimited`);
+      else console.log(`  ${q.name.padEnd(22)} ${q.used ?? '?'} used of ${q.entitlement ?? '?'}, ${q.remaining ?? '?'} left${q.percent_remaining !== null ? ` (${Math.round(q.percent_remaining)}%)` : ''}${q.overage_count ? `, ${q.overage_count} over` : ''}${q.overage_permitted === false ? ', no overage allowed' : ''}`);
+    }
+    if (!r.quotas.length) console.log(dim(r.message));
+    if (opts.shape) console.log(JSON.stringify(r.shape, null, 2));
+  });
+
+example
+  .command('repos')
+  .description('Show, add or remove the repositories an installed example\'s GitHub tools may use')
+  .argument('<id>', 'example id, for example pr-review')
+  .option('--add <owner/name>', 'repository to allow; repeatable', collect)
+  .option('--remove <owner/name>', 'repository to stop allowing; repeatable', collect)
+  .action(async (id: string, opts: { add?: string[]; remove?: string[] }) => {
+    const api = client();
+    if (!opts.add?.length && !opts.remove?.length) {
+      const e = (await api.get<Array<{ id: string; repos: string[] }>>('/v1/examples')).find((x) => x.id === id);
+      if (!e) throw new Error(`no example named '${id}'`);
+      console.log(e.repos.length ? e.repos.join('\n') : dim('not installed yet'));
+      return;
+    }
+    const r = await api.post<{ tools: Array<{ ref: string; revision: number }>; repos: string[] }>(`/v1/examples/${encodeURIComponent(id)}/repos`, { add: opts.add ?? [], remove: opts.remove ?? [] });
+    for (const t of r.tools) console.log(`  tool ${t.ref} (revision ${t.revision})`);
+    console.log(`${green('allowed')} ${r.repos.join(', ')}`);
+  });
+
+const tool = program.command('tool').description('Registered tools');
+tool
+  .command('repos')
+  .description('Add or remove repositories a GitHub tool may use (a new revision of the tool)')
+  .argument('<tool>', 'tool@version, for example github.get-pull-request@1')
+  .option('--add <owner/name>', 'repository to allow; repeatable', collect)
+  .option('--remove <owner/name>', 'repository to stop allowing; repeatable', collect)
+  .action(async (ref: string, opts: { add?: string[]; remove?: string[] }) => {
+    const r = await client().post<{ revision: number; repos: string[] }>(`/v1/tools/${encodeURIComponent(ref)}/repos`, { add: opts.add ?? [], remove: opts.remove ?? [] });
+    console.log(`${green('allowed')} ${r.repos.join(', ')} ${dim(`(${ref} revision ${r.revision})`)}`);
+  });
+
+const mcp = program.command('mcp').description('Manage shared remote Streamable HTTP MCP connections (admin)');
+mcp
+  .command('add')
+  .description('Add a remote MCP endpoint; use --auth oauth with the OAuth client settings when required')
+  .requiredOption('--name <name>', 'connection name')
+  .requiredOption('--url <url>', 'Streamable HTTP MCP URL')
+  .option('--auth <none|oauth>', 'authentication mode', 'none')
+  .option('--authorization-url <url>', 'OAuth authorization endpoint')
+  .option('--token-url <url>', 'OAuth token endpoint')
+  .option('--client-id <id>', 'OAuth client ID')
+  .option('--client-secret <secret>', 'OAuth client secret')
+  .option('--scopes <scopes>', 'OAuth scopes')
+  .action(async (opts) => {
+    const oauth = opts.auth === 'oauth' ? { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes } : undefined;
+    const r = await client().post<{ id: string; status: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
+    console.log(`${green('added')} ${opts.name} (${r.id}), ${r.status}`);
+    if (opts.auth === 'oauth') console.log(`authorize it with: azhi mcp login ${r.id}`);
+  });
+mcp.command('list').action(async () => {
+  const rows = await client().get<Array<{ id: string; name: string; url: string; auth_kind: string; status: string }>>('/v1/mcp/connections');
+  table([['ID', 'Name', 'Auth', 'Status', 'URL'], ...rows.map((r) => [r.id, r.name, r.auth_kind, r.status, r.url])]);
+});
+mcp.command('login').argument('<connection>').description('Print the browser URL that authorizes a shared OAuth MCP connection').action(async (id: string) => {
+  const r = await client().post<{ authorization_url: string }>(`/v1/mcp/connections/${encodeURIComponent(id)}/oauth/start`, {});
+  console.log(r.authorization_url);
+});
+mcp.command('discover').argument('<connection>').description('List the tools a ready remote MCP connection exposes').action(async (id: string) => {
+  const rows = await client().get<Array<{ name: string; description: string }>>(`/v1/mcp/connections/${encodeURIComponent(id)}/tools`);
+  table([['Tool', 'Description'], ...rows.map((r) => [r.name, r.description])]);
+});
+mcp
+  .command('register-tool')
+  .argument('<connection>')
+  .argument('<remote-tool>')
+  .requiredOption('--id <id>', 'Azhi tool id')
+  .option('--version <number>', 'tool version', '1')
+  .requiredOption('--description <text>', 'tool description')
+  .option('--effect <effect>', 'read, write-idempotent, write-dedupable, or write-unsafe', 'read')
+  .option('--input-schema <json>', 'JSON Schema for tool arguments', '{"type":"object"}')
+  .option('--output-schema <json>', 'JSON Schema for tool output', '{"type":"object"}')
+  .action(async (connection: string, remoteTool: string, opts) => {
+    const r = await client().post<{ ref: string; revision: number }>(`/v1/mcp/connections/${encodeURIComponent(connection)}/tools`, { id: opts.id, version: Number(opts.version), name: remoteTool, description: opts.description, effect: opts.effect, input_schema: JSON.parse(opts.inputSchema), output_schema: JSON.parse(opts.outputSchema) });
+    console.log(`${green('registered')} ${r.ref} revision ${r.revision}`);
   });
 
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');
@@ -383,6 +782,38 @@ function readSecretStdin(): string {
   return strip(strip(text, 0xfeff), 0).trim();
 }
 
+const signin = program.command('signin').description('Every sign-in the workspace has, and how each was supplied');
+signin
+  .command('list')
+  .description('Show each integration (GitHub, Copilot, ChatGPT, Claude, Slack, Jira), its secrets and whether the value suits it')
+  .action(async () => {
+    type S = { name: string; status: string; kind?: string; host?: string; gh_ok?: boolean; problem?: string };
+    const r = await client().get<{ integrations: Array<{ title: string; cli: string; secrets: S[] }>; other: S[] }>('/v1/signins');
+    const how = (x: S) => (x.kind === 'gh-cli' ? `GitHub CLI login (${x.host})${x.gh_ok ? '' : ' - gh gives no token'}` : x.kind === 'chatgpt' ? 'ChatGPT sign-in' : x.kind === 'copilot' ? 'Copilot sign-in' : 'pasted token');
+    for (const i of r.integrations) {
+      console.log(bold(i.title));
+      for (const x of i.secrets) console.log(`  ${x.name}: ${x.status === 'missing' ? yellow(`missing (${i.cli})`) : x.problem ? red(x.problem) : x.kind === 'gh-cli' && !x.gh_ok ? yellow(how(x)) : green(how(x))}`);
+    }
+    if (r.other.length) console.log(`${bold('Other secrets')}: ${r.other.map((x) => x.name).join(', ')}`);
+    process.exitCode = r.integrations.some((i) => i.secrets.some((x) => x.problem)) ? 1 : 0;
+  });
+
+const settingsCmd = program.command('settings').description('Workspace settings');
+settingsCmd
+  .command('concurrency')
+  .description('Show or set how many runs may work on one repository at once (0: no limit)')
+  .option('--max-runs-per-repo <n>', "a number, or 'default' for the server's setting (admin)")
+  .action(async (opts: { maxRunsPerRepo?: string }) => {
+    if (opts.maxRunsPerRepo !== undefined) {
+      const v = opts.maxRunsPerRepo === 'default' ? null : Number(opts.maxRunsPerRepo);
+      if (v !== null && !(Number.isInteger(v) && v >= 0)) throw new Error(`--max-runs-per-repo must be a whole number 0 or more, or 'default'`);
+      await client().put('/v1/settings/concurrency', { max_runs_per_repo: v });
+    }
+    const s = await client().get<{ max_runs_per_repo: number; source: string; server_default: number; repos: Array<{ repo: string; running: string[]; held: string[] }> }>('/v1/settings/concurrency');
+    console.log(`runs per repository: ${s.max_runs_per_repo === 0 ? 'no limit' : s.max_runs_per_repo} (${s.source === 'workspace' ? 'workspace setting' : `server default, AZHI_MAX_RUNS_PER_REPO=${s.server_default}`})`);
+    if (s.repos.length) table([['REPOSITORY', 'RUNNING', 'WAITING'], ...s.repos.map((r) => [r.repo, r.running.join(' ') || '-', r.held.join(' ') || '-'])]);
+  });
+
 const secret = program.command('secret').description('Manage workspace secrets');
 secret
   .command('set')
@@ -458,6 +889,42 @@ program
       ok = false;
     }
     process.exitCode = ok ? 0 : 1;
+  });
+
+program
+  .command('setup')
+  .description('Check this machine has what OpenCode steps need (OpenCode, ripgrep, git) and say how to install what is missing')
+  .option('--dcp', 'also install the DCP context-pruning plugin for OpenCode steps (AGPL-3.0, so installed from npm here, not shipped with Azhi)')
+  .option('--opencode2', 'also install OpenCode 2 into the tools folder (used by workers that set AZHI_OPENCODE_MAJOR=2)')
+  .action(async (opts: { dcp?: boolean; opencode2?: boolean }) => {
+    const { detectCapabilities } = await import('../worker/capabilities.js');
+    const { DCP_VERSION, dcpDir, dcpLimits, dcpPlugin, installDcp, installOpencode2, OPENCODE2_VERSION, opencode2Binary, opencode2Dir, ripgrepInstallHint, toolsDir } = await import('../worker/tools.js');
+    if (opts.dcp && !dcpPlugin()) {
+      console.log(`Installing @tarquinen/opencode-dcp ${DCP_VERSION} into ${dcpDir()} (about 180 MB; set AZHI_TOOLS_DIR to use another drive)`);
+      installDcp();
+    }
+    if (opts.opencode2 && !opencode2Binary()) {
+      console.log(`Installing @opencode/cli ${OPENCODE2_VERSION} into ${opencode2Dir()} (about 250 MB; set AZHI_TOOLS_DIR to use another drive)`);
+      installOpencode2();
+    }
+    const rt = detectCapabilities().runtimes;
+    const line = (ok: boolean, name: string, detail: string) => console.log(`${ok ? green('ok  ') : red('MISSING')} ${name}: ${detail}`);
+    line(Boolean(rt.git), 'git', rt.git?.version ?? 'install git (needed to clone repositories for agent steps)');
+    const two = process.env.AZHI_OPENCODE_MAJOR === '2';
+    line(Boolean(rt.opencode), two ? 'opencode (2.x, AZHI_OPENCODE_MAJOR=2)' : 'opencode', rt.opencode ? `${rt.opencode.version} (${rt.opencode.path})` : two ? 'run azhi setup --opencode2, or set AZHI_OPENCODE2_BIN' : 'run npm ci (it installs the pinned OpenCode), or set AZHI_OPENCODE_BIN');
+    if (rt.opencode) line(Boolean(rt.ripgrep), 'ripgrep', rt.ripgrep ? `${rt.ripgrep.version} (${rt.ripgrep.path})` : ripgrepInstallHint());
+    else console.log(dim(`ripgrep is checked once OpenCode is present. Tools folder: ${toolsDir()} (AZHI_TOOLS_DIR to change it)`));
+    if (rt.opencode) console.log(`${rt.dcp ? green('ok  ') : dim('--  ')} dcp (optional): ${rt.dcp ? `${rt.dcp.version} (used when token saving is on)` : `not installed; run azhi setup --dcp`}`);
+    if (rt.dcp) {
+      try {
+        const l = dcpLimits();
+        const at = (v: number | string | undefined, dflt: number) => (v === undefined ? `${dflt} tokens (default)` : typeof v === 'number' ? `${v} tokens` : `${v} of the context window`);
+        console.log(dim(`     dcp asks the model to compress from ${at(l.minContextLimit, 50000)} and insists past ${at(l.maxContextLimit, 100000)} (AZHI_DCP_MIN_CONTEXT, AZHI_DCP_MAX_CONTEXT)`));
+      } catch (e) {
+        line(false, 'dcp limits', (e as Error).message);
+      }
+    }
+    process.exitCode = rt.git && rt.opencode && rt.ripgrep ? 0 : 1;
   });
 
 program

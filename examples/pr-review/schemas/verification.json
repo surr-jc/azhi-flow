@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "checks": {
+      "description": "One check per finding id in the input; [] when there are no findings.",
+      "type": "array",
+      "maxItems": 120,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[CSTQ][0-9]{1,2}$"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "refuted",
+              "unverifiable"
+            ]
+          },
+          "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ],
+            "description": "Your own grade of the harm for a confirmed finding (finding-verification skill); leave out for refuted and unverifiable"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "confidence",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "checks"
+  ],
+  "additionalProperties": false
+}

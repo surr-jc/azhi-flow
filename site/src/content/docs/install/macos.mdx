@@ -1,0 +1,78 @@
+---
+title: Install on macOS
+description: Run the Azhi Flow server on a Mac with Docker Desktop and a native CLI and development worker.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Tested and working; workers not certified">
+This install is tested and working on macOS. Workers are still not certified on macOS in the alpha, so for
+production use, run the worker on a Linux host instead.
+</Aside>
+
+## How it works on a Mac
+
+Docker Desktop runs the server stack (PostgreSQL, Temporal, the Azhi server). The CLI and a **development
+worker** run natively.
+
+## Steps
+
+<Steps>
+
+1. Install prerequisites with Homebrew.
+
+   ```bash
+   brew install node@22 git
+   brew install --cask docker     # start Docker Desktop once and wait until it is running
+   brew install uv                # optional: Python script nodes
+   brew install oven-sh/bun/bun   # optional: Bun script nodes
+   brew install ripgrep           # needed by OpenCode steps
+   ```
+
+2. Clone and install.
+
+   ```bash
+   git clone https://github.com/surr-jc/azhi-flow && cd azhi-flow
+   npm ci
+   ```
+
+3. Install the server stack.
+
+   ```bash
+   deploy/install.sh     # prints the owner token
+   ```
+
+4. Start a worker and sign in.
+
+   ```bash
+   export AZHI_TEMPORAL_ADDRESS=localhost:7233
+   npx azhi login --url http://localhost:7400 --token <owner token>
+   npx azhi worker start
+   ```
+
+5. Verify.
+
+   ```bash
+   npx azhi setup
+   npx azhi doctor
+   npx azhi open
+   ```
+
+</Steps>
+
+## Known macOS limit: script memory limits
+
+Script memory limits are enforced with `prlimit`, which macOS lacks. The run plan marks any `limits.memory_mb`
+as **unsupported** and **refuses the run**. The flagship quality-report workflow's `metrics` script sets
+`limits.memory_mb`. To run it on a Mac, remove that line from `examples/quality-report/workflow.yaml`, or use a
+Linux worker.
+
+This is the plan doing its job: it refuses a guarantee the host cannot keep, rather than running without it.
+
+## Alternatives
+
+- **Local mode** (no Docker) is not yet tested on macOS. See [Local mode](/install/local-mode/).
+- **Linux worker, Mac client:** run the server and worker on a Linux host and use `npx azhi login --url ...`
+  from your Mac. See [Linux](/install/linux/).
+
+Next: [First run](/install/first-run/).

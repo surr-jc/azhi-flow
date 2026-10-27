@@ -3,10 +3,17 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
+import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
+import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
+import type { AppContext } from '../server/context.js';
+import { callRemoteMcpTool } from '../server/mcp.js';
 
 export interface ExecContext {
+  /** Gateway-owned fields are present for remote MCP execution. Kept optional for direct executor tests. */
+  app?: AppContext;
+  workspaceId?: string;
   /** Resolved credential value (never logged, never stored in run state). */
   credential?: string;
   idempotencyKey?: string;
@@ -26,12 +33,96 @@ export interface ToolExecutor {
   lookup?(spec: ToolSpec, args: Record<string, unknown>, key: string, since: Date, ctx: ExecContext): Promise<ExecResult | null>;
 }
 
+const githubConfig = (spec: ToolSpec): GithubConfig => ((spec.transport as { config?: GithubConfig }).config ?? {});
+
 const builtin: Record<string, ToolExecutor> = {
   /** Returns data recorded in the registration. Used for fixtures, demos and test-node. */
   fixture: {
     async call(spec) {
       const cfg = (spec.transport as { config?: { data?: unknown } }).config ?? {};
       return { value: structuredClone(cfg.data ?? null) };
+    },
+  },
+  /** Real data for the flagship: GitHub Actions runs and issues (src/gateway/tools/github.ts). */
+  'github.ci-runs': {
+    async call(spec, args, ctx) {
+      return { value: await ciRuns(githubConfig(spec), { since: typeof args.since === 'string' ? args.since : undefined }, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.flaky-tests': {
+    async call(spec, _args, ctx) {
+      return { value: await flakyTests(githubConfig(spec), ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.incidents': {
+    async call(spec, _args, ctx) {
+      return { value: await incidents(githubConfig(spec), ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  /** The pull request review example: one PR's metadata and files, and a comment on it. */
+  'github.pull-request': {
+    async call(spec, args, ctx) {
+      return { value: await pullRequest(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.pr-comment': {
+    async call(spec, args, ctx) {
+      return { value: await commentOnPullRequest(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPullRequestComment(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  /** The SDLC implement example: commit a workspace step's change onto a branch, and open a pull request for it. */
+  'github.push-branch': {
+    async call(spec, args, ctx) {
+      return { value: await pushBranch(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPush(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  'github.create-pull-request': {
+    async call(spec, args, ctx) {
+      return { value: await createPullRequest(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findPullRequest(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  /** The delivery workflows' order guard: are the slices an issue depends on still open? */
+  'github.issue-blockers': {
+    async call(spec, args, ctx) {
+      return { value: await issueBlockers(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  /** The issue splitter example: create an issue (as a sub-issue of a parent), and add labels to one. */
+  'github.create-issue': {
+    async call(spec, args, ctx) {
+      return { value: await createIssue(githubConfig(spec), args, ctx.credential, ctx.idempotencyKey ?? '', ctx.timeoutMs) };
+    },
+    async lookup(spec, args, key, _since, ctx) {
+      const hit = await findIssue(githubConfig(spec), args, ctx.credential, key, ctx.timeoutMs);
+      return hit ? { value: hit } : null;
+    },
+  },
+  'github.label-issue': {
+    async call(spec, args, ctx) {
+      return { value: await labelIssue(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  /** The SDLC example's intake: one GitHub issue, and any ticket in the shape its agents read. */
+  'github.issue': {
+    async call(spec, args, ctx) {
+      return { value: await issue(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'ticket.normalize': {
+    async call(_spec, args) {
+      return { value: normalizeTicket(args) };
     },
   },
   'slack.post-message': {
@@ -104,11 +195,16 @@ const mcpStdio: ToolExecutor = {
   async call(spec, args, ctx) {
     const t = spec.transport as Extract<ToolSpec['transport'], { kind: 'mcp-stdio' }>;
     const [command, ...cmdArgs] = t.command;
+    // Install-time settings (`{{jira_url}}`) the example install fills in; refuse to start without them.
+    const unset = [...new Set([...t.command, ...Object.values(t.env ?? {})].flatMap((v) => [...v.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]!)))];
+    if (unset.length) throw new SendError(`${spec.id} is missing the setting${unset.length > 1 ? 's' : ''} ${unset.join(', ')}: install the example again with ${unset.map((u) => `--set ${u}=...`).join(' ')} (or fill it in on the Examples page)`, true, ErrorClass.invalidInput);
+    const credentialEnv = t.credential_env ?? 'AZHI_TOOL_CREDENTIAL';
+    if (!/^[A-Z][A-Z0-9_]*$/.test(credentialEnv) || ['PATH', 'HOME'].includes(credentialEnv)) throw new AzhiError(ErrorClass.invalidInput, `${spec.id}: credential_env must be an upper-case variable name other than PATH or HOME`);
     const transport = new StdioClientTransport({
       command: command!,
       args: cmdArgs,
       cwd: t.cwd,
-      env: { PATH: process.env.PATH ?? '', ...(t.env ?? {}), ...(ctx.credential ? { AZHI_TOOL_CREDENTIAL: ctx.credential } : {}) },
+      env: { PATH: process.env.PATH ?? '', ...(t.env ?? {}), ...(ctx.credential ? { [credentialEnv]: ctx.credential } : {}) },
       stderr: 'ignore',
     });
     const client = new Client({ name: 'azhi-gateway', version: '0.1.0' });
@@ -133,6 +229,14 @@ const mcpStdio: ToolExecutor = {
   },
 };
 
+const mcpStreamableHttp: ToolExecutor = {
+  async call(spec, args, ctx) {
+    const t = spec.transport as Extract<ToolSpec['transport'], { kind: 'mcp-streamable-http' }>;
+    if (!ctx.app || !ctx.workspaceId) throw new AzhiError(ErrorClass.unsupportedCapability, 'remote MCP tools must run through the Azhi gateway');
+    return { value: await callRemoteMcpTool(ctx.app, ctx.workspaceId, t.connection, t.tool, args) };
+  },
+};
+
 export function executorFor(spec: ToolSpec): ToolExecutor {
   switch (spec.transport.kind) {
     case 'builtin': {
@@ -144,6 +248,8 @@ export function executorFor(spec: ToolSpec): ToolExecutor {
       return http;
     case 'mcp-stdio':
       return mcpStdio;
+    case 'mcp-streamable-http':
+      return mcpStreamableHttp;
   }
 }
 

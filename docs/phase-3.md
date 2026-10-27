@@ -71,13 +71,13 @@ access, and once with a real Anthropic key (`ANTHROPIC_API_KEY`, `AZHI_ANTHROPIC
 
 From the plan, to be detailed after the alpha gate and design-partner feedback:
 
-1. **Real data sources for the flagship**: GitHub Actions and GitHub Issues as MCP tools (or the
+1. **Real data sources for the flagship** (built 2026-10-05, see docs/github-data.md): GitHub Actions and GitHub Issues as MCP tools (or the
    partners' systems), replacing the fixture tools.
-2. **More executors**: Claude Agent SDK and Codex adapters, each with a pinned version and a
+2. **More executors** (2026-10-05: Claude Agent SDK adapter built and passing its scripted conformance suite, `src/worker/harness-claude.ts`; Codex adapter written but experimental, off unless `AZHI_EXPERIMENTAL_CODEX=1`, because Codex 0.160 defers MCP tools behind a tool_search step the scripted suite cannot play; Streamable HTTP MCP not started): Claude Agent SDK and Codex adapters, each with a pinned version and a
    conformance run like OpenCode's; Streamable HTTP MCP in the gateway.
 3. **Workflows as MCP tools** (the spec's second workflow), so a developer's coding agent can call
    a published workflow.
-4. **Graph features**: loops, subworkflows, quorum joins.
+4. **Graph features** (2026-10-05: loops and subworkflows built, see docs/loops-and-subworkflows.md; quorum joins not started): loops, subworkflows, quorum joins.
 5. **Channels**: Slack commands and buttons (approvals from Slack), web chat and a visual editor.
 6. **Knowledge**: more dataset formats and document-level ACL.
 7. **Operations**: `azhi migrate`, `export`, `rerun`; the 100-case benchmark that the system

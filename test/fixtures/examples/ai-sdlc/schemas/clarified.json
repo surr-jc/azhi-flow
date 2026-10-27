@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "answers": {"type": "string", "description": "What a person answered at the readiness check; empty when the ticket was ready"},
+    "asked": {"type": "boolean"}
+  },
+  "required": ["answers", "asked"],
+  "additionalProperties": false
+}

@@ -1,4 +1,6 @@
 import type { AgentNode, RetrieveNode } from '../definition/types.js';
+import { poolPosition, round } from '../agents/copilot-pricing.js';
+import { settings, type Settings } from '../config/settings.js';
 import { pinDatasets } from '../knowledge/datasets.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type pg from 'pg';
@@ -6,8 +8,11 @@ import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
-import type { RunSnapshot } from '../runtime/types.js';
-import { loadCatalog } from './catalog.js';
+import type { RunInput, RunSnapshot } from '../runtime/types.js';
+import { loadCatalog, loadToolRevision } from './catalog.js';
+import { runRepos } from './repo-slots.js';
+import type { ToolSpec } from '../gateway/types.js';
+import { contentHash } from '../lib/hash.js';
 import type { AppContext } from './context.js';
 import type { VersionRow } from './workflows.js';
 
@@ -26,6 +31,10 @@ export interface CreateRunOptions {
   interpreterBuild: string;
   /** The run plan already built for this request; built here when absent (schedules). */
   plan?: RunPlanReport;
+  /** A subworkflow run: its parent, and no outbox entry (the parent's workflow starts it as a child). */
+  parent?: NonNullable<RunSnapshot['parent']>;
+  /** Provider and model chosen for this run, for steps whose profile says `name: default`; overrides the workflow's model_defaults. */
+  modelDefaults?: NonNullable<RunSnapshot['model_defaults']>;
 }
 
 /**
@@ -33,6 +42,11 @@ export interface CreateRunOptions {
  * Temporal workflow, so a crash between the two never loses a run or starts one twice.
  * A schedule occurrence ID makes creation idempotent.
  */
+function sameExceptRepos(a: ToolSpec, b: ToolSpec): boolean {
+  const strip = ({ revision: _r, ...t }: ToolSpec) => ({ ...t, transport: { ...t.transport, config: { ...((t.transport as { config?: object }).config ?? {}), repos: null } } });
+  return contentHash(strip(a)) === contentHash(strip(b));
+}
+
 export async function createRun(ctx: AppContext, workspaceId: string, o: CreateRunOptions): Promise<{ runId: string; created: boolean }> {
   const schema = o.version.plan.inputsSchema;
   if (schema) {
@@ -44,6 +58,15 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   for (const n of o.version.plan.nodes) if (n.tool) toolRevisions[n.tool.ref] = n.tool.revision ?? catalog.revisions.get(n.tool.ref) ?? 0;
   for (const n of o.version.plan.nodes) for (const t of n.agentTools ?? []) toolRevisions[t.ref] ??= t.revision ?? catalog.revisions.get(t.ref) ?? 0;
   toolRevisions['slack.post-message@1'] ??= 0;
+  // A version pins the tool revisions it was compiled against, except for the repository list:
+  // a later revision that changes only `transport.config.repos` (azhi example repos, Allowed
+  // repositories) applies to new runs of versions saved before it.
+  for (const [ref, pinned] of Object.entries(toolRevisions)) {
+    const latest = catalog.get(ref);
+    if (!latest?.revision || latest.revision <= pinned) continue;
+    const old = await loadToolRevision(ctx, workspaceId, ref, pinned);
+    if (old && sameExceptRepos(old, latest)) toolRevisions[ref] = latest.revision;
+  }
 
   if (o.testNode) {
     const target = o.version.plan.nodes.find((n) => n.id === o.testNode!.node);
@@ -63,7 +86,8 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
 
   // The plan as it stood when the run was created is kept with the run, so the run page shows
   // the coverage this run actually had, not whatever the workers look like later.
-  const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal));
+  const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal, o.modelDefaults));
+  const modelDefaults = o.modelDefaults?.provider ? o.modelDefaults : o.version.definition.model_defaults?.provider ? o.version.definition.model_defaults : undefined;
 
   // Spend limits hold back every trigger, scheduled runs included; test runs are exempt like
   // other plan blockers, since `azhi test-node` is how authors debug.
@@ -82,13 +106,16 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     ...(o.testNode ? { test_node: o.testNode } : {}),
     ...(datasetRevisions ? { dataset_revisions: datasetRevisions } : {}),
     ...(principal ? { principal } : {}),
+    ...(modelDefaults ? { model_defaults: modelDefaults } : {}),
+    ...(o.modelDefaults?.provider ? { model_defaults_chosen: true } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
+    ...(o.parent ? { parent: o.parent } : {}),
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {
     const r = await c.query(
-      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by)
-       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (occurrence_id) DO NOTHING`,
-      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy],
+      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by, repos)
+       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11::text[]) ON CONFLICT (occurrence_id) DO NOTHING`,
+      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy, runRepos(o.version.plan, o.inputs)],
     );
     if (r.rowCount === 0) {
       const existing = (await c.query(`SELECT id FROM runs WHERE occurrence_id=$1`, [o.occurrenceId])).rows[0].id as string;
@@ -96,8 +123,10 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     }
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger })]);
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.planned',$3)`, [workspaceId, runId, JSON.stringify(plan)]);
-    await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
-    await c.query(`NOTIFY azhi_outbox`);
+    if (!o.parent) {
+      await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
+      await c.query(`NOTIFY azhi_outbox`);
+    }
     return { runId, created: true };
   });
 }
@@ -130,7 +159,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     ctx.pool.query(`SELECT node_id, data, at FROM run_events WHERE run_id=$1 AND kind='approval.requested' ORDER BY seq`, [runId]),
     ctx.pool.query(`SELECT node_id, decision, decided_by, data, decided_at FROM approvals WHERE run_id=$1`, [runId]),
     ctx.pool.query(
-      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision
+      `SELECT node_id, attempt, turn, executor, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, cost::float8 AS cost, currency, cost_label, pricing_revision, credits::float8 AS credits, seq, at
        FROM usage_records WHERE run_id=$1 ORDER BY seq`,
       [runId],
     ),
@@ -144,7 +173,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
       const d = decisions.rows.find((x) => x.node_id === r.node_id);
       return { node_id: r.node_id, requested_at: r.at, request: r.data, ...(d ? { decision: d.decision, decided_by: d.decided_by, decided_at: d.decided_at, data: d.data } : { decision: null }) };
     }),
-    usage: summariseUsage(usage.rows),
+    usage: summariseUsage(usage.rows, await creditsBefore(ctx, workspaceId, usage.rows), ctx.settings),
     context_manifests: manifests.rows,
     attempts: attempts.rows,
     actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
@@ -163,7 +192,7 @@ export async function runEvents(ctx: AppContext, workspaceId: string, runId: str
 }
 
 /** Usage completeness (spec section 11): the share of turns whose token usage is known. */
-export function summariseUsage(rows: Array<Record<string, any>>) {
+export function summariseUsage(rows: Array<Record<string, any>>, before = 0, s: Pick<Settings, 'copilotCreditPool' | 'copilotCreditUsd'> = settings()) {
   const known = rows.filter((r) => r.input_tokens !== null && r.output_tokens !== null);
   const sum = (k: string) => (known.length ? known.reduce((n, r) => n + (r[k] ?? 0), 0) : null);
   const costs = rows.filter((r) => r.cost_label !== 'unavailable');
@@ -172,7 +201,68 @@ export function summariseUsage(rows: Array<Record<string, any>>) {
     completeness_pct: rows.length ? Math.round((known.length / rows.length) * 100) : null,
     input_tokens: sum('input_tokens'),
     output_tokens: sum('output_tokens'),
+    /** GitHub Copilot AI Credits across the run's priced Copilot turns; null without any. */
+    credits: rows.some((r) => r.credits !== null && r.credits !== undefined) ? round(rows.reduce((n, r) => n + (r.credits ?? 0), 0), 3) : null,
     cost: costs.length === rows.length && rows.length ? { amount: costs.reduce((n, r) => n + r.cost, 0), currency: costs[0]!.currency, label: 'estimated', pricing_revision: costs[0]!.pricing_revision } : { amount: null, label: 'unavailable' },
+    copilot: copilotUsage(rows, before, s),
     records: rows,
+  };
+}
+
+/** What the interpreter workflow starts with for a stored run. */
+export async function loadRunInput(ctx: AppContext, workspaceId: string, runId: string) {
+  const run = (
+    await ctx.pool.query(`SELECT r.id, r.inputs, r.snapshot, r.test, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [runId, workspaceId])
+  ).rows[0] as { id: string; inputs: Record<string, unknown>; snapshot: RunSnapshot; test: boolean; plan: RunInput['plan'] };
+  const input: RunInput = { runId: run.id, workspaceId, plan: run.plan, inputs: run.inputs, snapshot: run.snapshot, mockWrites: run.test };
+  return input;
+}
+
+
+/**
+ * AI Credits this workspace's Copilot steps used this month (UTC, as GitHub's pool resets) before
+ * the run's first Copilot step: where the run started in the monthly pool.
+ */
+async function creditsBefore(ctx: AppContext, workspaceId: string, rows: Array<Record<string, any>>) {
+  const first = rows.find((r) => r.credits !== null && r.credits !== undefined);
+  if (!first) return 0;
+  const r = await ctx.pool.query(
+    `SELECT COALESCE(SUM(credits), 0)::float8 AS used FROM usage_records
+     WHERE workspace_id=$1 AND credits IS NOT NULL AND seq < $2 AND at >= date_trunc('month', $3::timestamptz, 'UTC')`,
+    [workspaceId, first.seq, first.at],
+  );
+  return r.rows[0].used as number;
+}
+
+/**
+ * GitHub Copilot turns in AI Credits, per model, with where the run sits in the monthly pool when
+ * its size is set. Null without Copilot turns.
+ */
+function copilotUsage(rows: Array<Record<string, any>>, before: number, s: Pick<Settings, 'copilotCreditPool' | 'copilotCreditUsd'>) {
+  const copilot = rows.filter((r) => r.provider === 'github-copilot');
+  if (!copilot.length) return null;
+  const models = new Map<string, { model: string; credits: number; cost: number }>();
+  const unpriced = new Set<string>();
+  for (const r of copilot) {
+    if (r.credits === null || r.credits === undefined) {
+      unpriced.add(r.model ?? 'unknown');
+      continue;
+    }
+    const m = models.get(r.model) ?? { model: r.model, credits: 0, cost: 0 };
+    m.credits += r.credits;
+    m.cost += r.cost ?? 0;
+    models.set(r.model, m);
+  }
+  const list = [...models.values()].map((m) => ({ model: m.model, credits: round(m.credits, 3), cost: round(m.cost, 6) }));
+  const credits = round(list.reduce((n, m) => n + m.credits, 0), 3);
+  const pool = poolPosition(s.copilotCreditPool, before, credits);
+  return {
+    credits,
+    cost: round(list.reduce((n, m) => n + m.cost, 0), 6),
+    currency: 'USD',
+    credit_usd: s.copilotCreditUsd,
+    models: list,
+    unpriced_models: [...unpriced],
+    pool: pool && { ...pool, past_pool_cost: round(pool.past_pool * s.copilotCreditUsd, 6) },
   };
 }

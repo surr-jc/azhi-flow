@@ -1,0 +1,100 @@
+---
+title: Host this site
+description: Publish the Azhi Flow docs to GitHub Pages with the included workflow, or to any static host.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The docs are a static site. The workflow `.github/workflows/docs.yml` builds it and publishes it to **GitHub
+Pages**. It builds the same way anywhere else, because the output is plain files in `site/dist`.
+
+## What the workflow does
+
+| Event | Build and link check | Publish |
+|---|---|---|
+| Pull request touching `site/**` | Yes | No |
+| Push to `dev` touching `site/**` | Yes | No |
+| Push to `main` touching `site/**` | Yes | **Yes** |
+| Manual run (`workflow_dispatch`) | Yes | **Yes**, from the branch you pick |
+
+Every run does `npm ci`, `npm run build` and `npm run check:links`. The link check fails the build on any broken
+internal link or `#anchor`, so a bad edit cannot reach the published site.
+
+<Aside type="note" title="Why dev does not publish">
+GitHub's `github-pages` environment allows deployments only from the repository's default branch by default,
+which here is `main`. Publishing from `dev` would be rejected, so `dev` only proves the site builds.
+</Aside>
+
+## One-time setup
+
+<Steps>
+
+1. In the repository, open **Settings › Pages**.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Merge the docs to `main`, or run **Actions › Docs site › Run workflow** on `main`.
+4. When the `deploy` job finishes, its summary shows the URL. For this repository it is
+   `https://surr-jc.github.io/azhi-flow/`.
+
+</Steps>
+
+## Base path and custom domains
+
+A GitHub project site is served under `/<repo>/`, so the build needs a **base path**. The workflow derives it
+from the repository name and the owner. Override it with repository variables
+(**Settings › Secrets and variables › Actions › Variables**):
+
+| Hosting | `DOCS_SITE_URL` | `DOCS_SITE_BASE` |
+|---|---|---|
+| Default project site | *(unset)* | *(unset)* |
+| Custom domain at the root | `https://docs.example.com` | *(empty)* |
+| Custom domain under a path | `https://example.com` | `/azhi` |
+
+For a custom domain, also set it under **Settings › Pages › Custom domain**.
+
+Astro does not prefix root-absolute Markdown links (`/install/`) with the base path on its own. The site
+includes a small rehype plugin, `site/rehype-base.mjs`, that does it when a base is set. Hero buttons on the home
+page use relative links for the same reason.
+
+## GitHub Wiki
+
+On `main` (and manual runs) the `wiki` job also converts every page to Markdown with `site/scripts/build-wiki.mjs`
+and pushes it to the repository wiki: one wiki page per site page (`concepts/taint` becomes `concepts-taint`), the
+site index as `Home`, and the sidebar groups as `_Sidebar`. Callouts become blockquotes, tabs become headings and
+site links become wiki links.
+
+The wiki is overwritten on every publish, so edit `site/src/content/docs`, never the wiki. One-time setup: enable
+**Settings › Features › Wikis** and create a first page by hand so the wiki repository exists. Preview locally
+with `npm run build:wiki` (writes `site/wiki-dist`).
+
+## Build it yourself
+
+```bash
+cd site
+npm ci
+SITE_URL=https://surr-jc.github.io SITE_BASE=/azhi-flow npm run build
+SITE_BASE=/azhi-flow npm run check:links
+npx astro preview        # serves site/dist
+```
+
+Leave both variables unset to build for the root of a domain.
+
+## Other static hosts
+
+Any static host works: build with the command above and serve `site/dist`.
+
+| Host | Settings |
+|---|---|
+| Netlify, Cloudflare Pages, Vercel | Root directory `site`, build command `npm run build`, output directory `dist`, Node 22.22 or newer. Leave `SITE_BASE` unset |
+| An internal web server | Copy `site/dist` to the document root, or to a subfolder with a matching `SITE_BASE` |
+| Air-gapped | The build has no runtime network calls. Search is a bundled Pagefind index |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Page loads unstyled, or links 404 | Built without the base path that the host serves under | Set `DOCS_SITE_BASE`, or fix `SITE_BASE`, and re-run |
+| Deploy job: "Branch ... is not allowed to deploy to github-pages" | The run was on a non-default branch | Run it on `main`, or add the branch under **Settings › Environments › github-pages** |
+| Deploy job: "Pages site not found" or a 404 from the API | Pages is not enabled for the repository | Set **Source** to **GitHub Actions** in Settings › Pages |
+| `check:links` fails | A link or anchor points to a page or heading that does not exist | The output names the page and the link. Fix the source, or the heading it points to |
+| `npm ci` fails with a lockfile mismatch | `site/package.json` changed without updating `site/package-lock.json` | Run `npm install` in `site/` and commit the lockfile |
+| Node engine warning from `@astrojs/prism` | A transitive dependency asks for Node 22.23.4 or newer | The workflow's `node-version: 22` resolves to the latest 22.x, so it is clean in CI. Locally it is only a warning |

@@ -15,11 +15,14 @@ export interface CelScope {
   config?: unknown;
   now?: Date | string;
   item?: unknown;
+  /** Loop nodes: the previous iteration's output (the seed first), and the iterations completed. */
+  state?: unknown;
+  iteration?: unknown;
   args?: unknown;
   run?: unknown;
 }
 
-export const CEL_VARIABLES = ['inputs', 'nodes', 'config', 'now', 'item', 'args', 'run'] as const;
+export const CEL_VARIABLES = ['inputs', 'nodes', 'config', 'now', 'item', 'state', 'iteration', 'args', 'run'] as const;
 
 let shared: Environment | undefined;
 
@@ -43,6 +46,8 @@ export function celEnvironment(): Environment {
     .registerVariable('config', 'dyn')
     .registerVariable('now', 'google.protobuf.Timestamp')
     .registerVariable('item', 'dyn')
+    .registerVariable('state', 'dyn')
+    .registerVariable('iteration', 'dyn')
     .registerVariable('args', 'dyn')
     .registerVariable('run', 'dyn')
     // CEL's spec formats timestamps as RFC 3339; the library lacks this overload.
@@ -72,6 +77,8 @@ export function evaluateCel(expression: string, scope: CelScope): unknown {
     config: scope.config ?? {},
     now: now ?? new Date(0),
     item: scope.item ?? null,
+    state: scope.state ?? null,
+    iteration: scope.iteration ?? 0,
     args: scope.args ?? {},
     run: scope.run ?? {},
   };

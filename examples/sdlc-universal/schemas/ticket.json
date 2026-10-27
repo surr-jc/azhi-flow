@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "source": {"type": "string"},
+    "key": {"type": "string"},
+    "title": {"type": "string"},
+    "description": {"type": "string"},
+    "priority": {"type": "string"},
+    "reporter": {"type": "string"},
+    "status": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "url": {"type": "string"}
+  },
+  "required": ["source", "key", "title", "description"],
+  "additionalProperties": false
+}

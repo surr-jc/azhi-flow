@@ -1,0 +1,23 @@
+// Screenshots of the real web app (built into src/web/dist) against the demo sample data, for the deck.
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { serve, mockApi } from '../demo/harness.mjs';
+const here = path.dirname(fileURLToPath(import.meta.url));
+const { chromium } = await import(process.env.PLAYWRIGHT_PKG ?? 'playwright');
+const srv = await serve(4395);
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/opt/pw-browsers/chromium' });
+const ctx = await b.newContext({ viewport: { width: 1600, height: 900 }, colorScheme: 'light' });
+await mockApi(ctx);
+const open = async (url) => { const p = await ctx.newPage(); await p.goto('http://localhost:4395' + url); await p.waitForSelector('.rail'); return p; };
+const shot = (p, n) => p.screenshot({ path: path.join(here, 'img', n + '.png') });
+let p = await open('/ui'); await p.waitForTimeout(1800); await shot(p, 'today'); await p.close();
+p = await open('/ui/workflows/pr-review'); await p.waitForSelector('.wf-card'); await p.waitForTimeout(1500); await shot(p, 'workflow'); await p.close();
+p = await open('/ui/runs/run_5d03ee19'); await p.waitForSelector('.wf-card'); await p.waitForTimeout(1800); await shot(p, 'run'); await p.close();
+p = await open('/ui/usage'); await p.waitForTimeout(1800); await shot(p, 'usage'); await p.close();
+p = await open('/ui/workflows/pr-review/edit'); await p.waitForSelector('.ed-panel'); await p.waitForTimeout(1200);
+await p.locator('.wf-card', { hasText: 'should_post' }).first().click();
+await p.getByRole('tab', { name: 'Steps' }).click();
+await p.getByLabel('Search steps and tools').fill('comment');
+await p.getByRole('button', { name: /Add a step that calls github.comment-on-pr/ }).click();
+await p.waitForTimeout(2200); await shot(p, 'editor-taint');
+await p.close(); await b.close(); srv.close();

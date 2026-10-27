@@ -1,0 +1,57 @@
+---
+title: Build with chat
+description: Describe a workflow in conversation and get a compiled, reviewable draft package.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+**Workflows › Build with chat** (`/ui/workflows/new`) turns a requirement into a workflow package by
+conversation. Authors and above can use it.
+
+<Steps>
+
+1. You describe what the workflow should do.
+2. The builder looks at the workspace: registered tools and their schemas, datasets, existing workflows, the
+   shipped examples, executors, and whether the well-known secrets are set (never their values).
+3. It asks grouped questions with suggested answers: trigger, data sources, where a person must approve, token
+   usage, delivery. You pick options, write your own, or say "just draft it".
+4. It proposes the whole package (`workflow.yaml`, agent profiles, schemas, templates, small scripts). The server
+   **compiles it and builds its run plan** exactly as an upload would. Compiler errors go back to the model to fix,
+   so you only see drafts that compile.
+5. The draft panel lists the steps, the files, and what must be set up before it can run.
+6. **Save draft and open the editor** stores an unsigned draft. Publishing still needs your signature.
+
+</Steps>
+
+## Provider and model
+
+Pick Anthropic, OpenAI, or OpenCode (GitHub Copilot, or ChatGPT plan). One that cannot be used is shown disabled
+with the reason. One model is marked **Recommended**, with the reason.
+
+## Token usage question
+
+When the workflow has agent steps, the builder asks how to balance cost and quality:
+
+| Choice | Effect |
+|---|---|
+| Economical | Smaller, cheaper models and tight limits (summarising, classifying, routing) |
+| Balanced | A mid-tier model, with the strongest one only on the steps that need it |
+| Highest quality | The strongest models and roomier limits on every agent step |
+
+The draft applies it per step: the model, `max_turns`, `max_output_tokens` and the step `budget`.
+
+## Creating tools
+
+If a requirement needs a tool that is not registered (your own MCP server, an internal HTTP API), the builder asks
+for the start command or URL and the input and output shape, then proposes the tool. An admin clicks **Register
+tool**. The builder **never asks for a token**: it names the credential and you set its value on the Secrets page.
+
+## Auditing
+
+Each turn is in the audit log (`builder.turn`, with provider, model and token counts) and each save as
+`builder.saved`. The conversation stays in your browser tab; the server keeps no transcript.
+
+<Aside type="note">
+The builder's instructions are a skill file, `src/builder/skill.md`: how to interview, the `workflow.yaml`
+reference, the rules the compiler enforces and the controls to offer. Edit it to change the builder's behavior.
+</Aside>

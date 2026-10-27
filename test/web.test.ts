@@ -54,21 +54,31 @@ describe.skipIf(!up)('mission control', () => {
     expect((await fetch(`${h.server.url}/v1/runs`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/v1/overview`)).status).toBe(403);
     expect((await fetch(`${h.server.url}/ui/assets/..%2F..%2Froutes.ts`)).status).toBe(404);
-    expect((await fetch(`${h.server.url}/favicon.ico`)).status).toBe(204);
+    const favicon = await fetch(`${h.server.url}/favicon.ico`);
+    expect(favicon.status).toBe(200);
+    expect(favicon.headers.get('content-type')).toBe('image/x-icon');
+    expect((await fetch(`${h.server.url}/ui/favicon.svg`)).headers.get('content-type')).toContain('image/svg+xml');
   });
 
   it('follows a live run and approves it from the browser', async () => {
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { team: 'payments' } });
     const page = await open(`/ui/runs/${run_id}`);
-    await page.getByText('waiting for approval on approve').waitFor({ timeout: 30_000 });
+    await page.getByText('Waiting for a person to decide at step approve').waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-waiting').count()).toBe(1);
-    await page.getByText('Post 4 runs to C-QUALITY?').waitFor();
+    // The decision is pinned to the waiting step on the canvas, and in full below it.
+    await page.locator('.atlas-pop').getByText('Post 4 runs to C-QUALITY?').waitFor();
+    await page.locator('#decision').getByText('Post 4 runs to C-QUALITY?').waitFor();
 
     await page.getByLabel('note').fill('looks right');
     await page.getByRole('button', { name: 'Approve' }).click();
-    await page.getByText('Decision sent').waitFor();
+    await page.getByText('Decision recorded').waitFor();
     await waitForRun(h.api, run_id);
-    await page.getByText('finished').waitFor({ timeout: 30_000 });
+    await page.locator('.crumbs .live', { hasText: 'finished' }).waitFor({ timeout: 30_000 });
+    expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
+    // Scrubbing back to the first event shows the run before any step had started.
+    await page.getByLabel('Event to show the run at').fill('0');
+    expect(await page.locator('.wf-card.st-succeeded').count()).toBe(0);
+    await page.getByRole('button', { name: 'Back to live' }).click();
     expect(await page.locator('.wf-card.st-succeeded').count()).toBe(3);
     const d = await h.api.get<any>(`/v1/runs/${run_id}`);
     expect(d.approvals[0]).toMatchObject({ decision: 'approved', data: { note: 'looks right' } });
@@ -106,17 +116,87 @@ describe.skipIf(!up)('mission control', () => {
 
   it('shows the overview and starts a test run from the workflow page', async () => {
     const page = await open('/ui');
-    await page.getByRole('heading', { name: 'Mission control' }).waitFor();
-    await page.getByText('Succeeded (24 h)').waitFor();
+    await page.getByRole('heading', { name: 'Waiting for a decision' }).waitFor();
+    // The mission control strip: each tile opens the runs behind its number.
+    const tiles = page.getByRole('navigation', { name: 'System status' });
+    await tiles.getByRole('link', { name: /Needs you/ }).waitFor();
+    await tiles.getByRole('link', { name: /Failed/ }).click();
+    await page.waitForURL(/\/ui\/runs\?state=failed/);
+    expect(await page.locator('.tile.active').innerText()).toContain('Failed');
     await page.getByRole('link', { name: 'Workflows', exact: true }).click();
     await page.getByRole('link', { name: 'approval-check' }).click();
     await page.getByRole('heading', { name: 'Run plan' }).waitFor();
+    await page.getByRole('button', { name: 'Start a run' }).click();
     await page.getByLabel('team').fill('search');
     await page.getByRole('button', { name: 'Test run' }).click();
     await page.waitForURL(/\/ui\/runs\/run_/);
     const id = decodeURIComponent(page.url().split('/').pop()!);
     const d = await h.api.get<any>(`/v1/runs/${id}`);
     expect(d.run).toMatchObject({ test: true, inputs: { team: 'search' }, created_by: expect.stringMatching(/^usr_/) });
+    await page.close();
+  });
+
+  it('chooses the provider and model for default-model steps: in the runner, the workflow settings and the editor', async () => {
+    await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-ant-test' });
+    const models = (await uploadDir(h.api, 'test/fixtures/models')).version.id;
+    const page = await open('/ui/workflows/model-check');
+    await page.getByRole('heading', { name: 'Run plan' }).waitFor();
+
+    // The dock names who decides each step's model.
+    await page.getByRole('button', { name: /Models/ }).first().click();
+    await page.getByText('Workflow default').first().waitFor();
+    expect(await page.locator('.settings-main').innerText()).toContain('none: each default-model step uses the server');
+    await page.keyboard.press('Escape');
+
+    // The runner: pick OpenAI-less Anthropic with a model; only the default-model step follows it.
+    await page.getByRole('button', { name: 'Start a run' }).click();
+    await page.getByLabel('Team').fill('search');
+    await page.locator('select[name="run-provider"]').selectOption('anthropic');
+    await page.locator('select[name="run-model"]').selectOption('__other__');
+    await page.getByRole('textbox', { name: 'Model id' }).fill('claude-sonnet-5-5');
+    await page.getByRole('button', { name: 'Use', exact: true }).click();
+    await page.getByText('Which model each step will use').click();
+    const rows = page.getByLabel('Model of each agent step').locator('tbody tr');
+    await rows.filter({ hasText: 'draft' }).getByText('chosen for this run').waitFor();
+    expect(await rows.filter({ hasText: 'pinned' }).innerText()).toContain('claude-opus-5-5');
+    expect(await rows.filter({ hasText: 'pinned' }).innerText()).toContain('named by the step');
+    await page.getByRole('button', { name: 'Test run' }).click();
+    await page.waitForURL(/\/ui\/runs\/run_/);
+    const id = decodeURIComponent(page.url().split('/').pop()!);
+    const d = await h.api.get<any>(`/v1/runs/${id}`);
+    expect(d.run.snapshot).toMatchObject({ model_defaults: { provider: 'anthropic', name: 'claude-sonnet-5-5' }, model_defaults_chosen: true });
+    await h.api.post(`/v1/runs/${id}/cancel`, {});
+
+    // The editor: set the workflow's default and save it as a draft.
+    await page.goto(`${h.server.url}/ui/workflows/model-check/edit?from=${models}`);
+    await page.getByRole('heading', { name: 'Workflow', exact: true }).waitFor();
+    await page.locator('select[name="workflow-provider"]').selectOption('anthropic');
+    await page.getByRole('button', { name: 'Save draft' }).waitFor();
+    await page.waitForFunction(() => !document.body.innerText.includes('Checking…'));
+    await page.getByRole('button', { name: 'Save draft' }).click();
+    await page.waitForURL(/\/ui\/workflows\/model-check\?version=/);
+    const draftId = decodeURIComponent(new URL(page.url()).searchParams.get('version')!);
+    const saved = await h.api.get<any>(`/v1/versions/${draftId}`);
+    expect(saved.definition.model_defaults).toEqual({ provider: 'anthropic' });
+    expect(saved.plan.nodes.find((n: any) => n.id === 'draft')).toBeDefined();
+    await page.close();
+  });
+
+  it('tells you what an example needs before you install it, and holds the install until it is given', async () => {
+    const page = await open('/ui/examples/ai-sdlc-v2');
+    const before = page.getByRole('region', { name: 'Before you install' });
+    await before.waitFor();
+    const text = await before.innerText();
+    expect(text).toContain('the install is refused without');
+    expect(text).toMatch(/required\s*Slack channel/i);
+    expect(text).toMatch(/set\s*Secret github-read-token|later\s*Secret github-read-token/);
+    const install = page.getByRole('button', { name: 'Install', exact: true });
+    expect(await install.isDisabled()).toBe(true);
+    await page.getByLabel(/^Repositories it may use/).fill('acme/shop');
+    expect(await install.isDisabled()).toBe(true);
+    await page.getByLabel(/^Slack channel/).fill('C0DELIVER');
+    expect(await install.isDisabled()).toBe(false);
+    expect(await before.innerText()).toContain('Everything required is in place.');
     await page.close();
   });
 
@@ -159,7 +239,8 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('cell', { name: 'Whole workspace' }).waitFor();
     expect(await h.api.get<any[]>('/v1/budgets')).toEqual([expect.objectContaining({ workflow: null, period: 'month', limit: 25, exceeded: false })]);
 
-    await page.getByRole('link', { name: 'Alerts', exact: true }).click();
+    await page.getByRole('link', { name: 'Runs', exact: true }).click();
+    await page.getByRole('link', { name: /^Alerts/ }).click();
     await page.getByLabel('Channel ID').fill('C-ALERTS');
     await page.getByRole('button', { name: 'Save' }).click();
     await page.getByText('Saved.').waitFor();
@@ -169,11 +250,45 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('searches runs by input and date, cancels one from the list, and switches the theme', async () => {
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version, inputs: { team: 'needle-team' } });
+    expect((await h.api.get<any[]>('/v1/runs?q=needle')).map((r) => r.id)).toEqual([run_id]);
+    expect((await h.api.get<any[]>(`/v1/runs?q=${run_id.slice(0, 12)}`)).map((r) => r.id)).toContain(run_id);
+    expect(await h.api.get<any[]>('/v1/runs?q=100%25')).toEqual([]);
+    expect(await h.api.get<any[]>(`/v1/runs?since=${encodeURIComponent(new Date(Date.now() + 86_400_000).toISOString())}`)).toEqual([]);
+
+    const page = await open('/ui/runs');
+    await page.getByLabel('Search runs').fill('needle');
+    await page.getByLabel('Search runs').press('Enter');
+    await page.waitForURL(/q=needle/);
+    await page.getByRole('cell', { name: /needle-team/ }).waitFor();
+    expect(await page.locator('tbody tr').count()).toBe(1);
+    const today = new Date().toLocaleDateString('en-CA');
+    await page.getByLabel('From').fill(today);
+    await page.getByRole('cell', { name: /needle-team/ }).waitFor();
+    await page.getByLabel('To', { exact: true }).fill('2020-01-01');
+    await page.getByText('No runs match these filters').waitFor();
+    await page.getByRole('button', { name: 'Clear all filters' }).first().click();
+
+    await page.getByRole('button', { name: `Cancel ${run_id}` }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel run' }).click();
+    expect((await waitForRun(h.api, run_id)).run.state).toBe('cancelled');
+
+    await page.getByLabel('Theme').selectOption('dark');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(14, 20, 27)');
+    await page.reload();
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+    await page.getByLabel('Theme').selectOption('system');
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBeUndefined();
+    await page.close();
+  });
+
   it('asks for a token when none is held, and raised no page errors', async () => {
     const page = await browser.newPage();
     await page.goto(`${h.server.url}/ui/runs`);
-    await page.getByPlaceholder('API token').fill(token);
-    await page.getByRole('button', { name: 'Open' }).click();
+    await page.getByLabel('API token').fill(token);
+    await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByRole('heading', { name: 'Runs' }).waitFor();
     await page.locator('tbody tr').first().waitFor();
     await page.close();

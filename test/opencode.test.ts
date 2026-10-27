@@ -1,21 +1,24 @@
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startFakeAnthropic, type FakeStep } from '../src/testing/fake-anthropic.js';
+import { startFakeAnthropic, type FakeRequest, type FakeStep } from '../src/testing/fake-anthropic.js';
 import { opencodeBinary } from '../src/worker/capabilities.js';
+import { dcpPlugin, opencode2Binary } from '../src/worker/tools.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
  * OpenCode conformance (spec section 9: each adapter has a pinned harness version and a
  * conformance run). OpenCode runs for real against a scripted Anthropic-compatible endpoint, so
  * the suite needs no provider key; what it checks is the adapter's contract, not model quality.
+ * AZHI_OPENCODE_MAJOR=2 runs the same suite on the OpenCode 2 adapter.
  */
-const up = (await temporalAvailable()) && Boolean(opencodeBinary());
+const two = process.env.AZHI_OPENCODE_MAJOR === '2';
+const up = (await temporalAvailable()) && Boolean(two ? opencode2Binary() : opencodeBinary());
 const MODEL = 'conformance-model';
 
-let script: FakeStep[] = [];
+let script: FakeStep[] | ((r: FakeRequest) => FakeStep[]) = [];
 let delayMs = 0;
 
 function opencodePackage(): string {
@@ -23,7 +26,26 @@ function opencodePackage(): string {
   cpSync('test/fixtures/agent', dir, { recursive: true });
   writeFileSync(join(dir, 'profiles/analyst@1.yaml'), 'model: {provider: anthropic, name: default}\ninstructions: Explain the CI runs in one sentence.\n');
   const wf = join(dir, 'workflow.yaml');
-  writeFileSync(wf, readFileSync(wf, 'utf8').replace('    profile: analyst@1\n', '    profile: analyst@1\n    executor: opencode\n'));
+  // A Windows checkout (core.autocrlf) has CRLF line ends; without a match the step silently runs on the model-agent.
+  const yaml = readFileSync(wf, 'utf8').replace(/( {4}profile: analyst@1)(\r?\n)/, '$1$2    executor: opencode$2');
+  if (!yaml.includes('executor: opencode')) throw new Error('could not switch the fixture step to OpenCode');
+  writeFileSync(wf, yaml);
+  return dir;
+}
+
+/** The same step with a profile harness: an agent file, a command run after the input, a skill, `read`, token saving. */
+function harnessPackage(): string {
+  const dir = opencodePackage();
+  mkdirSync(join(dir, 'harness/agents'), { recursive: true });
+  mkdirSync(join(dir, 'harness/commands'), { recursive: true });
+  mkdirSync(join(dir, 'harness/skills/run-notes'), { recursive: true });
+  writeFileSync(join(dir, 'harness/agents/analyst.md'), '---\ndescription: CI analyst\n---\nAGENT-BODY: read the runs before you explain them.\n');
+  writeFileSync(join(dir, 'harness/commands/explain.md'), '---\ndescription: Explain the runs\n---\nCOMMAND-BODY: explain the runs above, then submit.\n');
+  writeFileSync(join(dir, 'harness/skills/run-notes/SKILL.md'), '---\nname: run-notes\ndescription: How to read CI runs\n---\nFailures first.\n');
+  writeFileSync(
+    join(dir, 'profiles/analyst@1.yaml'),
+    'model: {provider: anthropic, name: default}\ninstructions: Explain the CI runs in one sentence.\nharness:\n  opencode:\n    agent: harness/agents/analyst.md\n    command: harness/commands/explain.md\n    skills: [harness/skills/run-notes]\n    tools: [read]\n    token_saving: "on"\n',
+  );
   return dir;
 }
 
@@ -34,7 +56,7 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
   const ours = () => fake.requests.filter((r) => r.model === MODEL);
 
   beforeAll(async () => {
-    fake = await startFakeAnthropic({ script: () => script, get delayMs() { return delayMs; } } as never);
+    fake = await startFakeAnthropic({ script: (r: FakeRequest) => (typeof script === 'function' ? script(r) : script), get delayMs() { return delayMs; } } as never);
     h = await startHarness({ settings: { anthropicApiUrl: fake.url, anthropicModel: MODEL } });
     for (const t of parse(readFileSync('examples/ci-digest/azhi.config.yaml', 'utf8')).tools) await h.api.post('/v1/tools', t);
     await h.api.put('/v1/secrets/anthropic-api-key', { value: 'sk-conformance' });
@@ -81,6 +103,20 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
     const m = d.context_manifests.find((x: any) => x.node_id === 'explain');
     expect(m.items.at(-1)).toMatchObject({ source: 'opencode', content_hash: 'unobservable' });
     expect(h.slack.messages.at(-1)!.text).toBe('1 of 4 runs failed (r3).');
+
+    // The run page's agent transcript: prompts, the tool call with its result, and the submitted output.
+    const tx = await h.api.get<any>(`/v1/runs/${run_id}/transcript?node=explain`);
+    const kinds = tx.entries.map((e: any) => e.kind);
+    expect(kinds).toContain('system');
+    expect(kinds).toContain('user');
+    expect(kinds).toContain('step');
+    const tool = tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'azhi_ci_list-runs_1');
+    expect(tool).toMatchObject({ status: 'completed', input: { team: 'payments' }, attempt: 1 });
+    expect(tool.output).toMatch(/r3/);
+    expect(tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'azhi_submit_output')).toMatchObject({ status: 'completed' });
+    expect(JSON.stringify(tx.entries)).not.toContain('sk-conformance');
+    // Polling with the cursor returns only what changed since.
+    expect((await h.api.get<any>(`/v1/runs/${run_id}/transcript?after=${tx.cursor}`)).entries).toEqual([]);
   });
 
   it('feeds schema failures back and fails after two repairs', async () => {
@@ -89,6 +125,53 @@ describe.skipIf(!up)('OpenCode adapter conformance', () => {
     const d = await waitForRun(h.api, run_id, 120_000);
     expect(d.run.state).toBe('failed');
     expect(d.run.error.class).toBe('contract_violation');
+  });
+
+  it("runs a profile's agent and command, with only its read tool (and DCP's when installed) added", async () => {
+    const harnessVersion = (await uploadDir(h.api, harnessPackage())).version.id;
+    script = [
+      { tool: 'submit_output', input: { summary: '1 of 4 runs failed (r3).', failed: 1 } },
+      { text: 'done' },
+    ];
+    const before = ours().length;
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: harnessVersion, inputs: {} });
+    const d = await waitForRun(h.api, run_id, 120_000);
+    expect(d.run.error).toBeNull();
+    expect(d.attempts.find((a: any) => a.node_id === 'explain')).toMatchObject({ state: 'succeeded', output: { summary: '1 of 4 runs failed (r3).', failed: 1 } });
+    const calls = ours().slice(before);
+    // The agent file's body is in the system prompt; the input arrives as its own message, before the command's body.
+    expect(calls[0]!.system).toContain('AGENT-BODY');
+    const first = JSON.stringify(calls[0]!.messages);
+    expect(first.indexOf('COMMAND-BODY')).toBeGreaterThan(first.indexOf('r3'));
+    expect(calls[0]!.tools.sort()).toEqual(['azhi_ci_list-runs_1', 'azhi_submit_output', ...(dcpPlugin() ? ['compress'] : []), 'read'].sort());
+  });
+
+  it.skipIf(!dcpPlugin())('lets DCP compress the conversation but keeps the gateway tool results', async () => {
+    const harnessVersion = (await uploadDir(h.api, harnessPackage())).version.id;
+    // Look the runs up, compress everything so far, then submit. DCP's message ids are m0001 (1.x) or @1@ (2.x).
+    script = (r) => {
+      const text = JSON.stringify(r.messages);
+      if (!r.tools.length) return [{ text: 'title' }];
+      if (text.includes('azhi_submit_output')) return [{ text: 'done' }];
+      if (text.includes('DCP-SUMMARY')) return [{ tool: 'submit_output', input: { summary: '1 of 4 runs failed (r3).', failed: 1 } }];
+      const refs = [...new Set([...text.matchAll(/@\d+@|\bm\d{4}\b/g)].map((m) => m[0]))];
+      if (text.includes('tool_result')) return [{ tool: 'compress', input: { topic: 'CI lookup', content: [{ startId: refs[0] ?? 'm0001', endId: refs.at(-1) ?? 'm0002', summary: 'DCP-SUMMARY the runs were looked up' }] } }];
+      return [{ tool: 'ci_list-runs_1', input: { team: 'payments' } }];
+    };
+    try {
+      const before = ours().length;
+      const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: harnessVersion, inputs: {} });
+      const d = await waitForRun(h.api, run_id, 120_000);
+      expect(d.run.error).toBeNull();
+      const tx = await h.api.get<any>(`/v1/runs/${run_id}/transcript?node=explain`);
+      expect(tx.entries.find((e: any) => e.kind === 'tool' && e.tool === 'compress')).toMatchObject({ status: 'completed', output: expect.stringMatching(/^Compressed \d+ messages?/) });
+      // After the compression the model sees DCP's summary, and the gateway result word for word (duration_s is only in it).
+      const after = ours().slice(before).find((c) => c.tools.length && JSON.stringify(c.messages).includes('DCP-SUMMARY') && !JSON.stringify(c.messages).includes('azhi_submit_output'));
+      expect(after, 'a model call after the compression').toBeDefined();
+      expect(JSON.stringify(after!.messages)).toContain('duration_s');
+    } finally {
+      script = [];
+    }
   });
 
   it('cancels a running harness (best effort) and stops OpenCode', async () => {

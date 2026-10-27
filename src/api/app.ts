@@ -8,14 +8,21 @@ import { TERMINAL_STATES } from '../runtime/types.js';
 import { callTool } from '../gateway/gateway.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, loadCatalog, registerTool } from '../server/catalog.js';
+import { audit, loadCatalog, registerTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
+import { registerModelOptionRoutes } from './model-options.js';
+import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
+import { preflight, probesFor } from '../plan/preflight.js';
+import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
+import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
-import { publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
+import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
+import { checkEgress } from '../gateway/egress.js';
+import { deleteVersion, deleteWorkflow, publishVersion, resolveVersion, upsertSchedule, uploadPackage } from '../server/workflows.js';
 import type { Role } from '../db/schema.js';
 import { authenticate, requireRole, type Principal } from './auth.js';
 
@@ -25,8 +32,19 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerBuilderRoutes } from './builder.js';
 import { registerEditorRoutes } from './editor.js';
+import { registerExampleRoutes } from './examples.js';
+import { freshChatgptAuth, keepRenewedChatgptAuth, registerChatgptRoutes } from './chatgpt.js';
+import { registerCopilotRoutes } from './copilot.js';
+import { registerSigninRoutes } from './signins.js';
 import { registerMissionRoutes } from './mission.js';
+import { decideApproval } from '../server/approvals.js';
+import { isAuthPath, registerTeamRoutes } from './team.js';
+import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
+import { registerMcpRoutes } from './mcp.js';
+import { registerAssetRoutes } from './assets.js';
+import { registerConnectionRoutes } from './connections.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -64,7 +82,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url)) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -77,6 +95,17 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerWebRoutes(app);
   registerMissionRoutes(app, ctx);
   registerEditorRoutes(app, ctx);
+  registerBuilderRoutes(app, ctx);
+  registerModelOptionRoutes(app, ctx);
+  registerExampleRoutes(app, ctx);
+  registerCopilotRoutes(app, ctx);
+  registerChatgptRoutes(app, ctx);
+  registerSigninRoutes(app, ctx);
+  registerTeamRoutes(app, ctx);
+  registerSlackRoutes(app, ctx, temporal);
+  registerMcpRoutes(app, ctx);
+  registerAssetRoutes(app, ctx);
+  registerConnectionRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -97,6 +126,22 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     return { ok: true, diagnostics: r.diagnostics, version: { id: v.id, workflow: v.slug, version: v.version, package_hash: v.package_hash, draft: v.draft, signed } };
   });
 
+  // Signs an unsigned draft after the fact (mission control signs in the browser, `azhi example install` on the
+  // CLI); workers only run signed packages. The signature must be the caller's own, for this package.
+  app.post('/v1/versions/:id/signature', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const { id } = req.params as { id: string };
+    const { signature } = z.object({ signature: z.record(z.string(), z.unknown()) }).parse(req.body);
+    const current = (await ctx.pool.query(`SELECT package_hash, signature FROM workflow_versions WHERE id=$1 AND workspace_id=$2`, [id, p.workspaceId])).rows[0];
+    if (!current) throw notFound('workflow version');
+    if (current.signature) return { id, signed: true, changed: false };
+    await requireValidSignature(ctx, p.workspaceId, signature, current.package_hash, p.userId);
+    await ctx.pool.query(`UPDATE workflow_versions SET signature=$2 WHERE id=$1 AND signature IS NULL`, [id, JSON.stringify(signature)]);
+    await audit(ctx, p.workspaceId, p.userId, 'version.signed', { id, package_hash: current.package_hash });
+    return { id, signed: true, changed: true };
+  });
+
   app.post('/v1/versions/:id/publish', async (req) => {
     const p = user(req);
     requireRole(p, 'author');
@@ -111,6 +156,23 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     return { id: v.id, workflow: v.slug, version: v.version, draft: v.draft };
   });
 
+  // Deleting a revision (or the whole workflow) is an admin action; runs on it block it unless purge_runs is set.
+  app.delete('/v1/versions/:id', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const { id } = req.params as { id: string };
+    const { purge_runs } = z.object({ purge_runs: z.enum(['true', 'false']).default('false') }).parse(req.query);
+    return deleteVersion(ctx, p.workspaceId, id, p.userId, purge_runs === 'true');
+  });
+
+  app.delete('/v1/workflows/:slug', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const { slug } = req.params as { slug: string };
+    const { purge_runs } = z.object({ purge_runs: z.enum(['true', 'false']).default('false') }).parse(req.query);
+    return deleteWorkflow(ctx, p.workspaceId, slug, p.userId, purge_runs === 'true');
+  });
+
   app.get('/v1/versions/:ref', async (req) => {
     const p = user(req);
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
@@ -123,7 +185,21 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const p = user(req);
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
-    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
+    // `provider` and `model` show the plan as it would be for a run that chooses them.
+    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional() }).parse(req.query ?? {});
+    if (q.model && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model needs provider');
+    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}) } : undefined);
+  });
+
+  // Checks the workflow against the systems it uses, before a run: tools, secrets, GitHub tokens
+  // for the repositories involved, Slack, workers. `inputs` are the values the run would start with.
+  app.post('/v1/versions/:ref/preflight', async (req) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    const b = z.object({ inputs: z.record(z.string(), z.unknown()).default({}) }).parse(req.body ?? {});
+    const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
+    if (!v) throw notFound('workflow version');
+    return preflight(ctx, p.workspaceId, v, { inputs: b.inputs, principal: { userId: p.userId, role: p.role } });
   });
 
   app.get('/v1/workflows', async (req) => {
@@ -171,18 +247,29 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/users', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
-    const b = z.object({ display_name: z.string(), email: z.string().optional(), role: z.enum(['admin', 'author', 'operator', 'viewer']) }).parse(req.body);
+    // `token: false` invites someone who will sign in with SSO (claimed by their verified email).
+    const b = z
+      .object({ display_name: z.string(), email: z.string().optional(), role: z.enum(['admin', 'author', 'operator', 'viewer']), token: z.boolean().default(true) })
+      .parse(req.body);
+    if (b.role === 'admin' && p.role !== 'owner') throw new AzhiError(ErrorClass.authorization, 'only the owner can make admins');
     const id = newId('usr');
     await ctx.pool.query(`INSERT INTO users(id, workspace_id, email, display_name, role) VALUES ($1,$2,$3,$4,$5)`, [id, p.workspaceId, b.email ?? null, b.display_name, b.role]);
-    const t = newApiToken();
-    await ctx.pool.query(`INSERT INTO api_tokens(id, workspace_id, user_id, name, token_hash) VALUES ($1,$2,$3,$4,$5)`, [newId('tok'), p.workspaceId, id, b.display_name, t.hash]);
-    await audit(ctx, p.workspaceId, p.userId, 'user.created', { user: id, role: b.role });
-    return { id, role: b.role, token: t.token };
+    const t = b.token ? newApiToken() : undefined;
+    if (t) await ctx.pool.query(`INSERT INTO api_tokens(id, workspace_id, user_id, name, token_hash) VALUES ($1,$2,$3,$4,$5)`, [newId('tok'), p.workspaceId, id, b.display_name, t.hash]);
+    await audit(ctx, p.workspaceId, p.userId, 'user.created', { user: id, role: b.role, email: b.email ?? null });
+    return { id, role: b.role, token: t?.token };
   });
 
   app.get('/v1/users', async (req) => {
     const p = user(req);
-    return (await ctx.pool.query(`SELECT id, display_name, email, role, created_at FROM users WHERE workspace_id=$1 ORDER BY created_at`, [p.workspaceId])).rows;
+    return (
+      await ctx.pool.query(
+        `SELECT u.id, u.display_name, u.email, u.role, u.created_at, u.disabled_at, u.slack_user_id, u.oidc_subject IS NOT NULL AS sso,
+           (SELECT count(*)::int FROM api_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL) AS tokens
+         FROM users u WHERE u.workspace_id=$1 ORDER BY u.created_at`,
+        [p.workspaceId],
+      )
+    ).rows;
   });
 
   // Runs
@@ -196,21 +283,36 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         test: z.boolean().optional(),
         node: z.string().optional(),
         fixtures: z.record(z.string(), z.unknown()).optional(),
+        /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
+        preflight: z.boolean().optional(),
+        /** Provider and model for steps whose profile says `name: default`; steps that name a model keep it. Overrides the workflow's model_defaults. */
+        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional() }).strict().optional(),
       })
       .parse(req.body);
+    if (body.model_defaults) {
+      const problems = modelDefaultsProblems(body.model_defaults);
+      if (problems.length) throw new AzhiError(ErrorClass.invalidInput, problems.join('; '));
+    }
     if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
     const v = await resolveVersion(ctx, p.workspaceId, body.version);
     if (!v) throw notFound(`workflow version ${body.version}`);
     // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
     // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
-    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role });
+    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, body.model_defaults);
     if (!body.test) {
       if (!plan.ok) {
         const first = plan.blockers[0]!;
         throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
       }
+      if (body.preflight) {
+        const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role } });
+        if (!pre.ok) {
+          const failed = pre.checks.filter((c) => c.status === 'fail');
+          throw new AzhiError(ErrorClass.unsupportedCapability, `preflight failed: ${failed.map((c) => (c.node ? `${c.node}: ` : '') + c.message).join('; ')}`, { checks: pre.checks });
+        }
+      }
     }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
+    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.model_defaults ? { modelDefaults: body.model_defaults } : {}), ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
     return reply.status(202).send({ run_id: r.runId });
   });
 
@@ -222,15 +324,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         state: z.string().optional(),
         workflow: z.string().optional(),
         before: z.string().datetime({ offset: true }).optional(),
+        since: z.string().datetime({ offset: true }).optional(),
+        // Text found in the run's inputs, or the start of its id.
+        q: z.string().trim().min(1).max(200).optional(),
       })
       .parse(req.query);
+    const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+           AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
          ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null],
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null],
       )
     ).rows;
   });
@@ -344,25 +451,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const p = user(req);
     const { id } = req.params as { id: string };
     const b = z.object({ node: z.string(), decision: z.enum(['approved', 'rejected']), data: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
-    const row = (
-      await ctx.pool.query(`SELECT r.state, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [id, p.workspaceId])
-    ).rows[0];
-    if (!row) throw notFound('run');
-    const node = (row.plan as ExecutionPlan).nodes.find((n) => n.id === b.node);
-    if (!node || node.type !== 'approval') throw new AzhiError(ErrorClass.invalidInput, `run ${id} has no approval node '${b.node}'`);
-    const def = node.def as ApprovalNode;
-    requireRole(p, (def.role ?? 'operator') as Role);
-    if (b.decision === 'approved' && def.decision_schema) {
-      const validate = ajv.compile(def.decision_schema);
-      if (!validate(b.data)) throw new AzhiError(ErrorClass.invalidInput, `decision data does not match the decision schema: ${ajv.errorsText(validate.errors)}`);
-    }
-    const decided = (await ctx.pool.query(`SELECT decision FROM approvals WHERE run_id=$1 AND node_id=$2`, [id, b.node])).rows[0];
-    if (decided) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' was already decided: ${decided.decision}`);
-    const requested = (await ctx.pool.query(`SELECT 1 FROM run_events WHERE run_id=$1 AND node_id=$2 AND kind='approval.requested'`, [id, b.node])).rowCount;
-    if (!requested || TERMINAL_STATES.includes(row.state)) throw new AzhiError(ErrorClass.invalidInput, `approval '${b.node}' is not waiting for a decision (run is ${row.state})`);
-    if (!temporal) throw new AzhiError(ErrorClass.transient, 'not connected to Temporal');
-    await temporal.workflow.getHandle(id).signal('approval', { node: b.node, decision: b.decision, by: p.userId, at: new Date().toISOString(), data: b.data });
-    await audit(ctx, p.workspaceId, p.userId, 'approval.submitted', { run: id, node: b.node, decision: b.decision });
+    await decideApproval(ctx, temporal, p, id, b);
     return reply.status(202).send({ ok: true });
   });
 
@@ -412,6 +501,30 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   // Admin: tools, secrets, schedules, workers
   app.get('/v1/tools', async (req) => (await loadCatalog(ctx, req.principal.workspaceId)).list());
 
+  // Adds or removes repositories on a GitHub-style tool without re-registering it by hand.
+  app.post('/v1/tools/:ref/repos', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ add: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'repositories are owner/name')).optional(), remove: z.array(z.string()).optional() }).parse(req.body ?? {});
+    return updateToolRepos(ctx, p.workspaceId, decodeURIComponent((req.params as { ref: string }).ref), b, p.userId);
+  });
+
+  // Asks GitHub, with the tool's own token, whether it can use these repositories (default: the
+  // ones the tool allows) for what the tool does: read, or change. Says what to fix when it cannot.
+  app.post('/v1/tools/:ref/repos/check', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const ref = decodeURIComponent((req.params as { ref: string }).ref);
+    const b = z.object({ repos: z.array(z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'repositories are owner/name')).max(50).optional() }).parse(req.body ?? {});
+    const spec = (await loadCatalog(ctx, p.workspaceId)).get(ref);
+    const cfg = ((spec?.transport as { config?: GithubConfig } | undefined)?.config ?? {}) as GithubConfig;
+    if (!spec || !Array.isArray(cfg.repos)) throw new AzhiError(ErrorClass.invalidInput, `${ref} is not a registered tool with a repository list`);
+    const token = spec.credential ? (await resolveSecret(ctx, p.workspaceId, spec.credential))?.value : undefined;
+    const need = spec.effect === 'read' ? 'read' : 'write';
+    const results = await Promise.all((b.repos ?? cfg.repos).map((r) => checkRepoAccess(cfg, token, r, need, undefined, need === 'write' ? probesFor(ref) : [])));
+    return { tool: ref, credential: spec.credential ?? null, results };
+  });
+
   app.post('/v1/tools', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
@@ -441,6 +554,35 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'admin');
     const { value } = z.object({ value: z.string().min(1) }).parse(req.body);
     return { version: await setSecret(ctx, p.workspaceId, (req.params as { name: string }).name, value, p.userId) };
+  });
+
+  // Points GitHub secrets at the GitHub CLI's login (`gh auth login` on this machine) instead of a stored
+  // token: the token is asked of `gh` each time a step needs it and is never stored.
+  app.post('/v1/github/cli-login', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z
+      .object({
+        secrets: z.array(z.string().regex(/^[A-Za-z0-9._-]+$/)).min(1).max(10).default(['github-read-token', 'github-write-token']),
+        host: z.string().regex(/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$/).default('github.com'),
+      })
+      .parse(req.body ?? {});
+    const token = await ghCliToken(b.host);
+    const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
+    await checkEgress(`${api}/user`);
+    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
+    const who = (await res.json().catch(() => ({}))) as { login?: string };
+    const header = res.headers.get('x-oauth-scopes');
+    const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+    for (const name of b.secrets) await setSecret(ctx, p.workspaceId, name, ghCliPointer(b.host), p.userId);
+    return {
+      host: b.host,
+      login: who.login ?? null,
+      scopes,
+      secrets: b.secrets,
+      warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
+    };
   });
 
   app.post('/v1/schedules', async (req) => {
@@ -512,6 +654,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     // tool unless it is marked safe for tainted callers.
     const node = (run.plan as ExecutionPlan).nodes.find((n) => n.id === c.node);
     const agentTool = node?.agentTools?.find((t) => t.ref === b.tool);
+    if (node?.type === 'agent' && !agentTool) throw new AzhiError(ErrorClass.authorization, `tool ${b.tool} is not assigned to agent node ${c.node}`);
     const tainted = (run.plan as ExecutionPlan).taint?.tainted?.[c.node];
     if (tainted && agentTool && agentTool.effect !== 'read' && !agentTool.safeForTainted) {
       await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'gateway.refused',$3,$4)`, [c.ws, c.run, c.node, JSON.stringify({ tool: b.tool, reason: 'tainted_write' })]);
@@ -541,7 +684,38 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const s = await resolveSecret(ctx, c.ws, name);
     if (!s) throw notFound(`credential ${name}`);
     await audit(ctx, c.ws, `run:${c.run}`, 'credential.read', { name, node: c.node });
-    return { value: s.value };
+    // A ChatGPT sign-in is renewed here when it would expire during the step (only Azhi may renew it).
+    return { value: await freshChatgptAuth(ctx, c.ws, name, s.value) };
+  });
+
+  // A harness sends back a ChatGPT sign-in OpenCode renewed during its step (OpenAI rotates the refresh token).
+  app.post('/v1/gateway/credentials/:name/renewed', async (req) => {
+    if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'credentials need a run-scoped token');
+    const c = req.principal.claims;
+    const name = (req.params as { name: string }).name;
+    if (!c.creds?.includes(name)) throw new AzhiError(ErrorClass.authorization, `this run token may not update credential ${name}`);
+    const b = z.object({ value: z.string().min(2).max(20_000) }).parse(req.body);
+    return { kept: await keepRenewedChatgptAuth(ctx, c.ws, name, b.value, `run:${c.run}`) };
+  });
+
+  // A harness streams its agent transcript with the run token, for its own node only. Entries are
+  // redacted again here, with the values of the credentials the token may read.
+  app.post('/v1/gateway/transcript', async (req) => {
+    if (req.principal.kind !== 'run') throw new AzhiError(ErrorClass.authorization, 'transcripts need a run-scoped token');
+    const c = req.principal.claims;
+    if (!ctx.settings.agentTranscripts) return { stored: 0, enabled: false };
+    const b = z.object({ attempt: z.number().int().min(1).max(1000).default(1), entries: z.array(z.record(z.string(), z.unknown())).max(500) }).parse(req.body);
+    const secrets = await Promise.all((c.creds ?? []).map(async (n) => (await resolveSecret(ctx, c.ws, n).catch(() => undefined))?.value));
+    const stored = await writeTranscript(ctx.pool, { workspaceId: c.ws, runId: c.run, nodeId: c.node, attempt: b.attempt }, b.entries as never, redactor(secrets));
+    return { stored, enabled: true };
+  });
+
+  app.get('/v1/runs/:id/transcript', async (req) => {
+    const p = user(req);
+    const q = z.object({ after: z.coerce.number().int().min(0).default(0), node: z.string().optional() }).parse(req.query);
+    const run = (await ctx.pool.query(`SELECT 1 FROM runs WHERE id=$1 AND workspace_id=$2`, [(req.params as { id: string }).id, p.workspaceId])).rows[0];
+    if (!run) throw notFound('run');
+    return { enabled: ctx.settings.agentTranscripts, ...(await readTranscript(ctx.pool, p.workspaceId, (req.params as { id: string }).id, q)) };
   });
 
   app.get('/v1/doctor', async (req) => {
@@ -560,6 +734,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     checks.push({ name: 'interpreter builds', ok: builds.length <= 3, detail: `current ${interpreterBuild}; with open runs: ${builds.map((b) => `${b.interpreter_build} (${b.open})`).join(', ') || 'none'} (max 3)` });
     const workers = (await ctx.pool.query(`SELECT count(*)::int AS n FROM workers WHERE workspace_id=$1 AND last_heartbeat > now() - interval '30 seconds'`, [req.principal.workspaceId])).rows[0].n;
     checks.push({ name: 'workers online', ok: workers > 0, detail: String(workers) });
+    // OpenCode steps search with ripgrep; without it on the worker, OpenCode downloads a copy on every step.
+    const ocWorkers = (
+      await ctx.pool.query(`SELECT name, capabilities FROM workers WHERE workspace_id=$1 AND last_heartbeat > now() - interval '30 seconds' AND capabilities->'runtimes' ? 'opencode'`, [req.principal.workspaceId])
+    ).rows as Array<{ name: string; capabilities: { runtimes?: { ripgrep?: { version: string } } } }>;
+    if (ocWorkers.length) {
+      const missing = ocWorkers.filter((w) => !w.capabilities.runtimes?.ripgrep).map((w) => w.name);
+      checks.push({ name: 'ripgrep on OpenCode workers', ok: missing.length === 0, detail: missing.length ? `missing on ${missing.join(', ')}; run 'azhi setup' on that host` : `${ocWorkers.length} worker(s)` });
+    }
     return { ok: checks.every((c) => c.ok), checks };
   });
 

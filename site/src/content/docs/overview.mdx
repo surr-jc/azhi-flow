@@ -1,0 +1,62 @@
+---
+title: What is Azhi Flow?
+description: A self-hosted runtime for AI workflows where code, agents, MCP tools, knowledge and human approvals are nodes of one durable, governed workflow.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Azhi Flow is a **self-hosted runtime for AI workflows**. Deterministic code, agents, MCP tools, knowledge
+and human approvals run as nodes of one durable, governed workflow. Every run shows what the agent saw,
+what it was allowed to do, what it did, and what it cost, and says plainly where it cannot know.
+
+The name comes from ஆழி (*aazhi*, "sea"). The logo is the letter ழ (*zha*) drawn as one continuous line.
+
+## The problems it is built for
+
+| Problem teams hit with agents today | How Azhi answers it | State |
+|---|---|---|
+| Agent runs die halfway and redo or lose work | Durable runs on Temporal: retries by error class, cancellation, `worker_offline` waits, schedules | <span class="tag tag-built">Built</span> |
+| A retried agent posts or writes twice | Tool gateway with an action ledger and effect classes | <span class="tag tag-built">Built</span> |
+| Nobody can say what the agent was allowed to do before it ran | The run plan (`azhi plan`); runs with blockers are refused | <span class="tag tag-built">Built</span> |
+| Policies that look enforced but are not | Policy coverage: enforced, harness-enforced or unobservable, per executor | <span class="tag tag-built">Built</span> |
+| Prompt injection from untrusted data flowing into writes | Compile-time taint rule | <span class="tag tag-built">Built</span> |
+| "What did the model actually see?" | A context manifest per turn | <span class="tag tag-built">Built</span> |
+| Surprise model bills | Per-turn usage, cost from declared pricing or "unavailable", step budgets, spend limits | <span class="tag tag-built">Built</span> |
+| Locked to one agent harness | Pluggable executors that declare their capabilities | <span class="tag tag-built">Built</span> |
+| Locked to one model vendor | Profiles choose Anthropic, OpenAI or GitHub Copilot | <span class="tag tag-built">Built</span> |
+| Human sign-off on risky steps | Approval nodes in the CLI and Mission Control | <span class="tag tag-built">Built</span> |
+| Answers without sources | Datasets with hybrid retrieval and numbered citations to immutable excerpts | <span class="tag tag-built">Built</span> (alpha embedder is lexical-hash, not a neural model) |
+| Untrusted workflow code on workers | Signed packages, per-publisher keys, worker trust policies | <span class="tag tag-built">Built</span> |
+
+## Who it is for
+
+- **Teams that run the same agent work repeatedly and unattended**: a weekly report, every PR review, a
+  ticket-to-release flow. Azhi adds durability, scheduling, approvals and an audit trail.
+- **Platform and security owners** who need to know, before a run, which guarantees actually hold.
+- **Engineers who already use OpenCode or the Claude Agent SDK** and want those tools to run as governed steps
+  rather than as interactive sessions.
+
+## Who it is not for
+
+<Aside type="caution" title="Be sure before you adopt it">
+- It is **not** an in-editor assistant. If you want interactive coding in your IDE, use that tool directly. Several
+  of those tools can run *inside* Azhi as executors.
+- It is **alpha**. Workers are supported on Linux only. macOS and native Windows local mode are tested and
+  working, and local mode is still experimental. See [Project status](/status/).
+- It does not merge, close or force-push anything. By design, nothing in Azhi merges.
+</Aside>
+
+## A workflow in a glance
+
+```yaml
+# Illustrative shape only. See Write a workflow for the real schema.
+nodes:
+  - id: fetch        # tool: ordinary code, no model, no tokens
+  - id: metrics      # script: Python (uv) or Bun
+  - id: analyse      # agent: the only step that spends tokens
+  - id: review       # approval: a person decides
+  - id: post         # tool: Slack post, recorded in the action ledger
+```
+
+Read [Workflow-first design](/concepts/workflow-first/) for why this shape matters, and
+[What is different](/unique/) for what you get that is hard to find elsewhere.

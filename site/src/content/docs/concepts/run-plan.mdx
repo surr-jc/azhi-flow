@@ -1,0 +1,64 @@
+---
+title: The run plan
+description: How azhi plan marks every requirement and policy before anything executes, and refuses runs with blockers.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+```bash
+npx azhi plan examples/quality-report
+```
+
+The run plan is built from the compiled workflow, your workspace and the declared capabilities of each executor.
+It answers: **what do you need, what will actually be enforced, and what cannot be promised?** It is shown by
+`azhi plan`, the workflow page and the editor in Mission Control, and again on each run. A run whose plan has
+**blockers is refused before anything executes**.
+
+## Capability marks
+
+Every requirement of every node gets one mark.
+
+| Mark | Meaning |
+|---|---|
+| **native** | The executor provides it itself |
+| **bridged** | Provided through an adapter (for example the gateway bridged into OpenCode over MCP) |
+| **unsupported** | Cannot be provided here. A blocker if the workflow needs it |
+| **unverified** | Declared but not yet checked by a conformance run |
+
+## Policy coverage
+
+Every policy rule is labelled per executor.
+
+| Level | Meaning |
+|---|---|
+| **enforced** | The platform enforces it |
+| **harness** | Only the coding harness enforces it. Azhi relies on it and says so |
+| **unobservable** | Azhi cannot see whether it holds. For example, calls to a profile's own MCP servers do not pass through the gateway or ledger |
+
+## What else the plan shows
+
+- **Taint paths** and the gate on each. See [The taint rule](/concepts/taint/).
+- **Missing grants**: tools, repositories and secrets the workflow needs but the workspace has not provided.
+- **Which model each step will use**, and who decided: named by the step, server default, workflow default, or
+  chosen for this run.
+- **Whether each budget cap is enforced or only estimated.**
+- **Worker capabilities**: for example a script needing `uv` when no worker has it.
+
+## Blockers you can trigger on purpose
+
+| Code | Cause |
+|---|---|
+| `tainted_write_ungated` | A write after tainted data with no approval, guard or trusted-tool mark |
+| `subworkflow_missing`, `subworkflow_recursion` | A subworkflow target that is not published or that calls itself |
+| unsupported `memory_mb` | A script memory limit on a host without `prlimit` (macOS, Windows) |
+
+<Aside type="tip">
+Run `azhi plan` in CI. Because it is deterministic and checks your workspace, it catches an unsatisfiable
+workflow before the first scheduled run does. Scheduled workflows whose current plan has blockers also raise an
+alert in Mission Control.
+</Aside>
+
+## Checking one node
+
+`azhi test-node <node> <path> -f fixture.json` runs a single node on fixture outputs with writes mocked. It is
+recorded as a test run and excluded from analytics.

@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api, atLeast, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
-import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, Table, useConfirm, when } from '../ui';
 
-interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null }
+/** credits: GitHub Copilot AI Credits (null without Copilot turns). */
+interface Row { turns: number; unpriced: number; cost: number; input_tokens: number | null; output_tokens: number | null; credits: number | null }
 interface UsageSummary { days: number; by_day: Array<Row & { day: string }>; by_workflow: Array<Row & { workflow: string; runs: number }> }
 
 export function Usage() {
@@ -29,22 +30,24 @@ export function Usage() {
 }
 
 function UsageBody({ data }: { data: UsageSummary }) {
-  const total = data.by_day.reduce((a, r) => ({ cost: a.cost + r.cost, turns: a.turns + r.turns, unpriced: a.unpriced + r.unpriced }), { cost: 0, turns: 0, unpriced: 0 });
+  const total = data.by_day.reduce((a, r) => ({ cost: a.cost + r.cost, turns: a.turns + r.turns, unpriced: a.unpriced + r.unpriced, credits: r.credits === null ? a.credits : (a.credits ?? 0) + r.credits }), { cost: 0, turns: 0, unpriced: 0, credits: null as number | null });
+  const copilot = data.by_workflow.some((w) => w.credits !== null);
   return (
     <>
       <div className="stats">
         <div className="stat"><span className="stat-label">Spend</span><span className="stat-value">{money(total.cost, 'USD', total.unpriced === 0)}</span><span className="stat-hint">last {data.days} days</span></div>
+        {total.credits !== null ? <div className="stat"><span className="stat-label">Copilot AI credits</span><span className="stat-value">{num(Math.round(total.credits * 10) / 10)}</span><span className="stat-hint">last {data.days} days</span></div> : null}
         <div className="stat"><span className="stat-label">Model turns</span><span className="stat-value">{num(total.turns)}</span><span className="stat-hint">{total.unpriced ? `${total.unpriced} unpriced` : 'all priced'}</span></div>
       </div>
       <Panel title="Spend per day">
         <DayBars days={data.days} rows={data.by_day} />
       </Panel>
       <Panel title="By workflow">
-        <Table head={['Workflow', 'Runs', 'Turns', 'Tokens in', 'Tokens out', 'Spend']} empty="No model usage in this period.">
+        <Table head={['Workflow', 'Runs', 'Turns', 'Tokens in', 'Tokens out', ...(copilot ? ['Copilot credits'] : []), 'Spend']} empty="No model usage in this period.">
           {data.by_workflow.map((w) => (
             <tr key={w.workflow}>
               <td>{w.workflow}</td><td>{w.runs}</td><td>{w.turns}{w.unpriced ? <span className="muted small"> ({w.unpriced} unpriced)</span> : null}</td>
-              <td>{num(w.input_tokens)}</td><td>{num(w.output_tokens)}</td><td>{money(w.cost, 'USD', w.unpriced === 0)}</td>
+              <td>{num(w.input_tokens)}</td><td>{num(w.output_tokens)}</td>{copilot ? <td>{w.credits === null ? '—' : num(Math.round(w.credits * 10) / 10)}</td> : null}<td>{money(w.cost, 'USD', w.unpriced === 0)}</td>
             </tr>
           ))}
         </Table>
@@ -95,6 +98,7 @@ interface Budget { id: string; workflow: string | null; period: 'day' | 'month';
 function SpendLimits() {
   const me = useMe();
   const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
   const q = useQuery({ queryKey: ['budgets'], queryFn: () => api<Budget[]>('/v1/budgets'), refetchInterval: 30_000 });
   const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
   const [workflow, setWorkflow] = useState('');
@@ -114,6 +118,7 @@ function SpendLimits() {
   };
   return (
     <Panel title="Spend limits">
+      {dialog}
       <p className="muted small">When a limit is used up, new runs of workflows with agent steps are refused (scheduled ones too) until the period resets at midnight UTC or the start of the month. Test runs still work. Unpriced turns are not counted, so spend is a lower bound.</p>
       <ErrorNote error={q.error ?? remove.error} />
       {!q.data ? <Loading /> : (
@@ -129,7 +134,7 @@ function SpendLimits() {
                 {money(b.spent, b.currency)} of {money(b.limit, b.currency)} {b.exceeded ? <Badge tone="bad">used up</Badge> : <span className="muted">({b.used_pct}%)</span>}
               </td>
               <td title={when(b.resets_at)} className="nowrap">{ago(b.resets_at)}</td>
-              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={() => confirm('Remove this spend limit?') && remove.mutate(b.id)}>Remove</button> : null}</td>
+              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={async () => (await ask({ title: `Remove the ${b.period === 'day' ? 'daily' : 'monthly'} spend limit for ${b.workflow ?? 'the whole workspace'}?`, text: 'Runs are no longer refused when spend passes it.', confirm: 'Remove limit' })) && remove.mutate(b.id)}>Remove limit</button> : null}</td>
             </tr>
           ))}
         </Table>
@@ -144,8 +149,8 @@ function SpendLimits() {
             <option value="day">Per day</option>
             <option value="month">Per month</option>
           </select>
-          <input aria-label="Limit in USD" type="number" min="0.01" step="0.01" placeholder="Limit in USD" value={limit} onChange={(e) => setLimit(e.target.value)} required />
-          <button type="submit" className="primary" disabled={save.isPending || !(Number(limit) > 0)}>Set limit</button>
+          <label className="lbl"><span>Limit in USD</span><input type="number" min="0.01" step="0.01" placeholder="50.00" value={limit} onChange={(e) => setLimit(e.target.value)} required /></label>
+          <button type="submit" className="primary" disabled={save.isPending}>Set limit</button>
         </form>
       ) : null}
       <ErrorNote error={save.error} />

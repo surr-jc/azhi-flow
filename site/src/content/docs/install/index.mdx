@@ -1,0 +1,60 @@
+---
+title: Choose an install
+description: Pick between the team install (Docker) and local mode (no Docker), then follow the guide for Linux, macOS or Windows.
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Azhi Flow has two ways to run. They run the same code.
+
+| | Team install | Local mode (experimental) |
+|---|---|---|
+| For | A team, or anything you want to keep running | One person on one machine |
+| Parts | PostgreSQL 16 + pgvector, Temporal and the Azhi server in Docker, plus one or more **workers** | One process: embedded PostgreSQL (PGlite), Temporal's dev server, the server and a worker |
+| Needs | Git, Node.js 22+, Docker with Compose | Git, Node.js 22+ (Python for script nodes) |
+| Command | `deploy/install.sh` | `npx azhi up` |
+| Data | Docker volumes | `~/.azhi` (`%USERPROFILE%\.azhi` on Windows) |
+
+## Platform support
+
+| Platform | Team install | Local mode |
+|---|---|---|
+| Linux | **Server and workers** | Yes |
+| Windows 10/11 | Inside **WSL2** (Ubuntu) | Yes, native, no WSL |
+| macOS | Server in Docker, development worker. Tested and working; workers not certified. | Not yet tested |
+
+<Aside type="caution" title="Alpha caveat">
+Workers (the processes that run scripts and harnesses) are supported on **Linux only**. On Windows you work
+inside WSL2 for the team install. On macOS, run production workers on a Linux host.
+</Aside>
+
+## Common requirements
+
+- **Git** and **Node.js 22 or newer** (`engines` in `package.json`).
+- **Docker with the Compose plugin** for the team install.
+- For script nodes, on each worker host: [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh).
+  The worker reports what it found, and the run plan marks anything missing as a blocker.
+- A model credential: an Anthropic or OpenAI API key, or a Copilot / ChatGPT / Claude plan sign-in. See
+  [Use a subscription, not API keys](/guides/subscriptions/).
+
+## Documented hardware (team install)
+
+| | |
+|---|---|
+| CPU | 4 vCPU (x86_64) |
+| Memory | 16 GiB (the three containers use about 420 MiB idle; leave room for load) |
+| Disk | 20 GiB free (images take about 1.7 GiB) |
+| OS | Linux 6.x with Docker Engine and the Compose plugin |
+| Network | Outbound HTTPS to Docker Hub (or a mirror) and the npm registry |
+
+Measured on 2026-10-04: server image build 39 s, start to all three containers healthy 16 s (fresh volumes,
+migrations included). Image pulls were not measured; at 50 Mbit/s a cold install is estimated at 2 to 3 minutes.
+
+## Pick your guide
+
+<CardGrid>
+  <LinkCard title="Linux" description="Server with deploy/install.sh, then workers." href="/install/linux/" />
+  <LinkCard title="macOS" description="Docker Desktop for the server, native CLI and development worker." href="/install/macos/" />
+  <LinkCard title="Windows" description="WSL2 for the team install, or native local mode." href="/install/windows/" />
+  <LinkCard title="Local mode" description="One command, no Docker." href="/install/local-mode/" />
+</CardGrid>

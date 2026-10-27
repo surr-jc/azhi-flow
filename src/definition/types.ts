@@ -26,6 +26,12 @@ interface NodeCommon {
   type: NodeType;
   description?: string;
   depends_on?: string[];
+  /**
+   * `any`: the node joins alternative branches (for example the routes of one condition). It runs
+   * when its upstream nodes have settled and at least one succeeded; skipped upstream nodes do not
+   * skip it. Expressions must only read outputs of nodes that ran (guard them with the condition).
+   */
+  merge?: 'any';
   timeout?: string;
   retry?: { max_attempts?: number };
 }
@@ -58,6 +64,31 @@ export interface AgentNode extends NodeCommon {
   output_schema: string | JsonSchema;
   budget?: { max_output_tokens?: number; max_tool_calls?: number; max_cost_usd?: number };
   requires?: { enforced_restrictions?: boolean };
+  /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
+  workspace?: AgentWorkspace;
+}
+
+export interface AgentWorkspace {
+  /** `owner/name`. */
+  repo: Value;
+  /** The ref to check out, for example `refs/pull/7/head`. */
+  ref: Value;
+  /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
+  base_ref?: Value;
+  /** Literal git host base URL. Default https://github.com. */
+  host?: string;
+  /** Workspace secret holding a read-only token, sent only to `host`. */
+  credential?: string;
+  /** Shallow fetch depth; full history when absent. */
+  depth?: number;
+  /**
+   * `read` (default): the agent may only read the checkout. `write`: it may also edit files in it, and the
+   * worker returns what changed as the node output's `workspace` field (base commit, changed files, diff,
+   * test result). Nothing is pushed from the worker: a write tool after an approval does that.
+   */
+  mode?: 'read' | 'write';
+  /** Write mode: a shell command the worker runs in the checkout after the agent submits (repository code runs on the worker). */
+  test?: { command: string; timeout?: string; attempts?: number };
 }
 
 export interface RetrieveNode extends NodeCommon {
@@ -84,10 +115,20 @@ export interface ParallelNode extends NodeCommon {
   join?: 'all' | 'any';
 }
 
+/**
+ * Repeats one tool or script step, one iteration after another. The body sees `state` (the
+ * previous iteration's output, `initial` for the first) and `iteration` (0-based). After each
+ * iteration `exit` (CEL, with `state` set to that iteration's output and `iteration` to the number
+ * completed) decides whether to stop. Output: `{state, iterations, count, exited}`.
+ */
 export interface LoopNode extends NodeCommon {
   type: 'loop';
+  node: Omit<ToolNode, 'id'> | Omit<ScriptNode, 'id'>;
+  initial?: Value;
   max_iterations: number;
   exit: string;
+  /** What reaching max_iterations without the exit condition does. Default: fail. */
+  on_max?: 'fail' | 'continue';
 }
 
 export interface SubworkflowNode extends NodeCommon {
@@ -146,6 +187,8 @@ export interface WorkflowDefinition {
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;
+  /** Provider and model for every agent step whose profile says `name: default`; a run may override it. Steps that name a model keep it. */
+  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
   nodes: NodeDef[];
 }
 

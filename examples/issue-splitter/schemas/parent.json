@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "number": {
+      "type": "integer"
+    },
+    "url": {
+      "type": "string"
+    },
+    "created": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "number",
+    "url",
+    "created"
+  ],
+  "additionalProperties": false
+}

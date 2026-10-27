@@ -4,6 +4,8 @@ import type { ExecutionPlan } from '../compiler/plan.js';
 import { loadDefinitionText, type Diagnostic } from '../definition/load.js';
 import { packageFromFiles, type PackageManifest, type PackageSource } from '../definition/package.js';
 import type { WorkflowDefinition } from '../definition/types.js';
+import { transaction } from '../db/pool.js';
+import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { audit, loadCatalog } from './catalog.js';
 import type { AppContext } from './context.js';
@@ -125,4 +127,66 @@ export async function upsertSchedule(ctx: AppContext, workspaceId: string, workf
     [id, workspaceId, workflowId, cron, timezone, JSON.stringify(inputs), enabled, next],
   );
   return id;
+}
+
+/** Tables that hold a run's history; they go before the run itself. */
+const RUN_CHILD_TABLES = ['run_events', 'node_attempts', 'approvals', 'usage_records', 'context_manifests', 'agent_transcripts', 'approval_messages', 'alert_state'];
+
+async function runIdsOf(c: { query: (t: string, v?: unknown[]) => Promise<{ rows: any[] }> }, workspaceId: string, versionIds: string[]): Promise<string[]> {
+  // The runs of these versions plus every sub-run they started.
+  return (
+    await c.query(
+      `WITH RECURSIVE tree AS (
+         SELECT id FROM runs WHERE workspace_id=$1 AND workflow_version_id = ANY($2)
+         UNION SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id = t.id)
+       SELECT id FROM tree`,
+      [workspaceId, versionIds],
+    )
+  ).rows.map((r) => r.id as string);
+}
+
+async function removeVersions(ctx: AppContext, workspaceId: string, workflowId: string, slug: string, versionIds: string[], purgeRuns: boolean, actor: string, whole: boolean) {
+  return transaction(ctx.pool, async (c) => {
+    const runs = await runIdsOf(c, workspaceId, versionIds);
+    if (runs.length && !purgeRuns) {
+      throw new AzhiError(ErrorClass.invalidInput, `${slug} has ${runs.length} run(s) on ${versionIds.length === 1 ? 'this version' : 'these versions'}. Deleting them would erase run history; pass purge_runs to delete the runs too.`);
+    }
+    if (runs.length) {
+      await c.query(`UPDATE runs SET parent_run_id=NULL WHERE id = ANY($1)`, [runs]);
+      await c.query(`DELETE FROM action_transitions WHERE action_id IN (SELECT id FROM actions WHERE run_id = ANY($1))`, [runs]);
+      await c.query(`DELETE FROM actions WHERE run_id = ANY($1)`, [runs]);
+      for (const t of RUN_CHILD_TABLES) await c.query(`DELETE FROM ${t} WHERE run_id = ANY($1)`, [runs]);
+      await c.query(`DELETE FROM runs WHERE id = ANY($1)`, [runs]);
+    }
+    await c.query(`DELETE FROM workflow_versions WHERE workspace_id=$1 AND id = ANY($2)`, [workspaceId, versionIds]);
+    const left = (await c.query(`SELECT count(*)::int AS n FROM workflow_versions WHERE workflow_id=$1`, [workflowId])).rows[0].n as number;
+    const workflowGone = whole || left === 0;
+    if (workflowGone) {
+      await c.query(`DELETE FROM schedules WHERE workflow_id=$1`, [workflowId]);
+      await c.query(`DELETE FROM budgets WHERE workflow_id=$1`, [workflowId]);
+      await c.query(`DELETE FROM workflow_portable_assets WHERE workflow_id=$1`, [workflowId]);
+      await c.query(`DELETE FROM example_installs WHERE workspace_id=$1 AND workflow_slug=$2`, [workspaceId, slug]);
+      await c.query(`DELETE FROM workflows WHERE id=$1`, [workflowId]);
+    }
+    return { runs_deleted: runs.length, workflow_deleted: workflowGone };
+  });
+}
+
+/** Deletes one revision of a workflow; the workflow goes with its last revision. */
+export async function deleteVersion(ctx: AppContext, workspaceId: string, versionId: string, actor: string, purgeRuns = false) {
+  const v = await getVersion(ctx, workspaceId, versionId);
+  if (!v) throw new AzhiError(ErrorClass.invalidInput, 'workflow version not found');
+  const result = await removeVersions(ctx, workspaceId, v.workflow_id, v.slug, [v.id], purgeRuns, actor, false);
+  await audit(ctx, workspaceId, actor, 'workflow.version_deleted', { workflow: v.slug, version: v.version, package_hash: v.package_hash, ...result });
+  return { workflow: v.slug, version: v.version, ...result };
+}
+
+/** Deletes a workflow and every revision of it. */
+export async function deleteWorkflow(ctx: AppContext, workspaceId: string, slug: string, actor: string, purgeRuns = false) {
+  const w = (await ctx.pool.query(`SELECT id FROM workflows WHERE workspace_id=$1 AND slug=$2`, [workspaceId, slug])).rows[0] as { id: string } | undefined;
+  if (!w) throw new AzhiError(ErrorClass.invalidInput, `workflow ${slug} not found`);
+  const ids = (await ctx.pool.query(`SELECT id FROM workflow_versions WHERE workflow_id=$1`, [w.id])).rows.map((r) => r.id as string);
+  const result = await removeVersions(ctx, workspaceId, w.id, slug, ids, purgeRuns, actor, true);
+  await audit(ctx, workspaceId, actor, 'workflow.deleted', { workflow: slug, versions: ids.length, ...result });
+  return { workflow: slug, versions_deleted: ids.length, ...result };
 }

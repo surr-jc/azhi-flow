@@ -1,17 +1,19 @@
 import { budgetStatus, describeBudget } from '../server/budgets.js';
 import type { PlanNode } from '../compiler/plan.js';
 import type { TaintReport } from '../compiler/taint.js';
-import type { AgentNode, RetrieveNode, ScriptNode } from '../definition/types.js';
-import { parseProfile } from '../agents/profile.js';
+import type { AgentNode, RetrieveNode, ScriptNode, SubworkflowNode } from '../definition/types.js';
+import { applyModelDefaults, parseProfile, usesDefaultModel, type AgentProfile, type ModelDefaults } from '../agents/profile.js';
 import { PROVIDER_DEFAULTS } from '../agents/providers.js';
+import { chatgptAuth } from '../agents/chatgpt-auth.js';
+import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
-import { EXECUTORS } from '../executors/capabilities.js';
+import { EXECUTORS, isHarness } from '../executors/capabilities.js';
 import { resolveDatasetRef } from '../knowledge/datasets.js';
 import { packageFile } from '../server/packages.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { evaluateWorkerTrust } from '../server/trust.js';
-import type { VersionRow } from '../server/workflows.js';
+import { resolveVersion, type VersionRow } from '../server/workflows.js';
 import type { PackageSignature } from '../security/signing.js';
 
 /**
@@ -42,6 +44,8 @@ export interface NodePlan {
   requirements: Requirement[];
   coverage: Coverage[];
   tainted?: string;
+  /** An agent step's model: where the provider and model came from (its profile, the workflow's defaults, or this run's choice). */
+  model?: { provider: string; name: string | null; source: 'profile' | 'server_default' | 'workflow_default' | 'run_choice' };
 }
 
 export interface Blocker {
@@ -63,8 +67,10 @@ export interface RunPlanReport {
   blockers: Blocker[];
 }
 
-export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }): Promise<RunPlanReport> {
+export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }, runChoice?: ModelDefaults | null): Promise<RunPlanReport> {
   const plan = version.plan;
+  // The run's choice wins over the workflow's defaults; both apply only to steps that say `name: default`.
+  const modelDefaults: { value?: ModelDefaults; from: 'workflow_default' | 'run_choice' } = runChoice?.provider ? { value: runChoice, from: 'run_choice' } : { value: version.definition.model_defaults, from: 'workflow_default' };
   const catalog = await loadCatalog(ctx, workspaceId);
   const secrets = new Set((await ctx.pool.query(`SELECT DISTINCT name FROM secrets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const workers = (
@@ -111,6 +117,55 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     return reqs;
   };
 
+  /** An OpenCode step's workspace clone and harness setup: what runs on the worker outside the gateway. */
+  const opencodeSetup = async (def: AgentNode, nodeId: string, np: NodePlan) => {
+    const ws = def.workspace;
+    if (ws) {
+      const withGit = workers.filter((w) => w.capabilities.runtimes?.git && w.capabilities.runtimes?.opencode);
+      np.requirements.push(
+        !workers.length
+          ? { name: 'git on a worker', mark: 'unverified', detail: 'no worker online' }
+          : withGit.length
+            ? { name: 'git on a worker', mark: 'native', detail: withGit.map((w) => `${w.name}: git ${w.capabilities.runtimes!.git!.version}`).join(', ') }
+            : { name: 'git on a worker', mark: 'unsupported', detail: 'no online OpenCode worker has git' },
+      );
+      if (ws.credential) {
+        if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
+        np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+      }
+      np.coverage.push({
+        action: 'workspace clone',
+        enforcement: 'harness',
+        detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
+      });
+      if (ws.mode === 'write') {
+        np.coverage.push({
+          action: 'edits in the checkout',
+          enforcement: 'harness',
+          detail: 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
+        });
+      }
+      if (ws.test) {
+        np.coverage.push({
+          action: `test command: ${ws.test.command}`,
+          enforcement: 'unobservable',
+          detail: `runs on the worker in the checkout, after the agent's edits, with no secrets in its environment (up to ${ws.test.attempts ?? 1} attempt(s)); this executes repository code the agent may have written, so use a worker you would trust as a CI runner for this repository`,
+        });
+      }
+    }
+    let harness: AgentProfile['harness'];
+    try {
+      harness = parseProfile((await packageFile(ctx, workspaceId, version.package_hash, profilePath(def.profile))).toString('utf8'), def.profile).harness;
+    } catch {
+      return;
+    }
+    const oc = harness?.opencode;
+    if (oc?.tools?.length) np.coverage.push({ action: `OpenCode tools ${oc.tools.join(', ')}`, enforcement: 'harness', detail: 'read-only, limited to the step directory by OpenCode permission rules (external directories denied)' });
+    for (const name of Object.keys(oc?.mcp ?? {})) {
+      np.coverage.push({ action: `MCP server ${name}`, enforcement: 'unobservable', detail: 'a local process from the package, outside the gateway; its calls are not ledgered (trusted-author packages only)' });
+    }
+  };
+
   for (const n of plan.nodes) {
     const np: NodePlan = { id: n.id, type: n.type, requirements: [], coverage: [] };
     if (plan.taint.tainted[n.id]) np.tainted = plan.taint.tainted[n.id];
@@ -133,9 +188,14 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         break;
       }
       case 'parallel':
+      case 'loop':
         if (n.tool) np.requirements.push(toolRequirement(n, n.tool.ref));
         else np.requirements.push(...workerRequirements((n.def as unknown as { node: ScriptNode }).node.runtime));
-        np.coverage.push({ action: 'items', enforcement: 'enforced', detail: 'each item runs as its own tool call or script attempt' });
+        np.coverage.push(
+          n.type === 'loop'
+            ? { action: 'iterations', enforcement: 'enforced', detail: 'one tool call or script attempt per iteration, at most max_iterations, stopped by the exit condition' }
+            : { action: 'items', enforcement: 'enforced', detail: 'each item runs as its own tool call or script attempt' },
+        );
         break;
       case 'agent': {
         const def = n.def as AgentNode;
@@ -153,8 +213,8 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           { name: 'usage reporting', mark: mark('usage', c.usage !== 'unavailable'), detail: c.usage },
           { name: 'cancellation', mark: mark('cancellation', c.cancellation !== 'none'), detail: c.cancellation },
         );
-        if (executor === 'model-agent' || executor === 'opencode') np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor)));
-        if (executor === 'opencode') np.requirements.push(...workerRequirements('opencode'));
+        if (executor === 'model-agent' || isHarness(executor)) np.requirements.push(...(await modelRequirements(ctx, workspaceId, version.package_hash, def, n.id, secrets, missing, executor, modelDefaults.value, modelDefaults.from, np)));
+        if (isHarness(executor)) np.requirements.push(...workerRequirements(executor));
         if (def.tools?.length) np.requirements.push({ name: 'gateway tools', mark: mark('gatewayTools', c.gatewayTools !== 'none', c.gatewayTools === 'bridged'), detail: c.gatewayTools });
         for (const t of def.tools ?? []) np.requirements.push(toolRequirement(n, t));
         if (def.requires?.enforced_restrictions && c.ambientTools === 'uncontrolled') {
@@ -167,6 +227,22 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           detail: executor === 'model-agent' ? 'none exist' : `${c.ambientTools}: ${decl.notes.join('; ')}`,
         });
         for (const d of def.datasets ?? []) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
+        if (executor === 'opencode') await opencodeSetup(def, n.id, np);
+        break;
+      }
+      case 'subworkflow': {
+        const def = n.def as SubworkflowNode;
+        const target = await resolveVersion(ctx, workspaceId, def.workflow);
+        if (!target || target.draft) {
+          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'no published version in this workspace' });
+          blockers.push({ code: 'subworkflow_missing', message: `subworkflow '${def.workflow}' has no published version`, node: n.id });
+        } else if (target.slug === version.slug) {
+          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'a workflow cannot call itself' });
+          blockers.push({ code: 'subworkflow_recursion', message: `workflow '${version.slug}' calls itself`, node: n.id });
+        } else {
+          np.requirements.push({ name: `subworkflow ${target.slug}`, mark: 'native', detail: `published version ${target.version}, resolved when the node starts` });
+        }
+        np.coverage.push({ action: 'child run', enforcement: 'enforced', detail: "its own run with its own plan, ledger and trust checks, acting as the parent's principal; its output is treated as untrusted" });
         break;
       }
       case 'retrieve':
@@ -199,7 +275,9 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   }
 
   const unique = new Map(blockers.map((b) => [`${b.code}:${b.node ?? ''}:${b.message}`, b]));
-  const needsWorkers = plan.nodes.some((n) => n.type === 'script' || (n.type === 'parallel' && !n.tool));
+  const needsWorkers = plan.nodes.some(
+    (n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool) || (n.type === 'agent' && isHarness((n.def as AgentNode).executor ?? 'model-agent')),
+  );
   const finalBlockers = [...unique.values()].filter((b) => b.code !== 'worker_trust_denied' || needsWorkers);
   return {
     workflow: version.slug,
@@ -236,6 +314,13 @@ export function datasetAllows(acl: { roles?: string[]; users?: string[] }, p: { 
   return (acl.roles ?? []).some((r) => RANK[p.role]! >= RANK[r]!);
 }
 
+/** Where a step's model came from, for the plan: nothing for a model the profile names itself. */
+function modelOrigin(explicit: boolean, chosen: 'workflow_default' | 'run_choice' | undefined, defaultName?: string): string {
+  if (!chosen) return explicit ? '' : ' (server default)';
+  const who = chosen === 'run_choice' ? 'chosen for this run' : 'workflow default';
+  return defaultName ? ` (${who})` : ` (${who} provider, its server default model)`;
+}
+
 /** The model binding, credential and budget enforceability of a model-agent node. */
 async function modelRequirements(
   ctx: AppContext,
@@ -246,6 +331,9 @@ async function modelRequirements(
   secrets: Set<string>,
   missing: RunPlanReport['missing_grants'],
   executor: string,
+  defaults?: ModelDefaults,
+  defaultsFrom: 'workflow_default' | 'run_choice' = 'workflow_default',
+  np?: NodePlan,
 ): Promise<Requirement[]> {
   const path = profilePath(def.profile);
   let profile;
@@ -254,7 +342,13 @@ async function modelRequirements(
   } catch (e) {
     return [{ name: `profile ${def.profile}`, mark: 'unsupported', detail: (e as Error).message }];
   }
+  const chosen = usesDefaultModel(profile) && defaults?.provider ? defaultsFrom : undefined;
+  profile = applyModelDefaults(profile, defaults);
   const reqs: Requirement[] = [];
+  if (np && profile.model.provider !== 'scripted') {
+    const explicit = Boolean(profile.model.name && profile.model.name !== 'default');
+    np.model = { provider: profile.model.provider, name: explicit ? profile.model.name! : PROVIDER_DEFAULTS[profile.model.provider].model(ctx.settings) ?? null, source: chosen ?? (explicit ? 'profile' : 'server_default') };
+  }
   if (profile.model.provider === 'scripted') {
     reqs.push({ name: 'model binding', mark: 'native', detail: 'scripted provider (fixtures and tests only)' });
   } else {
@@ -263,19 +357,33 @@ async function modelRequirements(
     const explicit = profile.model.name && profile.model.name !== 'default';
     const model = explicit ? profile.model.name : d.model(ctx.settings);
     reqs.push(
-      executor === 'opencode' && provider !== 'anthropic'
-        ? { name: 'model binding', mark: 'unsupported', detail: `the OpenCode adapter supports anthropic profiles only, not ${provider}` }
+      isHarness(executor) && !EXECUTORS[executor]!.providers.includes(provider)
+        ? { name: 'model binding', mark: 'unsupported', detail: `the ${executor} adapter supports ${EXECUTORS[executor]!.providers.join(' or ')} profiles only, not ${provider}` }
+        : !isHarness(executor) && provider === 'github-copilot'
+          ? { name: 'model binding', mark: 'unsupported', detail: 'GitHub Copilot models run through OpenCode only (executor: opencode)' }
+        : !isHarness(executor) && provider === 'openai-chatgpt'
+          ? { name: 'model binding', mark: 'unsupported', detail: 'ChatGPT plan models run through OpenCode only (executor: opencode)' }
         : model
-          ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${explicit ? '' : ' (server default)'}` }
+          ? { name: 'model binding', mark: 'native', detail: `${provider} ${model}${modelOrigin(Boolean(explicit), chosen, defaults?.name)}` }
           : { name: 'model binding', mark: 'unsupported', detail: `the profile uses the default ${provider} model and ${d.modelEnv} is not set` },
     );
     const credential = profile.model.credential ?? d.credential;
     if (!secrets.has(credential)) missing.push({ kind: 'secret', name: credential, node });
-    reqs.push({ name: `credential ${credential}`, mark: secrets.has(credential) ? 'native' : 'unsupported', detail: secrets.has(credential) ? 'set' : `MISSING (azhi secret set ${credential})` });
+    // A ChatGPT step needs a ChatGPT sign-in; a secret that is merely set (e.g. a Copilot token) would fail the step at run time.
+    const wrongKind = provider === 'openai-chatgpt' && secrets.has(credential) && !chatgptAuth((await resolveSecret(ctx, workspaceId, credential))?.value ?? '');
+    reqs.push({
+      name: `credential ${credential}`,
+      mark: secrets.has(credential) && !wrongKind ? 'native' : 'unsupported',
+      detail: wrongKind ? `is not a ChatGPT sign-in (the ${provider} model needs one): run \`azhi chatgpt login --secret ${credential}\`, or change the profile's credential to a ChatGPT sign-in secret` : secrets.has(credential) ? 'set' : `MISSING (azhi secret set ${credential})`,
+    });
   }
   if (def.budget?.max_cost_usd !== undefined) {
     reqs.push(
-      profile.pricing
+      profile.model.provider === 'github-copilot'
+        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'Copilot cost is counted in AI credits from the tokens reported when the step ends, so this cap is not enforced while it runs' }
+        : profile.model.provider === 'openai-chatgpt'
+        ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'ChatGPT plan steps have no per-token charge (they use the plan\'s usage limits), so this cap does not apply to them' }
+        : profile.pricing
         ? { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'native', detail: `estimated from pricing ${profile.pricing.revision}` }
         : { name: `budget max_cost_usd ${def.budget.max_cost_usd}`, mark: 'unverified', detail: 'the profile declares no pricing, so cost is unavailable and this cap cannot be enforced' },
     );

@@ -1,0 +1,89 @@
+{
+  "type": "object",
+  "properties": {
+    "approved": {
+      "type": "boolean"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[CTSL][0-9]{1,2}$",
+            "description": "Your prefix and a running number: C1 (code), T1 (test), S1 (security), L1 (lite)"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "major",
+              "minor",
+              "suggestion"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "prompt_injection_detected": {
+      "type": "boolean"
+    },
+    "criteria": {
+      "type": "array",
+      "description": "One entry per acceptance criterion in the requirements, in order: whether the change meets it and where that shows",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": {
+            "type": "string",
+            "description": "The criterion's text, copied from the requirements"
+          },
+          "status": {
+            "enum": [
+              "met",
+              "partial",
+              "unmet",
+              "unverifiable"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "description": "file:line of the code and the test that proves it; for partial or unmet, what is missing"
+          }
+        },
+        "required": [
+          "criterion",
+          "status",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "approved",
+    "summary",
+    "findings",
+    "prompt_injection_detected"
+  ],
+  "additionalProperties": false
+}

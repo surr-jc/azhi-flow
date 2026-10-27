@@ -6,6 +6,7 @@ import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '
 import { getDataset } from '../knowledge/datasets.js';
 import { datasetAllows } from '../plan/run-plan.js';
 import { budgetStatus } from '../server/budgets.js';
+import { concurrencySettings } from '../server/repo-slots.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { requireRole } from './auth.js';
@@ -16,6 +17,7 @@ import { requireRole } from './auth.js';
  * role checks, the run plan and the audit log apply unchanged. Nothing here returns a secret.
  */
 const OPEN_STATES = ['queued', 'running', 'waiting', 'cancelling'];
+const FAILED_STATES = ['failed', 'delivery_failed', 'expired'];
 
 function user(req: FastifyRequest) {
   if (req.principal.kind !== 'user') throw new AzhiError(ErrorClass.authorization, 'run tokens cannot use this endpoint');
@@ -39,13 +41,13 @@ async function spend(ctx: AppContext, workspaceId: string, since: string) {
     await ctx.pool.query(
       `SELECT count(*)::int AS turns, count(*) FILTER (WHERE cost_label = 'unavailable')::int AS unpriced,
          COALESCE(SUM(cost), 0)::float8 AS cost, MAX(currency) AS currency,
-         SUM(input_tokens)::float8 AS input_tokens, SUM(output_tokens)::float8 AS output_tokens
+         SUM(input_tokens)::float8 AS input_tokens, SUM(output_tokens)::float8 AS output_tokens, SUM(credits)::float8 AS credits
        FROM usage_records WHERE workspace_id=$1 AND at >= now() - $2::interval`,
       [workspaceId, since],
     )
   ).rows[0];
   // Unknown is not zero (spec section 11): with unpriced turns the total is a lower bound.
-  return { turns: r.turns, unpriced_turns: r.unpriced, amount: r.turns ? r.cost : 0, currency: r.currency ?? 'USD', complete: r.unpriced === 0, input_tokens: r.input_tokens, output_tokens: r.output_tokens };
+  return { turns: r.turns, unpriced_turns: r.unpriced, amount: r.turns ? r.cost : 0, currency: r.currency ?? 'USD', complete: r.unpriced === 0, input_tokens: r.input_tokens, output_tokens: r.output_tokens, credits: r.credits };
 }
 
 export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -76,7 +78,7 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/overview', async (req) => {
     const p = user(req);
     const ws = p.workspaceId;
-    const [open, recent, workers, approvals, today, week, schedules] = await Promise.all([
+    const [open, recent, workers, approvals, today, week, schedules, byDay, byWorkflow] = await Promise.all([
       ctx.pool.query(`SELECT state, count(*)::int AS n FROM runs WHERE workspace_id=$1 AND state = ANY($2) GROUP BY state`, [ws, OPEN_STATES]),
       ctx.pool.query(`SELECT state, count(*)::int AS n FROM runs WHERE workspace_id=$1 AND ended_at >= now() - interval '24 hours' GROUP BY state`, [ws]),
       ctx.pool.query(`SELECT count(*)::int AS total, count(*) FILTER (WHERE last_heartbeat > now() - interval '30 seconds')::int AS online FROM workers WHERE workspace_id=$1`, [ws]),
@@ -84,6 +86,19 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
       spend(ctx, ws, '24 hours'),
       spend(ctx, ws, '7 days'),
       nextSchedules(ctx, ws, 5),
+      // Runs started per UTC day over 28 days, so the app can compare the last 14 with the 14 before.
+      ctx.pool.query(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS started, count(*) FILTER (WHERE ended_at IS NOT NULL)::int AS ended,
+           count(*) FILTER (WHERE state='succeeded')::int AS succeeded, count(*) FILTER (WHERE state = ANY($2))::int AS failed
+         FROM runs WHERE workspace_id=$1 AND created_at >= now() - interval '28 days' GROUP BY 1 ORDER BY 1`,
+        [ws, FAILED_STATES],
+      ),
+      ctx.pool.query(
+        `SELECT w.slug AS workflow, count(*)::int AS runs, count(*) FILTER (WHERE r.state='succeeded')::int AS succeeded
+         FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+         WHERE r.workspace_id=$1 AND r.created_at >= now() - interval '14 days' GROUP BY 1 ORDER BY runs DESC, workflow`,
+        [ws],
+      ),
     ]);
     const counts = (rows: Array<{ state: string; n: number }>) => Object.fromEntries(rows.map((r) => [r.state, r.n]));
     return {
@@ -93,6 +108,8 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
       approvals: { pending: approvals.length, mine: approvals.filter((a) => canDecide(p.role, a.role)).length },
       spend: { today, week },
       schedules: schedules.filter((s) => s.enabled),
+      runs_by_day: byDay.rows,
+      runs_by_workflow: byWorkflow.rows,
     };
   });
 
@@ -155,14 +172,14 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     const { days } = z.object({ days: z.coerce.number().int().min(1).max(90).default(14) }).parse(req.query);
     const [byDay, byWorkflow] = await Promise.all([
       ctx.pool.query(
-        `SELECT date_trunc('day', u.at) AS day, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
-           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens
+        `SELECT to_char(u.at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
+           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens, SUM(u.credits)::float8 AS credits
          FROM usage_records u WHERE u.workspace_id=$1 AND u.at >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 1`,
         [p.workspaceId, days],
       ),
       ctx.pool.query(
         `SELECT w.slug AS workflow, count(DISTINCT u.run_id)::int AS runs, count(*)::int AS turns, count(*) FILTER (WHERE u.cost_label='unavailable')::int AS unpriced,
-           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens
+           COALESCE(SUM(u.cost),0)::float8 AS cost, SUM(u.input_tokens)::float8 AS input_tokens, SUM(u.output_tokens)::float8 AS output_tokens, SUM(u.credits)::float8 AS credits
          FROM usage_records u JOIN runs r ON r.id = u.run_id JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE u.workspace_id=$1 AND u.at >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY cost DESC`,
         [p.workspaceId, days],
@@ -225,6 +242,39 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     } catch (err) {
       throw new AzhiError(ErrorClass.invalidInput, `Slack did not accept the message: ${(err as Error).message}`);
     }
+  });
+
+  // Per-repository run limit: reading needs any user; changing it needs admin and is audited.
+  app.get('/v1/settings/concurrency', async (req) => {
+    const p = user(req);
+    const s = await concurrencySettings(ctx, p.workspaceId);
+    const repos = (
+      await ctx.pool.query(
+        `SELECT repo, array_agg(r.id ORDER BY r.admitted_at) FILTER (WHERE r.admitted_at IS NOT NULL) AS running,
+           array_agg(r.id ORDER BY r.created_at) FILTER (WHERE r.admitted_at IS NULL) AS held
+         FROM runs r, unnest(r.repos) AS repo
+         WHERE r.workspace_id=$1 AND r.parent_run_id IS NULL AND r.state IN ('queued','running','waiting','cancelling')
+         GROUP BY repo ORDER BY repo`,
+        [p.workspaceId],
+      )
+    ).rows.map((r) => ({ repo: r.repo as string, running: (r.running ?? []) as string[], held: (r.held ?? []) as string[] }));
+    return { ...s, server_default: ctx.settings.maxRunsPerRepo, repos };
+  });
+
+  app.put('/v1/settings/concurrency', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ max_runs_per_repo: z.number().int().min(0).max(64).nullable() }).parse(req.body);
+    await ctx.pool.query(
+      b.max_runs_per_repo === null
+        ? `UPDATE workspaces SET settings = settings - 'concurrency' WHERE id=$1`
+        : `UPDATE workspaces SET settings = jsonb_set(settings, '{concurrency}', $2::jsonb) WHERE id=$1`,
+      b.max_runs_per_repo === null ? [p.workspaceId] : [p.workspaceId, JSON.stringify({ max_runs_per_repo: b.max_runs_per_repo })],
+    );
+    await audit(ctx, p.workspaceId, p.userId, 'settings.concurrency_changed', b);
+    // A higher limit may free slots for held runs at once.
+    await ctx.pool.query(`NOTIFY azhi_outbox`);
+    return concurrencySettings(ctx, p.workspaceId);
   });
 
   // Spend limits: reading needs any user; changing them needs admin and is audited.

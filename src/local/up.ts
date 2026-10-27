@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { startServer, type ServerHandle } from '../server/server.js';
 import { startWorker } from '../worker/worker.js';
+import { ensureWebBuilt } from './web-build.js';
 import { ensureTemporalCli, startTemporalDevServer, type TemporalDevServer } from './temporal.js';
 
 /**
@@ -40,6 +41,7 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
     if (pid && pid !== process.pid && alive(pid)) throw new Error(`Azhi is already running locally (pid ${pid}); stop it with 'azhi down'`);
   }
 
+  ensureWebBuilt(log);
   const bin = await ensureTemporalCli(join(home, 'bin'), log);
   const temporal = await startTemporalDevServer({ bin, dbFile: join(localDir, 'temporal.db'), log });
   log(`Temporal dev server on ${temporal.address}`);

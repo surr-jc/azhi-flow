@@ -1,0 +1,165 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "is_code": {
+      "type": "boolean",
+      "description": "As written, deliverable as code changes in this repository"
+    },
+    "not_code_reason": {
+      "type": "string"
+    },
+    "deliverables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 12,
+      "description": "Independent things the ticket asks for, one phrase each"
+    },
+    "est_files": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Files the whole ticket touches, tests included"
+    },
+    "touches_sensitive": {
+      "type": "boolean"
+    },
+    "has_migration": {
+      "type": "boolean"
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "single": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string"
+        },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 12
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "acceptance_criteria"
+      ],
+      "additionalProperties": false
+    },
+    "umbrella": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "body"
+      ],
+      "additionalProperties": false
+    },
+    "slices": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "summary": {
+            "type": "string"
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 12
+          },
+          "surface": {
+            "type": "string"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            }
+          },
+          "est_files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "touches_sensitive": {
+            "type": "boolean"
+          },
+          "weight": {
+            "enum": [
+              "lite",
+              "full"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "summary",
+          "acceptance_criteria",
+          "surface",
+          "depends_on",
+          "est_files",
+          "touches_sensitive",
+          "weight"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "is_code",
+    "not_code_reason",
+    "deliverables",
+    "est_files",
+    "touches_sensitive",
+    "has_migration",
+    "risk",
+    "reasons",
+    "single",
+    "umbrella",
+    "slices"
+  ],
+  "additionalProperties": false
+}

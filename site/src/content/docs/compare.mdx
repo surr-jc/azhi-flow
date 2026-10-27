@@ -1,0 +1,59 @@
+---
+title: How Azhi compares
+description: Azhi Flow against OpenCode, VS Code agent mode, Claude Code and the Agent SDK, n8n-style automation and LangGraph-style frameworks.
+tableOfContents: false
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Dated comparison">
+As of **6 October 2026**, from each product's public descriptions. These tools change quickly. Check their
+current docs before relying on a row. Azhi is not a replacement for an in-editor assistant: several of these
+tools run *inside* Azhi as executors.
+</Aside>
+
+## Feature matrix
+
+| | Azhi Flow | OpenCode | VS Code + Copilot agent mode | Claude Code / Agent SDK | n8n-style automation | LangGraph-style frameworks |
+|---|---|---|---|---|---|---|
+| Primary shape | Self-hosted workflow runtime | Terminal/coding agent | Agent inside the editor | Coding agent (CLI) and SDK | Visual automation with AI nodes | Code library for agent graphs |
+| Unit of work | Workflow (agent is one node) | Agent session | Chat/agent session | Agent session | Workflow | Graph in code |
+| Durable runs, retries, schedules | Yes (Temporal) | No (interactive sessions) | No | No built-in scheduler | Yes | Checkpointing; scheduling depends on deployment |
+| Many model providers | Anthropic, OpenAI, Copilot today | Yes, many | Models offered by your Copilot plan | Claude models | Many, via nodes | Many |
+| MCP | stdio and Streamable HTTP via a governed gateway | Yes | Yes | Yes | Available | Via adapters |
+| Pre-run plan of what is enforced vs not | Yes | No | No | No | No | No |
+| Exactly-once writes ledger | Yes | No | No | No | No | No |
+| Taint check for injected data | Yes, at compile time | No | No | No | No | No |
+| Per-turn context manifest | Yes | No | No | No | No | No |
+| Cost per step, budgets, spend limits | Yes | Usage per session | Plan-level premium usage | Usage and cost reporting | Varies | Via separate tracing tools |
+| Human approval gates | Yes | Per-tool permission prompts | Per-tool confirmation | Per-tool permission prompts | Yes | Yes (interrupts) |
+| Best at | Repeatable, governed team workflows | Interactive coding, any model | Coding where you already work | Interactive and headless coding | Integrations glue | Custom agent apps in code |
+
+## When to choose which
+
+| If you need... | Choose |
+|---|---|
+| Interactive coding in the editor you already use | VS Code agent mode (or your editor's assistant) |
+| Interactive terminal coding with any model | OpenCode |
+| Interactive or headless coding with Claude | Claude Code / Agent SDK |
+| Hundreds of SaaS integrations with light AI | n8n-style automation |
+| A custom agent application written in code | A LangGraph-style framework |
+| The **same** agent work run repeatedly, unattended, auditable, with limits and sign-offs | **Azhi Flow** |
+
+## How Azhi fits with them
+
+- **OpenCode** and the **Claude Agent SDK** are Azhi executors today. Azhi adds what they leave to you:
+  durability, scheduling, approvals, the action ledger, taint checks and cost limits.
+- **VS Code agent mode** is right for a developer working interactively. Azhi is for the same kind of work run
+  repeatedly, unattended and auditable: a weekly report, every PR review, a ticket-to-release flow.
+- **n8n-style tools** are strong on integrations. Azhi's difference is treating agents as governed, measured
+  nodes with explicit guarantees.
+- **LangGraph-style frameworks** give building blocks in code. Azhi is an opinionated runtime with a
+  declarative definition, compile-time checks and an operations UI.
+
+## Honest weak spots
+
+- Fewer integrations and providers than the broad automation tools and frameworks.
+- Linux-only workers and a heavier install than a CLI you `npm i -g`.
+- Capability-based model routing, result caching and savings reports are **Vision**, not built. See
+  [Project status](/status/).

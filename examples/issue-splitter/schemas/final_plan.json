@@ -1,0 +1,121 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "single_existing",
+        "single_new",
+        "split_existing",
+        "split_new",
+        "none"
+      ]
+    },
+    "label": {
+      "type": "string",
+      "description": "The ticket as people name it: its key, or its title for free text"
+    },
+    "ticket_number": {
+      "type": "integer"
+    },
+    "comment": {
+      "type": "string"
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "single": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "labels"
+      ],
+      "additionalProperties": false
+    },
+    "umbrella": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "title",
+        "body",
+        "labels"
+      ],
+      "additionalProperties": false
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "labels"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    }
+  },
+  "required": [
+    "mode",
+    "label",
+    "ticket_number",
+    "comment",
+    "labels",
+    "single",
+    "umbrella",
+    "issues",
+    "dropped"
+  ],
+  "additionalProperties": false
+}

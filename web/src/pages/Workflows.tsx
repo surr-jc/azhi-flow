@@ -1,28 +1,36 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { api, atLeast, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
-import { PublishDraft, ScheduleForm, WorkflowFiles } from './Authoring';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
+import { api, atLeast, type PreflightReport, type RunPlan, type RunRow, type ScheduleRow, type WorkflowSummary } from '../api';
+import { PublishAction } from './Authoring';
 import { useMe } from '../App';
+import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, when } from '../ui';
+import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, useConfirm, when } from '../ui';
 import { RunTable } from './Overview';
-import { Coverage } from './Run';
-import { WorkflowCanvas } from '../components/WorkflowCanvas';
+import { PlanDock, type DockTab } from '../components/PlanDock';
+import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
+import { Popup } from '../components/Popup';
+import { StepPanel } from '../components/StepDrawer';
+import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
+import { nodeStates, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
+import { LENSES, lensRows, lensSummary, type Lens } from '../lenses';
+import { keySettings } from '../stepHelp';
 
 export function Workflows() {
   const me = useMe();
+  const isAdmin = atLeast(me.data?.role, 'admin');
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
   return (
     <>
       <PageHead
         title="Workflows"
-        sub={<>Upload a package here as a draft, or sign and publish it with <code>azhi publish</code>.</>}
-        actions={atLeast(me.data?.role, 'author') ? <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link> : undefined}
+        sub={<>Build one by describing it in chat, upload a package as a draft, or sign and publish it with <code>azhi publish</code>.</>}
+        actions={atLeast(me.data?.role, 'author') ? <><Link to="/ui/workflows/new" className="button primary">Build with chat</Link> <Link to="/ui/examples" className="button">Browse the marketplace</Link> <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link></> : undefined}
       />
       <ErrorNote error={q.error} />
       <Panel>
         {!q.data ? <Loading /> : (
-          <Table head={['Workflow', 'Published', 'Latest', 'Schedule', 'Last run']} empty="No workflows yet. Run azhi init, then azhi publish.">
+          <Table head={['Workflow', 'Published', 'Latest', 'Schedule', 'Last run', ...(isAdmin ? [''] : [])]} empty="No workflows yet. Run azhi init, then azhi publish.">
             {q.data.map((w) => (
               <tr key={w.slug}>
                 <td><Link to={`/ui/workflows/${encodeURIComponent(w.slug)}`}>{w.latest?.name ?? w.slug}</Link>{w.latest?.name && w.latest.name !== w.slug ? <div className="muted small mono">{w.slug}</div> : null}</td>
@@ -30,6 +38,7 @@ export function Workflows() {
                 <td>v{w.latest?.version}{w.latest?.draft ? <> <Badge tone="idle">draft</Badge></> : null}</td>
                 <td>{w.schedule ? <>{w.schedule.cron} <span className="muted">{w.schedule.timezone}</span>{w.schedule.enabled ? null : <> <Badge tone="idle">off</Badge></>}</> : <span className="muted">manual</span>}</td>
                 <td>{w.last_run ? <><StateBadge state={w.last_run.state} /> <span className="muted">{ago(w.last_run.created_at)}</span></> : <span className="muted">never</span>}</td>
+                {isAdmin ? <td><DeleteAction slug={w.slug} compact /></td> : null}
               </tr>
             ))}
           </Table>
@@ -39,77 +48,245 @@ export function Workflows() {
   );
 }
 
-interface VersionRow { id: string; version: number; draft: boolean; package_hash: string; signed: boolean; created_at: string }
-
-export function WorkflowPage({ slug }: { slug: string }) {
-  const me = useMe();
-  const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<VersionRow[]>(`/v1/workflows/${encodeURIComponent(slug)}/versions`) });
-  const { search } = useRoute();
-  const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
-  const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
-  const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
-  const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
-  const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
-  const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
-  if (versions.error) return <ErrorNote error={versions.error} />;
-  if (!versions.data) return <Loading />;
-  if (!current) return <p>No versions of {slug}.</p>;
-  const def = version.data?.definition;
+/**
+ * Deletes one revision, or the whole workflow when `version` is omitted. The server refuses when
+ * runs exist; the person is then asked once more, naming how many runs go with it.
+ */
+function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; version?: { id: string; version: number }; onDeleted?: () => void; compact?: boolean }) {
+  const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
+  const what = version ? `v${version.version} of ${slug}` : `${slug} and every revision of it`;
+  const remove = useMutation({
+    mutationFn: async () => {
+      const path = version ? `/v1/versions/${version.id}` : `/v1/workflows/${encodeURIComponent(slug)}`;
+      try {
+        return await api<{ workflow_deleted: boolean }>(path, { method: 'DELETE' });
+      } catch (e) {
+        const m = /has (\d+) run\(s\)/.exec((e as Error).message);
+        if (!m) throw e;
+        if (!(await ask({ title: `Delete ${m[1]} run(s) of ${slug}?`, text: `${slug} has ${m[1]} run(s) on ${version ? 'this revision' : 'it'}. Deleting erases their history, logs and approvals for good.`, confirm: `Delete ${what} and its runs` }))) return null;
+        return api<{ workflow_deleted: boolean }>(`${path}?purge_runs=true`, { method: 'DELETE' });
+      }
+    },
+    onSuccess: (r) => {
+      if (!r) return;
+      void qc.invalidateQueries();
+      onDeleted?.();
+    },
+  });
+  const confirmDelete = async () => (await ask({ title: `Delete ${what}?`, text: 'This cannot be undone.', confirm: `Delete ${version ? `v${version.version}` : slug}` })) && remove.mutate();
+  const label = version ? `Delete v${version.version}` : `Delete ${slug}`;
   return (
     <>
-      <PageHead
-        title={def?.name ?? slug}
-        sub={def?.description ?? (def?.name && def.name !== slug ? <span className="mono">{slug}</span> : undefined)}
-        actions={
-          <div className="row">
-            <select aria-label="Version" value={current.id} onChange={(e) => setPicked(e.target.value)}>
-              {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
-            </select>
-            {atLeast(me.data?.role, 'author') ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="button">Edit</Link> : null}
-          </div>
-        }
-      />
-      <div className="grid-2">
-        <Panel title="Start a run">
-          {atLeast(me.data?.role, 'operator') ? <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} /> : <p className="muted">Your role cannot start runs.</p>}
-        </Panel>
-        <Panel title="About this version">
-          <div className="meta tight">
-            <div><span>Version</span>v{current.version} {current.draft ? <Badge tone="idle">draft</Badge> : <Badge tone="ok">published</Badge>}</div>
-            <div><span>Signature</span>{plan.data ? (plan.data.signer.verified ? `verified, ${plan.data.signer.publisher}` : `not verified${plan.data.signer.error ? `: ${plan.data.signer.error}` : ''}`) : '…'}</div>
-            <div><span>Uploaded</span>{when(current.created_at)}</div>
-            <div><span>Package</span><span className="mono">{current.package_hash.slice(0, 19)}</span></div>
-            <div><span>Trigger</span>{def?.trigger?.schedule ? `${def.trigger.schedule.cron} (${def.trigger.schedule.timezone})` : 'manual'}</div>
-          </div>
-          {atLeast(me.data?.role, 'author') ? <PublishDraft version={current} slug={slug} /> : null}
-        </Panel>
-      </div>
-      <Panel title="Workflow">{version.data?.plan?.nodes ? <WorkflowCanvas nodes={version.data.plan.nodes} plan={plan.data} /> : <Loading />}</Panel>
-      <details className="panel">
-        <summary>Files in this version</summary>
-        <WorkflowFiles versionId={current.id} />
-      </details>
-      {atLeast(me.data?.role, 'admin') && schedules.data && versions.data.some((v) => !v.draft) ? (
-        <details className="panel" open={schedules.data.some((s) => s.workflow === slug)}>
-          <summary>Schedule</summary>
-          <ScheduleForm key={slug} slug={slug} schema={version.data?.plan?.inputsSchema ?? def?.inputs} schedule={schedules.data.find((s) => s.workflow === slug)} />
-        </details>
-      ) : null}
-      <h2 className="section">Run plan</h2>
-      {plan.error ? <ErrorNote error={plan.error} /> : plan.data ? <Coverage plan={plan.data} live /> : <Loading />}
-      <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>
-        {runs.data ? <RunTable runs={runs.data} /> : <Loading />}
-      </Panel>
+      {compact ? (
+        <button type="button" className="small danger" disabled={remove.isPending} onClick={() => void confirmDelete()}>{version ? `Delete v${version.version}` : `Delete ${slug}`}</button>
+      ) : (
+        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} data-tip={label} onClick={() => void confirmDelete()}><Icon name="trash" /></button>
+      )}
+      {dialog}
+      {remove.error ? <span className="warn-text small" role="alert">{(remove.error as Error).message}</span> : null}
     </>
   );
 }
 
-function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan }) {
+export function WorkflowPage({ slug }: { slug: string }) {
+  const me = useMe();
+  const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<VersionRow[]>(`/v1/workflows/${encodeURIComponent(slug)}/versions`) });
+  const { search, navigate } = useRoute();
+  const [picked, setPicked] = useState<string | undefined>(search.get('version') ?? undefined);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [section, setSection] = useState<SectionId | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [mode, setMode] = useState<'plan' | 'run'>('plan');
+  const [lens, setLens] = useState<Lens>('flow');
+  const [dockRequest, setDockRequest] = useState<{ tab: DockTab; id: number }>({ tab: 'plan', id: 0 });
+  const current = versions.data?.find((v) => v.id === picked) ?? versions.data?.find((v) => !v.draft) ?? versions.data?.[0];
+  const version = useQuery({ queryKey: ['version', current?.id], queryFn: () => api<any>(`/v1/versions/${current!.id}`), enabled: Boolean(current), staleTime: Infinity });
+  const source = useQuery({ queryKey: ['source', current?.id], queryFn: () => api<{ workflow: string; files: Array<{ path: string; text?: string }> }>(`/v1/versions/${current!.id}/source`), enabled: Boolean(current), staleTime: Infinity });
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<ToolRow[]>('/v1/tools') });
+  const plan = useQuery({ queryKey: ['plan', current?.id], queryFn: () => api<RunPlan>(`/v1/versions/${current!.id}/plan`), enabled: Boolean(current), refetchInterval: 15_000 });
+  const schedules = useQuery({ queryKey: ['schedules'], queryFn: () => api<ScheduleRow[]>('/v1/schedules/summary'), enabled: atLeast(me.data?.role, 'admin') });
+  const runs = useQuery({ queryKey: ['runs', '', slug, 'wf'], queryFn: () => api<RunRow[]>(`/v1/runs?limit=10&workflow=${encodeURIComponent(slug)}`), refetchInterval: 5_000 });
+  const portableAssets = useQuery({ queryKey: ['workflow-assets', slug], queryFn: () => api<PortableAsset[]>(`/v1/workflows/${encodeURIComponent(slug)}/assets`) });
+  const examples = useQuery({ queryKey: ['examples'], queryFn: () => api<Array<{ id: string; name: string; workflow: string; update: { available: boolean; tracked: boolean } | null }>>('/v1/examples') });
+  const lastId = runs.data?.[0]?.id;
+  const lastRun = useQuery({ queryKey: ['run', lastId], queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(lastId!)}`), enabled: Boolean(lastId) });
+  const nodes: PlanNode[] | undefined = version.data?.plan?.nodes;
+  const toolList = tools.data ?? [];
+  const missing = new Set((plan.data?.missing_grants ?? []).filter((g) => g.kind === 'secret').map((g) => g.name));
+  const missingKey = [...missing].sort().join(',');
+  const settings = useCallback(
+    (n: PlanNode) => (lens === 'flow' ? keySettings({ type: n.type, ...(n.def ?? {}) }, toolList) : lensRows(lens, n, version.data?.plan?.nodes ?? [], { tools: toolList, missing: new Set(missingKey ? missingKey.split(',') : []) })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [toolList, lens, missingKey, version.data],
+  );
+  if (versions.error) return <ErrorNote error={versions.error} />;
+  if (!versions.data) return <Loading />;
+  if (!current) return <p>No versions of {slug}.</p>;
+  const def = version.data?.definition;
+  const step = nodes?.find((n) => n.id === selected);
+  const runStates = lastRun.data ? nodeStates(lastRun.data) : {};
+  const lastLabel = runs.data?.[0] ? `#${runs.data[0].id.slice(-8)}` : undefined;
+  const data: SettingsData = { slug, version: current, def, nodes: nodes ?? [], plan: plan.data, tools: toolList, role: me.data?.role, schedule: schedules.data?.find((s) => s.workflow === slug), schedulesLoaded: Boolean(schedules.data), hasPublished: versions.data.some((v) => !v.draft), assets: portableAssets.data };
+  const blockers = plan.data?.blockers.length ?? 0;
+  const canAuthor = atLeast(me.data?.role, 'author');
+  const isAdmin = atLeast(me.data?.role, 'admin');
+  const lastRunRow = runs.data?.[0];
+  const update = examples.data?.find((x) => x.workflow === slug && x.update?.available);
+  const showStep = Boolean(step && nodes);
+  return (
+    <>
+      <div className="ed-shell">
+        <div className="ed-main">
+        <div className="ed-stage">
+          {nodes ? (
+            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
+              <div className="ed-title">
+                <h1>{def?.name ?? slug}</h1>
+                <span className="pill">v{current.version}{current.draft ? ' draft' : ''}</span>
+                {plan.data ? <span className={`pill ${blockers ? 'bad' : 'ok'}`} title={blockers ? plan.data.blockers[0]!.message : 'The run plan compiles and every step can run.'}>{blockers ? `${blockers} blocker${blockers === 1 ? '' : 's'}` : 'ready to run'}</span> : null}
+                {plan.data ? <span className={`pill ${plan.data.signer.verified ? 'ok' : 'warn'}`}>{plan.data.signer.verified ? 'signed' : 'not signed'}</span> : null}
+              </div>
+              <div className="ed-modes">
+                <div className="seg" role="group" aria-label="Show">
+                  <button type="button" aria-pressed={mode === 'plan'} onClick={() => setMode('plan')}>Plan</button>
+                  <button type="button" aria-pressed={mode === 'run'} disabled={!lastId} onClick={() => setMode('run')} title={lastId ? undefined : 'This workflow has not run yet'}>Last run{lastLabel ? ` · ${lastLabel}` : ''}</button>
+                </div>
+                {mode === 'plan' ? (
+                  <div className="seg" role="group" aria-label="Lens">
+                    {LENSES.map((l) => <button key={l.id} type="button" aria-pressed={lens === l.id} title={l.hint} onClick={() => setLens(l.id)}>{l.label}</button>)}
+                  </div>
+                ) : null}
+              </div>
+              {update ? (
+                <div className="ed-alerts update-note" role="status">
+                  <span><b>The marketplace has an update.</b> Your changes stay; new steps and settings are loaded.</span>{' '}
+                  <Link to={`/ui/examples/${encodeURIComponent(update.id)}`}>Review the update</Link>
+                </div>
+              ) : null}
+              {atLeast(me.data?.role, 'operator') ? (
+                <div className="ed-runbar">
+                  <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Start a run" data-tip="Start a run"><Icon name="play" size={22} /></button>
+                  <span className="txt"><b>Run…</b><span className="muted small">{lastRunRow ? <>Last run {ago(lastRunRow.created_at)} · {lastRunRow.state.replaceAll('_', ' ')}</> : 'Not run yet'}</span></span>
+                </div>
+              ) : null}
+              <div className="ed-toolbar" role="toolbar" aria-label="Workflow">
+                <select aria-label="Version" value={current.id} onChange={(e) => { setPicked(e.target.value); setSelected(null); }}>
+                  {versions.data.map((v) => <option key={v.id} value={v.id}>v{v.version}{v.draft ? ' (draft)' : ''}{v.signed ? '' : ' unsigned'}</option>)}
+                </select>
+                {canAuthor ? <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(current.id)}`} className="tb-btn" data-tip="Edit this workflow" aria-label="Edit this workflow"><Icon name="edit" /></Link> : null}
+                {canAuthor ? <PublishAction version={current} slug={slug} /> : null}
+                {isAdmin ? <DeleteAction slug={slug} version={current} onDeleted={() => { setPicked(undefined); setSelected(null); if (versions.data.length <= 1) navigate('/ui/workflows'); }} /> : null}
+                <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} data-tip="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
+              </div>
+            </WorkflowCanvas>
+          ) : <Loading />}
+        </div>
+        <PlanDock plan={plan.data} yaml={source.data?.files.find((f) => f.path === source.data?.workflow)?.text} file={source.data?.workflow} selected={selected} request={dockRequest} note="This is the plan as it stands now, for you, with the workers online now." />
+        </div>
+        <aside className="ed-panel" aria-label="Settings and step">
+          <div className="ed-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected={!showStep} onClick={() => setSelected(null)}>Workflow</button>
+            <button type="button" role="tab" aria-selected={showStep} disabled={!showStep}>{step ? step.id : 'Step'}</button>
+          </div>
+          {showStep && nodes && step ? (
+            <div className="ed-side wb-drawer">
+              <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setSelected(null)} onExpand={() => setExpanded(true)} />
+            </div>
+          ) : (
+            <div className="ed-side"><SettingsDock data={data} collapsed={false} active={section ?? undefined} onOpen={setSection} /></div>
+          )}
+        </aside>
+      </div>
+      <div className="ed-below">
+      {mode === 'plan' && lens !== 'flow' && nodes ? (
+        <div className="lens-cards" aria-label={`${lens} summary`}>
+          {lensSummary(lens, nodes, { tools: toolList, missing }).map((c) => (
+            <div key={c.title} className={`lens-card${c.tone ? ` ${c.tone}` : ''}`}>
+              <span className="label">{c.title}</span>
+              {c.lines.map((l) => <p key={l} className="small">{l}</p>)}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {section ? (
+        <Popup title="Workflow settings" sub={`${def?.name ?? slug} · v${current.version}`} onClose={() => setSection(null)} footer={<span className="muted small">Changes apply to the next run. A run that has started keeps the version it began with.</span>}>
+          <SettingsBody data={data} section={section} onSection={setSection} onClose={() => setSection(null)} />
+        </Popup>
+      ) : null}
+      {expanded && step && nodes ? (
+        <Popup title={<span className="mono">{step.id}</span>} onClose={() => setExpanded(false)}>
+          <StepPanel node={step} nodes={nodes} tools={toolList} plan={plan.data} run={runStates[step.id]} runLabel={lastLabel} onPick={setSelected} onClose={() => setExpanded(false)} />
+        </Popup>
+      ) : null}
+      {starting ? (
+        <Popup title="Start a run" sub={`${def?.name ?? slug} · v${current.version}`} size="narrow" onClose={() => setStarting(false)}>
+          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
+        </Popup>
+      ) : null}
+      {plan.error ? <ErrorNote error={plan.error} /> : null}
+      <Panel title="Recent runs" action={<Link to={`/ui/runs?workflow=${encodeURIComponent(slug)}`}>All runs</Link>}>
+        {runs.data ? <RunTable runs={runs.data} /> : <Loading />}
+      </Panel>
+      </div>
+    </>
+  );
+}
+
+const CHOICE_KEY = 'azhi-run-model';
+function loadChoice(): ModelValue {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}');
+    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}) } : {};
+  } catch {
+    return {};
+  }
+}
+
+function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
   const { navigate } = useRoute();
+  // The provider and model for this run's default-model steps; empty keeps the workflow's own default.
+  const [choice, setChoice] = useState<ModelValue>(loadChoice);
+  const pick = (v: ModelValue) => {
+    setChoice(v);
+    try {
+      localStorage.setItem(CHOICE_KEY, JSON.stringify(v));
+    } catch {
+      /* the choice just is not remembered */
+    }
+  };
+  const chosenPlan = useQuery({
+    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? ''],
+    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}`),
+    enabled: Boolean(choice.provider),
+    staleTime: 0,
+  });
+  // With a choice the plan is the one under that choice (its blockers included).
+  const plan = choice.provider ? chosenPlan.data ?? workflowPlan : workflowPlan;
+  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}) } } : {};
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [formError, setFormError] = useState<string>();
+  // The inputs the checks use settle half a second after typing stops.
+  const [settled, setSettled] = useState<Record<string, unknown>>({});
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        setSettled(formValues(schema, values));
+      } catch {
+        /* the form shows what is wrong when it is submitted */
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [values, schema]);
+  const pre = useQuery({
+    queryKey: ['preflight', versionId, JSON.stringify(settled)],
+    queryFn: () => api<PreflightReport>(`/v1/versions/${encodeURIComponent(versionId)}/preflight`, { method: 'POST', body: { inputs: settled } }),
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
   const start = useMutation({
-    mutationFn: (test: boolean) => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: versionId, inputs: formValues(schema, values), ...(test ? { test: true } : {}) } }),
+    mutationFn: (test: boolean) => api<{ run_id: string }>('/v1/runs', { method: 'POST', body: { version: versionId, inputs: formValues(schema, values), ...modelBody, ...(test ? { test: true } : { preflight: true }) } }),
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
   const go = (test: boolean) => {
@@ -122,14 +299,50 @@ function StartRun({ versionId, draft, schema, plan }: { versionId: string; draft
     start.mutate(test);
   };
   const blocked = plan && !plan.ok;
+  const failed = pre.data?.checks.filter((c) => c.status === 'fail') ?? [];
+  const warned = pre.data?.checks.filter((c) => c.status === 'warn') ?? [];
+  const passed = pre.data?.checks.filter((c) => c.status === 'ok') ?? [];
   return (
     <form onSubmit={(e) => { e.preventDefault(); go(false); }}>
       <SchemaFields schema={schema} values={values} onChange={setValues} />
+      <section className="model-choice" aria-label="Choice for this run">
+        <h3>Model for this run</h3>
+        <ModelChoice
+          nameBase="run"
+          value={choice}
+          onChange={pick}
+          noneLabel={workflowDefault?.provider ? `The workflow's default (${workflowDefault.provider}${workflowDefault.name ? `, ${workflowDefault.name}` : ''})` : 'Each step\'s own default (set on the server)'}
+        />
+        <details className="small">
+          <summary>Which model each step will use</summary>
+          <ModelSteps plan={plan} />
+        </details>
+      </section>
+      <section className="preflight" aria-label="Checks before the run" aria-live="polite">
+        <h3>Before it starts</h3>
+        {pre.isFetching && !pre.data ? <p className="muted small">Checking tools, tokens and repositories…</p> : null}
+        {pre.error ? <p className="warn-text small">The checks could not run: {(pre.error as Error).message}</p> : null}
+        {failed.map((c) => (
+          <div key={c.id} className="pf-line bad"><Badge tone="bad">{c.node ?? c.kind}</Badge> {c.message}{c.fix ? <div className="muted small">{c.fix}</div> : null}</div>
+        ))}
+        {warned.map((c) => (
+          <div key={c.id} className="pf-line warn"><Badge tone="warn">{c.node ?? c.kind}</Badge> {c.message}</div>
+        ))}
+        {pre.data ? (
+          <details className="small">
+            <summary>{failed.length ? `${passed.length} other checks passed` : `${passed.length} checks passed`}{pre.isFetching ? ', checking again…' : ''}</summary>
+            {passed.map((c) => <div key={c.id} className="pf-line ok"><Badge tone="ok">{c.node ?? c.kind}</Badge> {c.message}</div>)}
+          </details>
+        ) : null}
+        {pre.data && pre.data.ok ? <p className="ok-note">Every tool, token and repository this run needs is in place.</p> : null}
+      </section>
       {blocked ? <p className="warn-note">The run plan has {plan.blockers.length} blocker(s), so a real run will be refused. A test run mocks writes and still works.</p> : null}
+      {failed.length ? <p className="warn-note">A real run is blocked until these are fixed. A test run mocks writes and still works.</p> : null}
       {draft ? <p className="muted small">This is a draft version.</p> : null}
       <div className="row">
-        <button type="submit" className="primary" disabled={start.isPending || blocked}>Start run</button>
+        <button type="submit" className="primary" disabled={start.isPending || blocked || failed.length > 0 || pre.isFetching}>Start run</button>
         <button type="button" disabled={start.isPending} onClick={() => go(true)} title="Writes are mocked">Test run</button>
+        <button type="button" className="small" disabled={pre.isFetching} onClick={() => void pre.refetch()}>Check again</button>
       </div>
       {formError ? <div className="error">{formError}</div> : null}
       <ErrorNote error={start.error} />

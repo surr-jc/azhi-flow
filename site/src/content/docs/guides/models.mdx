@@ -1,0 +1,55 @@
+---
+title: Choose providers and models
+description: How profiles, workflow defaults and per-run choices decide which model each agent step uses.
+---
+
+Agent steps get their model from a **profile** (`profiles/<name>@<n>.yaml`). A profile either **names** a model
+(`name: claude-opus-5.5`) or says `name: default`, which leaves the choice to the server
+(`AZHI_ANTHROPIC_MODEL`, `AZHI_OPENAI_MODEL`, `AZHI_COPILOT_MODEL`, `AZHI_CHATGPT_MODEL`).
+
+## The rule
+
+A choice applies only to steps whose profile says `name: default`. **A step that names its own provider and model
+keeps them**, whatever is chosen.
+
+## Where you choose
+
+| Where | Effect |
+|---|---|
+| Workflow editor: **Default provider and model** | Saved as `model_defaults: {provider, name}` on every run of that version |
+| Workflow page **Start run**: **Model for this run** | Overrides the workflow default for one run (and its subworkflows) |
+| CLI | `azhi run ... --provider github-copilot --model gpt-5.6-terra` |
+| CLI plan | `azhi plan ... --provider anthropic` shows the plan under a choice |
+| API | `POST /v1/runs` with `model_defaults`; `GET /v1/model-options` lists providers and models |
+
+**Precedence, highest first:** the run's choice, the workflow's `model_defaults`, the server's default for the
+profile's own provider.
+
+## Providers
+
+| Provider id | Executor that can drive it | Credential |
+|---|---|---|
+| `anthropic` | model agent, OpenCode, Claude Agent SDK | `anthropic-api-key`, or `claude-plan-token` for the SDK |
+| `openai` | model agent, OpenCode, Codex (experimental) | `openai-api-key` |
+| `github-copilot` | OpenCode | `github-copilot-token` |
+| `openai-chatgpt` | OpenCode | `openai-chatgpt-auth` |
+
+When the provider changes, the step uses the new provider's own credential. A choice a step's executor cannot
+drive is marked **unsupported** in the run plan and the run is refused.
+
+## The plan shows who decided
+
+Each agent step lists its provider, model and where it came from: *named by the step*, *server default*,
+*workflow default* or *chosen for this run*. See it on the workflow page, in the editor, and in the runner.
+
+## Mixing on purpose
+
+AI-SDLC pins its code reviewer, test reviewer, security reviewer and verifier to **different models** on purpose.
+Choosing `github-copilot` / `claude-opus-5.5` for a run changes the analyst, architect, engineer and other
+default-model steps, and leaves those four alone.
+
+## Before you install an example
+
+An example's `azhi.config.yaml` marks settings `required: true` or optional. `azhi example needs <id>` prints the
+checklist; `azhi example install <id>` prints it first and stops, changing nothing, when a required value is
+missing.

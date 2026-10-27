@@ -1,0 +1,55 @@
+---
+title: Executors
+description: The built-in model agent, OpenCode and the Claude Agent SDK as pluggable executors with declared capabilities.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An **executor** is what actually runs an `agent` node. Azhi does not hide the differences between them. Each one
+**declares its capabilities**, and the [run plan](/concepts/run-plan/) checks the workflow against them.
+
+## The executors
+
+| Executor | Providers | Notes |
+|---|---|---|
+| `model-agent` (default) | Anthropic, OpenAI | A platform-owned tool loop. Every tool call goes through the gateway; no ambient tools exist |
+| `opencode` | Anthropic, GitHub Copilot, ChatGPT plan | Gateway bridged over MCP, built-in tools restricted by deny-all permissions, isolated `HOME` |
+| `claude-agent-sdk` | Anthropic | The SDK driving the Claude Code runtime. Verified against a scripted endpoint; not yet against a live model |
+| `codex` | OpenAI | Experimental, off by default |
+
+## What each declares
+
+| Capability | Values |
+|---|---|
+| streaming | yes / no |
+| resume | native / checkpoint-only / none |
+| cancellation | confirmed / best-effort / none |
+| gateway tools | native-mcp / bridged / none |
+| ambient tools | disableable / restrictable / uncontrolled |
+| structured output | enforced / validated / none |
+| usage | reported / partial / unavailable |
+| platforms | linux, macos, windows |
+| compacts context | yes / no. If yes, the platform does not compact |
+
+Anything not yet confirmed by a conformance run is listed as **unverified** and the plan says so. For example,
+OpenCode's usage, structured output, cancellation and platform support are declared unverified.
+
+## Why bring your own harness?
+
+OpenCode and the Claude Agent SDK are strong interactive tools. Azhi runs them as **steps** and adds what they
+leave to you: durability, scheduling, approvals, the action ledger, taint checks and cost limits.
+
+## Isolated coding workspaces
+
+An agent step can get a **fresh git checkout** on a worker, with isolated git and `HOME`, deleted after the step.
+The checkout token is read-only and never written. At most 2 runs work on one repository at once by default.
+
+## Compare them
+
+`npm run compare` runs 30 fixtures through two executors and writes `docs/executor-comparison.md`. It states
+which numbers are estimated and that OpenCode's usage is incomplete.
+
+<Aside type="note">
+OpenCode steps are the only way to use a GitHub Copilot or ChatGPT plan. Claude Pro and Max plans are used
+through the Claude Agent SDK executor. See [Use a subscription, not API keys](/guides/subscriptions/).
+</Aside>

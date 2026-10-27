@@ -27,9 +27,17 @@ export function printInspect(d: any) {
   }
   if (d.usage?.turns) {
     const u = d.usage;
-    const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out`;
+    const tokens = u.input_tokens === null ? 'unknown' : `${u.input_tokens} in / ${u.output_tokens} out${u.credits !== null && u.credits !== undefined ? `, ${u.credits} Copilot AI credits` : ''}`;
     const cost = u.cost.amount === null ? 'cost unavailable' : `${u.cost.label} cost ${u.cost.amount.toFixed(4)} ${u.cost.currency} (pricing ${u.cost.pricing_revision})`;
     console.log(`\n${bold('Usage')}  ${u.turns} model turns, ${u.completeness_pct}% complete, tokens ${tokens}, ${cost}`);
+    if (u.copilot) {
+      const c = u.copilot;
+      const each = c.models.map((m: any) => `${m.model} ${m.credits}`).join('; ');
+      console.log(`GitHub Copilot  ${c.credits} AI credits${each ? ` (${each})` : ''}, ${c.cost.toFixed(4)} ${c.currency} at ${c.credit_usd} per credit`);
+      if (c.unpriced_models.length) console.log(yellow(`    no Copilot rate for ${c.unpriced_models.join(', ')}; set AZHI_COPILOT_RATES`));
+      if (c.pool) console.log(`    monthly pool ${c.pool.monthly}: ${c.pool.used_before} used before this run, ${c.pool.left_after} left, ${c.pool.past_pool} past the pool (${c.pool.past_pool_cost.toFixed(4)} ${c.currency})`);
+      else console.log(dim('    set AZHI_COPILOT_CREDIT_POOL to see what is left of the monthly pool'));
+    }
   }
   if (d.context_manifests?.length) {
     console.log(`\n${bold('Context manifests')}`);

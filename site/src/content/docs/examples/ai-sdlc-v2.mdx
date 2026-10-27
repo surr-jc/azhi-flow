@@ -1,0 +1,72 @@
+---
+title: "AI-SDLC v2: issue to pull request"
+description: Governed delivery from a GitHub issue to a draft pull request, with two human approvals and an honest statement of how much was verified.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Give it a GitHub issue. It checks the ticket is ready, plans the change, builds it, has an independent reviewer
+and a verifier challenge it, and, **after a person approves**, pushes a branch and opens a pull request. Nothing
+reaches GitHub without that approval, and the pull request says plainly how much was verified.
+
+## What happens
+
+<Steps>
+
+1. **Intake and readiness.** Reads the issue; a cheap model checks it is specific enough to build. If not, it is
+   sent back.
+2. **Preflight on the base branch.** Runs the test command on the **untouched** branch, so a repository whose
+   tests cannot run is found before any expensive step.
+3. **Plan.** One pass writes the requirements and the design, searching migrations and code for what already
+   exists. **You approve the design.**
+4. **Build, review, one fix round.** The engineer builds; one independent reviewer checks the diff and each
+   acceptance criterion; a verifier tries to refute each critical or major finding; one fix round follows if
+   findings stand.
+5. **Release approval.** You see the diff, the findings and the criteria checklist. On approval it pushes
+   `azhi/<ticket>` and opens the pull request.
+
+</Steps>
+
+## How much was verified
+
+| Level | Meaning |
+|---|---|
+| (no tag) | The whole test command passed on the base and after the change |
+| `[static-checks-only]` | Full tests cannot run here. Typecheck and build passed, **and the test files the agent added or changed were also run**. A new failing test blocks; a failing edit to an existing test is reported, not blocking |
+| `[untested]` | Nothing could run and a person chose to continue |
+
+Anything but the first is always a **draft**, as is a change with a migration or a sensitive area, one whose
+reviewers still have critical or major findings, or one whose acceptance criteria are not all met. A draft's
+`Closes #N` is rewritten to `Refs #N`, so merging it cannot close a ticket it does not finish.
+
+## Run it
+
+```bash
+npx azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...
+npx azhi run examples/ai-sdlc-v2 \
+  -i source=github -i ticket=OWNER/REPO#28 -i repo=OWNER/REPO -i base_branch=dev
+```
+
+`base_branch` is required. Name the branch the ticket was written against: the default branch can be far behind
+it, and the plan would look for code that is not there.
+
+## Before you start
+
+| Needed | How |
+|---|---|
+| A running server whose worker has **OpenCode, git and Python** | `node bin/azhi.js up` from the repository |
+| **GitHub access** to read and write the repo | `gh auth login`, then `azhi github login`; or secrets `github-read-token` and `github-write-token` (fine-grained: **Contents** and **Pull requests** read and write). The preflight proves write access with a harmless test write |
+| A **ChatGPT plan** sign-in for the models | `azhi chatgpt login` |
+| **Slack** for notices (optional) | Secret `slack-bot-token` and the channel in `config.channel` |
+| The GitHub tools allowed to use the repository | `repos` of `github.get-issue`, `github.push-branch` and `github.create-pull-request` must list it |
+
+## Known limits
+
+- One fix round. Several findings of the same kind can survive it; the pull request lists them.
+- In static mode, only the tests the agent touched run, not the full suite.
+- Policy and rules added by the change are checked by reading and by those tests, not by a person's trial.
+
+<Aside type="tip" title="Pair it with the splitter">
+Run `issue-splitter` first. This workflow sends back a ticket that fails its readiness check; the splitter turns
+oversized tickets into ones that pass.
+</Aside>

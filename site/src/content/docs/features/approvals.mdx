@@ -1,0 +1,42 @@
+---
+title: Approvals
+description: Human sign-off as a first-class node, with roles, expiry and structured decisions.
+---
+
+An `approval` node pauses the run until a person decides. It is how you gate a risky step and how you satisfy the
+[taint rule](/concepts/taint/) for a write that follows untrusted data.
+
+```bash
+npx azhi approve <run> <node>                       # approve
+npx azhi approve <run> <node> --reject              # reject
+npx azhi approve <run> <node> --data '{"drop":"2,4"}'   # with decision data
+```
+
+The same approvals are listed in **Mission Control › Approvals**, with the message, payload, who may decide and
+the expiry.
+
+## What you can configure
+
+| Setting | Example |
+|---|---|
+| Role who may decide | `author` |
+| Expiry, and what expiry means | The issue splitter expires in 72 hours **as a rejection** |
+| A decision schema | Structured answers, for example slice numbers to leave out, or open design questions as selections |
+| A message and payload | The diff, findings and an acceptance-criteria checklist |
+
+## Approvals in the shipped workflows
+
+| Workflow | What a person decides |
+|---|---|
+| AI-SDLC v2 | The **design** (answering open questions) and the **release** (diff, findings, criteria checklist) before any push |
+| Issue splitter | The split plan, optionally leaving slices out. **Nothing is written before this** |
+| Issue investigation | The exact text of the issue comment |
+
+PR review is deliberately different: it posts one guarded, ledgered, sticky comment without an approval, and its
+guard only allows the PR under review.
+
+## Why not just per-tool confirmations?
+
+Per-tool permission prompts belong to an interactive session someone is watching. An approval node is part of a
+durable run: it survives restarts, shows in an inbox, has an owner role and an expiry, and is recorded in the
+audit log.
