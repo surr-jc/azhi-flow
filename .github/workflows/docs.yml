@@ -114,8 +114,8 @@ jobs:
         run: |
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.wiki.git" "$RUNNER_TEMP/wiki"
           cd "$RUNNER_TEMP/wiki"
-          find . -path ./.git -prune -o -type f -name '*.md' -print0 | xargs -0 git rm -q --
-          cp "$RUNNER_TEMP"/wiki-out/*.md .
+          find . -path ./.git -prune -o -type f \( -name '*.md' -o -path './images/*' \) -print0 | xargs -0 -r git rm -q --
+          cp -r "$RUNNER_TEMP"/wiki-out/. .
           git add -A
           if git diff --cached --quiet; then
             echo "Wiki already up to date"
