@@ -1,0 +1,68 @@
+---
+title: Cost and token control
+description: How Azhi limits and reports model spend, what is built, and what is still vision.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Built today
+
+1. **Not every step is an LLM call.** Script, tool, condition, retrieve, report and notify nodes run without a
+   model. A well-designed workflow spends tokens only on agent nodes.
+2. **Lightweight versus heavyweight execution.** A full coding harness and a cloned workspace are created only
+   for the step that needs them, behind a `condition` if you want.
+3. **Bounded context.** `retrieve` takes `top_k`, and tool outputs pass through projections so agents get the fields
+   they need rather than whole API payloads.
+4. **Budgets.** Agent steps accept `max_output_tokens`, `max_tool_calls` and `max_cost_usd`; profiles accept
+   `max_turns`. The run plan says whether each cap is **enforced or only estimated**.
+5. **Spend limits** per workspace or workflow, per day or month, with alerts.
+6. **Honest accounting.** Cost is shown only when pricing is known; otherwise it is *unavailable*, and spend limits
+   say they are a **lower bound**.
+7. **Prompt caching** on the Anthropic system prompt, with cache read and write tokens recorded.
+8. **Token-saving rules for OpenCode** (optional) and the **DCP** pruning plugin (optional). See
+   [Workers](/install/workers/).
+
+## Usage record per turn
+
+Input, output, cache read, cache write and reasoning tokens.
+
+## Where the price comes from
+
+For OpenAI models, highest priority first:
+
+1. The profile's `pricing` (input and output prices both set).
+2. `AZHI_OPENAI_RATES` on the server, for example `gpt-5.5=5/0.5/30,my-model=1/4` (`model=input/cached/output` or
+   `input/output`, USD per million tokens).
+3. The cost OpenCode reports from its model catalog (OpenCode steps).
+4. The built-in standard-tier table in `src/agents/openai-pricing.ts`.
+
+A model with no rate is shown as *cost unavailable*, never guessed. Check the provider's pricing page before
+relying on the built-in table.
+
+## Subscriptions
+
+| Plan | Cost shown |
+|---|---|
+| ChatGPT plan | 0, labelled `reported`, "ChatGPT plan". Token counts are still recorded |
+| GitHub Copilot | Counted in **AI credits** against the monthly pool. `azhi copilot quota` and the run page show your allowance. Rates come from published tables |
+
+## Vision, not built
+
+<Aside type="caution">
+These are the target, not current behavior.
+</Aside>
+
+```text
+Request
+  → cached result?                     (vision: result cache)
+  → deterministic step possible?       (today: chosen by the author, not the runtime)
+  → small model sufficient?            (vision: capability routing)
+  → retrieve only the context needed   (partly built: top_k, projections)
+  → large model only if necessary
+```
+
+- **Automatic model selection** by capability and strategy (`capability: coding`, `strategy: cost_optimized`).
+  Today the profile names a provider and model.
+- **Result caching** across runs.
+- **Savings reporting** against a naive all-agent baseline. Azhi reports only measured cost until a defined
+  baseline exists per workflow. Any "saved $X" figure would need that baseline to be honest.

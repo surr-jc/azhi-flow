@@ -12,3 +12,4 @@ docs/demo/out/*
 .claude/work/
 .claude/logs/
 .opencode/
+site/.astro/

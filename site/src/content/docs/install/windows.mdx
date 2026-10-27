@@ -1,0 +1,120 @@
+---
+title: Install on Windows
+description: Run Azhi Flow on Windows 10/11 inside WSL2 for the team install, or natively with experimental local mode.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+There are two routes on Windows. Pick one.
+
+<Tabs>
+<TabItem label="WSL2 (team install)">
+
+The team installer is a bash script and workers are Linux-only, so run everything inside **WSL2**. Native
+Windows is not supported for this route.
+
+<Steps>
+
+1. In an **admin PowerShell**, install Ubuntu and reboot.
+
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+
+2. Install **Docker Desktop** and enable WSL integration for Ubuntu (Settings > Resources > WSL integration).
+
+3. In the Ubuntu shell, install Node.js 22+ and git, then follow the [Linux guide](/install/linux/).
+   Clone into the Linux filesystem (`~/azhi-flow`), **not** `/mnt/c`, which is slow and breaks file permissions.
+
+4. Open Mission Control in your Windows browser. WSL2 forwards `localhost`, so `http://localhost:7400` works,
+   and `npx azhi open <run-id>` prints a ready-to-paste link.
+
+</Steps>
+
+If the page does not load, check that `docker ps` shows port 7400 published, wait about 15 seconds after the
+installer, and make sure `localhostForwarding` is not disabled in `%UserProfile%\.wslconfig`.
+
+</TabItem>
+<TabItem label="Native (local mode)">
+
+Local mode runs without Docker or WSL, for one person on one machine. It is **experimental**. The steps below
+were verified on Windows 11 Home with PowerShell 5.1.
+
+<Steps>
+
+1. Install Node.js 22+ (an administrator prompt appears). Git is also required, and Python 3.12 for script
+   workflows.
+
+   ```powershell
+   winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements
+   ```
+
+   Open a **new** PowerShell window afterwards so `node` and `npm` are on PATH, then check:
+
+   ```powershell
+   node --version
+   npm --version
+   ```
+
+2. Clone the repository and switch to `dev`.
+
+   ```powershell
+   git clone https://github.com/surr-jc/azhi-flow.git azhi-flow
+   cd azhi-flow
+   git checkout dev
+   ```
+
+3. Install dependencies (about 2 minutes, 415 packages).
+
+   ```powershell
+   npm install
+   ```
+
+4. Start local mode. Keep this window open; it is the server.
+
+   ```powershell
+   npx azhi up --port 7410
+   ```
+
+5. In a second PowerShell window, verify.
+
+   ```powershell
+   (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7410/ui).StatusCode   # expect 200
+   npx azhi doctor
+   ```
+
+</Steps>
+
+Type plain hyphens, not dashes pasted from a document. The first `azhi up` takes a few minutes because it
+builds the web app and downloads the Temporal CLI (about 45 MB, once, checksum-verified) into `~\.azhi\bin`. Later
+starts skip both.
+
+### Daily use
+
+| Task | Command |
+|---|---|
+| Start | `npx azhi up --port 7410` |
+| Print the sign-in link for the web UI | `npx azhi open` |
+| Check health | `npx azhi doctor` |
+| Stop | `npx azhi down` (or Ctrl+C in the server window) |
+| Update | `git pull origin dev`, then `npm install`, then start again |
+
+On Windows `azhi down` stops the process hard (there is no SIGTERM). The database and Temporal recover cleanly
+on the next start.
+
+### Windows notes
+
+- `limits.memory_mb` is Linux-only; workflows that set it are refused on Windows with a clear reason.
+- OpenCode steps also run on native Windows, but this is new and **not yet checked by a live run**. Add ripgrep
+  with `winget install BurntSushi.ripgrep.MSVC`, open a new window, then run `npx azhi setup`.
+- If npm 11 prints `npm warn allow-scripts` for `@swc/core`, `esbuild`, `opencode-ai` or `protobufjs`, startup works
+  without them, but they may affect OpenCode steps. Run `npm approve-scripts --allow-scripts-pending`, review,
+  then `npm install` again.
+
+</TabItem>
+</Tabs>
+
+<Aside type="tip">
+See [Troubleshooting](/install/troubleshooting/) for common failures, and [First run](/install/first-run/) for
+what to do once it is up.
+</Aside>

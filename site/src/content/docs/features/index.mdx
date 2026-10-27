@@ -1,0 +1,73 @@
+---
+title: All features
+description: A catalogue of what Azhi Flow does today, grouped by area, each with its status.
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Everything below is on the `dev` branch unless marked <span class="tag tag-partly">Partly built</span> or
+<span class="tag tag-vision">Vision</span>.
+
+## Run workflows
+
+| Feature | Detail |
+|---|---|
+| YAML workflow definitions (schema 2.0) | Validated and compiled by `azhi validate`: graph checks, ref type-checking against output schemas, tool argument and projection checks, CEL checks |
+| Eleven node types | `tool`, `script`, `agent`, `retrieve`, `condition`, `parallel`, `loop`, `subworkflow`, `approval`, `report`, `notify` |
+| Durable runs on Temporal | Retries by error class, cancellation, `worker_offline` waits |
+| Schedules | Cron in IANA timezones; a published version's `trigger.schedule` becomes its schedule |
+| Parallel runs | Several runs of the same workflow, each harness step in its own fresh checkout; at most 2 runs per repository by default |
+| Loops and subworkflows | A workflow can call another; nesting stops at four levels |
+| Entry points | CLI, REST API, schedules, Mission Control. Web chat and webhooks are <span class="tag tag-vision">Vision</span> |
+
+## Govern them
+
+| Feature | Detail |
+|---|---|
+| [Run plan](/concepts/run-plan/) | Capability marks, policy coverage, taint paths, missing grants, blockers |
+| [Taint rule](/concepts/taint/) | Ungated write after untrusted data fails to compile |
+| [Action ledger](/concepts/ledger/) | Exactly-once writes with reconciliation |
+| [Context manifest](/concepts/context-manifest/) | What the model saw, every turn |
+| [Approvals](/features/approvals/) | Approve or reject in the CLI or Mission Control |
+| [Signed packages](/concepts/security/) | Per-publisher keys, worker trust policies |
+
+## Agents and models
+
+| Feature | Detail |
+|---|---|
+| [Executors](/concepts/executors/) | Model agent, OpenCode, Claude Agent SDK (Codex experimental) |
+| Providers | Anthropic, OpenAI, GitHub Copilot, ChatGPT plan. See [models](/guides/models/) |
+| Validated output | Output schema with two repairs |
+| Harness builder | Per-step agent prompt, command, skills, read-only tools and MCP servers for OpenCode reviewers |
+| Isolated workspaces | Fresh git checkout per step, isolated `HOME`, deleted after |
+| [Result confidence](/features/confidence/) | A verifier on a different model family tries to refute findings |
+
+## Cost
+
+| Feature | Detail |
+|---|---|
+| [Usage and cost](/features/cost/) | Per turn, with `null` for unknown |
+| Budgets and spend limits | Per step, per workflow, per workspace, with alerts |
+| Copilot allowance | `azhi copilot quota` and the run page show AI credits |
+
+## Knowledge and tools
+
+| Feature | Detail |
+|---|---|
+| [Datasets](/features/knowledge/) | Hybrid retrieval with numbered citations to immutable excerpts |
+| [MCP and the Library](/features/mcp-library/) | Stdio and Streamable HTTP MCP, reusable agents, skills and commands, live marketplaces |
+| Tool gateway | Projection, observation records, ledger |
+
+## Operate
+
+| Feature | Detail |
+|---|---|
+| [Mission Control](/features/mission-control/) | Web app: runs, approvals, alerts, spend, schedules, workers, secrets |
+| [Build with chat](/features/builder/) | Describe a workflow; get a compiled draft |
+| `azhi doctor` | Database, Temporal, workers online, interpreter builds |
+| Audit log | Who changed secrets, published, approved, changed schedules or trust policies |
+
+<CardGrid>
+  <LinkCard title="Example workflows" description="Seven installable workflows that put these together." href="/examples/" />
+  <LinkCard title="Write a workflow" description="From azhi init to a published, scheduled version." href="/guides/write-a-workflow/" />
+</CardGrid>

@@ -1,0 +1,54 @@
+---
+title: Result confidence
+description: How the PR review and issue analysis workflows check their own work, and what that does and does not prove.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A single agent's single pass is not a result you should act on. Two shipped workflows add an adversarial check.
+
+## How it works
+
+```text
+reviewers / investigator ──► verifier or challenger (different model family, own checkout)
+                              tries to REFUTE each finding or root cause
+                                       │
+                          score 0–100 per finding
+                                       │
+              ≥ 80 and confirmed ──► reaches the review / is called "high"
+              unverifiable        ──► "check by hand", never decides the verdict
+              refuted             ──► dropped and counted
+```
+
+| Workflow | Refutation step | Then |
+|---|---|---|
+| PR review | `verify` re-derives every finding and walks its scenario | `triage` (a plain script, no model) keeps confirmed findings at or above `min_confidence` (80) |
+| Issue investigation | `challenge` checks every cited evidence line, a competing explanation and the fix | `calibrate`: confidence is `high` only when the investigator says high **and** the challenger supports it at 80+. A refuted analysis is never posted |
+| AI-SDLC v2 | A verifier after each review round | Only confirmed critical and major findings trigger a fix round |
+
+The verifier runs on a **different model family** from the reviewers so they do not share blind spots.
+
+## Findings are joinable
+
+Findings need an `id` and a reproducible `scenario`, so each verdict attaches to one finding.
+
+## What is not claimed
+
+<Aside type="caution" title="80 is a threshold, not a measured precision">
+No benchmark has been run. The 80 is a bar the workflows **enforce per finding**. Measuring precision and recall
+on a labelled set (30 to 50 PRs with known defects, with the verifier on and off) is the first remaining gap in the
+project's own review. Until then, treat it as a filter, not a guarantee.
+</Aside>
+
+Other remaining gaps, as listed by the project:
+
+- Run the project's tests, type checker and a static analyzer on the PR checkout and give the output to the
+  reviewers (PR review does not yet).
+- The investigator is read-only, so a bug is traced, not reproduced.
+- Model names such as `gpt-5.6-terra` and `claude-opus-5.5` must exist on your plan, or set the profile to
+  `default` (and lose the independence of the second opinion).
+
+## Cost
+
+One extra agent step per review or investigation (plus a second checkout). The verifier runs once for all
+findings, not once per finding.

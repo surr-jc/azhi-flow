@@ -1,0 +1,93 @@
+---
+title: Workers and OpenCode tools
+description: What a worker host needs, how to install ripgrep, and the optional token-saving, DCP and OpenCode 2 settings.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The server image never runs scripts or harnesses. **Workers do.** A worker is a Linux host (in the alpha) that
+runs `azhi worker start`, with the tools your workflows need.
+
+## Script runtimes
+
+Script nodes need [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh). The worker
+reports what it found, and the run plan marks anything missing as a **blocker** before a run starts.
+
+## Tools for OpenCode steps
+
+OpenCode's search tools (`grep`, `glob`) run [ripgrep](https://github.com/BurntSushi/ripgrep). Each step gets a
+fresh home folder, so without `rg` on the worker OpenCode downloads a copy on every step (and fails offline).
+Run `npx azhi setup` on each worker host: it checks git, OpenCode and ripgrep and prints the install command
+that fits the platform.
+
+<Tabs>
+<TabItem label="Debian / Ubuntu / WSL">
+
+```bash
+sudo apt install ripgrep
+```
+
+</TabItem>
+<TabItem label="Fedora / RHEL">
+
+```bash
+sudo dnf install ripgrep
+```
+
+</TabItem>
+<TabItem label="macOS">
+
+```bash
+brew install ripgrep
+```
+
+</TabItem>
+<TabItem label="Native Windows">
+
+```powershell
+winget install BurntSushi.ripgrep.MSVC
+```
+
+Then open a new PowerShell window.
+
+</TabItem>
+</Tabs>
+
+Without root, put `rg` in `~/.azhi/tools/bin` (or `$AZHI_TOOLS_DIR/bin`, for a small system drive) or set
+`AZHI_RG_BIN`. `azhi doctor` flags OpenCode workers without ripgrep.
+
+## Optional: token saving
+
+Off by default. Set `AZHI_OPENCODE_TOKEN_SAVING=on` on a worker, or `token_saving: on|off` under a profile's
+`harness.opencode`, to add search-first reading rules to OpenCode steps' prompts: search with grep and glob,
+read only the lines needed, never reread a file. The run's Usage tab shows each turn's cache share.
+
+## Optional: DCP context pruning
+
+`npx azhi setup --dcp` installs the pinned [DCP](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning)
+OpenCode plugin into the tools folder (about 180 MB). It is AGPL-3.0-or-later, so **Azhi does not ship it**.
+
+- When token saving is on and the worker has DCP, the step loads it with update checks, notifications and
+  slash commands off.
+- DCP prunes only OpenCode's own tool output. It never prunes the Azhi gateway tools (`azhi_*`,
+  `submit_output` included), because their results carry the excerpt ids the model cites and the ledger records.
+- DCP's settings come only from Azhi, so a checked-out repository cannot change how DCP runs.
+- DCP only asks the model to compress once context is large: from 50,000 tokens, and insistently past 100,000, by
+  default. Change them with `AZHI_DCP_MIN_CONTEXT` and `AZHI_DCP_MAX_CONTEXT` (a token count such as `30000`, or a
+  share of the context window such as `40%`).
+
+<Aside type="caution">
+Check quality and cost before turning DCP on for a workflow.
+</Aside>
+
+## Optional: OpenCode 2 (preview)
+
+Off by default. A worker started with `AZHI_OPENCODE_MAJOR=2` runs OpenCode steps on OpenCode 2 through its own
+adapter. `npx azhi setup --opencode2` installs the pinned `@opencode/cli` into the tools folder (about 250 MB), or
+set `AZHI_OPENCODE2_BIN`. It is not yet checked with real Copilot or ChatGPT accounts.
+
+## Concurrency
+
+At most **2 runs** work on one repository at once; the rest wait in order. Change it per workspace with
+`azhi settings concurrency` or the Workers page, or the server default with `AZHI_MAX_RUNS_PER_REPO`
+(`0` means no limit).

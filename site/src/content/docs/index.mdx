@@ -1,0 +1,77 @@
+---
+title: Azhi Flow
+description: Governed, durable agent workflows that say plainly what they can and cannot guarantee.
+template: splash
+hero:
+  tagline: Governed, durable agent workflows that say plainly what they can and cannot guarantee. Every run shows what the agent saw, what it was allowed to do, what it did, and what it cost.
+  actions:
+    - text: What is Azhi Flow?
+      link: /overview/
+      icon: right-arrow
+    - text: Install it
+      link: /install/
+      variant: secondary
+    - text: What is different
+      link: /unique/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## The idea in one paragraph
+
+Most agent tools start from an agent and hand it tools. Azhi starts from a **workflow**, and an agent is only
+one kind of node in it. Fetching data, parsing, filtering and posting run as ordinary code. A model is called
+only where judgment is needed. The whole thing runs durably on Temporal, behind a tool gateway that records
+every write, and it tells you **before** the run what is enforced and what is not.
+
+## What you get
+
+<CardGrid stagger>
+  <Card title="Durable runs" icon="rocket">
+    Crash, restart or timeout and the run resumes. Retries by error class, cancellation, schedules in IANA
+    timezones, and waits for offline workers. Built on Temporal.
+  </Card>
+  <Card title="A plan before anything executes" icon="approve-check">
+    `azhi plan` marks every requirement native, bridged, unsupported or unverified, and every policy
+    enforced, harness-enforced or unobservable. A run with blockers is refused.
+  </Card>
+  <Card title="Exactly-once writes" icon="seti:checkbox">
+    The tool gateway keeps an action ledger. Kill the process mid-Slack-post and exactly one message exists,
+    and `azhi inspect` shows why.
+  </Card>
+  <Card title="Prompt-injection guard" icon="warning">
+    An ungated write after an agent that read untrusted data fails to **compile**. It is caught at authoring
+    time, not in production.
+  </Card>
+  <Card title="Honest cost accounting" icon="information">
+    Usage per turn, cost from declared pricing or "unavailable". Never guessed. Per-step budgets and
+    daily/monthly spend limits.
+  </Card>
+  <Card title="Bring your own harness" icon="puzzle">
+    Built-in model agent, OpenCode, Claude Agent SDK. Each declares what it can enforce and the plan checks
+    it. Anthropic, OpenAI and GitHub Copilot models.
+  </Card>
+</CardGrid>
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard title="Install on your OS" description="Linux, macOS and Windows guides, plus a no-Docker local mode." href="/install/" />
+  <LinkCard title="How it compares" description="Against OpenCode, VS Code agent mode, Claude Code, n8n-style tools and LangGraph-style frameworks." href="/compare/" />
+  <LinkCard title="What is different" description="The features that are hard to find elsewhere, and the honest caveats." href="/unique/" />
+  <LinkCard title="Example workflows" description="Weekly quality report, PR review, issue investigation, issue splitter and issue-to-PR delivery." href="/examples/" />
+</CardGrid>
+
+## Platform support at a glance
+
+| Platform | Supported as |
+|---|---|
+| Linux | Server and workers. The reference platform. |
+| Windows 10/11 | Everything inside **WSL2**, or the experimental no-Docker local mode natively. |
+| macOS | Server in Docker plus a development worker. **Not certified; the install has not been tested on a Mac.** |
+
+:::note
+This site describes what is on the `dev` branch. Anything not yet built is labelled **Vision** or
+**Partly built** on the [status page](/status/), not presented as shipping.
+:::

@@ -1,0 +1,52 @@
+---
+title: MCP and the library
+description: MCP tools through a governed gateway, plus a versioned library of reusable MCP servers, agents, skills and commands with live marketplaces.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## MCP in Azhi
+
+| Mode | State |
+|---|---|
+| Local **stdio** MCP servers called through the gateway, with ledger and policy | <span class="tag tag-built">Built</span> |
+| Admin-managed remote **Streamable HTTP** connections (`azhi mcp add`, OAuth supported), tool discovery, registration | <span class="tag tag-built">Built</span> |
+| The gateway **bridged into harnesses** over MCP, so OpenCode and the Claude Agent SDK use governed tools | <span class="tag tag-built">Built</span> |
+| Health, latency and cost metadata per tool | <span class="tag tag-partly">Partly built</span> |
+| Workflows exposed as MCP tools | <span class="tag tag-vision">Vision</span> |
+
+```bash
+npx azhi mcp add ...               # add a remote endpoint (--auth oauth when required)
+npx azhi mcp login <connection>    # print the URL that authorizes a shared OAuth connection
+npx azhi mcp discover <connection> # list the tools it exposes
+npx azhi mcp register-tool ...     # register selected tools
+```
+
+## The Library (portable assets)
+
+The **Library** stores reusable **MCP servers, agents, skills and commands** as versioned definitions. Publish a
+version before attaching it to a workflow; the workflow records the **exact published version**, so later edits
+cannot silently change it.
+
+### Discover
+
+| Kind | Source |
+|---|---|
+| MCP servers | The official MCP Registry. Hosted servers become `remote` definitions; npm, PyPI and Docker packages become `local` ones |
+| Agents, commands, skills | GitHub plugin marketplaces: any repo with `.claude-plugin/marketplace.json`. Built in: `anthropics/skills`, `anthropics/claude-plugins-official`, `wshobson/agents`. Admins can add others or turn it off |
+
+Preview shows exactly what an import would store, the environment variables it needs, and what was **not** carried
+over. **Import as draft** re-fetches the item on the server (the browser never supplies the definition) and
+records the source URL and a SHA-256 in the definition's `provenance`.
+
+### Export to harnesses
+
+Each asset can be exported for **OpenCode** (`opencode.jsonc`, `.opencode/...`) and **Claude Code** (`.mcp.json`,
+`.claude/agents`, `.claude/skills`, `.claude/commands`). A workflow page can download everything attached to it
+as a bundle.
+
+<Aside type="caution">
+A `local` MCP server is a program that runs on a worker (`npx`, `uvx`, `docker`). The preview marks it "runs on
+a worker". Import only ones whose source you trust. Secrets are never stored; definitions name `{env:NAME}`
+variables.
+</Aside>

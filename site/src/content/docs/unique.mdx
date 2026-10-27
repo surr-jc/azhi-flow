@@ -1,0 +1,108 @@
+---
+title: What is different
+description: The Azhi Flow capabilities that are hard to find in comparable tools, and the honest caveats on each.
+tableOfContents: false
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Read this first: no single feature here is unique on its own">
+Visual workflows, coding agents, MCP, model routing, observability and RAG all exist elsewhere. What is
+distinctive is the **combination**: governance and honest cost accounting built into the runtime instead of
+bolted on afterwards. The comparison rows below come from each product's public descriptions as of
+6 October 2026. Those tools change quickly, so check their current docs before relying on a row.
+</Aside>
+
+## The ten differentiators
+
+### 1. A plan before the run, not a log after it
+
+`azhi plan` compiles the workflow against your workspace and marks each requirement **native**, **bridged**,
+**unsupported** or **unverified**. A run whose plan has blockers is **refused before anything executes**.
+Missing grants, missing tools and missing worker capabilities (for example no `uv` on the worker) show up as
+blockers rather than as a failure halfway through.
+
+### 2. Policy coverage that admits what is not enforced
+
+Every policy is labelled **enforced**, **harness-enforced** or **unobservable**, per executor. A rule that
+only the coding harness enforces is not shown as a platform guarantee. The alternative, which most tools
+use, is a policy list that looks uniformly enforced.
+
+### 3. A compile-time taint rule against prompt injection
+
+Data from tickets, issues, PRs and tools is treated as untrusted. If an agent reads untrusted data, an
+**ungated write after it fails to compile**. The gate is an approval or a CEL guard. See
+[The taint rule](/concepts/taint/).
+
+### 4. An exactly-once action ledger
+
+Writes go through the tool gateway, which records each action with an effect class and a dedupe key. A
+retried or crashed step finds the earlier action instead of repeating it. The alpha demo kills the gateway
+right after Slack accepts a post and shows a fresh gateway finding the message by its dedupe key.
+
+### 5. A context manifest for every turn
+
+For each model turn Azhi records the items that went into the context, their sources, token counts, and what
+is **unobservable**. This answers "what did the model actually see?" with a record, not a guess.
+
+### 6. Unknowns stay unknown
+
+Usage and cost are `null` / "unavailable" when they cannot be known, never estimated silently. Cost is shown
+only when pricing is declared; spend limits then say they are a **lower bound**. A ChatGPT-plan step records
+cost 0 (`reported`, "ChatGPT plan") rather than an invented per-token figure.
+
+### 7. Workflow-first cost structure
+
+Steps that do not need a model (fetching CI data, parsing, filtering, formatting, posting) run as ordinary
+code. A full coding harness and a cloned workspace are created only for the step that needs them. See
+[Cost and token control](/features/cost/).
+
+### 8. Pluggable executors that declare their capabilities
+
+The built-in model agent, OpenCode and the Claude Agent SDK each declare what they can enforce. OpenCode and
+the Claude Agent SDK run **inside** Azhi as steps, so you keep them and gain durability, scheduling,
+approvals, the ledger, taint checks and cost limits. `npm run compare` runs 30 fixtures through two executors
+and writes a report that says which numbers are estimated.
+
+### 9. Results that try to refute themselves
+
+In the PR review and issue analysis workflows, a verifier or challenger on a **different model family** tries
+to refute each finding or root cause in its own checkout. Only what survives at 80 out of 100 reaches the
+review or is called high confidence. See [Result confidence](/features/confidence/).
+
+<Aside type="note">
+The 80 is a **threshold the workflows enforce per finding**, not a measured precision. No benchmark has been
+run yet; measuring it is the first remaining gap in the project's own review.
+</Aside>
+
+### 10. Signed packages and worker trust policies
+
+Every upload is signed with a per-publisher key certified by the workspace root. Workers enforce a trust
+policy (`self`, `authors:<ids>`, `workspace-publishers`). In the demo, a second author's package is refused by a
+`self` worker in the plan, and the run is never created.
+
+## Side by side
+
+| Capability | Azhi Flow | OpenCode | VS Code + Copilot agent | Claude Code / Agent SDK | n8n-style | LangGraph-style |
+|---|---|---|---|---|---|---|
+| Pre-run plan of enforced vs not | Yes | No | No | No | No | No |
+| Exactly-once writes ledger | Yes | No | No | No | No | No |
+| Compile-time taint check | Yes | No | No | No | No | No |
+| Per-turn context manifest | Yes | No | No | No | No | No |
+| Durable runs, retries, schedules | Yes (Temporal) | No (interactive) | No | No built-in scheduler | Yes | Checkpointing; scheduling depends on deployment |
+| Cost per step, budgets, spend limits | Yes | Per-session usage | Plan-level premium usage | Usage and cost reporting | Varies | Via separate tracing tools |
+
+## What you give up
+
+| Trade-off | Detail |
+|---|---|
+| Heavier to run | A server stack (PostgreSQL with pgvector, Temporal, the Azhi server) plus workers, or local mode on one machine. |
+| Linux-first | Workers are supported on Linux only in the alpha. |
+| Smaller ecosystem | Three model providers today, stdio MCP through the gateway, a handful of examples. |
+| Alpha maturity | Phase 4 (first release) is only outlined. |
+| Authoring cost | A declarative YAML definition with compile-time checks is stricter than a prompt. That strictness is the product. |
+
+<Aside type="tip">
+Next: [How it compares](/compare/) for when to pick another tool instead, or
+[Project status](/status/) for what is built and what is vision.
+</Aside>

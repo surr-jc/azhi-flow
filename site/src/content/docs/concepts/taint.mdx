@@ -1,0 +1,57 @@
+---
+title: The taint rule
+description: How Azhi fails to compile an ungated write after an agent has read untrusted data.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Prompt injection works by smuggling instructions into data an agent reads (a ticket, an issue, a PR body, a web
+page), then hoping the agent acts on them. Azhi's answer is structural, and it runs at **compile time**.
+
+## The rule
+
+> If an agent read untrusted data, a **write** that follows it must be gated. Otherwise the workflow **fails to
+> compile**.
+
+Ticket, issue and PR text is untrusted data. Tool outputs are untrusted unless the tool is marked otherwise.
+
+## What counts as a gate
+
+The compiler accepts a write after a tainted node only when one of these is true:
+
+1. An **approval** node precedes it.
+2. A **CEL guard** is declared on the write that constrains its arguments.
+3. The tool is marked `safe_for_tainted` by an administrator.
+
+## Example
+
+The flagship's `analyse` node ingests untrusted tool output, so it is tainted. Its output reaches the `post`
+notify node, which is a write. The package declares a guard on the notify node:
+
+```yaml
+guard: "args.channel == config.team_channel"
+```
+
+The agent can influence the *text* of the message, but not where it goes. Remove the `guard:` line and run
+`azhi plan`:
+
+```text
+tainted_write_ungated
+```
+
+## Where taint flows
+
+| Source | Treated as |
+|---|---|
+| Tool output | Untrusted unless the tool is trusted |
+| Agent output after reading untrusted data | Tainted |
+| Subworkflow output | Untrusted, since the child may call tools and agents the parent cannot see into |
+| A loop over a tool | As trusted as that tool's output |
+
+The plan lists every **taint path** with its gate, so a reviewer sees the exposure without reading the YAML.
+
+<Aside type="caution" title="What this does not claim">
+The rule gates *writes*. It does not stop an agent from being misled in its analysis, and a guard is only as
+strong as the CEL expression you write. Pair it with approvals for anything irreversible, and with the
+[verification step](/features/confidence/) for results people act on.
+</Aside>

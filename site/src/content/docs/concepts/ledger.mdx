@@ -1,0 +1,65 @@
+---
+title: Action ledger
+description: How the tool gateway makes writes safe across retries and crashes, with effect classes, fencing and reconciliation.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Agents retry. Processes crash. Without care, that means two Slack posts, two issues or two comments. Every tool
+call in Azhi passes through the **gateway**, which keeps an **action ledger**.
+
+## One logical action, many attempts
+
+Each external write is a logical **action** with a stable id derived from the run, node, tool, the intended
+operation and an ordinal. A retry of the same operation computes the **same id**, so it finds the earlier
+action instead of creating a second one. Changing the operation produces a new id.
+
+## States
+
+```text
+planned → dispatched → confirmed
+                    ↘ failed            (the target definitely did not apply it)
+                    ↘ outcome_unknown   (we cannot tell)
+```
+
+Every transition is recorded and **fenced by the attempt generation**: a stale attempt can never commit after a
+newer one took over.
+
+## Effect classes decide what recovery may do
+
+If a previous attempt ended after sending but before recording a receipt, the action becomes `outcome_unknown`.
+What happens next depends on the tool's declared effect class.
+
+| Effect class | Recovery |
+|---|---|
+| `write-idempotent` | Resend with the same idempotency key |
+| `write-dedupable` | **Look the write up on the target by its dedupe key.** If it is found, mark it confirmed and reuse the receipt. If not, resend |
+| `write-unsafe` | **Stop.** An operator must reconcile it before any retry. Azhi does not guess |
+
+For Slack, that lookup is how a fresh gateway finds the message a crashed one had already posted.
+
+## Proof, not a promise
+
+The alpha demo kills the gateway right after Slack accepted the post. A fresh gateway finds the message by its
+dedupe key. Exactly one message exists, and the ledger line shows how.
+
+```bash
+npm run demo            # check 4: crash mid-post
+npx azhi inspect <run>  # state, flags, attempts, approvals, usage, context manifests and the ledger
+```
+
+The test suite injects crashes at named points (after planned, after dispatched, after sent) by killing the
+process, the same as a power loss.
+
+## Related behavior
+
+- **Loops**: each iteration has its own ledger ordinal, so writes inside a loop are deduplicated per iteration.
+- **Sticky comments**: the PR review tool is registered with a sticky marker, so a later run edits the earlier
+  review comment instead of adding another.
+- **Alerts**: writes left in `outcome_unknown` raise an alert in Mission Control.
+- **Test runs**: `azhi test-node` mocks writes, so nothing reaches the ledger.
+
+<Aside type="caution">
+The ledger covers writes that go **through the gateway**. MCP servers that a coding-harness profile starts
+itself do not, and the run plan marks them *unobservable*.
+</Aside>

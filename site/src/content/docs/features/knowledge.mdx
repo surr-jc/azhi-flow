@@ -1,0 +1,33 @@
+---
+title: Knowledge and citations
+description: Datasets with hybrid retrieval, immutable published revisions, and numbered citations to excerpts.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Answers should come with sources. Azhi's knowledge datasets give agents and `retrieve` nodes **numbered citations
+to immutable excerpts**, with an as-of time per source.
+
+## Workflow
+
+```bash
+npx azhi dataset create quality-guidelines
+npx azhi dataset add quality-guidelines examples/quality-report/knowledge     # .md and .txt
+npx azhi dataset publish quality-guidelines --tag approved
+npx azhi dataset search quality-guidelines "flaky tests"
+npx azhi dataset revoke quality-guidelines <document>                          # stop it being retrievable
+```
+
+| Concept | Meaning |
+|---|---|
+| Publish | Chunks, embeds and publishes an **immutable index revision** |
+| Tag | A workflow pins `quality-guidelines@approved`, not "whatever is latest" |
+| Revoke | Stops a document being retrievable from every revision |
+| Retrieval | Hybrid: full text (`tsvector`) plus vectors (`pgvector`) |
+
+An `agent` node takes `datasets: [quality-guidelines@approved]`. A `retrieve` node uses `top_k` to bound context.
+
+<Aside type="caution" title="Alpha limits">
+The alpha embedder is lexical-hash, **not a neural model**. Retrieval quality will improve when a real embedder
+lands. Git, MCP resources, databases and the web are not yet knowledge sources. See [status](/status/).
+</Aside>

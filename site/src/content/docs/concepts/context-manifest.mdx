@@ -1,0 +1,42 @@
+---
+title: Context manifest
+description: A per-turn record of exactly what the model saw, including what Azhi could not observe.
+---
+
+"What did the model actually see?" is the first question after a surprising result. Azhi records the answer for
+**every turn** of every agent step.
+
+## What a manifest holds
+
+- The **items** that went into the context: system prompt, instructions, inputs, retrieved excerpts, tool
+  results.
+- The **source** of each item.
+- **Token counts** per item and per turn.
+- What is **unobservable**. If an executor compacts context itself (OpenCode does), Azhi says so rather than
+  pretending to know the final prompt.
+
+```bash
+npx azhi inspect <run-id> --context analyse
+```
+
+## Usage next to it
+
+Each turn also records usage: input, output, cache read, cache write and reasoning tokens. Cost comes from
+declared pricing; otherwise it is shown as **unavailable**. See [Cost and token control](/features/cost/).
+
+## Agent activity
+
+The run page's **Agent activity** tab keeps what each agent did while it ran: system prompt, prompts, replies,
+reasoning, and every tool call with its input and result (or error), plus each model call's token counts.
+
+| Executor | How entries are captured |
+|---|---|
+| `opencode` | The worker follows OpenCode's event stream for the step's session |
+| `claude-agent-sdk` | The SDK's assistant messages, tool uses and results |
+| `codex` | `codex exec --json` items |
+| model agent | The server records each turn |
+
+Entries are **redacted twice** (on the worker and on the server) using the step's secrets and token-shaped
+patterns such as provider keys, GitHub, Slack and AWS tokens, bearer headers and private keys. Each text field is
+kept up to 32 KB and a step attempt keeps up to 2,000 entries. Set `AZHI_AGENT_TRANSCRIPTS=0` to stop storing
+transcripts.

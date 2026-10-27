@@ -1,0 +1,88 @@
+---
+title: Use a subscription, not API keys
+description: Run agent steps on a ChatGPT, GitHub Copilot or Claude plan you already pay for.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Agent steps can run on a subscription you already pay for, as long as the step uses the runtime that plan's owner
+allows.
+
+| Plan | Step executor | Profile `model.provider` | Credential |
+|---|---|---|---|
+| ChatGPT Plus, Pro, Business | `opencode` | `openai-chatgpt` | `openai-chatgpt-auth`, from `azhi chatgpt login` |
+| Claude Pro, Max | `claude-agent-sdk` | `anthropic` | A plan token from `claude setup-token` |
+| GitHub Copilot | `opencode` | `github-copilot` | `github-copilot-token`, from `azhi copilot login` |
+
+<Tabs>
+<TabItem label="ChatGPT plan">
+
+```bash
+npx azhi chatgpt login     # open the link, enter the code, sign in with your ChatGPT account
+npx azhi chatgpt check     # renews the sign-in once and says whether it works
+```
+
+```yaml
+model: {provider: openai-chatgpt, name: default, credential: openai-chatgpt-auth}
+```
+
+- `default` is the server's `AZHI_CHATGPT_MODEL` (`gpt-5.5` unless set).
+- Azhi renews the sign-in itself when the access token has less than an hour left.
+- OpenAI replaces the refresh token on every renewal. **Give Azhi its own sign-in.** Do not paste Azhi's into your
+  own OpenCode or Codex, or theirs into Azhi, or each cancels the other.
+- Cost is recorded as 0 (`reported`, "ChatGPT plan"). Token counts are still recorded. When the plan limit is
+  reached the step fails and says so.
+
+</TabItem>
+<TabItem label="GitHub Copilot">
+
+```bash
+npx azhi copilot login     # or import an existing sign-in
+npx azhi copilot check     # asks GitHub whether the saved sign-in works
+npx azhi copilot quota     # your AI-credit allowance, as VS Code shows it
+```
+
+```yaml
+model: {provider: github-copilot, name: default}
+```
+
+- Steps count in **AI credits** against the monthly pool.
+- Model names such as `claude-opus-5.5` or `gpt-5.6-terra` must exist on **your** plan, or the step fails at
+  start. Use `default` to fall back to one model.
+- The PR review workflow runs on this.
+
+</TabItem>
+<TabItem label="Claude plan">
+
+```bash
+claude setup-token                                    # on any machine with Claude Code; prints sk-ant-oat...
+npx azhi secret set claude-plan-token --value <token>
+```
+
+```yaml
+# profiles/<name>@1.yaml
+model: {provider: anthropic, name: default, credential: claude-plan-token}
+```
+
+```yaml
+# workflow.yaml, on the agent node
+executor: claude-agent-sdk
+```
+
+- Anthropic's terms do not allow a Claude plan in third-party tools such as OpenCode, but do allow it through the
+  Agent SDK, for your own use.
+- Azhi **refuses** a plan token on `model-agent` and `opencode` steps.
+- `workspace` checkouts and `harness.opencode` setups are OpenCode-only, so the PR review reviewers cannot move
+  to a Claude plan.
+- Usage counts against the plan's limits. Cost is unavailable unless you set `pricing` in the profile.
+
+</TabItem>
+</Tabs>
+
+<Aside type="caution" title="Your plan, your terms">
+This is for your own Azhi with your own plan. A hosted Azhi serving other people must use API keys. Check each
+provider's current terms before relying on any of this.
+</Aside>
+
+You can also sign in from Mission Control: **Secrets › Sign in with ChatGPT / GitHub Copilot**. `azhi signin list`
+shows every sign-in the workspace has, and how each was supplied.

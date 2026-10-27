@@ -1,0 +1,38 @@
+/* Brand colours from docs/brand/README.md: Sea #0B6F86, Deep #0E2A33, Foam #47BED0, Night #06222B. */
+:root {
+  --sl-color-accent-low: #cdeaf0;
+  --sl-color-accent: #0b6f86;
+  --sl-color-accent-high: #064556;
+}
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #06303b;
+  --sl-color-accent: #1f9bb3;
+  --sl-color-accent-high: #8fdbe8;
+  --sl-color-bg: #06222b;
+  --sl-color-bg-nav: #06222b;
+  --sl-color-bg-sidebar: #06222b;
+  --sl-color-hairline-light: #0e3a47;
+  --sl-color-hairline: #0e3a47;
+}
+
+/* Status labels used across the docs: Built / Partly built / Vision. */
+.tag {
+  display: inline-block;
+  padding: 0 0.5em;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tag-built { color: #0a7a3f; }
+.tag-partly { color: #9a5b00; }
+.tag-vision { color: #5b5f66; }
+:root[data-theme='dark'] .tag-built { color: #4fd18b; }
+:root[data-theme='dark'] .tag-partly { color: #f0b04a; }
+:root[data-theme='dark'] .tag-vision { color: #a3a8b0; }
+
+/* Wide comparison tables: smaller type, and use the full content column. */
+.sl-markdown-content table { font-size: var(--sl-text-sm); }
+.sl-markdown-content :is(td, th) { padding: 0.4rem 0.6rem; }
+:root { --sl-content-width: 60rem; }

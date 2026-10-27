@@ -1,0 +1,97 @@
+---
+title: First run
+description: Register an example, check its plan, test a node, and run your first governed workflow.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+This assumes the server and a worker are up (`npx azhi doctor` is green). If you work on Azhi itself from a
+checkout, see the contributor sequence at the bottom.
+
+## Run the CI digest example
+
+<Steps>
+
+1. Register the example's tools and store the Slack token.
+
+   ```bash
+   npx azhi apply examples/ci-digest/azhi.config.yaml
+   npx azhi secret set slack-bot-token --value xoxb-...
+   ```
+
+2. Run it and wait for the result.
+
+   ```bash
+   npx azhi run examples/ci-digest -i team=payments --wait
+   ```
+
+3. Inspect it: state, attempts, usage and the action ledger.
+
+   ```bash
+   npx azhi inspect <run-id>
+   ```
+
+</Steps>
+
+Without a Slack workspace, point the server at a fake Slack API for local runs:
+`AZHI_SLACK_API_URL=http://127.0.0.1:<port>/api` (see `src/testing/fake-slack.ts`).
+
+## Run the flagship: weekly quality report
+
+The flagship needs a knowledge dataset and, for real model calls, a provider key and model.
+
+```bash
+npx azhi apply examples/quality-report/azhi.config.yaml
+npx azhi dataset create quality-guidelines
+npx azhi dataset add quality-guidelines examples/quality-report/knowledge
+npx azhi dataset publish quality-guidelines --tag approved
+npx azhi secret set anthropic-api-key --value sk-ant-...
+export AZHI_ANTHROPIC_MODEL=<model id>   # set on the server; profiles say `name: default`
+npx azhi plan examples/quality-report     # capabilities, coverage, taint paths, blockers
+npx azhi test-node metrics examples/quality-report --fixture fixtures/metrics.json
+npx azhi run examples/quality-report -i team=payments --wait
+npx azhi inspect <run-id> --context analyse
+```
+
+The example profile uses Anthropic. To use OpenAI, set `model: {provider: openai, name: default}` in
+`profiles/quality-analyst@1.yaml` and use `openai-api-key` and `AZHI_OPENAI_MODEL`.
+
+### What to look at
+
+| Command | What it shows |
+|---|---|
+| `azhi plan` | Every requirement marked, every policy's coverage, the taint path `analyse → report → post` and its gate, and any blockers |
+| `azhi test-node` | One node on fixture outputs with writes mocked (a test run) |
+| `azhi inspect <run> --context analyse` | The context manifest: what the model saw on each turn |
+| `azhi open <run>` | A link to the run page with graph, timeline, ledger, policy coverage and usage |
+
+<Aside type="tip" title="See the taint rule fire">
+Delete the `guard:` line on the Slack post in the flagship and run `azhi plan` again. You get
+`tainted_write_ungated`. That is the same check that protects you in production.
+</Aside>
+
+## The alpha demo
+
+```bash
+export AZHI_DEMO_DATABASE_URL=postgres://azhi:<password>@localhost:5432/azhi   # admin connection
+export AZHI_TEMPORAL_ADDRESS=localhost:7233
+npm run demo                 # checks 2 to 6, with a scripted model unless ANTHROPIC_API_KEY is set
+npm run demo -- --install    # also check 1: runs deploy/install.sh on this host and times it
+```
+
+The six checks: install, plan, scheduled run with citations, crash mid-post (exactly one message), a trust
+refusal for an untrusted author, and a 30-fixture executor comparison.
+
+## Contributor sequence (run the server from a checkout)
+
+```bash
+npm install
+npm run build:web
+docker compose -f deploy/docker-compose.yml up -d --wait
+export AZHI_DATABASE_URL=postgres://azhi:azhi@localhost:5432/azhi
+export AZHI_TEMPORAL_ADDRESS=localhost:7233
+npx azhi server start      # terminal 1
+npx azhi worker start      # terminal 2
+```
+
+Tests: `npm run typecheck`, then `npm run test:local` (vitest on PGlite).

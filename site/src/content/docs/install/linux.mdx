@@ -1,0 +1,114 @@
+---
+title: Install on Linux
+description: Team install on Linux with deploy/install.sh, then add workers.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Linux is the reference platform: it runs the server **and** workers.
+
+## Requirements
+
+Git, Node.js 22+, Docker Engine with the Compose plugin, and `openssl` (the installer uses it to generate
+secrets). See the [hardware table](/install/#documented-hardware-team-install).
+
+## Install the server
+
+<Steps>
+
+1. Clone and install dependencies.
+
+   ```bash
+   git clone https://github.com/surr-jc/azhi-flow && cd azhi-flow
+   npm ci
+   ```
+
+2. Run the installer.
+
+   ```bash
+   deploy/install.sh
+   ```
+
+   It checks for Docker, Compose and openssl, writes `deploy/.env` once with a random server secret and
+   database password (mode 0600, git-ignored), pulls the PostgreSQL and Temporal images, builds the server
+   image, starts everything, waits until all three containers are healthy, and **prints the owner token**.
+   Re-running it upgrades in place and keeps `deploy/.env`.
+
+3. Add model access. Store a provider key and set a model, then re-run the installer.
+
+   ```bash
+   npx azhi secret set anthropic-api-key --value sk-ant-...   # or openai-api-key
+   # put AZHI_ANTHROPIC_MODEL (or AZHI_OPENAI_MODEL) in deploy/.env
+   deploy/install.sh
+   ```
+
+</Steps>
+
+<Aside type="caution">
+Do not delete `deploy/.env` while the database volume exists. The database keeps the password it was created
+with.
+</Aside>
+
+## Add a worker
+
+Workers run scripts and harnesses. Run one on this host or on another Linux machine.
+
+<Steps>
+
+1. On the worker host, clone and install (omit dev dependencies if you like; this includes the pinned
+   OpenCode binary).
+
+   ```bash
+   git clone https://github.com/surr-jc/azhi-flow && cd azhi-flow
+   npm ci --omit=dev
+   ```
+
+2. Point it at the server and sign in.
+
+   ```bash
+   export AZHI_URL=http://<server>:7400
+   export AZHI_TEMPORAL_ADDRESS=<server>:7233     # localhost:7233 on the same machine
+   npx azhi login --url "$AZHI_URL" --token <owner token>
+   ```
+
+3. Start the worker.
+
+   ```bash
+   npx azhi worker start --trust workspace-publishers
+   ```
+
+4. Check the tools OpenCode steps need, then verify.
+
+   ```bash
+   npx azhi setup     # git, OpenCode, ripgrep; prints the install command for your distro
+   npx azhi doctor    # database, Temporal, interpreter builds, workers online
+   ```
+
+</Steps>
+
+Script nodes also need [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on the worker.
+Details for ripgrep and token saving are on [Workers and OpenCode tools](/install/workers/).
+
+## Installer options
+
+All are environment variables.
+
+| Variable | Default | Use |
+|---|---|---|
+| `AZHI_PORT` | 7400 | API and web run page port |
+| `AZHI_PG_PORT`, `AZHI_TEMPORAL_PORT` | 5432, 7233 | Published ports, for workers and the CLI |
+| `AZHI_TEMPORAL_VERSION` | 1.29.1 | Temporal server image tag |
+| `AZHI_NODE_IMAGE` | `node:22-bookworm-slim` | Base image, for example a mirror when Docker Hub rate-limits |
+| `AZHI_SKIP_BUILD` | unset | `1` uses an `azhi-flow/server` image that is already loaded |
+| `AZHI_COMPOSE_PROJECT` | `azhi` | Run a second, isolated stack on one host |
+
+More in the [environment variable reference](/reference/environment/).
+
+## Verify
+
+```bash
+npx azhi doctor
+npx azhi open     # prints a link to Mission Control that signs the browser tab in
+```
+
+Next: [First run](/install/first-run/).

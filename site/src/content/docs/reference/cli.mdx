@@ -1,0 +1,87 @@
+---
+title: CLI reference
+description: Every azhi command, grouped by what you are trying to do.
+---
+
+Run from a checkout with `npx azhi <command>` (or `npm run azhi -- <command>` to run from source). `azhi --help`
+and `azhi <command> --help` are authoritative; this page is a map.
+
+## Run locally
+
+| Command | What it does |
+|---|---|
+| `azhi up [--port n]` | Run Azhi on this machine **without Docker**: embedded database, Temporal dev server, server and a worker |
+| `azhi down` | Stop a local-mode server |
+| `azhi setup [--dcp] [--opencode2]` | Check this machine has what OpenCode steps need (OpenCode, ripgrep, git) and say how to install what is missing |
+| `azhi doctor` | Check the server, database, Temporal, workers and interpreter builds |
+
+## Servers and workers (team install)
+
+| Command | What it does |
+|---|---|
+| `azhi server start [--roles ...]` | Run the server. Roles: `api,interpreter,gateway,scheduler` |
+| `azhi server migrate` | Apply database migrations and exit |
+| `azhi worker start [--trust policy]` | Run an execution worker on this Linux host. Trust: `self` (default), `authors:<ids>`, `workspace-publishers` |
+| `azhi login --url <url> --token <t>` | Save the server URL and API token for this CLI |
+| `azhi open [run]` | Print a link to Mission Control (or one run) that signs this browser tab in |
+
+## Author
+
+| Command | What it does |
+|---|---|
+| `azhi init [dir] [-t template]` | Create a package from a template: `quality-report` (default), `ci-digest`, `sdlc` |
+| `azhi validate [path] [-c config]` | Compile a package locally and print diagnostics |
+| `azhi schema` | Print the workflow JSON Schema (2.x) |
+| `azhi plan [path] [--provider ...]` | The run plan: capability marks, policy coverage, taint paths, missing grants, blockers |
+| `azhi test-node <node> [path] -f fixture.json` | Run one node on fixtures with writes mocked (a test run) |
+| `azhi publish [path]` | Upload and publish a version; its `trigger.schedule` becomes the schedule |
+| `azhi delete <slug@n \| slug>` | Delete a revision or a whole workflow (admin) |
+
+## Run and observe
+
+| Command | What it does |
+|---|---|
+| `azhi run [path] -i k=v --wait` | Upload and run a package, streaming node results. `-i k=v` or `--inputs file.json` for inputs; `--published` runs a published `workflow@n`; `--provider` / `--model` choose the model for default-model steps; `--no-preflight` skips the secrets, tools and GitHub access check |
+| `azhi runs` | List recent runs |
+| `azhi inspect <run> [--context <node>]` | State, flags, attempts, approvals, usage, context manifests and the action ledger |
+| `azhi approve <run> <node> [--reject] [--data json]` | Decide an approval node |
+| `azhi cancel <run>` | Cancel a run |
+| `azhi schedule <workflow> --cron ... --timezone ...` | Set or change a schedule |
+
+## Configure
+
+| Command | What it does |
+|---|---|
+| `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
+| `azhi secret set <name> --value ...` / `secret list` | Store an encrypted workspace secret (write-only) |
+| `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once |
+| `azhi user add` / `user list` | Workspace users and their API tokens (admin) |
+| `azhi tool repos <tool@ver> --add/--remove owner/name` | Add or remove repositories a GitHub tool may use (a new tool revision) |
+| `azhi signin list` | Every sign-in the workspace has, and how each was supplied |
+
+## Examples
+
+| Command | What it does |
+|---|---|
+| `azhi example list` | List shipped examples, the tools they register and secrets they need |
+| `azhi example needs <id>` | Required and optional settings, repositories and secrets, plus the exact install command |
+| `azhi example install <id> --repo ... --set k=v` | Install; stops and changes nothing if a required value is missing |
+| `azhi example repos <id> [--add owner/name] [--remove owner/name]` | Show, add or remove the repositories an installed example's GitHub tools may use |
+
+## Sign-ins and integrations
+
+| Command | What it does |
+|---|---|
+| `azhi github login` | Use the GitHub CLI login (`gh auth login`) for the GitHub secrets |
+| `azhi chatgpt login` / `check` | Sign in with a ChatGPT plan; renew and verify |
+| `azhi copilot login` / `import` / `inspect` / `check` / `quota` | GitHub Copilot sign-in, validity, and your AI-credit allowance |
+| `azhi mcp add` / `list` / `login` / `discover` / `register-tool` | Manage shared remote Streamable HTTP MCP connections (admin) |
+
+## Knowledge
+
+| Command | What it does |
+|---|---|
+| `azhi dataset create <name>` | Create a dataset |
+| `azhi dataset add <name> <paths>` | Add or replace documents (`.md`, `.txt`) |
+| `azhi dataset publish <name> [--tag t]` | Chunk, embed and publish an immutable index revision |
+| `azhi dataset tag`, `revoke`, `search`, `list` | Tag a revision, stop a document being retrievable, run hybrid retrieval, list |

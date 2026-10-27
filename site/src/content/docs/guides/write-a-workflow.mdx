@@ -1,0 +1,100 @@
+---
+title: Write a workflow
+description: From azhi init to a validated, planned, tested, published and scheduled workflow.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A workflow is a **package**: a folder with `workflow.yaml` and the files it references (profiles, schemas,
+templates, scripts, knowledge). You can write it by hand, start from a template, or
+[build it with chat](/features/builder/).
+
+<Steps>
+
+1. **Start from a template.**
+
+   ```bash
+   npx azhi init my-report                # the weekly quality report (default)
+   npx azhi init my-digest -t ci-digest
+   npx azhi init my-delivery -t sdlc      # feature delivery with design and release gates
+   ```
+
+2. **Validate locally.** Compiles the package and prints diagnostics: graph, ref types against output schemas,
+   tool arguments and projections, CEL, taint.
+
+   ```bash
+   npx azhi validate my-report
+   npx azhi validate my-report -c azhi.config.yaml    # also checks the tools
+   npx azhi schema                                    # print the workflow JSON Schema (2.x)
+   ```
+
+3. **Register tools and read the plan.**
+
+   ```bash
+   npx azhi apply my-report/azhi.config.yaml
+   npx azhi plan my-report
+   ```
+
+4. **Test one node** on a fixture, with writes mocked.
+
+   ```bash
+   npx azhi test-node metrics my-report -f fixtures/metrics.json
+   ```
+
+5. **Run it.**
+
+   ```bash
+   npx azhi run my-report -i team=payments --wait
+   npx azhi inspect <run-id>
+   ```
+
+6. **Publish and schedule.** A published version's `trigger.schedule` becomes the workflow's schedule, in an IANA
+   timezone.
+
+   ```bash
+   npx azhi publish my-report
+   npx azhi schedule my-report --cron "0 8 * * 1" --timezone Asia/Kolkata
+   ```
+
+</Steps>
+
+## Anatomy
+
+```yaml
+schema_version: "2.0"
+id: quality-report
+name: Weekly quality report
+trigger:
+  schedule: {cron: "0 8 * * 1", timezone: "Asia/Kolkata"}
+  manual: true
+inputs:
+  type: object
+  properties: {team: {type: string}}
+  required: [team]
+config:
+  channel: C-QUALITY
+nodes:
+  # ... tool → script → agent → report → notify
+  - id: post
+    type: notify
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.report.output.markdown}
+    guard: "args.channel == config.channel"   # taint gate: analyse read untrusted data
+```
+
+## Habits that pay off
+
+| Habit | Why |
+|---|---|
+| Put numbers in a `script` and let the agent explain them | Authoritative figures, fewer tokens |
+| Use `project:` on tool nodes | The agent sees the fields it needs, not the whole payload |
+| Give every agent an `output_schema` and a `budget` | Validated output (with two repairs) and a spend cap |
+| Gate every write after an agent with a guard or an approval | Otherwise it will not compile |
+| Run `azhi plan` in CI | Catches an unsatisfiable workflow before a scheduled run does |
+| Pin datasets by tag (`name@approved`) | Reproducible knowledge |
+
+<Aside type="note">
+The example tools in `examples/quality-report` return **fixture data**. Swap them for MCP tools against your
+real systems before relying on the output.
+</Aside>

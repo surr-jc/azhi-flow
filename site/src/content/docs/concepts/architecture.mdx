@@ -1,0 +1,66 @@
+---
+title: Architecture
+description: The server, Temporal, PostgreSQL, the tool gateway and the workers, and how a run flows through them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## The pieces
+
+```
+        CLI · REST API · Mission Control (web) · schedules
+                              │
+                     ┌────────▼────────┐
+                     │  Azhi server    │  roles: api · interpreter · gateway · scheduler
+                     └───┬─────────┬───┘
+                         │         │
+              ┌──────────▼───┐  ┌──▼─────────────────────┐
+              │  Temporal    │  │  PostgreSQL + pgvector │
+              │  (durable    │  │  runs · ledger ·       │
+              │   engine)    │  │  datasets · audit      │
+              └──────┬───────┘  └────────────────────────┘
+                     │
+         ┌───────────▼───────────┐
+         │  Workers (Linux)      │  scripts (uv / Bun) · OpenCode · Claude Agent SDK
+         │  fresh checkouts      │  per-step isolated git and HOME
+         └───────────────────────┘
+```
+
+| Part | Job |
+|---|---|
+| **Server** | Runs as roles you can split: `api`, `interpreter`, `gateway`, `scheduler` (`azhi server start --roles ...`) |
+| **Interpreter** | A Temporal workflow that walks the compiled graph. Interpreter code is versioned by task queue, so old runs finish on the code they started on |
+| **Gateway** | Every tool call passes here: projection, observation records, the action ledger, policy |
+| **Temporal** | The only durable engine. Retries by error class, cancellation, timers, schedules |
+| **PostgreSQL** | All state. PostgreSQL only: no Redis, vector DB or queue until a measured bottleneck |
+| **Workers** | Execute script and harness steps. The server image never runs them |
+
+## Life of a run
+
+1. **Publish.** A package is validated and compiled, signed with the publisher's key, and uploaded.
+2. **Plan.** The server builds the [run plan](/concepts/run-plan/) against your workspace. Blockers refuse the run.
+3. **Interpret.** The Temporal interpreter walks the graph. Independent branches run under `parallel`.
+4. **Execute.** Script and agent steps run on a worker that satisfies the plan and the trust policy.
+5. **Gate.** Every tool call goes through the gateway, which records each write in the
+   [ledger](/concepts/ledger/).
+6. **Record.** Each agent turn gets a [context manifest](/concepts/context-manifest/) and a usage record.
+7. **Decide.** Approval nodes wait for a person, in the CLI or Mission Control.
+
+## Design decisions on record
+
+| ADR | Decision |
+|---|---|
+| 01 | Temporal is the only durable engine; interpreter code is versioned |
+| 02 | CEL for all expressions; no JavaScript eval anywhere; the same evaluator in compiler and runtime |
+| 03 | PostgreSQL only |
+| 04 | Node for the platform; Bun only as a script runtime |
+| 05 | The model agent is the default executor |
+| 06 | Packages are signed and hashed; credentials never enter packages |
+| 08 | `now` in CEL is pinned per run |
+| 10 | The flagship's Slack post passes the taint rule through a CEL guard |
+| 11 | Per-publisher signing keys under a workspace root |
+
+<Aside type="note" title="Local mode swaps two parts, not the design">
+In [local mode](/install/local-mode/), PostgreSQL becomes embedded PGlite and Temporal becomes its
+single-binary dev server. The code paths are the same.
+</Aside>

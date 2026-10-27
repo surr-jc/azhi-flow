@@ -1,0 +1,57 @@
+---
+title: Mission Control
+description: "The Azhi Flow web app for operating workflows: what is running, waiting, failing and costing money."
+---
+
+Mission Control is the web app an operator keeps open all day (`azhi open`). It answers: *what is running, what
+is stuck, what needs me, what did it cost, and can I trust it?*
+
+```bash
+npx azhi open            # prints a link that signs this browser tab in
+npx azhi open <run-id>   # the same, for one run
+```
+
+## Principles
+
+1. **Same API, same rules.** The UI is a client of `/v1` like the CLI. Role checks, the run plan, the decision
+   schema and the audit log apply unchanged. There are no UI-only back doors.
+2. **Secrets are write-only.** You can set a value; the API has no endpoint that returns one.
+3. **Trust is visible.** Plan blockers, policy coverage, taint, signature status and `outcome_unknown` writes are
+   shown where decisions are made.
+4. **Unknown is not zero.** Missing usage shows as unknown.
+
+## Screens
+
+| Screen | Shows |
+|---|---|
+| Overview | Runs now (running, waiting, queued), last 24 h results, approvals waiting on you, workers online, model spend, alerts, next scheduled runs |
+| Runs / Run | Filterable runs; per run: graph, timeline, ledger, policy coverage, context manifest, usage, agent activity, live over SSE |
+| Approvals | Everything waiting for a decision, with payload, who may decide and expiry |
+| Workflows / Workflow | Versions, signed or not, run plan, input form built from the schema, test run, **visual editor** |
+| Schedules | Cron, timezone, next occurrence, enable or disable |
+| Workers | Online state, heartbeat, capabilities, trust policy, per-repository concurrency |
+| Secrets | Name, version, last changed. Sign in with GitHub Copilot or ChatGPT here |
+| Datasets / Tools / Library | Knowledge, tool catalog, reusable MCP servers, agents, skills, commands |
+| Usage | Spend and tokens by day and workflow, with completeness |
+| Audit / Health | Who changed what; the `azhi doctor` checks |
+
+## Alerts
+
+Computed from state the server already has:
+
+- runs that failed or ended `delivery_failed` in the last 24 hours,
+- ledger writes stuck in `outcome_unknown`,
+- approvals that expire within an hour,
+- no worker online, or runs waiting on an offline worker,
+- scheduled workflows whose plan now has blockers (the next occurrence would be refused),
+- runs waiting longer than expected.
+
+## The visual editor
+
+Workflows are drawn as a graph. Authors can edit on the canvas: add, link and change steps, **checked live by the
+compiler and run plan**, and save a new **draft** version. Publishing still needs a signature.
+
+## Security of the app
+
+The token lives in the tab's sessionStorage, is passed once in the URL fragment, and never appears in a URL the
+server logs. Strict CSP, no third-party scripts or fonts.

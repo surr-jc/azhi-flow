@@ -1,0 +1,43 @@
+---
+title: Workflow-first design
+description: Why Azhi starts from a workflow and treats the agent as one node, and what that does for cost and control.
+---
+
+Most agent tools start from an agent and hand it tools:
+
+```
+Agent → tools → task
+```
+
+Azhi starts from a workflow, and an agent is only one kind of node:
+
+```
+Intent → workflow → code / tools / MCP / knowledge / agents / approvals → result
+```
+
+## Why it matters
+
+Steps that do not need a model run as ordinary code: fetching CI data, parsing, filtering, formatting and
+posting. The model is called only where judgment is needed. In the flagship weekly report, the numbers come from
+a Python script and are authoritative; the agent only *explains* them.
+
+| Consequence | Detail |
+|---|---|
+| Fewer tokens | Only `agent` nodes spend tokens. `script`, `tool`, `condition`, `retrieve`, `report` and `notify` run without a model |
+| Smaller blast radius | The agent has gateway-only tools and a bounded context, not the whole machine |
+| Checkable before running | The definition is compiled: graph, ref types against output schemas, tool arguments, projections, CEL expressions and taint paths |
+| Replaceable parts | The model, tool, knowledge source and executor behind a node can change without rewriting the workflow |
+
+## Heavy things only when needed
+
+A full coding harness (OpenCode, Claude Agent SDK) and a cloned workspace are created **only for the step that
+needs them**, optionally behind a `condition`. The rest of the workflow stays cheap.
+
+## Honest framing
+
+None of the individual features is unique on its own. What can be distinctive is treating all of them as
+replaceable parts of one execution system, with governance and cost accounting built into the runtime.
+
+The longer-term ambition is an **execution fabric**: one portable definition whose models, tools, knowledge and
+environments the runtime picks and optimizes. That is the roadmap, claimed only as each piece ships. See
+[Project status](/status/).
