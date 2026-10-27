@@ -14,11 +14,19 @@ npm run preview
 Pages are MDX in `src/content/docs/`; the sidebar is in `astro.config.mjs`. Brand colours are in
 `src/styles/brand.css` (from `docs/brand/README.md`).
 
-To host under a path, such as GitHub Pages, set `SITE_URL` and `SITE_BASE` when building:
+## Hosting
+
+`.github/workflows/docs.yml` builds the site and link-checks it on every change under `site/`, and publishes
+it to GitHub Pages from `main`. One-time setup: **Settings > Pages > Source: GitHub Actions**. To build by hand
+under a path, set `SITE_URL` and `SITE_BASE`:
 
 ```bash
 SITE_URL=https://surr-jc.github.io SITE_BASE=/azhi-flow npm run build
+SITE_BASE=/azhi-flow npm run check:links
 ```
+
+Full details, custom domains and troubleshooting: `src/content/docs/reference/hosting.mdx` (published as
+"Host this site").
 
 ## Content rules
 

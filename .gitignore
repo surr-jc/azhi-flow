@@ -13,3 +13,4 @@ docs/demo/out/*
 .claude/logs/
 .opencode/
 site/.astro/
+!site/package-lock.json

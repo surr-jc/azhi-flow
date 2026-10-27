@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import rehypeBase from './rehype-base.mjs';
 
 // Set SITE_URL / SITE_BASE when hosting under a path (for example GitHub Pages: /azhi-flow).
 const site = process.env.SITE_URL;
@@ -9,6 +10,7 @@ const base = process.env.SITE_BASE;
 export default defineConfig({
   ...(site ? { site } : {}),
   ...(base ? { base } : {}),
+  markdown: { rehypePlugins: [[rehypeBase, { base }]] },
   integrations: [
     starlight({
       title: 'Azhi Flow',
@@ -97,6 +99,7 @@ export default defineConfig({
             { label: 'Environment variables', slug: 'reference/environment' },
             { label: 'Glossary', slug: 'reference/glossary' },
             { label: 'FAQ', slug: 'reference/faq' },
+            { label: 'Host this site', slug: 'reference/hosting' },
           ],
         },
       ],
