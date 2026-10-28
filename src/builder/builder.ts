@@ -85,7 +85,7 @@ const SKILL = readFileSync(new URL('./skill.md', import.meta.url), 'utf8');
 /** Model calls per person message: lookups plus a few compile-and-repair rounds. */
 const MAX_CALLS = 16;
 const MAX_OUTPUT_TOKENS = 16_000;
-const RESULT_CHARS = 24_000;
+const RESULT_CHARS = 120_000;
 /** Paths a proposed package may hold. */
 const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -407,7 +407,8 @@ async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string):
   const v = await latestVersion(ctx, workspaceId, slug);
   if (!v) throw new Error(`no workflow '${slug}'`);
   const out: string[] = [`(version ${v.version}${v.draft ? ', draft' : ''})`];
-  for (const f of v.manifest.files) {
+  // workflow.yaml first, so a cut result never hides it
+  for (const f of [...v.manifest.files].sort((a, b) => Number(b.path === 'workflow.yaml') - Number(a.path === 'workflow.yaml'))) {
     if (!PACKAGE_PATH.test(f.path) || f.size > 32 * 1024) continue;
     out.push(`=== ${f.path} ===\n${(await packageFile(ctx, workspaceId, v.package_hash, f.path)).toString('utf8')}`);
   }
