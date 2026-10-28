@@ -1,4 +1,4 @@
-import { Background, BackgroundVariant, ControlButton, Controls, Handle, MarkerType, MiniMap, NodeToolbar, Panel, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { Background, BackgroundVariant, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RunPlan } from '../api';
@@ -15,6 +15,10 @@ import { Formatted } from './Rich';
  * node's live state. Read-only unless `edit` is given: then steps are connected by dragging from
  * one card's right handle to another's left (the target then runs after the source), and a
  * selected edge is removed with Delete. The editor owns the definition; the canvas only reports.
+ *
+ * The canvas itself shows the graph and nothing else. Titles, status, controls, filters, the
+ * legend and any step panel live in rails above and below it and in a column beside it, so no
+ * heads-up display ever covers a step or a link.
  */
 export interface PlanNode {
   id: string;
@@ -140,7 +144,7 @@ function layout(nodes: PlanNode[], shown: Map<string, string[]>, W: number, H: n
   return pos;
 }
 
-type CardData = { size: { w: number; h: number }; rows?: CardSetting[]; chips?: Array<{ label: string; tone: string }>; node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number; toolbar?: ReactNode };
+type CardData = { size: { w: number; h: number }; rows?: CardSetting[]; chips?: Array<{ label: string; tone: string }>; node: PlanNode; run?: NodeRunState; live: boolean; selected: boolean; editing?: boolean; problems?: number };
 
 export interface CanvasEdit {
   selected: string | null;
@@ -152,7 +156,7 @@ export interface CanvasEdit {
 }
 
 function Card({ data }: NodeProps<Node<CardData>>) {
-  const { node, run, live, editing, problems, toolbar, chips, rows, size } = data;
+  const { node, run, live, editing, problems, chips, rows, size } = data;
   const t = TYPE[node.type] ?? { glyph: '•', icon: 'step', label: node.type };
   const state = live ? (run?.state ?? 'pending') : undefined;
   const sub = node.type === 'agent' ? node.def?.profile : node.type === 'tool' ? node.def?.tool : node.type === 'approval' ? `role ${node.def?.role ?? 'operator'}` : node.type === 'condition' ? Object.keys(node.def?.routes ?? {}).join(' / ') : node.type === 'notify' ? node.def?.channel : node.type === 'script' ? node.def?.runtime : undefined;
@@ -187,7 +191,6 @@ function Card({ data }: NodeProps<Node<CardData>>) {
         <div className="wf-sub">{sub ?? t.label}</div>
       )}
       <Handle type="source" position={Position.Right} isConnectable={Boolean(editing)} />
-      {toolbar ? <NodeToolbar isVisible position={Position.Bottom} offset={14} className="wf-toolbar">{toolbar}</NodeToolbar> : null}
     </div>
   );
 }
@@ -198,8 +201,8 @@ const nodeTypes = { card: Card };
 const STATES = ['succeeded', 'failed', 'skipped', 'running', 'waiting', 'pending'] as const;
 const STATE_LABEL: Record<string, string> = { succeeded: 'succeeded', failed: 'failed', skipped: 'skipped', running: 'running', waiting: 'waiting', pending: 'not started' };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, toolbar, controls = 'top-right', inset, children, chips, settings, details, title, tag }: {
-  /** Named in the fullscreen heads-up display, where the page's own floating panels are hidden. */
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, head, foot, aside, chips, settings, details, title, tag }: {
+  /** Named in the fullscreen run header, where the page's own rails give way to the canvas's. */
   title?: string;
   /** A short label beside the title there, such as the version. */
   tag?: string;
@@ -212,9 +215,12 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   select?: { selected: string | null; onSelect: (id: string | null) => void };
   /** Node states to show instead of the run's current ones (a replay). */
   states?: Record<string, NodeRunState>;
-  /** Content pinned under one step, such as the decision on a waiting approval. */
-  toolbar?: { node: string; content: ReactNode };
-  controls?: 'top-right' | 'top-left';
+  /** The rail above the canvas, before the view tools: title, status, modes. */
+  head?: ReactNode;
+  /** The rail below the canvas, before the legend: actions, checks, replay. */
+  foot?: ReactNode;
+  /** A column beside the canvas, such as the run's evidence. Fullscreen shows the step panel there instead. */
+  aside?: ReactNode;
   /** Short labels under a step in the editor, such as what it changes outside Azhi. */
   chips?: (node: PlanNode) => Array<{ label: string; tone: string }>;
   /**
@@ -224,10 +230,6 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   settings?: (node: PlanNode) => CardSetting[];
   /** The panel shown under the canvas for the selected step, in place of the built-in one. */
   details?: (node: PlanNode, close: () => void) => ReactNode;
-  /** Pixels taken by panels floating over the canvas, kept clear when the graph is framed. */
-  inset?: { right: number; bottom: number };
-  /** Panels floating over the canvas. */
-  children?: ReactNode;
 }) {
   const [ownSelected, setOwnSelected] = useState<string | null>(null);
   const owner = edit ?? select;
@@ -284,10 +286,9 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const pos = useMemo(() => layout(planNodes, reduced, W, H), [planNodes, reduced, W, H]);
 
   // Fullscreen: the browser's own where it allows it, else the canvas covering the window. The
-  // page's floating panels give way to a heads-up display drawn from the graph and the run.
+  // page's rails give way to ones drawn from the graph and the run.
   const root = useRef<HTMLDivElement>(null);
   const [full, setFull] = useState<'native' | 'overlay' | null>(null);
-  const [showMap, setShowMap] = useState(true);
   const [spot, setSpot] = useState<{ by: 'type' | 'state'; value: string } | null>(null);
   useEffect(() => {
     const on = () => setFull((f) => (document.fullscreenElement && document.fullscreenElement === root.current ? 'native' : f === 'native' ? null : f));
@@ -337,8 +338,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
       else if (e.key === 'Escape') {
         if (selected) setSelected(() => null);
         else if (full === 'overlay') exit();
-      } else if (e.key === 'm' || e.key === 'M') setShowMap((m) => !m);
-      else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
         // Taken before React Flow, which would otherwise nudge a focused step.
         e.preventDefault();
         e.stopPropagation();
@@ -360,7 +360,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     id: n.id,
     type: 'card',
     position: pos[n.id]!,
-    data: { size, rows: rowsOf.has(n.id) ? (detailLevel === 'key' ? rowsOf.get(n.id)!.slice(0, KEY_ROWS) : rowsOf.get(n.id)) : undefined, node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], chips: chips?.(n), toolbar: toolbar?.node === n.id ? toolbar.content : undefined },
+    data: { size, rows: rowsOf.has(n.id) ? (detailLevel === 'key' ? rowsOf.get(n.id)!.slice(0, KEY_ROWS) : rowsOf.get(n.id)) : undefined, node: n, run: states[n.id] ? { ...states[n.id]!, route: routeTaken(states[n.id]) } : undefined, live, selected: selected === n.id, editing: Boolean(edit), problems: edit?.problems[n.id], chips: chips?.(n) },
     selected: selected === n.id,
     ...(full && !lit(n) ? { className: 'dim' } : {}),
     width: W,
@@ -407,17 +407,12 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     const ys = Object.values(pos).map((p) => p.y);
     const gw = Math.max(...xs) + W;
     const gh = Math.max(...ys) + H;
-    // Panels floating over the canvas take room the graph should not sit under (the right one
-    // folds away on narrow canvases), and a pinned panel under a step needs room below it.
-    // In fullscreen those panels are hidden and the heads-up display rims the edges instead.
-    const right = full ? 0 : inset && el.clientWidth > 860 ? inset.right : 0;
-    const bottom = (full ? 72 : (inset?.bottom ?? 0)) + (toolbar ? 200 : 0);
-    const fit = Math.min((el.clientWidth - right - 48) / gw, (el.clientHeight - bottom - (full ? 136 : 48)) / gh, 1.1);
-    if (fit >= 0.5) return void f.fitView({ padding: right || bottom ? { top: full ? '112px' : '24px', left: '24px', right: `${right + 24}px`, bottom: `${bottom + 24}px` } : 0.12, maxZoom: 1.1 });
+    const fit = Math.min((el.clientWidth - 48) / gw, (el.clientHeight - 48) / gh, 1.1);
+    if (fit >= 0.5) return void f.fitView({ padding: 0.12, maxZoom: 1.1 });
     const zoom = Math.max(0.72, Math.min(0.9, (el.clientHeight - 48) / gh));
     const at = focus ? pos[focus]! : { x: 0, y: gh / 2 - H / 2 };
-    const x = focus ? (el.clientWidth - right) / 2 - (at.x + W / 2) * zoom : 24;
-    void f.setViewport({ x: Math.min(24, x), y: (el.clientHeight - bottom) / 2 - (at.y + H / 2) * zoom, zoom });
+    const x = focus ? el.clientWidth / 2 - (at.x + W / 2) * zoom : 24;
+    void f.setViewport({ x: Math.min(24, x), y: el.clientHeight / 2 - (at.y + H / 2) * zoom, zoom });
   };
   const framedOn = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -439,7 +434,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   }, [focus]);
 
   // While editing, a step that is selected (or just added) off screen is brought into view; in
-  // fullscreen any selected step is, clear of the step panel on the right.
+  // fullscreen any selected step is.
   const watched = owner ? owner.selected : full ? selected : null;
   useEffect(() => {
     const f = flow.current;
@@ -449,9 +444,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     const { x, y, zoom } = f.getViewport();
     const sx = at.x * zoom + x;
     const sy = at.y * zoom + y;
-    const panel = full && el.clientWidth > 860 ? 360 : 0;
-    if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth - panel && sy + H * zoom <= el.clientHeight) return;
-    void f.setCenter(at.x + W / 2 + panel / 2 / zoom, at.y + H / 2, { zoom, duration: 200 });
+    if (sx >= 0 && sy >= 0 && sx + W * zoom <= el.clientWidth && sy + H * zoom <= el.clientHeight) return;
+    void f.setCenter(at.x + W / 2, at.y + H / 2, { zoom, duration: 200 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watched, pos]);
 
@@ -465,28 +459,66 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   const usage = detail?.usage as { turns?: number; cost?: { amount: number | null; currency?: string } } | undefined;
   return (
     <div className={`wf${full ? ' is-full' : ''}${full === 'overlay' ? ' is-overlay' : ''}`} ref={root}>
-      {settings || edit ? (
-        <div className="wf-detailbar">
-          {settings ? (
-            <>
-              <span className="muted small">Show on cards</span>
-              <div className="seg" role="group" aria-label="Show on cards">
-                {([['names', 'Names'], ['key', 'Key settings'], ['all', 'All settings']] as const).map(([v, label]) => (
-                  <button key={v} type="button" aria-pressed={level === v} onClick={() => pickLevel(v)}>{label}</button>
-                ))}
-              </div>
-            </>
-          ) : null}
-          {edit ? (
-            <>
-              <span className="muted small">Links</span>
-              <div className="seg" role="group" aria-label="Links shown">
-                {([['flow', 'Flow only'], ['all', 'All links']] as const).map(([v, label]) => (
-                  <button key={v} type="button" aria-pressed={links === v} title={v === 'flow' ? 'Hide links already implied by a longer path (mostly data references)' : 'Show every direct dependency, so any can be removed'} onClick={() => pickLinks(v)}>{label}</button>
-                ))}
-              </div>
-            </>
-          ) : null}
+      <div className="wf-rail wf-head">
+        <div className="wf-slot">
+          {full ? (
+            <div className="wf-ident">
+              <span className="wf-kicker">{live ? 'Run' : edit ? 'Editing' : 'Workflow'}</span>
+              <span className="wf-name">{title ?? run?.workflow ?? 'Workflow'}</span>
+              {tag ? <span className="pill">{tag}</span> : null}
+              {run ? <><StateBadge state={run.state} /><span className="mono muted small">{run.id}</span></> : (
+                <span className="muted small">
+                  {planNodes.length} step{planNodes.length === 1 ? '' : 's'}
+                  {typeCounts.agent ? ` · ${typeCounts.agent} agent${typeCounts.agent === 1 ? '' : 's'}` : ''}
+                  {typeCounts.approval ? ` · ${typeCounts.approval} approval gate${typeCounts.approval === 1 ? '' : 's'}` : ''}
+                </span>
+              )}
+            </div>
+          ) : head}
+        </div>
+        {settings || edit ? (
+          <div className="wf-detailbar">
+            {settings ? (
+              <>
+                <span className="muted small">Show on cards</span>
+                <div className="seg" role="group" aria-label="Show on cards">
+                  {([['names', 'Names'], ['key', 'Key settings'], ['all', 'All settings']] as const).map(([v, label]) => (
+                    <button key={v} type="button" aria-pressed={level === v} onClick={() => pickLevel(v)}>{label}</button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {edit ? (
+              <>
+                <span className="muted small">Links</span>
+                <div className="seg" role="group" aria-label="Links shown">
+                  {([['flow', 'Flow only'], ['all', 'All links']] as const).map(([v, label]) => (
+                    <button key={v} type="button" aria-pressed={links === v} title={v === 'flow' ? 'Hide links already implied by a longer path (mostly data references)' : 'Show every direct dependency, so any can be removed'} onClick={() => pickLinks(v)}>{label}</button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="wf-view" role="toolbar" aria-label="View">
+          <button type="button" className="wf-tool wf-zoom" onClick={() => void flow.current?.zoomOut({ duration: 150 })} title="Zoom out" aria-label="Zoom out"><Icon name="minus" size={18} /></button>
+          <button type="button" className="wf-tool wf-zoom" onClick={() => void flow.current?.zoomIn({ duration: 150 })} title="Zoom in" aria-label="Zoom in"><Icon name="plus" size={18} /></button>
+          <button type="button" className="wf-tool" onClick={frame} title="Fit the graph" aria-label="Fit the graph"><Icon name="fit" size={18} /></button>
+          <button type="button" className="wf-tool" onClick={toggle} title={full ? 'Exit fullscreen (F)' : 'Fullscreen (F)'} aria-label={full ? 'Exit fullscreen' : 'Show fullscreen'}>
+            <Icon name={full ? 'shrink' : 'expand'} size={18} />
+          </button>
+        </div>
+      </div>
+      {full && live ? (
+        <div className="wf-rail wf-progress">
+          <div className="wf-stats">
+            <div><span className="wf-kicker">Steps done</span><b>{done}<span className="muted">/{planNodes.length}</span></b></div>
+            {run?.created_at ? <div><span className="wf-kicker">{run.ended_at ? 'Took' : 'Elapsed'}</span><b>{duration(run.created_at, run.ended_at ?? new Date(now).toISOString())}</b></div> : null}
+            {usage?.turns ? <div><span className="wf-kicker">Model cost</span><b>{money(usage.cost?.amount ?? null, usage.cost?.currency)}</b></div> : null}
+          </div>
+          <div className="wf-bar" role="img" aria-label={STATES.filter((s) => stateCounts[s]).map((s) => `${stateCounts[s]} ${STATE_LABEL[s]}`).join(', ')}>
+            {STATES.map((s) => (stateCounts[s] ? <i key={s} className={`b-${s}`} style={{ flexGrow: stateCounts[s] }} /> : null))}
+          </div>
         </div>
       ) : null}
       {edit ? (
@@ -503,109 +535,78 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
           ) : <span className="muted">Drag from a step's right edge to another step to make it run after. Select a link to remove it.</span>}
         </div>
       ) : null}
-      <div className="wf-canvas" style={{ height }} ref={box}>
-        <ReactFlow
-          onInit={(f) => {
-            flow.current = f;
-            framedOn.current = focus;
-            frame();
-          }}
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          minZoom={0.2}
-          maxZoom={1.6}
-          nodesConnectable={Boolean(edit)}
-          edgesFocusable={Boolean(edit)}
-          deleteKeyCode={edit ? ['Delete', 'Backspace'] : null}
-          onConnect={(c) => edit && c.source && c.target && c.source !== c.target && edit.onConnect(c.source, c.target)}
-          onEdgesDelete={(es) => {
-            setEdgeSel(null);
-            es.forEach((e) => edit?.onDisconnect(e.source, e.target));
-          }}
-          onNodesDelete={() => undefined}
-          onBeforeDelete={async ({ edges }) => ({ nodes: [], edges })}
-          proOptions={{ hideAttribution: true }}
-          onNodeClick={(_e, n) => {
-            setEdgeSel(null);
-            setSelected((s) => (s === n.id && !edit ? null : n.id));
-          }}
-          onEdgeClick={(_e, e) => edit && setEdgeSel(e.id)}
-          onPaneClick={() => {
-            setEdgeSel(null);
-            setSelected(() => null);
-          }}
-          aria-label="Workflow graph"
-        >
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
-          <Controls showInteractive={false} position={full ? 'top-right' : controls} orientation="horizontal">
-            {full ? (
-              <ControlButton onClick={() => setShowMap((m) => !m)} title="Minimap (M)" aria-label="Show the minimap" aria-pressed={showMap}>
-                <Icon name="map" size={18} className="ctl-ico" />
-              </ControlButton>
-            ) : null}
-            <ControlButton onClick={toggle} title={full ? 'Exit fullscreen (F)' : 'Fullscreen (F)'} aria-label={full ? 'Exit fullscreen' : 'Show fullscreen'}>
-              <Icon name={full ? 'shrink' : 'expand'} size={18} className="ctl-ico" />
-            </ControlButton>
-          </Controls>
-          {full ? (
-            <>
-              <Panel position="top-left" className="hud hud-id">
-                <div className="hud-kicker">{live ? 'Run' : edit ? 'Editing' : 'Workflow'}</div>
-                <div className="hud-title">
-                  <span>{title ?? run?.workflow ?? 'Workflow'}</span>
-                  {tag ? <span className="pill">{tag}</span> : null}
-                </div>
-                <div className="hud-meta">
-                  {run ? <><StateBadge state={run.state} /><span className="mono">{run.id}</span></> : (
-                    <span>
-                      {planNodes.length} step{planNodes.length === 1 ? '' : 's'}
-                      {typeCounts.agent ? ` · ${typeCounts.agent} agent${typeCounts.agent === 1 ? '' : 's'}` : ''}
-                      {typeCounts.approval ? ` · ${typeCounts.approval} approval gate${typeCounts.approval === 1 ? '' : 's'}` : ''}
-                    </span>
-                  )}
-                </div>
-              </Panel>
-              {live ? (
-                <Panel position="top-center" className="hud hud-progress">
-                  <div className="hud-stats">
-                    <div><span className="hud-kicker">Steps done</span><b>{done}<span className="muted">/{planNodes.length}</span></b></div>
-                    {run?.created_at ? <div><span className="hud-kicker">{run.ended_at ? 'Took' : 'Elapsed'}</span><b>{duration(run.created_at, run.ended_at ?? new Date(now).toISOString())}</b></div> : null}
-                    {usage?.turns ? <div><span className="hud-kicker">Model cost</span><b>{money(usage.cost?.amount ?? null, usage.cost?.currency)}</b></div> : null}
-                  </div>
-                  <div className="hud-bar" role="img" aria-label={STATES.filter((s) => stateCounts[s]).map((s) => `${stateCounts[s]} ${STATE_LABEL[s]}`).join(', ')}>
-                    {STATES.map((s) => (stateCounts[s] ? <i key={s} className={`b-${s}`} style={{ flexGrow: stateCounts[s] }} /> : null))}
-                  </div>
-                  <div className="hud-filters" role="group" aria-label="Highlight steps by state">
-                    {STATES.filter((s) => stateCounts[s]).map((s) => (
-                      <button key={s} type="button" aria-pressed={spot?.by === 'state' && spot.value === s} onClick={() => pickSpot('state', s)}>
-                        <i className={`sw st-${s}`} />{STATE_LABEL[s]}<b>{stateCounts[s]}</b>
-                      </button>
-                    ))}
-                  </div>
-                </Panel>
-              ) : null}
-              <Panel position="bottom-left" className="hud hud-types" aria-label="Highlight steps by type">
-                {Object.entries(typeCounts).map(([type, n]) => (
-                  <button key={type} type="button" className={`t-${type}`} aria-pressed={spot?.by === 'type' && spot.value === type} onClick={() => pickSpot('type', type)} title={`Highlight ${TYPE[type]?.label.toLowerCase() ?? type} steps`}>
-                    <Icon name={TYPE[type]?.icon ?? 'step'} size={16} />{TYPE[type]?.label ?? type}<b>{n}</b>
+      <div className="wf-body" style={{ height }}>
+        <div className="wf-canvas" ref={box}>
+          <ReactFlow
+            onInit={(f) => {
+              flow.current = f;
+              framedOn.current = focus;
+              frame();
+            }}
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            minZoom={0.2}
+            maxZoom={1.6}
+            nodesConnectable={Boolean(edit)}
+            edgesFocusable={Boolean(edit)}
+            deleteKeyCode={edit ? ['Delete', 'Backspace'] : null}
+            onConnect={(c) => edit && c.source && c.target && c.source !== c.target && edit.onConnect(c.source, c.target)}
+            onEdgesDelete={(es) => {
+              setEdgeSel(null);
+              es.forEach((e) => edit?.onDisconnect(e.source, e.target));
+            }}
+            onNodesDelete={() => undefined}
+            onBeforeDelete={async ({ edges }) => ({ nodes: [], edges })}
+            proOptions={{ hideAttribution: true }}
+            onNodeClick={(_e, n) => {
+              setEdgeSel(null);
+              setSelected((s) => (s === n.id && !edit ? null : n.id));
+            }}
+            onEdgeClick={(_e, e) => edit && setEdgeSel(e.id)}
+            onPaneClick={() => {
+              setEdgeSel(null);
+              setSelected(() => null);
+            }}
+            aria-label="Workflow graph"
+          >
+            <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
+          </ReactFlow>
+        </div>
+        {full ? (sel ? <StepSide node={sel} run={states[sel.id]} live={live} onStep={stepBy} onClose={() => setSelected(() => null)} /> : null) : aside}
+      </div>
+      <div className="wf-rail wf-foot">
+        {full ? (
+          <>
+            {live ? (
+              <div className="wf-filters" role="group" aria-label="Highlight steps by state">
+                {STATES.filter((s) => stateCounts[s]).map((s) => (
+                  <button key={s} type="button" aria-pressed={spot?.by === 'state' && spot.value === s} onClick={() => pickSpot('state', s)}>
+                    <i className={`sw st-${s}`} />{STATE_LABEL[s]}<b>{stateCounts[s]}</b>
                   </button>
                 ))}
-              </Panel>
-              <Panel position="bottom-center" className="hud hud-keys" aria-hidden="true">
-                <span><kbd>←</kbd><kbd>→</kbd> step through</span>
-                <span><kbd>M</kbd> minimap</span>
-                <span><kbd>F</kbd> exit</span>
-              </Panel>
-              {showMap ? <MiniMap position="bottom-right" className="hud hud-map" pannable zoomable ariaLabel="Minimap" nodeBorderRadius={14} nodeClassName={(n) => `t-${(n.data as CardData).node.type} ${live ? `st-${stateOf(n.id)}` : ''} ${n.selected ? 'on' : ''}`} /> : null}
-            </>
-          ) : null}
-        </ReactFlow>
-        {full && sel ? <HudStep node={sel} run={states[sel.id]} live={live} onStep={stepBy} onClose={() => setSelected(() => null)} /> : null}
-        {children}
+              </div>
+            ) : null}
+            <div className="wf-filters wf-types" role="group" aria-label="Highlight steps by type">
+              {Object.entries(typeCounts).map(([type, n]) => (
+                <button key={type} type="button" className={`t-${type}`} aria-pressed={spot?.by === 'type' && spot.value === type} onClick={() => pickSpot('type', type)} title={`Highlight ${TYPE[type]?.label.toLowerCase() ?? type} steps`}>
+                  <Icon name={TYPE[type]?.icon ?? 'step'} size={16} />{TYPE[type]?.label ?? type}<b>{n}</b>
+                </button>
+              ))}
+            </div>
+            <div className="wf-keys" aria-hidden="true">
+              <span><kbd>←</kbd><kbd>→</kbd> step through</span>
+              <span><kbd>F</kbd> exit</span>
+            </div>
+          </>
+        ) : (
+          <>
+            {foot}
+            {edit ? null : <Legend live={live} />}
+          </>
+        )}
       </div>
-      {edit ? null : <Legend live={live} />}
-      {edit || select ? null : sel ?(details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
+      {edit || select ? null : sel ? (details ? details(sel, () => setSelected(() => null)) : <NodeDetails node={sel} run={states[sel.id]} plan={plan} onClose={() => setSelected(() => null)} />) : <p className="muted small">Select a step to see its settings.</p>}
     </div>
   );
 }
@@ -618,34 +619,34 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
   return out;
 }
 
-/** The selected step in fullscreen: what it is, how it ran, and its key settings. */
-function HudStep({ node, run, live, onStep, onClose }: { node: PlanNode; run?: NodeRunState; live: boolean; onStep: (d: number) => void; onClose: () => void }) {
+/** The selected step in fullscreen, in a column beside the canvas: what it is, how it ran, and its key settings. */
+function StepSide({ node, run, live, onStep, onClose }: { node: PlanNode; run?: NodeRunState; live: boolean; onStep: (d: number) => void; onClose: () => void }) {
   const t = TYPE[node.type] ?? { glyph: '•', icon: 'step', label: node.type };
   const def = node.def ?? {};
   const rows = keySettings({ type: node.type, ...def }, []);
   const route = routeTaken(run);
   const error = run?.error ? String((run.error as { message?: unknown }).message ?? JSON.stringify(run.error)) : null;
   return (
-    <aside className="hud hud-step" aria-label={`Step ${node.id}`}>
+    <aside className="wf-side wf-step" aria-label={`Step ${node.id}`}>
       <header>
-        <span className={`hud-tile t-${node.type}`} aria-hidden="true"><Icon name={t.icon} size={20} /></span>
-        <div className="hud-step-name">
-          <span className="hud-kicker">{t.label}</span>
+        <span className={`wf-tile t-${node.type}`} aria-hidden="true"><Icon name={t.icon} size={20} /></span>
+        <div className="wf-step-name">
+          <span className="wf-kicker">{t.label}</span>
           <h2>{node.id}</h2>
         </div>
-        <button type="button" className="hud-x" onClick={onClose} aria-label="Close step" title="Close (Esc)"><Icon name="close" size={16} /></button>
+        <button type="button" className="wf-x" onClick={onClose} aria-label="Close step" title="Close (Esc)"><Icon name="close" size={16} /></button>
       </header>
-      {def.description ? <p className="hud-desc">{def.description}</p> : null}
+      {def.description ? <p className="wf-step-desc">{def.description}</p> : null}
       {live ? (
-        <div className="hud-run">
+        <div className="wf-step-run">
           <StateBadge state={run?.state ?? 'pending'} />
           {run && run.attempts > 1 ? <span className="muted small">{run.attempts} attempts</span> : null}
           {route ? <span className="muted small">took route <b>{route}</b></span> : null}
           {run?.worker ? <span className="muted small mono" title="Worker">{run.worker}</span> : null}
         </div>
       ) : null}
-      {error ? <p className="hud-err">{error}</p> : null}
-      <dl className="hud-rows">
+      {error ? <p className="wf-step-err">{error}</p> : null}
+      <dl className="wf-step-rows">
         <div><dt>Runs after</dt><dd>{node.deps.length ? node.deps.join(', ') : 'the start of the run'}</dd></div>
         {node.route ? <div><dt>Only on route</dt><dd>{node.route.route} of {node.route.condition}</dd></div> : null}
         {rows.map((r) => <div key={r.label}><dt>{r.label}</dt><dd className={r.tone ? `tone-${r.tone}` : undefined} title={r.value}>{r.value}</dd></div>)}

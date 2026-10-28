@@ -141,7 +141,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
         <div className="ed-main">
         <div className="ed-stage">
           {nodes ? (
-            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
+            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}
+              head={<>
               <div className="ed-title">
                 <h1>{def?.name ?? slug}</h1>
                 <span className="pill">v{current.version}{current.draft ? ' draft' : ''}</span>
@@ -165,6 +166,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
                   <Link to={`/ui/examples/${encodeURIComponent(update.id)}`}>Review the update</Link>
                 </div>
               ) : null}
+              </>}
+              foot={<>
               {atLeast(me.data?.role, 'operator') ? (
                 <div className="ed-runbar">
                   <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Start a run" data-tip="Start a run"><Icon name="play" size={22} /></button>
@@ -180,7 +183,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
                 {isAdmin ? <DeleteAction slug={slug} version={current} onDeleted={() => { setPicked(undefined); setSelected(null); if (versions.data.length <= 1) navigate('/ui/workflows'); }} /> : null}
                 <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} data-tip="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
               </div>
-            </WorkflowCanvas>
+              </>}
+            />
           ) : <Loading />}
         </div>
         <PlanDock plan={plan.data} yaml={source.data?.files.find((f) => f.path === source.data?.workflow)?.text} file={source.data?.workflow} selected={selected} request={dockRequest} note="This is the plan as it stands now, for you, with the workers online now." />

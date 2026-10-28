@@ -339,7 +339,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       <div className="ed-shell">
         <div className="ed-main">
         <div className="ed-stage">
-          <WorkflowCanvas title={def.name ?? slug} tag={dirty ? 'unsaved changes' : `v${base.data.version}${base.data.draft ? ' draft' : ''}`} nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
+          <WorkflowCanvas title={def.name ?? slug} tag={dirty ? 'unsaved changes' : `v${base.data.version}${base.data.draft ? ' draft' : ''}`} nodes={graph} height="100%" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}
+            head={<>
             <div className="ed-title">
               <h1>{def.name ?? slug}</h1>
               <span className="pill">v{base.data.version}{base.data.draft ? ' draft' : ''}{dirty ? ' · unsaved changes' : ''}</span>
@@ -350,6 +351,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
                 {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.diagnostics.map((d) => d.message).join('; ')}</div> : null}
               </div>
             ) : null}
+            </>}
+            foot={<>
             <div className="ed-check-float"><CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} /></div>
             <div className="ed-toolbar" role="toolbar" aria-label="Editor">
               <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="tb-btn" data-tip="Close the editor" aria-label="Close the editor"><Icon name="close" /></Link>
@@ -358,7 +361,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
                 <Icon name="save" size={18} />{save.isPending ? 'Saving…' : 'Save draft'}
               </button>
             </div>
-          </WorkflowCanvas>
+            </>}
+          />
         </div>
         <PlanDock plan={check.data?.plan} yaml={check.data?.yaml} file={source.data?.workflow} selected={selected} note="This is the plan the edit would have now, as an unsigned draft, with the workers online now." />
         </div>

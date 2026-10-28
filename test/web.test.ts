@@ -65,8 +65,8 @@ describe.skipIf(!up)('mission control', () => {
     const page = await open(`/ui/runs/${run_id}`);
     await page.getByText('Waiting for a person to decide at step approve').waitFor({ timeout: 30_000 });
     expect(await page.locator('.wf-card.st-waiting').count()).toBe(1);
-    // The decision is pinned to the waiting step on the canvas, and in full below it.
-    await page.locator('.atlas-pop').getByText('Post 4 runs to C-QUALITY?').waitFor();
+    // The canvas draws the graph and nothing over it; the decision is in full below.
+    expect(await page.locator('.wf-canvas .react-flow__panel, .wf-canvas .react-flow__controls, .wf-canvas .react-flow__minimap, .wf-canvas .react-flow__node-toolbar').count()).toBe(0);
     await page.locator('#decision').getByText('Post 4 runs to C-QUALITY?').waitFor();
 
     await page.getByLabel('note').fill('looks right');

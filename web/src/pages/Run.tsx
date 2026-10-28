@@ -6,7 +6,7 @@ import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, useConfirm, when } from '../ui';
 import { Formatted, plainText } from '../components/Rich';
-import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
+import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
 import { AgentActivityPanel } from './AgentActivity';
 import { Feed, FeedEmpty, FeedItem, offsetOf, type FeedTone } from '../components/ActivityFeed';
@@ -119,18 +119,15 @@ export function RunPage({ id }: { id: string }) {
             detail={d}
             plan={d.plan}
             height="clamp(400px, 66vh, 760px)"
-            controls="top-left"
-            inset={{ right: drawerOpen ? 334 : 0, bottom: 64 }}
             states={replayStates}
-            toolbar={waiting[0] && cursor === null ? { node: waiting[0].node_id, content: <DecisionPop a={waiting[0]} /> } : undefined}
-          >
-            {drawerOpen ? <Drawer className="atlas-drawer floating" nodes={version.data.plan.nodes} detail={d} show={show} onHide={() => pickDrawer(false)} /> : (
+            head={drawerOpen ? null : (
               <button type="button" className="atlas-reopen" onClick={() => pickDrawer(true)} title="Show steps, ledger, policy, context and cost">
                 <Icon name="runs" size={16} />Run details
               </button>
             )}
-            <Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />
-          </WorkflowCanvas>
+            aside={drawerOpen ? <Drawer className="atlas-drawer wf-side" nodes={version.data.plan.nodes} detail={d} show={show} onHide={() => pickDrawer(false)} /> : null}
+            foot={<Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />}
+          />
           <Drawer className="atlas-drawer stacked" nodes={version.data.plan.nodes} detail={d} show={show} />
         </div>
       ) : <Loading />}
@@ -233,39 +230,6 @@ function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; 
           </div>
         );
       })}
-    </div>
-  );
-}
-
-/** The decision pinned under a waiting approval step: the question, a few facts and the buttons. */
-function DecisionPop({ a }: { a: Approval }) {
-  const decide = useDecide(a);
-  const payload = a.request.payload;
-  const facts = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? Object.entries(payload as Record<string, unknown>).slice(0, 3).map(([k, v]) => `${k.replace(/[_-]+/g, ' ')}: ${Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : v !== null && typeof v === 'object' ? 'details' : String(v)}`)
-    : [];
-  const details = () => document.getElementById('decision')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  return (
-    <div className="atlas-pop" role="group" aria-label={`Decision on ${a.node_id}`}>
-      <b>{plainText(approvalQuestion(a))}</b>
-      {facts.length ? <span className="muted small">{facts.join(' · ')}</span> : null}
-      <span className="muted small">{whoCanDecide(a.role)} can decide{a.expires_at ? ` · expires ${ago(a.expires_at)}` : ''}</span>
-      {decide.isSuccess ? (
-        <span className="ok-note" role="status">Decision recorded.</span>
-      ) : (
-        <div className="row">
-          {a.can_decide && !needsForm(a) ? (
-            <>
-              <button className="primary" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'approved' })}>Approve</button>
-              <button className="danger" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'rejected' })}>Reject</button>
-            </>
-          ) : a.can_decide ? (
-            <button className="primary" onClick={details}>Decide</button>
-          ) : null}
-          <button className="link" style={{ marginLeft: 'auto' }} onClick={details}>Details</button>
-        </div>
-      )}
-      <ErrorNote error={decide.error} />
     </div>
   );
 }
