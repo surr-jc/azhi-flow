@@ -493,6 +493,9 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .chat-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .chat-empty .starters { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .chat-empty .starters button { text-align: left; white-space: normal; }
+.chat-empty .edit-existing { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.chat-empty .edit-existing .row { display: flex; gap: 8px; }
+.chat-empty .edit-existing select { flex: 1; min-width: 0; }
 .bubble { max-width: 88%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bubble.user { align-self: flex-end; background: var(--accent-bg); color: var(--ink); border-bottom-right-radius: 3px; }
 .bubble.assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); border-bottom-left-radius: 3px; }

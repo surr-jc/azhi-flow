@@ -16,6 +16,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
+import { workflowAssets } from '../server/assets.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -85,9 +86,13 @@ const SKILL = readFileSync(new URL('./skill.md', import.meta.url), 'utf8');
 /** Model calls per person message: lookups plus a few compile-and-repair rounds. */
 const MAX_CALLS = 16;
 const MAX_OUTPUT_TOKENS = 16_000;
-const RESULT_CHARS = 24_000;
+const RESULT_CHARS = 200_000;
 /** Paths a proposed package may hold. */
-const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
+const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html)|LICENSE|NOTICE))$/;
+/** Largest file the builder reads or writes. */
+const FILE_BYTES = 64 * 1024;
+/** Characters of file contents `read_workflow` loads at once; the rest is listed and read with `read_workflow_file`. */
+const LOAD_CHARS = 170_000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
 const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)', chatgpt: 'OpenCode (ChatGPT plan)' } as const;
@@ -203,8 +208,13 @@ const TOOLS: ModelTool[] = [
   },
   {
     name: 'read_workflow',
-    description: "An existing workflow's latest version, as package files. Use when the person wants to change or extend one, or to call it as a subworkflow.",
+    description: "An existing workflow's latest version: an index of every package file, then the contents of as many as fit (workflow.yaml, profiles, harness agents, commands and skills, schemas, templates, scripts), then the registered tools it names. Use when the person wants to change or extend one, or to call it as a subworkflow.",
     input_schema: { type: 'object', properties: { slug: { type: 'string' } }, required: ['slug'], additionalProperties: false },
+  },
+  {
+    name: 'read_workflow_file',
+    description: 'One file of an existing workflow, by the path read_workflow listed. Use for files read_workflow marked not loaded.',
+    input_schema: { type: 'object', properties: { slug: { type: 'string' }, path: { type: 'string' } }, required: ['slug', 'path'], additionalProperties: false },
   },
   {
     name: 'ask_user',
@@ -252,12 +262,13 @@ const TOOLS: ModelTool[] = [
   {
     name: 'propose_workflow',
     description:
-      'Propose the whole workflow package. The server compiles it against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
+      'Propose a workflow package. For a new workflow send every file. With new_version_of, send only the files you add or change in `files` and the paths to delete in `remove`; every other file of the current version is kept as it is. The server compiles the result against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
     input_schema: {
       type: 'object',
       properties: {
         summary: { type: 'string', description: 'Plain-language summary: what it does, assumptions, what the person must set up.' },
-        files: { type: 'object', additionalProperties: { type: 'string' }, description: 'Package path to file text. Must include workflow.yaml.' },
+        files: { type: 'object', additionalProperties: { type: 'string' }, description: 'Package path to file text. A new workflow must include workflow.yaml; a change (new_version_of) lists only added or changed files.' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'With new_version_of: paths of the current version to delete.' },
         new_version_of: { type: 'string', description: 'Set to the workflow id only when the person asked to change that existing workflow.' },
       },
       required: ['summary', 'files'],
@@ -342,7 +353,7 @@ function readExample(id: string): string {
       if (name.startsWith('.') || ['fixtures', 'knowledge', 'node_modules', '.venv'].includes(name)) continue;
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else if (/\.(ya?ml|json|md|py|ts|mjs|js)$/.test(name) && statSync(p).size <= 32 * 1024) out.push(`=== ${relative(root, p)} ===\n${readFileSync(p, 'utf8')}`);
+      else if (/\.(ya?ml|json|md|py|ts|mjs|js)$/.test(name) && statSync(p).size <= FILE_BYTES) out.push(`=== ${relative(root, p)} ===\n${readFileSync(p, 'utf8')}`);
     }
   };
   walk(root);
@@ -403,15 +414,102 @@ async function getTool(ctx: AppContext, workspaceId: string, ref: string) {
   return { ...rest, ref: toolRef(t), transport: transport.kind };
 }
 
-async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string): Promise<string> {
+/** Reading order: the definition, then profiles, the harness (agents, commands, skills), schemas, templates, scripts. */
+function readRank(path: string): number {
+  if (path === 'workflow.yaml') return 0;
+  if (path.startsWith('profiles/')) return 1;
+  if (/^harness\/(?:agents|commands)\//.test(path)) return 2;
+  if (path.startsWith('harness/')) return 3;
+  if (path.startsWith('schemas/')) return 4;
+  if (path.startsWith('templates/')) return 5;
+  return 6;
+}
+const isLicense = (path: string) => /(?:^|\/)(?:LICENSE|NOTICE)$/.test(path);
+
+/**
+ * An existing workflow's latest version for editing: an index of every file, then the contents of as
+ * many as fit (definition first), then the registered tools its text names. Nothing is dropped silently.
+ */
+export async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string): Promise<string> {
   const v = await latestVersion(ctx, workspaceId, slug);
   if (!v) throw new Error(`no workflow '${slug}'`);
-  const out: string[] = [`(version ${v.version}${v.draft ? ', draft' : ''})`];
-  for (const f of v.manifest.files) {
-    if (!PACKAGE_PATH.test(f.path) || f.size > 32 * 1024) continue;
-    out.push(`=== ${f.path} ===\n${(await packageFile(ctx, workspaceId, v.package_hash, f.path)).toString('utf8')}`);
+  const files = [...v.manifest.files].sort((a, b) => readRank(a.path) - readRank(b.path) || a.path.localeCompare(b.path));
+  const status = new Map<string, string>();
+  const load: string[] = [];
+  let used = 0;
+  for (const f of files) {
+    if (!PACKAGE_PATH.test(f.path)) status.set(f.path, 'not editable here, and not carried into a new version');
+    else if (isLicense(f.path)) status.set(f.path, 'licence text, not loaded');
+    else if (f.size > FILE_BYTES) status.set(f.path, `over ${FILE_BYTES / 1024} KB, not loaded`);
+    else if (used + f.size > LOAD_CHARS) status.set(f.path, 'not loaded (size budget); read it with read_workflow_file');
+    else {
+      used += f.size;
+      load.push(f.path);
+      status.set(f.path, 'loaded');
+    }
   }
+  const texts = new Map<string, string>();
+  for (const path of load) texts.set(path, (await packageFile(ctx, workspaceId, v.package_hash, path)).toString('utf8'));
+  const text = [...texts.values()].join('\n');
+  const tools = loadCatalog(ctx, workspaceId).then((c) => c.list().filter((t) => text.includes(toolRef(t))));
+  const out: string[] = [
+    `(version ${v.version}${v.draft ? ', draft' : ''}; id '${v.slug}'. Change it with propose_workflow new_version_of: '${v.slug}'.)`,
+    `## Files\n${files.map((f) => `- ${f.path} (${f.size} bytes): ${status.get(f.path)}`).join('\n')}`,
+  ];
+  for (const path of load) out.push(`=== ${path} ===\n${texts.get(path)}`);
+  const attached = await workflowAssets(ctx, workspaceId, v.slug).catch(() => []);
+  if (attached.length)
+    out.push(
+      `## Library assets attached to this workflow (MCP servers, agents, skills, commands: published versions kept outside the package; you can read them but not change them, tell the person to edit them in the Library)\n${attached
+        .map((a: any) => `- ${a.kind} ${a.slug} v${a.version}${a.enabled === false ? ' (disabled)' : ''}: ${JSON.stringify(a.definition).slice(0, 4000)}`)
+        .join('\n')}`,
+    );
+  const used_tools = await tools.catch(() => []);
+  if (used_tools.length)
+    out.push(
+      `## Registered tools this package names (read_workflow_file does not cover tools; get_tool gives schemas)\n${used_tools
+        .map((t) => `- ${toolRef(t)} (${t.effect}${t.credential ? `, secret ${t.credential}` : ''}): ${t.description}`)
+        .join('\n')}`,
+    );
   return out.join('\n\n');
+}
+
+/** One file of an existing workflow's latest version, for files `read_workflow` did not load. */
+async function readWorkflowFile(ctx: AppContext, workspaceId: string, slug: string, path: string): Promise<string> {
+  const v = await latestVersion(ctx, workspaceId, slug);
+  if (!v) throw new Error(`no workflow '${slug}'`);
+  const f = v.manifest.files.find((x) => x.path === path);
+  if (!f || !PACKAGE_PATH.test(path)) throw new Error(`no file '${path}' in workflow '${slug}'; see the file list from read_workflow`);
+  if (f.size > FILE_BYTES) throw new Error(`${path} is over ${FILE_BYTES / 1024} KB`);
+  return (await packageFile(ctx, workspaceId, v.package_hash, path)).toString('utf8');
+}
+
+/**
+ * A change to an existing workflow, applied to its latest version: `files` replace or add paths and
+ * `remove` drops paths. The result is the whole package, so the compiler and the save step see it all.
+ */
+export async function applyChange(
+  ctx: AppContext,
+  workspaceId: string,
+  slug: string,
+  files: Record<string, unknown>,
+  remove: unknown,
+): Promise<{ ok: true; files: Record<string, unknown> } | { ok: false; errors: string[] }> {
+  const v = await latestVersion(ctx, workspaceId, slug);
+  if (!v) return { ok: false, errors: [`there is no workflow '${slug}' to make a new version of; leave new_version_of out for a new workflow`] };
+  const base: Record<string, unknown> = {};
+  for (const f of v.manifest.files) {
+    if (!PACKAGE_PATH.test(f.path) || f.size > FILE_BYTES) continue;
+    base[f.path] = (await packageFile(ctx, workspaceId, v.package_hash, f.path)).toString('utf8');
+  }
+  const errors: string[] = [];
+  const drop = Array.isArray(remove) ? remove.map(String) : [];
+  for (const path of drop) {
+    if (path === 'workflow.yaml') errors.push('workflow.yaml cannot be removed');
+    else if (!(path in base)) errors.push(`remove: no file '${path}' in the current version`);
+    else delete base[path];
+  }
+  return errors.length ? { ok: false, errors } : { ok: true, files: { ...base, ...files } };
 }
 
 const describe = (d: Diagnostic) => `${d.severity} ${d.code}${d.node ? ` [${d.node}]` : ''}${d.path ? ` at ${d.path}` : ''}: ${d.message}`;
@@ -426,11 +524,11 @@ export async function checkProposal(
   const errors: string[] = [];
   const clean: Record<string, string> = {};
   const entries = Object.entries(files ?? {});
-  if (entries.length > 60) errors.push('at most 60 files in a package proposal');
+  if (entries.length > 300) errors.push('at most 300 files in a package');
   for (const [path, text] of entries) {
     if (typeof text !== 'string') errors.push(`${path}: file contents must be text`);
     else if (!PACKAGE_PATH.test(path) || path.includes('..')) errors.push(`${path}: files are workflow.yaml or live under profiles/, schemas/, templates/, scripts/ or harness/`);
-    else if (text.length > 64 * 1024) errors.push(`${path}: at most 64 KB per file`);
+    else if (text.length > FILE_BYTES) errors.push(`${path}: at most ${FILE_BYTES / 1024} KB per file`);
     else clean[path] = text;
   }
   if (!('workflow.yaml' in clean)) errors.push('the package needs workflow.yaml');
@@ -547,6 +645,8 @@ export async function builderTurn(
           answer(u.id, readExample(String(input.id)));
         } else if (u.name === 'read_workflow') {
           answer(u.id, await readWorkflow(ctx, workspaceId, String(input.slug)));
+        } else if (u.name === 'read_workflow_file') {
+          answer(u.id, await readWorkflowFile(ctx, workspaceId, String(input.slug), String(input.path)));
         } else if (u.name === 'ask_user') {
           const questions = (Array.isArray(input.questions) ? input.questions : []).slice(0, 5).map((q: any, i: number) => ({
             id: String(q?.id ?? `q${i + 1}`),
@@ -562,7 +662,9 @@ export async function builderTurn(
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
           event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
         } else if (u.name === 'propose_workflow') {
-          const r = await checkProposal(ctx, workspaceId, input.files, input.new_version_of ? String(input.new_version_of) : undefined);
+          const base = input.new_version_of ? String(input.new_version_of) : undefined;
+          const change = base ? await applyChange(ctx, workspaceId, base, input.files ?? {}, input.remove) : undefined;
+          const r = change && !change.ok ? change : await checkProposal(ctx, workspaceId, change ? change.files : input.files, base);
           if (!r.ok) {
             answer(u.id, `The draft does not compile yet. Fix these and propose the whole package again:\n${r.errors.map((e) => `- ${e}`).join('\n')}`, true);
           } else {

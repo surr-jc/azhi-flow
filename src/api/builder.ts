@@ -28,7 +28,7 @@ const chat = z.object({
   provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']).optional(),
   model: z.string().min(1).max(160).optional(),
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })).max(400),
-  text: z.string().min(1).max(20_000),
+  text: z.string().min(1).max(100_000),
 });
 
 export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {

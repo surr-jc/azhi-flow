@@ -1,7 +1,7 @@
 # The preflight (v2): a cheap, do-nothing step. The workflow's test command runs on the untouched
 # base after it submits, so a repository whose tests cannot run is found before any expensive step.
 # tier: light
-model: {provider: anthropic, name: default, credential: anthropic-api-key}
+model: {provider: github-copilot, name: gpt-5.6-luna, credential: github-copilot-token}
 max_output_tokens: 300
 instructions: |
   You change nothing. Submit the output at once.
