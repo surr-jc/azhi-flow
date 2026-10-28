@@ -73,6 +73,7 @@ const LOOKUPS: Record<string, string> = {
   get_tool: 'Read tool',
   read_example: 'Read example',
   read_workflow: 'Read workflow',
+  read_workflow_file: 'Read workflow file',
 };
 
 function load(): Saved {
