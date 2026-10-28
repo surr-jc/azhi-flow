@@ -16,6 +16,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
+import { addProposedMcp, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpProposal } from './integrations.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -77,6 +78,7 @@ export interface BuilderToolProposal {
 
 export type BuilderEvent =
   | { kind: 'text' }
+  | { kind: 'mcp_proposal'; proposal: BuilderMcpProposal }
   | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
@@ -250,6 +252,39 @@ const TOOLS: ModelTool[] = [
     },
   },
   {
+    name: 'find_integrations',
+    description:
+      'Search the live marketplaces (the official MCP Registry, and plugin marketplaces for skills, agents and commands) for what a requirement needs, for example "jira", "postgres" or "release notes". Use after workspace_overview when the library has nothing that fits. Returns ids you can pass to propose_mcp_server.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'A short keyword or product name.' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['mcp', 'skill', 'agent', 'command'] }, description: 'Default: mcp and skill.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'propose_mcp_server',
+    description:
+      'Propose adding an MCP server to the library, like `opencode mcp add`: scope global (every workflow in the workspace) or project (one existing workflow). Give either a marketplace_id from find_integrations (the server fetches and records the definition) or a definition: {transport: "remote", url, headers?} or {transport: "local", command: [...], environment?}. Use {env:NAME} for secrets and list each in definition.needs; never a secret value. Nothing is stored until the person confirms.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What it gives agents, what the person must set up, and how the workflow would use it.' },
+        slug: { type: 'string', description: 'Lower-case letters, digits and dashes.' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        scope: { type: 'string', enum: ['global', 'project'] },
+        workflow: { type: 'string', description: 'With scope project: the slug of an existing workflow.' },
+        marketplace_id: { type: 'string' },
+        definition: { type: 'object' },
+      },
+      required: ['summary', 'slug', 'scope'],
+    },
+  },
+  {
     name: 'propose_workflow',
     description:
       'Propose the whole workflow package. The server compiles it against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
@@ -300,6 +335,7 @@ export async function checkToolProposal(ctx: AppContext, workspaceId: string, ra
 }
 
 /** Registers a confirmed tool proposal (a new revision when its spec changed). */
+export { addProposedMcp };
 export async function registerProposedTool(ctx: AppContext, workspaceId: string, raw: unknown, actor: string) {
   let c;
   try {
@@ -393,6 +429,7 @@ async function overview(ctx: AppContext, workspaceId: string, provider: BuilderP
     executors: Object.values(EXECUTORS).map((e) => ({ id: e.id, providers: e.providers, notes: e.notes })),
     secrets_set: await secretStatus(ctx, workspaceId, tools),
     note: 'Secret values are never shown. A missing secret is set by an admin under Governance › Secrets.',
+    ...(await integrationsOverview(ctx, workspaceId)),
   };
 }
 
@@ -561,6 +598,12 @@ export async function builderTurn(
           const r = await checkToolProposal(ctx, workspaceId, input.tool);
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
           event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
+        } else if (u.name === 'find_integrations') {
+          answer(u.id, JSON.stringify(await findIntegrations(ctx, workspaceId, input), null, 1));
+        } else if (u.name === 'propose_mcp_server') {
+          const r = await checkMcpProposal(ctx, workspaceId, input);
+          answer(u.id, `The MCP server is valid. The person now sees '${r.slug}' (${r.scope}${r.workflow ? ` · ${r.workflow}` : ''}) with an Add button${r.needs.length ? `; they must set ${r.needs.map((n) => n.name).join(', ')} where the harness runs` : ''}${r.runs_code ? '; it is a program that runs on a worker, so say where it comes from' : ''}. Summarise in a few plain sentences, and ask whether to use it in the workflow once it is added.`);
+          event = { kind: 'mcp_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
         } else if (u.name === 'propose_workflow') {
           const r = await checkProposal(ctx, workspaceId, input.files, input.new_version_of ? String(input.new_version_of) : undefined);
           if (!r.ok) {
@@ -585,7 +628,7 @@ export async function builderTurn(
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
     if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
-    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal') {
+    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal') {
       const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');

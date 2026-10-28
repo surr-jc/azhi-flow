@@ -648,7 +648,7 @@ tool
     console.log(`${green('allowed')} ${r.repos.join(', ')} ${dim(`(${ref} revision ${r.revision})`)}`);
   });
 
-const mcp = program.command('mcp').description('Manage shared remote Streamable HTTP MCP connections (admin)');
+const mcp = program.command('mcp').description('MCP servers: `server` for the library (harness agents), the rest for gateway connections (admin)');
 mcp
   .command('add')
   .description('Add a remote MCP endpoint; use --auth oauth with the OAuth client settings when required')
@@ -691,6 +691,75 @@ mcp
   .action(async (connection: string, remoteTool: string, opts) => {
     const r = await client().post<{ ref: string; revision: number }>(`/v1/mcp/connections/${encodeURIComponent(connection)}/tools`, { id: opts.id, version: Number(opts.version), name: remoteTool, description: opts.description, effect: opts.effect, input_schema: JSON.parse(opts.inputSchema), output_schema: JSON.parse(opts.outputSchema) });
     console.log(`${green('registered')} ${r.ref} revision ${r.revision}`);
+  });
+
+// MCP servers for harness agents (OpenCode, Claude Code), like `opencode mcp add`: global = every workflow, project = one workflow.
+const mcpServer = mcp.command('server').description('Add MCP servers to the library: global (all workflows) or project (one workflow)');
+const pairs = (items: string[] | undefined, what: string) => Object.fromEntries((items ?? []).map((kv) => {
+  const i = kv.indexOf('=');
+  if (i < 1) throw new Error(`${what} must look like NAME=value (use {env:NAME} for secrets): ${kv}`);
+  return [kv.slice(0, i), kv.slice(i + 1)];
+}));
+const libraryServer = async (name: string) => {
+  const rows = await client().get<Array<{ id: string; slug: string }>>('/v1/assets?kind=mcp');
+  const a = rows.find((r) => r.slug === name);
+  if (!a) throw new Error(`no MCP server '${name}' in the library; see: azhi mcp server list`);
+  return a;
+};
+mcpServer
+  .command('add')
+  .description('Add an MCP server: --remote <https url>, or --local followed by -- and the start command')
+  .argument('<name>', 'short name, lower-case letters, digits and dashes')
+  .argument('[command...]', 'with --local: the command that starts it, after --')
+  .option('--remote <url>', 'a hosted Streamable HTTP server')
+  .option('--local', 'a package run on a worker, for example: --local -- npx -y @acme/mcp')
+  .option('--header <NAME=value>', 'remote header; repeatable. Use {env:NAME} for secrets', collect)
+  .option('--env <NAME=value>', 'local environment variable; repeatable. Use {env:NAME} for secrets', collect)
+  .option('--scope <global|project>', 'global: every workflow; project: one workflow (needs --workflow)', 'global')
+  .option('--workflow <slug>', 'the workflow a project server belongs to')
+  .option('--description <text>', 'what it is for')
+  .option('--draft', 'save as a draft to review and publish later')
+  .action(async (name: string, command: string[], opts) => {
+    if (Boolean(opts.remote) === Boolean(opts.local)) throw new Error('choose exactly one of --remote <url> or --local -- <command>');
+    if (opts.local && !command.length) throw new Error('--local needs the start command after --, for example: azhi mcp server add files --local -- npx -y @modelcontextprotocol/server-filesystem /workspace');
+    if (!['global', 'project'].includes(opts.scope)) throw new Error('--scope must be global or project');
+    const headers = pairs(opts.header, '--header');
+    const environment = pairs(opts.env, '--env');
+    const needs = [...new Set(Object.values({ ...headers, ...environment }).flatMap((v) => [...v.matchAll(/\{env:([A-Za-z0-9_]+)\}/g)].map((m) => m[1]!)))].map((n) => ({ name: n, secret: true, required: true }));
+    const definition = opts.remote
+      ? { transport: 'remote', url: opts.remote, ...(Object.keys(headers).length ? { headers } : {}), enabled: true, ...(needs.length ? { needs } : {}) }
+      : { transport: 'local', command, ...(Object.keys(environment).length ? { environment } : {}), enabled: true, ...(needs.length ? { needs } : {}) };
+    const r = await client().post<{ slug: string; status: string; scope: string; project_workflow: string | null }>('/v1/mcp-servers', { slug: name, name, description: opts.description ?? '', definition, scope: opts.scope, ...(opts.workflow ? { workflow: opts.workflow } : {}), ...(opts.draft ? { draft: true } : {}) });
+    console.log(`${green('added')} ${r.slug} ${dim(`(${r.scope}${r.project_workflow ? ` · ${r.project_workflow}` : ''}, ${r.status})`)}`);
+    if (needs.length) console.log(`set ${needs.map((n) => n.name).join(', ')} where the harness runs; values are never stored in Azhi`);
+    if (r.scope === 'global') console.log(`use it in a workflow: azhi mcp server attach ${name} <workflow>`);
+  });
+mcpServer
+  .command('list')
+  .description('MCP servers in the library; with --workflow, the ones that workflow can use')
+  .option('--workflow <slug>')
+  .action(async (opts: { workflow?: string }) => {
+    const rows = await client().get<Array<{ slug: string; scope: string; project_workflow: string | null; status: string; definition: { transport: string; url?: string; command?: string[] }; attached?: boolean }>>(`/v1/mcp-servers${opts.workflow ? `?workflow=${encodeURIComponent(opts.workflow)}` : ''}`);
+    table([['Name', 'Scope', 'Status', 'Runs', 'Attached'], ...rows.map((r) => [r.slug, r.project_workflow ? `project · ${r.project_workflow}` : r.scope, r.status, r.definition.transport === 'remote' ? (r.definition.url ?? '') : (r.definition.command ?? []).join(' '), r.attached ? 'yes' : ''])]);
+  });
+mcpServer
+  .command('attach')
+  .description('Use a published MCP server in a workflow (the workflow records that exact version)')
+  .argument('<name>')
+  .argument('<workflow>')
+  .action(async (name: string, workflow: string) => {
+    const a = await libraryServer(name);
+    await client().post(`/v1/workflows/${encodeURIComponent(workflow)}/assets`, { asset_id: a.id });
+    console.log(`${green('attached')} ${name} to ${workflow}`);
+  });
+mcpServer
+  .command('remove')
+  .description('Archive an MCP server (workflows that already use a version keep it)')
+  .argument('<name>')
+  .action(async (name: string) => {
+    const a = await libraryServer(name);
+    await client().post(`/v1/assets/${a.id}/archive`, {});
+    console.log(`${green('archived')} ${name}`);
   });
 
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');

@@ -31,6 +31,8 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
   const [runner, setRunner] = useState<Runner>('npx'); const [pkg, setPkg] = useState(''); const [args, setArgs] = useState(''); const [other, setOther] = useState('');
   const [env, setEnv] = useState<Env[]>([]);
   const [gateway, setGateway] = useState(false);
+  const [scope, setScope] = useState<'global' | 'project'>('global'); const [workflow, setWorkflow] = useState('');
+  const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<Array<{ slug: string }>>('/v1/workflows/summary') });
   const [saved, setSaved] = useState<{ name: string; url?: string }>();
 
   const definition = (): Record<string, unknown> => {
@@ -48,9 +50,9 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
     return { transport: 'local', command, ...(names.length ? { environment: Object.fromEntries(names.map((e) => [e.name.trim(), `{env:${e.name.trim()}}`])) } : {}), enabled: true,
       ...(names.length ? { needs: names.map((e) => ({ name: e.name.trim(), secret: e.secret, required: true })) } : {}) };
   };
-  const body = { kind: 'mcp', slug: slug || 'server', name: name || 'MCP server', description: '', definition: definition() };
+  const body = { kind: 'mcp', slug: slug || 'server', name: name || 'MCP server', description: '', definition: definition(), scope, ...(scope === 'project' && workflow ? { workflow } : {}) };
   const dbody = useDebounced(JSON.stringify(body));
-  const ready = Boolean(how && slug && (how === 'hosted' ? url : runner === 'other' ? other.trim() : pkg.trim()));
+  const ready = Boolean(how && slug && (scope === 'global' || workflow) && (how === 'hosted' ? url : runner === 'other' ? other.trim() : pkg.trim()));
   const preview = useQuery({ queryKey: ['mcp-preview', dbody], enabled: ready, queryFn: () => api<Preview>('/v1/assets/preview-guides', { method: 'POST', body: JSON.parse(dbody) }), placeholderData: (p) => p });
   const save = useMutation({
     mutationFn: () => api('/v1/assets', { method: 'POST', body }),
@@ -115,6 +117,11 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
             </fieldset>
           </>
         )}
+        <fieldset className="wide wiz-use"><legend>Available to</legend>
+          <label className="row"><input type="radio" name="scope" checked={scope === 'global'} onChange={() => setScope('global')} /> <span><b>Every workflow</b> (global). Like OpenCode's user config.</span></label>
+          <label className="row"><input type="radio" name="scope" checked={scope === 'project'} onChange={() => setScope('project')} /> <span><b>One workflow</b> (project). Like OpenCode's project config; publishing attaches it.</span></label>
+          {scope === 'project' ? <label>Workflow<select required value={workflow} onChange={(e) => setWorkflow(e.target.value)}><option value="">Choose a workflow…</option>{(workflows.data ?? []).map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}</select></label> : null}
+        </fieldset>
         <fieldset className="wide wiz-use"><legend>Where will it be used?</legend>
           <label className="row"><input type="checkbox" checked disabled /> <span><b>Harness agents</b> (OpenCode, Claude Code). Saved to your library as a draft.</span></label>
           {how === 'hosted' ? <label className="row"><input type="checkbox" checked={gateway} onChange={(e) => setGateway(e.target.checked)} /> <span><b>Azhi tool steps and model agents</b>, through the governed gateway (recorded in the action ledger). Available for hosted servers.</span></label> : <p className="muted small">Servers that run on a worker are for harness agents. To use one in tool steps, host it and add its URL.</p>}

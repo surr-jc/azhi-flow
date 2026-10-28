@@ -8,7 +8,7 @@ import { DefinitionSummary, HarnessGuides, NeedList, type Guide, type Need } fro
 import { McpWizard } from './McpWizard';
 
 export type Kind = 'mcp' | 'agent' | 'skill' | 'command';
-type Asset = { id: string; kind: Kind; slug: string; name: string; description: string; status: string; current_version: number; definition?: Record<string, any>; version_id?: string };
+type Asset = { id: string; kind: Kind; slug: string; name: string; description: string; status: string; current_version: number; scope?: 'global' | 'project'; project_workflow?: string | null; definition?: Record<string, any>; version_id?: string };
 type Item = { id: string; source: string; source_name: string; kind: Kind; slug: string; name: string; description: string; version?: string; homepage?: string; author?: string; category?: string; group?: string; runs_code?: boolean; unsupported?: string };
 type Resolved = { item: Item; definition: Record<string, any>; needs: Need[]; warnings: string[]; provenance: { source: string; url: string; sha256: string; fetched_at: string }; guides: Guide[] };
 type Search = { items: Item[]; next_cursor?: string; warnings: Array<{ source: string; message: string }>; sources: Array<{ id: string; name: string }>; disabled?: boolean };
@@ -165,6 +165,7 @@ function Mine({ kind, assets, error, canEdit }: { kind: Kind; assets?: Asset[]; 
                 {a.description ? <p className="lib-desc">{a.description}</p> : null}
                 <p className="small">
                   <Badge tone={a.status === 'published' ? 'ok' : 'warn'}>{a.status === 'published' ? 'published' : 'draft: review, then publish'}</Badge>{' '}
+                  <Badge tone="ok">{a.project_workflow ? `project · ${a.project_workflow}` : 'global'}</Badge>{' '}
                   {a.definition?.transport === 'local' ? <Badge tone="warn">runs on a worker</Badge> : null}{' '}
                   {prov ? <span className="muted">Imported from <a href={prov.url} target="_blank" rel="noreferrer noopener">{prov.source.split('::')[0]}</a>, hash <span className="mono">{prov.sha256.slice(0, 8)}</span></span> : null}
                 </p>

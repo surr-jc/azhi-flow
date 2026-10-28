@@ -107,12 +107,31 @@ admin-managed remote Streamable HTTP MCP connections run today. Add a remote con
 `azhi mcp`), authorize it once for the workspace when required, discover its tools, and register the selected
 ones. After registering, ask the builder to draft the workflow that uses it.
 
+## Suggesting what is available, and adding MCP servers
+
+`workspace_overview` also lists the library's MCP servers, skills, agents and commands, the gateway's MCP
+connections and OpenCode's built-in read-only tools. The skill tells the builder to match the requirement
+against all of it and say what it would use. When nothing fits, `find_integrations` searches the MCP Registry and
+the plugin marketplaces (it reports a search that failed or a turned-off marketplace as a note).
+
+`propose_mcp_server` works like `opencode mcp add`. The chat shows a card with **Add MCP server**; confirming
+publishes it, then the card offers **Use in this workflow**. Scope is `global` (every workflow, like OpenCode's
+user config) or `project` (one existing workflow, attached when published, like its project config). A server
+picked from a search is sent by marketplace id and fetched again on the server, so its source and hash are
+recorded. A hosted server needs the author role; one that runs a program on a worker needs an admin.
+
+In a workflow, a local server with no secret goes in the agent profile as `harness.opencode.mcp`. A hosted server
+or one that needs a secret cannot (a package never holds secrets); its tools are registered through a gateway
+connection with `propose_tool` instead.
+
 ## API
+
+- `POST /v1/builder/register-mcp` `{server}`: re-checks and adds a proposed MCP server.
 
 - `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
 - `GET /v1/builder/models?provider=anthropic|openai|opencode`: the model list, the recommended model and why.
 - `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
-  and an event (`questions`, `proposal`, `tool_proposal` or `text`).
+  and an event (`questions`, `proposal`, `tool_proposal`, `mcp_proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.
 - `POST /v1/builder/register-tool` `{tool}` (admin): re-checks and registers a proposed tool.

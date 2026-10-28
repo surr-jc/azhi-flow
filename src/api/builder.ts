@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Message } from '../agents/providers.js';
-import { builderProviders, builderTurn, checkProposal, registerProposedTool } from '../builder/builder.js';
+import { addProposedMcp, builderProviders, builderTurn, checkProposal, registerProposedTool } from '../builder/builder.js';
+import { checkMcpProposal } from '../builder/integrations.js';
 import { builderModels } from '../builder/models.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
@@ -63,6 +64,20 @@ export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
     const b = z.object({ tool: z.record(z.string(), z.unknown()) }).parse(req.body);
     const r = await registerProposedTool(ctx, p.workspaceId, b.tool, p.userId);
     await audit(ctx, p.workspaceId, p.userId, 'builder.tool-registered', { tool: r.ref, revision: r.revision, changed: r.changed });
+    return r;
+  });
+
+  // Adds an MCP server the builder proposed, once the person confirms; checked again as at proposal time.
+  // A hosted server needs the author role; one that runs a program on a worker needs an admin, as registering a stdio tool does.
+  app.post('/v1/builder/register-mcp', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = z.object({ server: z.record(z.string(), z.unknown()) }).parse(req.body);
+    let checked;
+    try { checked = await checkMcpProposal(ctx, p.workspaceId, b.server); } catch (e) { throw new AzhiError(ErrorClass.invalidInput, (e as Error).message); }
+    if (checked.runs_code) requireRole(p, 'admin');
+    const r = await addProposedMcp(ctx, p.workspaceId, b.server, p.userId);
+    await audit(ctx, p.workspaceId, p.userId, 'builder.mcp-added', { slug: r.slug, scope: r.scope, workflow: r.workflow ?? null, runs_code: checked.runs_code });
     return r;
   });
 

@@ -1,19 +1,28 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { ASSET_KINDS, archiveAsset, attachAsset, createAsset, getAsset, harnessGuides, listAssets, openCodeGuide, publishAsset, renderClaudeCode, renderOpenCode, updateAsset, validateAsset, workflowAssets } from '../server/assets.js';
+import { ASSET_KINDS, addMcpServer, archiveAsset, attachAsset, createAsset, effectiveMcpServers, getAsset, harnessGuides, listAssets, openCodeGuide, publishAsset, renderClaudeCode, renderOpenCode, updateAsset, validateAsset, workflowAssets } from '../server/assets.js';
 import { BUILTIN_SOURCES, defaultDeps, importItem, marketConfig, resolve, saveMarketConfig, search, sourcesFor, type MarketDeps } from '../server/marketplace.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { requireRole } from './auth.js';
 import type { AppContext } from '../server/context.js';
 
 const definition = z.record(z.string(), z.unknown());
-const body = z.object({ kind: z.enum(ASSET_KINDS), slug: z.string().min(1).max(64), name: z.string().min(1).max(120), description: z.string().max(2000).optional(), definition });
+const scopeFields = { scope: z.enum(['global', 'project']).optional(), workflow: z.string().min(1).max(120).optional() };
+const body = z.object({ kind: z.enum(ASSET_KINDS), slug: z.string().min(1).max(64), name: z.string().min(1).max(120), description: z.string().max(2000).optional(), definition, ...scopeFields });
+const update = body.omit({ kind: true, slug: true, scope: true, workflow: true });
 function user(req: FastifyRequest) { if (req.principal.kind !== 'user') throw new AzhiError(ErrorClass.authorization, 'this endpoint needs a user token'); return req.principal; }
 export function registerAssetRoutes(app: FastifyInstance, ctx: AppContext, deps: MarketDeps = defaultDeps()) {
   app.get('/v1/assets', async (req) => { const p = user(req); const kind = z.object({ kind: z.enum(ASSET_KINDS).optional() }).parse(req.query).kind; return listAssets(ctx, p.workspaceId, kind); });
+  // MCP servers like `opencode mcp add`: global (every workflow) or project (one workflow), published and ready to use.
+  app.post('/v1/mcp-servers', async (req) => {
+    const p = user(req); requireRole(p, 'author');
+    const b = body.omit({ kind: true }).extend({ draft: z.boolean().optional() }).parse(req.body);
+    return addMcpServer(ctx, p.workspaceId, b, p.userId);
+  });
+  app.get('/v1/mcp-servers', async (req) => { const p = user(req); return effectiveMcpServers(ctx, p.workspaceId, z.object({ workflow: z.string().optional() }).parse(req.query).workflow); });
   app.get('/v1/assets/:id', async (req) => { const p = user(req); const a = await getAsset(ctx, p.workspaceId, (req.params as { id: string }).id); if (!a) throw new AzhiError(ErrorClass.invalidInput, 'portable asset not found'); return a; });
   app.post('/v1/assets', async (req) => { const p = user(req); requireRole(p, 'author'); return createAsset(ctx, p.workspaceId, body.parse(req.body), p.userId); });
-  app.put('/v1/assets/:id', async (req) => { const p = user(req); requireRole(p, 'author'); const b = body.omit({ kind: true, slug: true }).parse(req.body); return updateAsset(ctx, p.workspaceId, (req.params as { id: string }).id, b, p.userId); });
+  app.put('/v1/assets/:id', async (req) => { const p = user(req); requireRole(p, 'author'); const b = update.parse(req.body); return updateAsset(ctx, p.workspaceId, (req.params as { id: string }).id, b, p.userId); });
   app.post('/v1/assets/:id/publish', async (req) => { const p = user(req); requireRole(p, 'author'); return publishAsset(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId); });
   app.post('/v1/assets/:id/archive', async (req) => { const p = user(req); requireRole(p, 'author'); await archiveAsset(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId); return { ok: true }; });
   app.get('/v1/assets/:id/opencode-guide', async (req) => { const p = user(req); const a = await getAsset(ctx, p.workspaceId, (req.params as { id: string }).id); if (!a) throw new AzhiError(ErrorClass.invalidInput, 'portable asset not found'); const v = a.versions.find((x: any) => x.version === a.current_version); return openCodeGuide({ kind: a.kind, slug: a.slug, definition: v.definition }); });

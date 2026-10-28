@@ -25,6 +25,19 @@ interface ToolProposal {
   credential?: { name: string; set: boolean };
   exists: boolean;
 }
+interface McpProposal {
+  tool_use_id: string;
+  slug: string;
+  name: string;
+  summary: string;
+  scope: 'global' | 'project';
+  workflow?: string;
+  definition: Record<string, any>;
+  needs: Array<{ name: string; secret: boolean }>;
+  source?: string;
+  marketplace_id?: string;
+  runs_code: boolean;
+}
 interface Question { id: string; question: string; why?: string; options?: string[]; multiple?: boolean }
 interface Proposal {
   tool_use_id: string;
@@ -41,8 +54,8 @@ interface Proposal {
 interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode' | 'chatgpt'; label: string; ready: boolean; model?: string; reason?: string }
 interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
 interface Choice { provider?: string; model?: string }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal }; provider: string; model: string }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; shown?: string }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal }; provider: string; model: string }
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; shown?: string }
 
 const KEY = 'azhi-builder';
 const CHOICE_KEY = 'azhi-builder-model';
@@ -69,7 +82,8 @@ const STARTERS = [
   'Answer questions about our runbooks from a dataset, with citations.',
 ];
 const LOOKUPS: Record<string, string> = {
-  workspace_overview: 'Looked at this workspace’s tools, datasets, secrets and examples',
+  workspace_overview: 'Looked at this workspace’s tools, MCP servers, skills, datasets, secrets and examples',
+  find_integrations: 'Searched the marketplaces for',
   get_tool: 'Read tool',
   read_example: 'Read example',
   read_workflow: 'Read workflow',
@@ -114,13 +128,15 @@ export function WorkflowBuilder() {
       setState((s) => {
         const proposals = { ...s.proposals };
         const tools = { ...s.tools };
+        const mcps = { ...s.mcps };
         let shown = s.shown;
         if (r.event.kind === 'proposal' && r.event.proposal) {
           proposals[r.event.proposal.tool_use_id] = r.event.proposal as Proposal;
           shown = r.event.proposal.tool_use_id;
         }
         if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
-        return { messages: r.messages, proposals, tools, shown };
+        if (r.event.kind === 'mcp_proposal' && r.event.proposal) mcps[r.event.proposal.tool_use_id] = r.event.proposal as McpProposal;
+        return { messages: r.messages, proposals, tools, mcps, shown };
       });
       setDraft('');
     },
@@ -199,7 +215,7 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} />
               ))}
               {send.isPending ? <div className="bubble assistant pending"><span className="dots" aria-hidden="true" /> Working on it: reading the workspace, drafting and checking with the compiler…</div> : null}
               <ErrorNote error={send.error} />
@@ -223,10 +239,11 @@ export function WorkflowBuilder() {
   );
 }
 
-function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, shown }: {
+function MessageView({ m, proposals, tools, mcps, openAsk, busy, onAnswer, onShow, shown }: {
   m: Message;
   proposals: Record<string, Proposal>;
   tools: Record<string, ToolProposal>;
+  mcps: Record<string, McpProposal>;
   openAsk?: string;
   busy: boolean;
   onAnswer: (text: string) => void;
@@ -246,6 +263,10 @@ function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, sho
         if (b.name === 'propose_tool') {
           const t = tools[b.id];
           return t ? <ToolCard key={i} t={t} /> : <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>;
+        }
+        if (b.name === 'propose_mcp_server') {
+          const t = mcps[b.id];
+          return t ? <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} /> : <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>;
         }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
@@ -287,6 +308,31 @@ function ToolCard({ t }: { t: ToolProposal }) {
         {reg.error ? <ErrorNote error={reg.error} /> : null}
       </div>
       <button type="button" className="primary" disabled={reg.isPending || Boolean(reg.data)} onClick={() => reg.mutate()}>{reg.data ? 'Registered' : 'Register tool'}</button>
+    </div>
+  );
+}
+
+/** An MCP server the builder proposes, like `opencode mcp add`: confirming adds it to the library, then offers to use it in the workflow. */
+function McpCard({ t, busy, onAnswer }: { t: McpProposal; busy: boolean; onAnswer: (text: string) => void }) {
+  const qc = useQueryClient();
+  const add = useMutation({
+    // A server fetched from a marketplace is sent by id, so the server fetches the definition again.
+    mutationFn: () => api<{ slug: string; status: string }>('/v1/builder/register-mcp', { method: 'POST', body: { server: { slug: t.slug, name: t.name, description: '', scope: t.scope, ...(t.workflow ? { workflow: t.workflow } : {}), ...(t.marketplace_id ? { marketplace_id: t.marketplace_id } : { definition: t.definition }) } } }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['portable-assets'] }),
+  });
+  const d = t.definition;
+  return (
+    <div className="draft-card">
+      <div>
+        <strong className="mono">{t.slug}</strong> <Badge tone="ok">{t.scope === 'project' ? `project · ${t.workflow}` : 'global'}</Badge> {t.runs_code ? <Badge tone="warn">runs on a worker</Badge> : null}
+        <div className="muted small">{d.transport === 'remote' ? `Hosted: ${d.url}` : `Runs: ${(d.command ?? []).join(' ')}`}{t.source ? ` · from ${t.source}` : ''}</div>
+        {t.needs.length ? <div className="muted small">Set <code>{t.needs.map((n) => n.name).join(', ')}</code> where the harness runs. Values are never stored in Azhi.</div> : null}
+        {add.data ? <div className="ok-note" role="status">Added to the library ({add.data.status}).</div> : null}
+        {add.error ? <ErrorNote error={add.error} /> : null}
+      </div>
+      {add.data
+        ? <button type="button" className="primary" disabled={busy} onClick={() => onAnswer(`I added the MCP server ${t.slug}. Use it in the workflow.`)}>Use in this workflow</button>
+        : <button type="button" className="primary" disabled={add.isPending} onClick={() => add.mutate()}>{t.runs_code ? 'Add (admin)' : 'Add MCP server'}</button>}
     </div>
   );
 }
