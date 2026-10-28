@@ -41,10 +41,28 @@ interface Proposal {
 interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode' | 'chatgpt'; label: string; ready: boolean; model?: string; reason?: string }
 interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
 interface Choice { provider?: string; model?: string }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal }; provider: string; model: string }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; shown?: string }
+/** Tokens the provider reported; null when it did not say (never estimated). */
+interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal }; provider: string; model: string; usage: Usage }
+/** One answered turn: what it used and how long it took, kept by the index of its last message. */
+interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
 const KEY = 'azhi-builder';
+// The server refuses a longer conversation (src/api/builder.ts), so the size meter counts toward these.
+const MAX_MESSAGES = 400;
+const MAX_BYTES = 2_000_000;
+const MAX_TEXT = 20_000;
+const USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'] as const;
+
+/** Sums a field over turns; null when no turn reported it. */
+function total(stats: TurnStat[], f: keyof Usage): number | null {
+  const v = stats.map((s) => s.usage[f]).filter((n): n is number => typeof n === 'number');
+  return v.length ? v.reduce((a, b) => a + b, 0) : null;
+}
+const compact = (n: number | null) => (n === null ? '—' : n >= 1_000_000 ? `${(n / 1e6).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+const exact = (n: number | null) => (n === null ? 'not reported' : n.toLocaleString());
+const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
 const CHOICE_KEY = 'azhi-builder-model';
 const OTHER = '__other__';
 
@@ -109,9 +127,14 @@ export function WorkflowBuilder() {
   const using = ready.some((p) => p.id === choice.provider) ? choice.provider : status.data?.default;
   const model = choice.provider === using ? choice.model : undefined;
   const send = useMutation({
-    mutationFn: (text: string) => api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model } }),
-    onSuccess: (r) => {
+    mutationFn: async (text: string) => {
+      const t0 = performance.now();
+      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model } });
+      return { r, ms: Math.round(performance.now() - t0) };
+    },
+    onSuccess: ({ r, ms }) => {
       setState((s) => {
+        const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms } };
         const proposals = { ...s.proposals };
         const tools = { ...s.tools };
         let shown = s.shown;
@@ -120,7 +143,7 @@ export function WorkflowBuilder() {
           shown = r.event.proposal.tool_use_id;
         }
         if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
-        return { messages: r.messages, proposals, tools, shown };
+        return { messages: r.messages, proposals, tools, shown, stats };
       });
       setDraft('');
     },
@@ -142,10 +165,22 @@ export function WorkflowBuilder() {
       submit(draft);
     }
   };
+  const [confirmReset, setConfirmReset] = useState(false);
   const reset = () => {
     send.reset();
-    setState({ messages: [], proposals: {} });
+    setConfirmReset(false);
+    setState({ messages: [], proposals: {}, stats: {} });
   };
+  const turns = useMemo(() => Object.values(state.stats ?? {}), [state.stats]);
+  const bytes = useMemo(() => JSON.stringify(state.messages).length, [state.messages]);
+  // Seconds the current turn has been running, so a long draft is visibly alive.
+  const [waited, setWaited] = useState(0);
+  useEffect(() => {
+    if (!send.isPending) return setWaited(0);
+    const t0 = Date.now();
+    const id = window.setInterval(() => setWaited(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [send.isPending]);
 
   // The open question card is the last ask_user call, while nobody has answered it yet.
   const lastAsk = useMemo(() => {
@@ -166,9 +201,17 @@ export function WorkflowBuilder() {
         title="Build a workflow with chat"
         sub="Describe what you need. The builder asks a few questions, drafts a workflow from this workspace’s tools, datasets and examples, and checks it with the compiler. Publishing still needs your signature."
         actions={
-          <>
-            {state.messages.length ? <button type="button" onClick={reset}>Start over</button> : null}
-          </>
+          state.messages.length ? (
+            confirmReset ? (
+              <span className="row" role="group" aria-label="Confirm start over">
+                <span className="small">Discard this conversation and its drafts?</span>
+                <button type="button" className="danger" onClick={reset}>Discard conversation</button>
+                <button type="button" onClick={() => setConfirmReset(false)}>Keep it</button>
+              </span>
+            ) : (
+              <button type="button" onClick={() => setConfirmReset(true)}>Start over</button>
+            )
+          ) : undefined
         }
       />
       {status.data.providers.length ? (
@@ -189,6 +232,7 @@ export function WorkflowBuilder() {
       ) : (
         <div className={`builder ${shown ? 'with-draft' : ''}`}>
           <section className="panel chat" aria-label="Conversation">
+            <UsageBar turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} />
             <div className="chat-log" aria-live="polite" ref={log}>
               {!state.messages.length ? (
                 <div className="chat-empty">
@@ -199,21 +243,29 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
-              {send.isPending ? <div className="bubble assistant pending"><span className="dots" aria-hidden="true" /> Working on it: reading the workspace, drafting and checking with the compiler…</div> : null}
+              {send.isPending ? <div className="bubble assistant pending" role="status"><span className="dots" aria-hidden="true" /> Working on it: reading the workspace, drafting and checking with the compiler… <span className="mono">{waited}s</span></div> : null}
               <ErrorNote error={send.error} />
             </div>
             <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
-              <textarea
-                rows={2}
-                aria-label="Message"
-                placeholder={lastAsk ? 'Answer above, or type here…' : state.messages.length ? 'Ask for a change, or say “draft it”…' : 'Describe the workflow you need…'}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={onKey}
-              />
-              <button type="submit" className="primary" disabled={!draft.trim() || send.isPending}>Send message</button>
+              <div className="composer-row">
+                <textarea
+                  rows={2}
+                  aria-label="Message"
+                  aria-describedby="composer-meta"
+                  maxLength={MAX_TEXT}
+                  placeholder={lastAsk ? 'Answer above, or type here…' : state.messages.length ? 'Ask for a change, or say “draft it”…' : 'Describe the workflow you need…'}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onKey}
+                />
+                <button type="submit" className="primary" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}>{send.isPending ? 'Sending…' : 'Send message'}</button>
+              </div>
+              <div id="composer-meta" className="composer-meta muted">
+                <span><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line</span>
+                {draft.length > MAX_TEXT * 0.8 ? <span className={draft.length >= MAX_TEXT ? 'bad-text' : ''}>{draft.length.toLocaleString()} / {MAX_TEXT.toLocaleString()}</span> : null}
+              </div>
             </form>
           </section>
           {shown ? <DraftPanel p={shown} onClose={() => setState((s) => ({ ...s, shown: undefined }))} /> : null}
@@ -223,8 +275,71 @@ export function WorkflowBuilder() {
   );
 }
 
-function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, shown }: {
+/**
+ * Session meter above the conversation: tokens the provider reported for every turn so far, the
+ * last turn, and how close the conversation is to the size the server accepts. Input counts every
+ * lookup round of a turn (each re-sends the context), so it grows faster than the text you see.
+ * Cost is not shown: the builder has no price list, and an unknown value is never guessed.
+ */
+function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
+  const last = turns[turns.length - 1];
+  const sum = (f: keyof Usage) => total(turns, f);
+  const all = USAGE_FIELDS.map((f) => sum(f));
+  const grand = all.every((n) => n === null) ? null : (sum('input_tokens') ?? 0) + (sum('output_tokens') ?? 0);
+  const lastTokens = last ? (last.usage.input_tokens ?? 0) + (last.usage.output_tokens ?? 0) : null;
+  const fill = Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
+  const full = fill >= 0.8;
+  const cells: Array<{ label: string; value: number | null; hint: string }> = [
+    { label: 'Input', value: sum('input_tokens'), hint: 'Tokens sent to the model across all turns, including each lookup round' },
+    { label: 'Output', value: sum('output_tokens'), hint: 'Tokens the model wrote across all turns' },
+    { label: 'Cached', value: sum('cache_read_tokens'), hint: 'Input tokens served from the provider’s prompt cache' },
+  ];
+  return (
+    <div className="usage" role="region" aria-label="Session usage">
+      <div className="usage-main">
+        <div className="usage-total">
+          <span className="usage-label">Session tokens</span>
+          <strong className="usage-value" title={exact(grand)}>{compact(grand)}</strong>
+          <span className="muted small">{turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
+        </div>
+        <dl className="usage-cells">
+          {cells.map((c) => (
+            <div key={c.label} title={`${c.hint}. ${exact(c.value)}`}>
+              <dt>{c.label}</dt>
+              <dd>{compact(c.value)}</dd>
+            </div>
+          ))}
+          <div title="Cost is not estimated: the builder has no price list for this model">
+            <dt>Cost</dt>
+            <dd className="muted">unavailable</dd>
+          </div>
+        </dl>
+      </div>
+      <div className="usage-foot muted small">
+        <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>
+        {last ? <span title={`Input ${exact(last.usage.input_tokens)}, output ${exact(last.usage.output_tokens)}`}>Last turn {compact(lastTokens)} tokens · {seconds(last.ms)}</span> : null}
+        <span className={full ? 'warn-text' : ''} title={`${messages} of ${MAX_MESSAGES} messages; ${(bytes / 1000).toFixed(0)} KB of ${(MAX_BYTES / 1000).toFixed(0)} KB`}>
+          Conversation {messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}
+          {full ? ' · start over soon' : ''}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Compact per-turn line under the builder's reply. */
+function TurnMeta({ s }: { s: TurnStat }) {
+  const cached = s.usage.cache_read_tokens;
+  return (
+    <div className="turn-meta muted" title={`Input ${exact(s.usage.input_tokens)}, output ${exact(s.usage.output_tokens)}, cached ${exact(cached)}`}>
+      {compact(s.usage.input_tokens)} in · {compact(s.usage.output_tokens)} out{cached ? ` · ${compact(cached)} cached` : ''} · {seconds(s.ms)} · <span className="mono">{s.model}</span>
+    </div>
+  );
+}
+
+function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, shown, stat }: {
   m: Message;
+  stat?: TurnStat;
   proposals: Record<string, Proposal>;
   tools: Record<string, ToolProposal>;
   openAsk?: string;
@@ -265,6 +380,7 @@ function MessageView({ m, proposals, tools, openAsk, busy, onAnswer, onShow, sho
         const what = b.input.ref ?? b.input.id ?? b.input.slug;
         return label ? <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div> : null;
       })}
+      {stat ? <TurnMeta s={stat} /> : null}
     </>
   );
 }
@@ -359,6 +475,13 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
         <h2>{p.name ?? p.id} <span className="muted small mono">{p.id}</span></h2>
         <button type="button" className="link small" onClick={onClose}>Hide</button>
       </header>
+      <dl className="draft-facts">
+        <div><dt>Status</dt><dd><Badge tone={p.blockers.length ? 'bad' : 'ok'}>{p.blockers.length ? 'blocked' : 'compiles'}</Badge></dd></div>
+        <div><dt>Steps</dt><dd>{p.nodes.length}</dd></div>
+        <div><dt>Files</dt><dd>{paths.length}</dd></div>
+        <div><dt>To set up</dt><dd>{p.missing.length}</dd></div>
+        <div><dt>Warnings</dt><dd>{p.warnings.length}</dd></div>
+      </dl>
       {p.summary ? <p className="draft-summary">{p.summary}</p> : null}
       {p.missing.length || p.blockers.length ? (
         <div className="draft-todo">
