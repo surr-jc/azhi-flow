@@ -344,6 +344,7 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     await h.api.put('/v1/secrets/slack-bot-token', { value: 'xoxb-test' });
     await h.api.put('/v1/secrets/github-read-token', { value: READ_TOKEN });
     await h.api.put('/v1/secrets/github-comment-token', { value: COMMENT_TOKEN });
+    await h.api.put('/v1/secrets/github-merge-token', { value: COMMENT_TOKEN });
     const pkgDir = packageFor(git.url);
     // The server's examples, with pr-review pointed at the local git host (setup tests below).
     const examples = mkdtempSync(join(tmpdir(), 'azhi-examples-'));
@@ -608,8 +609,8 @@ describe.skipIf(!up)('PR review example with OpenCode', () => {
     const list = await h.api.get<any[]>('/v1/examples');
     const e = list.find((x) => x.id === 'pr-review');
     expect(e).toMatchObject({ name: expect.any(String), needs_repos: true });
-    expect(e.secrets.map((x: any) => x.name)).toEqual(['github-comment-token', 'github-copilot-token', 'github-read-token', 'slack-bot-token']);
-    expect(e.tools.map((t: any) => t.ref)).toEqual(['github.get-pull-request@1', 'github.comment-on-pr@1']);
+    expect(e.secrets.map((x: any) => x.name)).toEqual(['github-comment-token', 'github-copilot-token', 'github-merge-token', 'github-read-token', 'slack-bot-token']);
+    expect(e.tools.map((t: any) => t.ref)).toEqual(['github.get-pull-request@1', 'github.comment-on-pr@1', 'github.merge-pr@1']);
     await expect(h.api.post('/v1/examples/pr-review/install', {})).rejects.toThrow(/repositories/);
     await expect(h.api.post('/v1/examples/pr-review/install', { repos: ['not a repo'] })).rejects.toThrow(/owner\/name/);
     await expect(h.api.post('/v1/examples/nope/install', { repos: ['a/b'] })).rejects.toThrow(/no example/);

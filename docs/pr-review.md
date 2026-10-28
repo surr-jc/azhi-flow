@@ -29,6 +29,36 @@ and never decide the verdict; refuted ones are dropped and counted. See
 | `should_post` → `post` | Always, unless the run input `post` is false (a dry run): `github.comment-on-pr@1` posts the review. No approval step. The comment is ledgered and deduplicated, and its CEL guard only allows the PR under review. The tool is registered with `sticky: azhi-pr-review`, so the PR keeps one review comment: a later run edits the comment the token's own account posted before (found by a hidden `azhi-sticky` marker) instead of adding another. A comment by anyone else that carries the marker is never edited. The output says `updated: true` when it edited |
 | `slack_message`, `should_notify` → `notify` | When the reviewers have any comment (and `post` is not false), a short Slack message (`templates/slack.md`: verdict, summary, findings) goes to the channel set at install (`slack_channel`, secret `slack-bot-token`); a guard only allows that channel |
 
+## Optional merge, after a Slack approval
+
+Off by default. Start the run with `-i offer_merge=true` (or tick *Offer to merge* in the web UI) and,
+when the review leaves nothing for the author to do, the run asks a person whether to merge:
+
+```
+post ─ should_offer_merge ─ approve_merge (Slack Approve / Reject) ─ merge (github.merge-pr@1)
+```
+
+- **When it is offered** (`should_offer_merge`, plain rules): `offer_merge` is true, the review was posted
+  (`post` is not false), the pull request is open, not a draft and GitHub reports `mergeable_state: clean`
+  (no conflicts, required checks passed), the verdict is `approve`, every finding is `minor` and a
+  `follow_up`, and the verifier left nothing "check by hand". Anything else skips the step; the review and
+  Slack summary go out as before.
+- **The approval** (`approve_merge`, role `admin`): posted to the workspace's Slack approvals channel
+  (*Slack* settings; the same `slack-bot-token`) with Approve and Reject buttons, and answerable in
+  mission control or with `azhi approve`. It names the pull request, the base branch and the short commit.
+  A rejection, or no answer within 24 hours, skips the merge. The clicking Slack user must be linked to an
+  Azhi user (Users page), as for every Slack approval.
+- **The merge** (`merge`, `github.merge-pr@1`, secret `github-merge-token`): after the approval only. It
+  sends the head commit the reviewers read (`sha`), so a push made after the review makes GitHub, and the
+  tool, refuse: review it again. The guard pins the repository, number and commit to the run. The method
+  is the tool registration's `merge_method` (`squash` by default; `merge` or `rebase`), never a run input.
+  An already merged pull request is a success; a closed, draft or conflicting one fails the step with the
+  reason. Branch protection still applies: if it requires reviews GitHub refuses, and the step says so.
+- `github-merge-token`: fine-grained, **Pull requests: write** and **Contents: write** on the repository
+  (kept apart from the comment token). Like the other tokens it is checked before a run, so set it even
+  if you never turn `offer_merge` on, or remove the `should_offer_merge`, `approve_merge` and `merge`
+  steps and the tool in the editor.
+
 ## The agents' setup (profile `harness.opencode`)
 
 Each reviewer profile names files from the package. Azhi turns them into OpenCode's own
@@ -184,7 +214,9 @@ for the models, and two GitHub tokens:
 - `github-copilot-token`: your Copilot sign-in. All four agents run on GitHub Copilot models
   through OpenCode's own `github-copilot` provider; no Anthropic or OpenAI key is involved.
 - `github-read-token`: fine-grained, read-only **Contents** and **Pull requests** on the repository.
-- `github-comment-token`: **Pull requests: write**, used only by the approved comment step.
+- `github-comment-token`: **Pull requests: write**, used only by the comment step.
+- `github-merge-token`: **Pull requests: write** and **Contents: write**, used only by the merge step
+  (see *Optional merge*).
 
 For a repository owned by an organization, the tokens must be made for that organization:
 
@@ -284,6 +316,7 @@ azhi example install pr-review --repo OWNER/REPO        # --repo again for more;
 azhi copilot login                                       # shows a code for github.com/login/device
 azhi secret set github-read-token
 azhi secret set github-comment-token
+azhi secret set github-merge-token
 azhi run <version-id> --published -i repo=OWNER/REPO -i pr=123 -i post=false --wait
 ```
 

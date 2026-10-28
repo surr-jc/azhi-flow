@@ -23,6 +23,8 @@ export interface GithubConfig {
   branch_prefix?: string;
   /** The PR comment tool keeps one comment per pull request under this name and edits it on every run. */
   sticky?: string;
+  /** How the merge tool merges: `merge`, `squash` (default) or `rebase`. */
+  merge_method?: string;
 }
 
 const MAX_PAGES = 3;
@@ -37,7 +39,7 @@ async function get(cfg: GithubConfig, token: string | undefined, path: string, t
   return request(cfg, token, 'GET', path, undefined, timeoutMs);
 }
 
-async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH', path: string, body: unknown, timeoutMs: number): Promise<any> {
+async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body: unknown, timeoutMs: number): Promise<any> {
   if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
   await checkEgress(url);
@@ -243,6 +245,32 @@ export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: u
   const comments = await pages(cfg, token, `/repos/${repo}/issues/${number}/comments`, undefined, timeoutMs);
   const hit = comments.find((c: any) => String(c.body ?? '').includes(marker(key)));
   return hit ? { id: Number(hit.id), url: String(hit.html_url ?? '') } : null;
+}
+
+const MERGE_METHODS = ['merge', 'squash', 'rebase'];
+
+/**
+ * Merges a pull request (`github.merge-pr`, write-idempotent). `sha` is the head commit the reviewers
+ * saw: the tool refuses, and GitHub is told the same, when the branch moved since, so an approval
+ * never merges code nobody reviewed. A pull request that is already merged is a success (a retry or a
+ * second approval changes nothing); a closed, draft or conflicting one is refused. The method comes
+ * from the registration (`merge_method`), never from the arguments.
+ */
+export async function mergePullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown; sha?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const sha = String(args.sha ?? '');
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) throw new SendError(`sha must be the full head commit that was reviewed, got '${sha.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  const method = cfg.merge_method ?? 'squash';
+  if (!MERGE_METHODS.includes(method)) throw new SendError(`merge_method must be one of ${MERGE_METHODS.join(', ')}, got '${method}'`, true, ErrorClass.invalidInput);
+  const pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, timeoutMs);
+  const url = String(pr.html_url ?? '');
+  if (pr.merged) return { repo, number, merged: true, already_merged: true, sha: String(pr.merge_commit_sha ?? ''), url };
+  if (pr.state !== 'open') throw new SendError(`${repo}#${number} is ${String(pr.state)} and was not merged`, true, ErrorClass.invalidInput);
+  if (pr.draft) throw new SendError(`${repo}#${number} is a draft and is not merged`, true, ErrorClass.invalidInput);
+  if (String(pr.head?.sha ?? '') !== sha) throw new SendError(`${repo}#${number} has new commits since the review (head ${String(pr.head?.sha ?? '').slice(0, 12)}, reviewed ${sha.slice(0, 12)}); review it again before merging`, true, ErrorClass.invalidInput);
+  const r = await request(cfg, token, 'PUT', `/repos/${repo}/pulls/${number}/merge`, { sha, merge_method: method }, timeoutMs);
+  return { repo, number, merged: r.merged !== false, already_merged: false, sha: String(r.sha ?? ''), url };
 }
 
 const MAX_COMMENTS = 20;

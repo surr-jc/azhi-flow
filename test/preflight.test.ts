@@ -59,6 +59,7 @@ describe('workflow preflight', () => {
   it('passes when every token works for the repositories involved', async () => {
     await setSecret(ctx, WS, 'github-read-token', 'read-token', 'usr_test');
     await setSecret(ctx, WS, 'github-comment-token', 'write-token', 'usr_test');
+    await setSecret(ctx, WS, 'github-merge-token', 'write-token', 'usr_test');
     await setSecret(ctx, WS, 'github-copilot-token', 'copilot', 'usr_test');
     await setSecret(ctx, WS, 'slack-bot-token', 'xoxb-ok', 'usr_test');
     const r = await run({ repo: 'acme/payments', pr: 7 });

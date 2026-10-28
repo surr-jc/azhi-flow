@@ -21,6 +21,9 @@ export interface FakeGithubData {
     mergeable_state?: string;
     /** `open` unless set (a merged pull request is `closed`). */
     state?: 'open' | 'closed';
+    draft?: boolean;
+    /** Set when the pull request was merged (by `PUT .../merge`, or to start merged). */
+    merged?: boolean;
     files: Array<{ filename: string; status: string; additions: number; deletions: number }>;
   }>;
 }
@@ -64,6 +67,8 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
   /** What the issue splitter created, and the sub-issue links it made. */
   const created: FakeGithubData['issues'] = [];
   const links: Array<{ repo: string; parent: number; child: number }> = [...(opts.links ?? [])];
+  /** Merges made through the API. */
+  const merges: Array<{ repo: string; number: number; sha: string; method: string }> = [];
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -218,6 +223,19 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const head = url.searchParams.get('head')?.split(':').pop();
       return send(200, git.pulls.filter((p) => p.repo === repo && (!head || p.head === head)).map(view));
     }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)\/merge$/);
+    if (m && req.method === 'PUT') {
+      const pr = data.pulls?.find((p) => p.number === Number(m![2]));
+      if (!pr) return send(404, { message: 'Not Found' });
+      const b = body();
+      if (pr.state === 'closed' || pr.mergeable === false || pr.mergeable_state === 'dirty') return send(405, { message: 'Pull Request is not mergeable' });
+      if (b.sha && b.sha !== pr.head.sha) return send(409, { message: 'Head branch was modified. Review and try the merge again.' });
+      pr.state = 'closed';
+      pr.merged = true;
+      const merge = { repo: m[1]!, number: pr.number, sha: b.sha as string, method: String(b.merge_method ?? 'merge') };
+      merges.push(merge);
+      return send(200, { merged: true, sha: sha('merge', merge), message: 'Pull Request successfully merged' });
+    }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/files)?$/);
     if (m) {
       const pr = data.pulls?.find((p) => p.number === Number(m![2]));
@@ -227,7 +245,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const reads = ((pr as any).reads = ((pr as any).reads ?? 0) + 1);
       const mergeable = seq[Math.min(reads, seq.length) - 1] ?? null;
       const sum = (k: 'additions' | 'deletions') => pr.files.reduce((n, f) => n + f[k], 0);
-      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: pr.state ?? 'open', draft: false, user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, mergeable, mergeable_state: mergeable === null ? 'unknown' : pr.mergeable_state ?? (mergeable ? 'clean' : 'dirty'), additions: sum('additions'), deletions: sum('deletions') });
+      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: pr.state ?? 'open', draft: pr.draft ?? false, merged: pr.merged ?? false, ...(pr.merged ? { merge_commit_sha: sha('merge', pr.number) } : {}), user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, mergeable, mergeable_state: mergeable === null ? 'unknown' : pr.mergeable_state ?? (mergeable ? 'clean' : 'dirty'), additions: sum('additions'), deletions: sum('deletions') });
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/);
     if (m) {
@@ -249,5 +267,5 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const t = c && git.trees.get(c.tree);
     return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
   };
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, merges, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }
