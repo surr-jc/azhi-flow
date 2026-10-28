@@ -93,8 +93,10 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   await git(['config', 'core.symlinks', 'false'], { ...base, ...config(always) });
   const auth: Array<[string, string]> = o.token ? [[`http.${new URL(url).origin}/.extraHeader`, `Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`]] : [];
   const refspecs = [`+${spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : [])];
+  // A transfer under 1 KB/s for 60 s is stalled, not slow: fail it as transient so the retry starts now, not after the step timeout.
+  const stall: Array<[string, string]> = [['http.lowSpeedLimit', '1000'], ['http.lowSpeedTime', '60']];
   // Fetch by URL: no remote is configured, so neither the URL nor the header is written to .git/config.
-  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...auth]) });
+  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...stall, ...auth]) });
   await git(['checkout', '-q', '--detach', 'refs/azhi/head'], { ...base, ...config(always) });
   const head = await git(['rev-parse', 'HEAD'], { ...base, ...config(always) });
   const baseSha = spec.baseRef ? await git(['rev-parse', 'refs/azhi/base'], { ...base, ...config(always) }) : undefined;
