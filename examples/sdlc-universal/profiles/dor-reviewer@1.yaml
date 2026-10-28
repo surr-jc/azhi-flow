@@ -1,6 +1,6 @@
 # The definition-of-ready reviewer: OpenCode in a fresh read-only checkout, definition-of-ready skill.
 # tier: light
-model: {provider: anthropic, name: default, credential: anthropic-api-key}
+model: {provider: github-copilot, name: gpt-5.6-luna, credential: github-copilot-token}
 max_output_tokens: 3000
 instructions: |
   You score whether one ticket is ready to be built, against the repository checked out in your

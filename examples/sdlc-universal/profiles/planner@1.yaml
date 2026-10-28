@@ -1,7 +1,7 @@
 # The planner (v2): one grounded pass over the repository that writes the requirements and the
 # design together, so the repository is explored once instead of twice.
 # tier: strong
-model: {provider: anthropic, name: default, credential: anthropic-api-key}
+model: {provider: github-copilot, name: claude-opus-5.5, credential: github-copilot-token}
 max_output_tokens: 12000
 instructions: |
   You turn one ticket into testable requirements and a file-by-file plan for the repository checked

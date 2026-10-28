@@ -21,6 +21,13 @@ workflow package by conversation. Authors and above can use it.
    proposal for an existing workflow id is saved as a new draft version only when you asked to
    change that workflow.
 
+Above the conversation, the session meter shows the tokens the provider reported so far (input,
+output, cached), the last turn's size and duration, the provider and model in use, and how full the
+conversation is against the size the server accepts. Each reply also carries its own tokens and
+time. Input counts every lookup round of a turn, so it grows faster than the text you see. A value
+the provider does not report shows "—", and cost shows "unavailable": the builder has no price
+list, so nothing is estimated. The totals live in the browser tab with the conversation.
+
 The conversation stays in your browser tab; the server keeps no transcript. Each turn is in the
 audit log (`builder.turn`, with provider, model and token counts) and each save as
 `builder.saved`. Builder calls are not part of any run, so run budgets do not apply to them.
