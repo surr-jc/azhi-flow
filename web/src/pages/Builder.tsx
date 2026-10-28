@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { api } from '../api';
+import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Markdown } from '../components/Rich';
@@ -131,6 +131,8 @@ export function WorkflowBuilder() {
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [state.messages.length, send.isPending]);
 
+  const existing = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
+  const [editSlug, setEditSlug] = useState('');
   const submit = (text: string) => {
     const t = text.trim();
     if (!t || send.isPending) return;
@@ -192,6 +194,19 @@ export function WorkflowBuilder() {
             <div className="chat-log" aria-live="polite" ref={log}>
               {!state.messages.length ? (
                 <div className="chat-empty">
+                  {existing.data?.length ? (
+                    <div className="edit-existing">
+                      <label htmlFor="edit-existing">Change an existing workflow</label>
+                      <div className="row">
+                        <select id="edit-existing" value={editSlug} onChange={(e) => setEditSlug(e.target.value)}>
+                          <option value="">Choose a workflow…</option>
+                          {existing.data.map((w) => <option key={w.slug} value={w.slug}>{w.latest?.name ? `${w.latest.name} (${w.slug})` : w.slug}</option>)}
+                        </select>
+                        <button type="button" disabled={!editSlug || send.isPending} onClick={() => submit(`I want to change the existing workflow ${editSlug}. Read it first, then ask me what to change.`)}>Edit it</button>
+                      </div>
+                      <p className="muted">Or create a new one:</p>
+                    </div>
+                  ) : null}
                   <p className="muted">What should the workflow do? A sentence or two is enough. For example:</p>
                   <div className="starters">
                     {STARTERS.map((s) => <button key={s} type="button" onClick={() => submit(s)} disabled={send.isPending}>{s}</button>)}
