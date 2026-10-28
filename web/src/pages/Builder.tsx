@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
@@ -11,6 +11,7 @@ import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
  * builder's questions, and get a package the server has already compiled against this
  * workspace. Saving stores it as an unsigned draft and opens it in the editor; publishing
  * still needs a signature. The conversation stays in this browser tab.
+ * Page pattern: split pane. The conversation is the left pane; the compiled draft opens beside it.
  */
 type Block =
   | { type: 'text'; text: string }
@@ -135,16 +136,20 @@ export function WorkflowBuilder() {
   };
   const [draft, setDraft] = useState('');
   const log = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
   useEffect(() => store(state), [state]);
 
   const ready = status.data?.providers.filter((p) => p.ready) ?? [];
   // A remembered provider that is no longer set up falls back to the server's default.
   const using = ready.some((p) => p.id === choice.provider) ? choice.provider : status.data?.default;
   const model = choice.provider === using ? choice.model : undefined;
+  // Stop only ends the wait in this tab; the server may still finish the turn, and nothing is added to the conversation.
+  const abort = useRef<AbortController | null>(null);
   const send = useMutation({
     mutationFn: async (text: string) => {
       const t0 = performance.now();
-      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model } });
+      abort.current = new AbortController();
+      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model }, signal: abort.current.signal });
       return { r, ms: Math.round(performance.now() - t0) };
     },
     onSuccess: ({ r, ms }) => {
@@ -166,10 +171,23 @@ export function WorkflowBuilder() {
       setDraft('');
     },
   });
-  // Keep the newest message in view inside the conversation, without scrolling the page.
+  // Follow the newest message only while the reader is at the bottom; otherwise offer a jump so reading is not interrupted.
+  const [away, setAway] = useState(false);
+  const toBottom = () => {
+    const el = log.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    setAway(false);
+  };
+  const onScroll = () => {
+    const el = log.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 48) setAway(false);
+  };
   useEffect(() => {
     const el = log.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) toBottom();
+    else setAway(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.messages.length, send.isPending]);
 
   const existing = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
@@ -213,13 +231,14 @@ export function WorkflowBuilder() {
   }, [state.messages]);
 
   const shown = state.shown ? state.proposals[state.shown] : undefined;
+  const latest = Object.values(state.proposals).at(-1);
   if (status.error) return <ErrorNote error={status.error} />;
   if (!status.data) return <Loading />;
   return (
     <>
       <PageHead
         title="Build a workflow with chat"
-        sub="Describe what you need. The builder asks a few questions, drafts a workflow from this workspace’s tools, datasets and examples, and checks it with the compiler. Publishing still needs your signature."
+        sub="The builder asks a few questions, drafts a workflow and checks it with the compiler. Publishing still needs your signature."
         actions={
           state.messages.length ? (
             confirmReset ? (
@@ -235,13 +254,16 @@ export function WorkflowBuilder() {
         }
       />
       {status.data.providers.length ? (
-        <ModelPicker
-          providers={status.data.providers}
-          provider={using}
-          model={model}
-          serverDefault={status.data.providers.find((p) => p.id === using)?.model}
-          onChange={setChoice}
-        />
+        <details className="model-fold">
+          <summary>Model: {status.data.providers.find((p) => p.id === using)?.label ?? 'none'} · {model ?? status.data.providers.find((p) => p.id === using)?.model ?? 'default'}</summary>
+          <ModelPicker
+            providers={status.data.providers}
+            provider={using}
+            model={model}
+            serverDefault={status.data.providers.find((p) => p.id === using)?.model}
+            onChange={setChoice}
+          />
+        </details>
       ) : null}
       {!ready.length ? (
         <Panel>
@@ -252,38 +274,59 @@ export function WorkflowBuilder() {
       ) : (
         <div className={`builder ${shown ? 'with-draft' : ''}`}>
           <section className="panel chat" aria-label="Conversation">
-            <UsageBar turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} />
-            <div className="chat-log" aria-live="polite" ref={log}>
+            {state.messages.length || send.isPending ? <UsageBar turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} /> : null}
+            <div className="sr-only" role="status">{send.isPending ? 'The builder is working' : send.isSuccess ? 'The builder replied' : ''}</div>
+            <div className="chat-log" ref={log} onScroll={onScroll} tabIndex={0} aria-label="Conversation messages">
               {!state.messages.length ? (
                 <div className="chat-empty">
+                  <p className="muted">What should the workflow do? A sentence or two is enough. Pick an example to edit, or write your own below.</p>
+                  <div className="starters">
+                    {STARTERS.map((s) => <button key={s} type="button" onClick={() => { setDraft(s); composer.current?.focus(); }} disabled={send.isPending}>{s}</button>)}
+                  </div>
                   {existing.data?.length ? (
                     <div className="edit-existing">
-                      <label htmlFor="edit-existing">Change an existing workflow</label>
+                      <label htmlFor="edit-existing">Or change an existing workflow</label>
                       <div className="row">
                         <select id="edit-existing" value={editSlug} onChange={(e) => setEditSlug(e.target.value)}>
                           <option value="">Choose a workflow…</option>
                           {existing.data.map((w) => <option key={w.slug} value={w.slug}>{w.latest?.name ? `${w.latest.name} (${w.slug})` : w.slug}</option>)}
                         </select>
-                        <button type="button" disabled={!editSlug || send.isPending} onClick={() => submit(`I want to change the existing workflow ${editSlug}. Read it first, then ask me what to change.`)}>Edit it</button>
+                        <button type="button" disabled={!editSlug || send.isPending} onClick={() => submit(`I want to change the existing workflow ${editSlug}. Read it first, then ask me what to change.`)}>Edit workflow</button>
                       </div>
-                      <p className="muted">Or create a new one:</p>
                     </div>
                   ) : null}
-                  <p className="muted">What should the workflow do? A sentence or two is enough. For example:</p>
-                  <div className="starters">
-                    {STARTERS.map((s) => <button key={s} type="button" onClick={() => submit(s)} disabled={send.isPending}>{s}</button>)}
-                  </div>
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
                 <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
-              {send.isPending ? <div className="bubble assistant pending" role="status"><span className="dots" aria-hidden="true" /> Working on it: reading the workspace, drafting and checking with the compiler… <span className="mono">{waited}s</span></div> : null}
-              <ErrorNote error={send.error} />
+              {send.isPending ? (
+                <div className="pending">
+                  <span className="dots" aria-hidden="true" />
+                  <span>Reading the workspace, drafting and checking with the compiler…</span>
+                  <span className="mono">{waited}s</span>
+                  <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>
+                </div>
+              ) : null}
+              {send.error && (send.error as Error).name === 'AbortError' ? <div className="chat-note muted small">Stopped. Nothing was added to the conversation; send it again to retry.</div> : <ErrorNote error={send.error} />}
             </div>
+            {away ? <button type="button" className="jump" onClick={toBottom}>New message ↓</button> : null}
+            {latest && state.shown !== latest.tool_use_id ? (
+              <div className="draft-bar">
+                <span><strong>{latest.name ?? latest.id}</strong> <Badge tone={latest.blockers.length ? 'bad' : 'ok'}>{latest.blockers.length ? 'blocked' : 'compiles'}</Badge> <span className="muted small">{latest.nodes.length} step{latest.nodes.length === 1 ? '' : 's'}</span></span>
+                <button type="button" onClick={() => setState((s) => ({ ...s, shown: latest.tool_use_id }))}>View draft</button>
+              </div>
+            ) : null}
             <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
+              {state.messages.length > 1 && !send.isPending ? (
+                <div className="chips">
+                  <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}>Draft it</button>
+                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}>Explain the draft</button> : null}
+                </div>
+              ) : null}
               <div className="composer-row">
                 <textarea
+                  ref={composer}
                   rows={2}
                   aria-label="Message"
                   aria-describedby="composer-meta"
@@ -293,7 +336,7 @@ export function WorkflowBuilder() {
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onKey}
                 />
-                <button type="submit" className="primary" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}>{send.isPending ? 'Sending…' : 'Send message'}</button>
+                <button type="submit" className="primary" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}>Send</button>
               </div>
               <div id="composer-meta" className="composer-meta muted">
                 <span><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line</span>
@@ -328,7 +371,11 @@ function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns:
     { label: 'Cached', value: sum('cache_read_tokens'), hint: 'Input tokens served from the provider’s prompt cache' },
   ];
   return (
-    <div className="usage" role="region" aria-label="Session usage">
+    <details className="usage" aria-label="Session usage">
+      <summary>
+        <span><strong>{compact(grand)}</strong> tokens · {turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
+        <span className={full ? 'warn-text' : 'muted'}>{messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
+      </summary>
       <div className="usage-main">
         <div className="usage-total">
           <span className="usage-label">Session tokens</span>
@@ -356,7 +403,7 @@ function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns:
           {full ? ' · start over soon' : ''}
         </span>
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -386,24 +433,42 @@ function MessageView({ m, proposals, tools, mcps, openAsk, busy, onAnswer, onSho
     const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
     return text ? <div className="bubble user">{text}</div> : null;
   }
-  return (
-    <>
-      {m.content.map((b, i) => {
-        if (b.type === 'text') return b.text.trim() ? <Markdown key={i} className="bubble assistant" text={b.text} /> : null;
-        if (b.type !== 'tool_use') return null;
-        if (b.name === 'ask_user') return <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />;
+  // Consecutive lookup notes collapse into one line so a long turn reads as its replies, not its tool calls.
+  const items: Array<{ note: boolean; node: ReactNode }> = [];
+  const push = (note: boolean, node: ReactNode) => items.push({ note, node });
+  const grouped = () => {
+    const out: ReactNode[] = [];
+    for (let i = 0; i < items.length; ) {
+      if (!items[i]!.note) { out.push(items[i]!.node); i++; continue; }
+      let j = i;
+      while (j < items.length && items[j]!.note) j++;
+      const run = items.slice(i, j);
+      out.push(run.length === 1 ? run[0]!.node : (
+        <details key={`l${i}`} className="lookups">
+          <summary>Looked at {run.length} things</summary>
+          {run.map((r) => r.node)}
+        </details>
+      ));
+      i = j;
+    }
+    return out;
+  };
+  m.content.forEach((b, i) => {
+        if (b.type === 'text') return void (b.text.trim() ? push(false, <div key={i} className="reply"><Markdown className="bubble assistant" text={b.text} /><CopyButton text={b.text} /></div>) : null);
+        if (b.type !== 'tool_use') return;
+        if (b.name === 'ask_user') return void push(false, <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />);
         if (b.name === 'propose_tool') {
           const t = tools[b.id];
-          return t ? <ToolCard key={i} t={t} /> : <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>;
+          return void (t ? push(false, <ToolCard key={i} t={t} />) : push(true, <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>));
         }
         if (b.name === 'propose_mcp_server') {
           const t = mcps[b.id];
-          return t ? <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} /> : <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>;
+          return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>));
         }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
-          if (!p) return <div key={i} className="chat-note muted small">Drafted a version the compiler sent back; fixing it…</div>;
-          return (
+          if (!p) return void push(true, <div key={i} className="chat-note muted small">Drafted a version the compiler sent back; fixing it…</div>);
+          return void push(false, (
             <div key={i} className="draft-card">
               <div>
                 <strong>{p.name ?? p.id}</strong> <Badge tone="ok">compiles</Badge>
@@ -412,14 +477,31 @@ function MessageView({ m, proposals, tools, mcps, openAsk, busy, onAnswer, onSho
               </div>
               <button type="button" onClick={() => onShow(b.id)} disabled={shown === b.id}>{shown === b.id ? 'Shown' : 'View draft'}</button>
             </div>
-          );
+          ));
         }
         const label = LOOKUPS[b.name];
         const what = b.input.ref ?? b.input.id ?? b.input.slug;
-        return label ? <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div> : null;
-      })}
+        if (label) push(true, <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div>);
+  });
+  return (
+    <>
+      {grouped()}
       {stat ? <TurnMeta s={stat} /> : null}
     </>
+  );
+}
+
+/** Copies one reply; says so for a moment, and says nothing when the clipboard is blocked. */
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      className="small-btn copy"
+      onClick={() => navigator.clipboard?.writeText(text).then(() => { setDone(true); window.setTimeout(() => setDone(false), 1500); }, () => undefined)}
+    >
+      {done ? 'Copied' : 'Copy'}
+    </button>
   );
 }
 
@@ -482,8 +564,10 @@ function Questions({ intro, questions, open, busy, onAnswer }: { intro?: string;
   const answerOf = (q: Question) => [...(picked[q.id] ?? []), ...(other[q.id]?.trim() ? [other[q.id]!.trim()] : [])].join('; ');
   const answered = questions.filter((q) => answerOf(q));
   const send = () => onAnswer(questions.map((q) => `${q.question}\n→ ${answerOf(q) || '(no preference, use your recommendation)'}`).join('\n\n'));
+  const Root = open ? 'div' : 'details';
   return (
-    <div className={`questions ${open ? '' : 'closed'}`}>
+    <Root className={`questions ${open ? '' : 'closed'}`}>
+      {open ? null : <summary>The builder asked {questions.length} question{questions.length === 1 ? '' : 's'}</summary>}
       {intro ? <p className="q-intro">{intro}</p> : null}
       <ol>
         {questions.map((q) => (
@@ -509,11 +593,11 @@ function Questions({ intro, questions, open, busy, onAnswer }: { intro?: string;
       {open ? (
         <div className="row">
           <button type="button" className="primary" disabled={busy || !answered.length} onClick={send}>Send answers</button>
-          <button type="button" disabled={busy} onClick={() => onAnswer('Use your recommendations for anything open and draft it now.')}>Skip, just draft it</button>
+          <button type="button" className="link" disabled={busy} onClick={() => onAnswer('Use your recommendations for anything open and draft it now.')}>Skip, just draft it</button>
           <span className="muted small">{answered.length} of {questions.length} answered</span>
         </div>
       ) : null}
-    </div>
+    </Root>
   );
 }
 
