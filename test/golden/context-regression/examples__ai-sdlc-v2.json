@@ -39,7 +39,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-v2",
-    "definitionHash": "sha256:687b510da260b39a80632de5090fa564b61155cf8bbfab5edb18146ae0e97885",
+    "definitionHash": "sha256:2879c96f9a0c2e0253eaeed7fc9f274eaa0017827ab815e088b38e40c90aa4fe",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -1086,15 +1086,54 @@
               "attempts": 3
             }
           },
-          "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
-          },
+          "context": [
+            "delivery_brief"
+          ],
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
             "max_tool_calls": 10
+          },
+          "input": {
+            "environment": {
+              "cel": "{'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}"
+            },
+            "ticket": {
+              "ref": "nodes.intake.output"
+            },
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "decisions": {
+              "ref": "nodes.design_review.output.data"
+            }
           }
         },
+        "inputParts": [
+          {
+            "key": "environment",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "ticket",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "requirements",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "design",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "decisions",
+            "source": "context:delivery_brief"
+          }
+        ],
         "timeoutMs": 3600000,
         "maxAttempts": 3,
         "route": {
@@ -1139,15 +1178,54 @@
             "depth": 1,
             "mode": "write"
           },
-          "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
-          },
+          "context": [
+            "delivery_brief"
+          ],
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
             "max_tool_calls": 10
+          },
+          "input": {
+            "environment": {
+              "cel": "{'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}"
+            },
+            "ticket": {
+              "ref": "nodes.intake.output"
+            },
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "decisions": {
+              "ref": "nodes.design_review.output.data"
+            }
           }
         },
+        "inputParts": [
+          {
+            "key": "environment",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "ticket",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "requirements",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "design",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "decisions",
+            "source": "context:delivery_brief"
+          }
+        ],
         "timeoutMs": 3600000,
         "maxAttempts": 3,
         "route": {
@@ -1197,15 +1275,54 @@
               "attempts": 3
             }
           },
-          "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
-          },
+          "context": [
+            "delivery_brief"
+          ],
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
             "max_tool_calls": 10
+          },
+          "input": {
+            "environment": {
+              "cel": "{'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}"
+            },
+            "ticket": {
+              "ref": "nodes.intake.output"
+            },
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "decisions": {
+              "ref": "nodes.design_review.output.data"
+            }
           }
         },
+        "inputParts": [
+          {
+            "key": "environment",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "ticket",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "requirements",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "design",
+            "source": "context:delivery_brief"
+          },
+          {
+            "key": "decisions",
+            "source": "context:delivery_brief"
+          }
+        ],
         "timeoutMs": 3600000,
         "maxAttempts": 3,
         "route": {
@@ -1281,15 +1398,40 @@
               "ref": "nodes.change_1.output.workspace"
             }
           },
-          "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
-          },
+          "context": [
+            "round_1"
+          ],
           "output_schema": "schemas/verdict.json",
           "timeout": "20m",
           "budget": {
             "max_tool_calls": 10
+          },
+          "input": {
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "change": {
+              "cel": "{'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}"
+            }
           }
         },
+        "inputParts": [
+          {
+            "key": "requirements",
+            "source": "context:round_1"
+          },
+          {
+            "key": "design",
+            "source": "context:round_1"
+          },
+          {
+            "key": "change",
+            "source": "context:round_1"
+          }
+        ],
         "timeoutMs": 1200000,
         "maxAttempts": 3,
         "route": {
@@ -1330,8 +1472,22 @@
               "ref": "nodes.change_1.output.workspace"
             }
           },
+          "context": [
+            "round_1"
+          ],
           "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "change": {
+              "cel": "{'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}"
+            },
+            "findings": {
+              "cel": "[{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]"
+            }
           },
           "output_schema": "schemas/verification.json",
           "timeout": "20m",
@@ -1339,6 +1495,24 @@
             "max_tool_calls": 10
           }
         },
+        "inputParts": [
+          {
+            "key": "requirements",
+            "source": "context:round_1"
+          },
+          {
+            "key": "design",
+            "source": "context:round_1"
+          },
+          {
+            "key": "change",
+            "source": "context:round_1"
+          },
+          {
+            "key": "findings",
+            "source": "input"
+          }
+        ],
         "timeoutMs": 1200000,
         "maxAttempts": 3,
         "agentTools": []
@@ -1701,15 +1875,40 @@
               "ref": "nodes.change_2.output.workspace"
             }
           },
-          "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
-          },
+          "context": [
+            "round_2"
+          ],
           "output_schema": "schemas/verdict.json",
           "timeout": "20m",
           "budget": {
             "max_tool_calls": 10
+          },
+          "input": {
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "change": {
+              "cel": "{'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}"
+            }
           }
         },
+        "inputParts": [
+          {
+            "key": "requirements",
+            "source": "context:round_2"
+          },
+          {
+            "key": "design",
+            "source": "context:round_2"
+          },
+          {
+            "key": "change",
+            "source": "context:round_2"
+          }
+        ],
         "timeoutMs": 1200000,
         "maxAttempts": 3,
         "route": {
@@ -1750,8 +1949,22 @@
               "ref": "nodes.change_2.output.workspace"
             }
           },
+          "context": [
+            "round_2"
+          ],
           "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+            "requirements": {
+              "ref": "nodes.plan.output.requirements"
+            },
+            "design": {
+              "ref": "nodes.plan.output.design"
+            },
+            "change": {
+              "cel": "{'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}"
+            },
+            "findings": {
+              "cel": "[{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]"
+            }
           },
           "output_schema": "schemas/verification.json",
           "timeout": "20m",
@@ -1759,6 +1972,24 @@
             "max_tool_calls": 10
           }
         },
+        "inputParts": [
+          {
+            "key": "requirements",
+            "source": "context:round_2"
+          },
+          {
+            "key": "design",
+            "source": "context:round_2"
+          },
+          {
+            "key": "change",
+            "source": "context:round_2"
+          },
+          {
+            "key": "findings",
+            "source": "input"
+          }
+        ],
         "timeoutMs": 1200000,
         "maxAttempts": 3,
         "agentTools": []

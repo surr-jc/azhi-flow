@@ -1,0 +1,1160 @@
+{
+  "note": "ai-sdlc-v2 as compiled before its inputs moved into shared contexts (from the regression golden, without a package). The adoption must change none of deps, dataDeps, taint or diagnostics, and each rewritten input must resolve to the same value.",
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_review_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_verify_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_review_2",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_verify_2",
+      "path": "workspace.from"
+    }
+  ],
+  "taint": {
+    "untrusted": {
+      "dor_check": "output of tainted agent dor_check",
+      "dor_gate": "output of tainted agent dor_check",
+      "dor_message": "output of tainted agent dor_check",
+      "dor_send_back": "output of tainted agent dor_check",
+      "preflight": "output of tainted agent preflight",
+      "preflight_gate": "output of tainted agent preflight",
+      "test_strategist": "output of tainted agent test_strategist",
+      "preflight_b": "output of tainted agent preflight_b",
+      "preflight_b_gate": "output of tainted agent preflight_b",
+      "static_notice": "output of tainted agent test_strategist",
+      "preflight_notify": "output of tainted agent test_strategist",
+      "plan": "output of tainted agent plan",
+      "weight_proposal": "output of tainted agent plan",
+      "build": "output of tainted agent build",
+      "build_untested": "output of tainted agent build_untested",
+      "build_static": "output of tainted agent build_static",
+      "change_1": "output of tainted agent build",
+      "lite_review_1": "output of tainted agent lite_review_1",
+      "lite_verify_1": "output of tainted agent lite_verify_1",
+      "lite_gate_1": "output of tainted agent lite_review_1",
+      "lite_fix": "output of tainted agent lite_fix",
+      "lite_fix_untested": "output of tainted agent lite_fix_untested",
+      "lite_fix_static": "output of tainted agent lite_fix_static",
+      "change_2": "output of tainted agent lite_fix",
+      "lite_changed": "output of tainted agent build",
+      "lite_review_2": "output of tainted agent lite_review_2",
+      "lite_verify_2": "output of tainted agent lite_verify_2",
+      "finalize": "output of tainted agent build",
+      "ship_gate": "output of tainted agent build",
+      "push_branch": "output of tainted agent build",
+      "open_pr": "output of tainted agent build",
+      "release": "output of tainted agent build",
+      "send_back": "output of tainted agent build",
+      "retro": "output of tainted agent dor_check"
+    },
+    "tainted": {
+      "dor_check": "reads a cloned repository (its files are untrusted)",
+      "preflight": "reads a cloned repository (its files are untrusted)",
+      "test_strategist": "reads a cloned repository (its files are untrusted)",
+      "preflight_b": "reads a cloned repository (its files are untrusted)",
+      "plan": "reads a cloned repository (its files are untrusted)",
+      "build": "reads a cloned repository (its files are untrusted)",
+      "build_untested": "reads a cloned repository (its files are untrusted)",
+      "build_static": "reads a cloned repository (its files are untrusted)",
+      "lite_review_1": "reads a cloned repository (its files are untrusted)",
+      "lite_verify_1": "reads a cloned repository (its files are untrusted)",
+      "lite_fix": "reads a cloned repository (its files are untrusted)",
+      "lite_fix_untested": "reads a cloned repository (its files are untrusted)",
+      "lite_fix_static": "reads a cloned repository (its files are untrusted)",
+      "lite_review_2": "reads a cloned repository (its files are untrusted)",
+      "lite_verify_2": "reads a cloned repository (its files are untrusted)"
+    },
+    "paths": [
+      {
+        "agent": "dor_check",
+        "write": "dor_send_back",
+        "path": [
+          "dor_check",
+          "dor_message",
+          "dor_send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "preflight",
+        "write": "send_back",
+        "path": [
+          "preflight",
+          "…",
+          "preflight_decision",
+          "…",
+          "send_back"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "preflight",
+        "write": "release",
+        "path": [
+          "preflight",
+          "…",
+          "preflight_decision",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "static_notice",
+        "path": [
+          "test_strategist",
+          "static_notice"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "preflight_notify",
+        "path": [
+          "test_strategist",
+          "preflight_notify"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "release",
+        "path": [
+          "test_strategist",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "send_back",
+        "path": [
+          "test_strategist",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "send_back",
+        "path": [
+          "test_strategist",
+          "…",
+          "preflight_decision",
+          "…",
+          "send_back"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "release",
+        "path": [
+          "test_strategist",
+          "…",
+          "preflight_decision",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "test_strategist",
+        "write": "release",
+        "path": [
+          "test_strategist",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "preflight_b",
+        "write": "send_back",
+        "path": [
+          "preflight_b",
+          "…",
+          "preflight_decision",
+          "…",
+          "send_back"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "preflight_b",
+        "write": "release",
+        "path": [
+          "preflight_b",
+          "…",
+          "preflight_decision",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "plan",
+        "write": "release",
+        "path": [
+          "plan",
+          "open_pr",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "plan",
+        "write": "send_back",
+        "path": [
+          "plan",
+          "weight_proposal",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "plan",
+        "write": "send_back",
+        "path": [
+          "plan",
+          "…",
+          "design_review",
+          "…",
+          "send_back"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "plan",
+        "write": "release",
+        "path": [
+          "plan",
+          "…",
+          "design_review",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "plan",
+        "write": "release",
+        "path": [
+          "plan",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "build",
+        "write": "release",
+        "path": [
+          "build",
+          "change_1",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build",
+        "write": "send_back",
+        "path": [
+          "build",
+          "change_1",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build",
+        "write": "release",
+        "path": [
+          "build",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "build_untested",
+        "write": "release",
+        "path": [
+          "build_untested",
+          "change_1",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build_untested",
+        "write": "send_back",
+        "path": [
+          "build_untested",
+          "change_1",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build_untested",
+        "write": "release",
+        "path": [
+          "build_untested",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "build_static",
+        "write": "release",
+        "path": [
+          "build_static",
+          "change_1",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build_static",
+        "write": "send_back",
+        "path": [
+          "build_static",
+          "change_1",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "build_static",
+        "write": "release",
+        "path": [
+          "build_static",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_review_1",
+        "write": "release",
+        "path": [
+          "lite_review_1",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_review_1",
+        "write": "send_back",
+        "path": [
+          "lite_review_1",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_review_1",
+        "write": "release",
+        "path": [
+          "lite_review_1",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_verify_1",
+        "write": "release",
+        "path": [
+          "lite_verify_1",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_verify_1",
+        "write": "send_back",
+        "path": [
+          "lite_verify_1",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_verify_1",
+        "write": "release",
+        "path": [
+          "lite_verify_1",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_fix",
+        "write": "release",
+        "path": [
+          "lite_fix",
+          "change_2",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix",
+        "write": "send_back",
+        "path": [
+          "lite_fix",
+          "change_2",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix",
+        "write": "release",
+        "path": [
+          "lite_fix",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_fix_untested",
+        "write": "release",
+        "path": [
+          "lite_fix_untested",
+          "change_2",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix_untested",
+        "write": "send_back",
+        "path": [
+          "lite_fix_untested",
+          "change_2",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix_untested",
+        "write": "release",
+        "path": [
+          "lite_fix_untested",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_fix_static",
+        "write": "release",
+        "path": [
+          "lite_fix_static",
+          "change_2",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix_static",
+        "write": "send_back",
+        "path": [
+          "lite_fix_static",
+          "change_2",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_fix_static",
+        "write": "release",
+        "path": [
+          "lite_fix_static",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_review_2",
+        "write": "release",
+        "path": [
+          "lite_review_2",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_review_2",
+        "write": "send_back",
+        "path": [
+          "lite_review_2",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_review_2",
+        "write": "release",
+        "path": [
+          "lite_review_2",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      },
+      {
+        "agent": "lite_verify_2",
+        "write": "release",
+        "path": [
+          "lite_verify_2",
+          "finalize",
+          "release"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_verify_2",
+        "write": "send_back",
+        "path": [
+          "lite_verify_2",
+          "finalize",
+          "send_back"
+        ],
+        "gate": "guard"
+      },
+      {
+        "agent": "lite_verify_2",
+        "write": "release",
+        "path": [
+          "lite_verify_2",
+          "…",
+          "release_approval",
+          "…",
+          "release"
+        ],
+        "gate": "approval"
+      }
+    ]
+  },
+  "nodes": {
+    "source": {
+      "deps": [],
+      "dataDeps": []
+    },
+    "github_issue": {
+      "deps": [
+        "source"
+      ],
+      "dataDeps": []
+    },
+    "intake": {
+      "deps": [
+        "github_issue"
+      ],
+      "dataDeps": [
+        "github_issue"
+      ]
+    },
+    "dor_check": {
+      "deps": [
+        "intake"
+      ],
+      "dataDeps": [
+        "intake"
+      ]
+    },
+    "dor_gate": {
+      "deps": [
+        "dor_check"
+      ],
+      "dataDeps": [
+        "dor_check"
+      ]
+    },
+    "dor_message": {
+      "deps": [
+        "dor_check",
+        "dor_gate",
+        "intake"
+      ],
+      "dataDeps": [
+        "dor_check",
+        "intake"
+      ]
+    },
+    "dor_send_back": {
+      "deps": [
+        "dor_message"
+      ],
+      "dataDeps": [
+        "dor_message"
+      ]
+    },
+    "preflight": {
+      "deps": [
+        "dor_gate"
+      ],
+      "dataDeps": []
+    },
+    "preflight_gate": {
+      "deps": [
+        "preflight"
+      ],
+      "dataDeps": [
+        "preflight"
+      ]
+    },
+    "test_strategist": {
+      "deps": [
+        "preflight",
+        "preflight_gate"
+      ],
+      "dataDeps": [
+        "preflight"
+      ]
+    },
+    "preflight_b": {
+      "deps": [
+        "preflight_gate",
+        "test_strategist"
+      ],
+      "dataDeps": []
+    },
+    "preflight_b_gate": {
+      "deps": [
+        "preflight_b"
+      ],
+      "dataDeps": [
+        "preflight_b"
+      ]
+    },
+    "preflight_b_ok": {
+      "deps": [
+        "preflight_b_gate"
+      ],
+      "dataDeps": []
+    },
+    "static_notice": {
+      "deps": [
+        "intake",
+        "preflight_b_gate",
+        "test_strategist"
+      ],
+      "dataDeps": [
+        "intake",
+        "test_strategist"
+      ]
+    },
+    "preflight_ok": {
+      "deps": [
+        "preflight_gate"
+      ],
+      "dataDeps": []
+    },
+    "preflight_notify": {
+      "deps": [
+        "intake",
+        "preflight_b_gate",
+        "test_strategist"
+      ],
+      "dataDeps": [
+        "intake",
+        "test_strategist"
+      ]
+    },
+    "preflight_decision": {
+      "deps": [
+        "preflight",
+        "preflight_b",
+        "preflight_b_gate",
+        "test_strategist"
+      ],
+      "dataDeps": [
+        "preflight",
+        "preflight_b",
+        "test_strategist"
+      ]
+    },
+    "plan": {
+      "deps": [
+        "intake",
+        "preflight_b_ok",
+        "preflight_decision",
+        "preflight_ok"
+      ],
+      "dataDeps": [
+        "intake"
+      ]
+    },
+    "mode": {
+      "deps": [
+        "preflight_b_ok",
+        "preflight_decision",
+        "preflight_ok"
+      ],
+      "dataDeps": [
+        "preflight_b_ok",
+        "preflight_decision",
+        "preflight_ok"
+      ]
+    },
+    "weight_proposal": {
+      "deps": [
+        "plan"
+      ],
+      "dataDeps": [
+        "plan"
+      ]
+    },
+    "design_review": {
+      "deps": [
+        "intake",
+        "plan",
+        "weight_proposal"
+      ],
+      "dataDeps": [
+        "intake",
+        "plan",
+        "weight_proposal"
+      ]
+    },
+    "weight": {
+      "deps": [],
+      "dataDeps": []
+    },
+    "build_mode": {
+      "deps": [
+        "design_review",
+        "mode"
+      ],
+      "dataDeps": [
+        "mode"
+      ]
+    },
+    "build": {
+      "deps": [
+        "build_mode",
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ]
+    },
+    "build_untested": {
+      "deps": [
+        "build_mode",
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ]
+    },
+    "build_static": {
+      "deps": [
+        "build_mode",
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "design_review",
+        "intake",
+        "mode",
+        "plan"
+      ]
+    },
+    "change_1": {
+      "deps": [
+        "build",
+        "build_static",
+        "build_untested"
+      ],
+      "dataDeps": [
+        "build",
+        "build_static",
+        "build_untested"
+      ]
+    },
+    "lite_review_1": {
+      "deps": [
+        "change_1",
+        "plan",
+        "weight"
+      ],
+      "dataDeps": [
+        "change_1",
+        "plan"
+      ]
+    },
+    "lite_verify_1": {
+      "deps": [
+        "change_1",
+        "lite_review_1",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_1",
+        "lite_review_1",
+        "plan"
+      ]
+    },
+    "lite_gate_1": {
+      "deps": [
+        "lite_review_1",
+        "lite_verify_1"
+      ],
+      "dataDeps": [
+        "lite_review_1",
+        "lite_verify_1"
+      ]
+    },
+    "fix_mode": {
+      "deps": [
+        "lite_gate_1",
+        "mode"
+      ],
+      "dataDeps": [
+        "mode"
+      ]
+    },
+    "lite_fix": {
+      "deps": [
+        "change_1",
+        "design_review",
+        "fix_mode",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_1",
+        "design_review",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ]
+    },
+    "lite_fix_untested": {
+      "deps": [
+        "change_1",
+        "design_review",
+        "fix_mode",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_1",
+        "design_review",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ]
+    },
+    "lite_fix_static": {
+      "deps": [
+        "change_1",
+        "design_review",
+        "fix_mode",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_1",
+        "design_review",
+        "intake",
+        "lite_review_1",
+        "lite_verify_1",
+        "mode",
+        "plan"
+      ]
+    },
+    "change_2": {
+      "deps": [
+        "lite_fix",
+        "lite_fix_static",
+        "lite_fix_untested"
+      ],
+      "dataDeps": [
+        "lite_fix",
+        "lite_fix_static",
+        "lite_fix_untested"
+      ]
+    },
+    "lite_changed": {
+      "deps": [
+        "change_1",
+        "change_2"
+      ],
+      "dataDeps": [
+        "change_1",
+        "change_2"
+      ]
+    },
+    "lite_review_2": {
+      "deps": [
+        "change_2",
+        "lite_changed",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_2",
+        "plan"
+      ]
+    },
+    "lite_verify_2": {
+      "deps": [
+        "change_2",
+        "lite_review_2",
+        "plan"
+      ],
+      "dataDeps": [
+        "change_2",
+        "lite_review_2",
+        "plan"
+      ]
+    },
+    "finalize": {
+      "deps": [
+        "change_1",
+        "change_2",
+        "design_review",
+        "lite_review_1",
+        "lite_review_2",
+        "lite_verify_1",
+        "lite_verify_2",
+        "mode",
+        "test_strategist",
+        "weight_proposal"
+      ],
+      "dataDeps": [
+        "change_1",
+        "change_2",
+        "design_review",
+        "lite_review_1",
+        "lite_review_2",
+        "lite_verify_1",
+        "lite_verify_2",
+        "mode",
+        "test_strategist",
+        "weight_proposal"
+      ]
+    },
+    "ship_gate": {
+      "deps": [
+        "finalize"
+      ],
+      "dataDeps": [
+        "finalize"
+      ]
+    },
+    "release_approval": {
+      "deps": [
+        "finalize",
+        "intake",
+        "ship_gate",
+        "weight"
+      ],
+      "dataDeps": [
+        "finalize",
+        "intake",
+        "weight"
+      ]
+    },
+    "push_branch": {
+      "deps": [
+        "finalize",
+        "intake",
+        "release_approval"
+      ],
+      "dataDeps": [
+        "finalize",
+        "intake"
+      ]
+    },
+    "open_pr": {
+      "deps": [
+        "finalize",
+        "intake",
+        "plan",
+        "push_branch",
+        "release_approval"
+      ],
+      "dataDeps": [
+        "finalize",
+        "intake",
+        "plan",
+        "push_branch",
+        "release_approval"
+      ]
+    },
+    "release": {
+      "deps": [
+        "finalize",
+        "intake",
+        "open_pr"
+      ],
+      "dataDeps": [
+        "finalize",
+        "intake",
+        "open_pr"
+      ]
+    },
+    "send_back": {
+      "deps": [
+        "finalize",
+        "intake",
+        "ship_gate"
+      ],
+      "dataDeps": [
+        "finalize",
+        "intake"
+      ]
+    },
+    "retro": {
+      "deps": [
+        "dor_check",
+        "finalize",
+        "intake",
+        "open_pr",
+        "plan",
+        "push_branch",
+        "release",
+        "weight"
+      ],
+      "dataDeps": [
+        "dor_check",
+        "finalize",
+        "intake",
+        "open_pr",
+        "plan",
+        "push_branch",
+        "weight"
+      ]
+    }
+  },
+  "inputs": {
+    "build": {
+      "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    },
+    "build_static": {
+      "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    },
+    "build_untested": {
+      "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    },
+    "lite_review_1": {
+      "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
+    },
+    "lite_verify_1": {
+      "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+    },
+    "lite_review_2": {
+      "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
+    },
+    "lite_verify_2": {
+      "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+    }
+  }
+}

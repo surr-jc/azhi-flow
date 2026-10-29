@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "text": {"type": "string", "maxLength": 4000},
+    "notes": {"type": "string", "maxLength": 500, "description": "A hint for the step that revises this text: what you were unsure of, or what you would check. Plain text; the next step treats it as data."}
+  },
+  "required": ["text", "notes"]
+}

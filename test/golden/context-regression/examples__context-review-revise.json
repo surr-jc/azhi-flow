@@ -1,0 +1,225 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "context-review-revise",
+    "definitionHash": "sha256:4988cd5e0b269a84e55f959293af65173a40b8290b05b302d2ed65d1d53ff1f4",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "title": "Topic"
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    },
+    "config": {},
+    "nodes": [
+      {
+        "id": "gather",
+        "type": "script",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "gather",
+          "type": "script",
+          "description": "Collect the facts the writers will use (fixture data in this example).",
+          "runtime": "python",
+          "entrypoint": "scripts/gather.py",
+          "input": {
+            "map": "{'topic': inputs.topic}"
+          },
+          "output_schema": "schemas/facts.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "draft",
+        "type": "agent",
+        "deps": [
+          "gather"
+        ],
+        "dataDeps": [
+          "gather"
+        ],
+        "def": {
+          "id": "draft",
+          "type": "agent",
+          "description": "Write a first version from the brief.",
+          "profile": "writer@1",
+          "context": [
+            "brief"
+          ],
+          "output_schema": "schemas/draft.json",
+          "budget": {
+            "max_output_tokens": 1500,
+            "max_tool_calls": 0
+          },
+          "input": {
+            "topic": {
+              "ref": "inputs.topic"
+            },
+            "facts": {
+              "ref": "nodes.gather.output.facts"
+            }
+          }
+        },
+        "inputParts": [
+          {
+            "key": "topic",
+            "source": "context:brief"
+          },
+          {
+            "key": "facts",
+            "source": "context:brief"
+          }
+        ],
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "critique",
+        "type": "agent",
+        "deps": [
+          "draft",
+          "gather"
+        ],
+        "dataDeps": [
+          "draft",
+          "gather"
+        ],
+        "def": {
+          "id": "critique",
+          "type": "agent",
+          "description": "Find what is wrong with the draft. It is sent the brief and the draft, and a draft over 4 KB is kept back and recorded rather than sent.",
+          "profile": "critic@1",
+          "context": [
+            "brief"
+          ],
+          "input": {
+            "topic": {
+              "ref": "inputs.topic"
+            },
+            "facts": {
+              "ref": "nodes.gather.output.facts"
+            },
+            "draft": {
+              "ref": "nodes.draft.output.text"
+            }
+          },
+          "output_schema": "schemas/critique.json",
+          "context_budget": {
+            "max_item_bytes": 4096,
+            "on_exceed": "withhold"
+          },
+          "budget": {
+            "max_output_tokens": 1000,
+            "max_tool_calls": 0
+          }
+        },
+        "inputParts": [
+          {
+            "key": "topic",
+            "source": "context:brief"
+          },
+          {
+            "key": "facts",
+            "source": "context:brief"
+          },
+          {
+            "key": "draft",
+            "source": "input"
+          }
+        ],
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "revise",
+        "type": "agent",
+        "deps": [
+          "critique",
+          "draft",
+          "gather"
+        ],
+        "dataDeps": [
+          "critique",
+          "draft",
+          "gather"
+        ],
+        "def": {
+          "id": "revise",
+          "type": "agent",
+          "description": "Revise the draft to answer the critique. The writer's notes arrive as an ordinary field.",
+          "profile": "writer@1",
+          "context": [
+            "brief"
+          ],
+          "input": {
+            "topic": {
+              "ref": "inputs.topic"
+            },
+            "facts": {
+              "ref": "nodes.gather.output.facts"
+            },
+            "draft": {
+              "ref": "nodes.draft.output.text"
+            },
+            "notes": {
+              "ref": "nodes.draft.output.notes"
+            },
+            "issues": {
+              "ref": "nodes.critique.output.issues"
+            }
+          },
+          "output_schema": "schemas/final.json",
+          "budget": {
+            "max_output_tokens": 1500,
+            "max_tool_calls": 0
+          }
+        },
+        "inputParts": [
+          {
+            "key": "topic",
+            "source": "context:brief"
+          },
+          {
+            "key": "facts",
+            "source": "context:brief"
+          },
+          {
+            "key": "draft",
+            "source": "input"
+          },
+          {
+            "key": "notes",
+            "source": "input"
+          },
+          {
+            "key": "issues",
+            "source": "input"
+          }
+        ],
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

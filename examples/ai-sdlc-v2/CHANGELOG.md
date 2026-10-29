@@ -1,5 +1,13 @@
 # Changelog
 
+## Shared contexts for repeated inputs
+
+| Gap | Change |
+|---|---|
+| The engineer's input (environment, ticket, requirements, design, decisions) was written out three times, once for the tested, the static-checks and the untested build, and each review round's change (a seven-field CEL map) was written twice per round, so an edit to one copy was easy to miss | `contexts:` defines `delivery_brief` (the three builds), and `round_1` and `round_2` (the lite reviewer and the verifier of each round). The seven steps list `context:` instead of repeating the map; the verifiers add their `findings` as their own input key. |
+
+Nothing the workflow does changes: the compiled plan has the same order, data edges, taint and diagnostics as before, and every one of the seven steps gets the same input, key for key (`test/ai-sdlc-v2-contexts.test.ts` checks both against the plan from before the change). The contexts only hold values from steps the using steps already wait on, so they add no skip coupling. The shared `workspace:` block (about a dozen copies) is not covered by contexts and is unchanged. An installed copy is updated by the usual three-way merge. If you edited the old `input` of one of these seven steps, the update reports a conflict and keeps your `input`, and the merged step then fails to compile (`context_input_shape`: a `{map: ...}` input cannot be combined with a context) until you move your change into the context or into per-key values.
+
 ## Reviewers and verifiers see the change they review
 
 | Gap | Change |
