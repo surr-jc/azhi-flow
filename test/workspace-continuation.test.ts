@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startFakeGit } from '../src/testing/fake-git.js';
-import { applyContinuation, unsafePath, validateContinuation, type Continuation, type ContinuationFile } from '../src/worker/continuation.js';
+import { applyContinuation, resolveWorkspace, unsafePath, validateContinuation, type Continuation, type ContinuationFile } from '../src/worker/continuation.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, stageChange, type Checkout } from '../src/worker/workspace.js';
 
 /**
@@ -162,6 +162,33 @@ describe.skipIf(!hasGit)('workspace continuation', () => {
     await expect(clone(change({ files: [{ path: '../escape.txt', status: 'added', mode: '100644', encoding: 'utf-8', content: 'x' }] }))).rejects.toThrow(/'\.\.' segment/);
     expect(existsSync(join(step, 'repo'))).toBe(false);
     expect(existsSync(join(root, 'escape.txt'))).toBe(false);
+  });
+});
+
+describe('resolveWorkspace', () => {
+  const base = 'c'.repeat(40);
+  const spec = { host: 'https://github.com', repo: 'acme/shop', ref: 'HEAD' };
+  const api = (body: string | Error) => ({ raw: async () => (body instanceof Error ? Promise.reject(body) : Buffer.from(body)) });
+
+  it('returns the spec unchanged when there is no continuation', async () => {
+    expect(await resolveWorkspace(spec, api(new Error('must not be called')))).toEqual(spec);
+  });
+
+  it('fetches the artifact by hash and fills in the files', async () => {
+    const asked: string[] = [];
+    const files = [{ path: 'a.js', status: 'added', mode: '100644', content: 'x', encoding: 'utf-8' }];
+    const client = { raw: async (p: string) => (asked.push(p), Buffer.from(JSON.stringify({ baseSha: base, files }))) };
+    const r = await resolveWorkspace({ ...spec, continuation: { artifact: 'sha256:abc', baseSha: base } }, client);
+    expect(asked).toEqual(['/v1/artifacts/sha256%3Aabc']);
+    expect(r.continuation).toEqual({ baseSha: base, files });
+    expect(r).toMatchObject(spec);
+  });
+
+  it('retries a fetch that failed, but not a change that is wrong', async () => {
+    await expect(resolveWorkspace({ ...spec, continuation: { artifact: 'sha256:abc', baseSha: base } }, api(new Error('503')))).rejects.toMatchObject({ type: 'transient', nonRetryable: false });
+    await expect(resolveWorkspace({ ...spec, continuation: { artifact: 'sha256:abc', baseSha: base } }, api('not json'))).rejects.toMatchObject({ type: 'invalid_input', nonRetryable: true });
+    await expect(resolveWorkspace({ ...spec, continuation: { artifact: 'sha256:abc', baseSha: base } }, api(JSON.stringify({ baseSha: 'd'.repeat(40), files: [] })))).rejects.toThrow(/does not match the one the server prepared/);
+    await expect(resolveWorkspace({ ...spec, continuation: { artifact: 'sha256:abc', baseSha: base } }, api(JSON.stringify({ baseSha: base })))).rejects.toThrow(/does not match/);
   });
 });
 
