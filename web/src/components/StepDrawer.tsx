@@ -121,7 +121,9 @@ function DataTab({ node, nodes, onPick }: { node: PlanNode; nodes: PlanNode[]; o
   const schema = def.output_schema;
   return (
     <>
-      <ConfigRow label="Gets" value={gets.length ? undefined : 'nothing from other steps'} help="Where this step's input comes from. A step sees only what is mapped in." from={gets} steps={ids} onPick={onPick} />
+      <ConfigRow label="Gets" value={gets.length ? undefined : 'nothing from other steps'} help="Where this step's input comes from. A step sees only what is mapped in." from={gets} steps={ids} onPick={onPick}>
+        {node.bundles?.length ? <p className="muted small">Includes shared {node.bundles.length === 1 ? 'context' : 'contexts'} {node.bundles.map((b) => `${b.name}${b.from.length ? ` (from ${b.from.join(', ')})` : ''}`).join('; ')}.</p> : null}
+      </ConfigRow>
       <ConfigRow label="Returns" value={typeof schema === 'string' ? schema : schema ? 'inline schema' : brief(def.output) || 'its output'} help={schema ? 'The shape of this step\'s output. A reply that does not match fails the step.' : undefined} />
       <ConfigRow label="Feeds" value={feeds.length ? undefined : 'no later step'} help="Steps that read this step's output or run after it.">
         {feeds.length ? <div className="cfg-from">{feeds.map((d) => <button key={d} type="button" className="chip-link" onClick={() => onPick(d)}>{d}</button>)}</div> : null}

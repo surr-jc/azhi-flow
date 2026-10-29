@@ -7,7 +7,7 @@ import { ModelChoice, ModelSteps } from '../components/ModelChoice';
 import { EXECUTOR_BLURB, FactChips, HbSection, PickList } from '../components/HarnessParts';
 import { Icon } from '../icons';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
-import { graphOf } from '../graph';
+import { graphOf, renameStep, reorder } from '../graph';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
@@ -35,6 +35,8 @@ const PROFILE_PROVIDER_MODELS: Record<string, string> = { anthropic: 'anthropic'
 const PROFILE_PROVIDER_CREDENTIALS: Record<string, string> = { anthropic: 'anthropic-api-key', openai: 'openai-api-key', 'github-copilot': 'github-copilot-token', 'openai-chatgpt': 'openai-chatgpt-auth' };
 
 type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string; help?: string };
+/** Agent, script and report steps can take keys from the workflow's shared contexts (Workflow settings). */
+const CONTEXT_FIELD: Field = { key: 'context', label: 'Shared context', kind: 'list', hint: 'Names of contexts defined in the workflow settings' };
 const COMMON: Field[] = [
   { key: 'timeout', label: 'Timeout', kind: 'text', hint: 'For example 10m' },
   { key: 'retry', label: 'Retry', kind: 'value', hint: 'For example max_attempts: 3' },
@@ -50,6 +52,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'profile', label: 'Profile', kind: 'text', suggest: 'profiles' },
     { key: 'executor', label: 'Executor', kind: 'text', hint: 'Empty for the built-in model agent' },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'output_schema', label: 'Output schema', kind: 'text', suggest: 'schemas' },
     { key: 'tools', label: 'Tools the agent may call', kind: 'list' },
     { key: 'datasets', label: 'Datasets', kind: 'list' },
@@ -59,6 +62,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'runtime', label: 'Runtime', kind: 'select', options: ['python', 'bun'] },
     { key: 'entrypoint', label: 'Entrypoint', kind: 'text', suggest: 'files' },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'output_schema', label: 'Output schema', kind: 'text', suggest: 'schemas' },
   ],
   retrieve: [
@@ -101,6 +105,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'template', label: 'Template', kind: 'text', suggest: 'files' },
     { key: 'format', label: 'Format', kind: 'select', options: ['', 'markdown', 'html', 'csv'] },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'summary', label: 'Summary', kind: 'value' },
   ],
   notify: [
@@ -136,26 +141,6 @@ function upstream(nodes: PlanNode[], id: string): Set<string> {
   return out;
 }
 
-/** Renames a step and every reference to it: depends_on, routes, refs and CEL. */
-function renameStep(def: Definition, from: string, to: string): Definition {
-  const swap = (v: unknown): unknown => JSON.parse(JSON.stringify(v).replace(new RegExp(`nodes\\.${from}(?![A-Za-z0-9_])`, 'g'), `nodes.${to}`));
-  return {
-    ...def,
-    nodes: def.nodes.map((n) => {
-      const { id, type, depends_on, routes, ...rest } = n;
-      const out: Step = { id: id === from ? to : id, type, ...(swap(rest) as object) };
-      if (depends_on) out.depends_on = depends_on.map((d: string) => (d === from ? to : d));
-      if (routes) out.routes = Object.fromEntries(Object.entries(routes as Record<string, string[]>).map(([k, ms]) => [k, Array.isArray(ms) ? ms.map((m) => (m === from ? to : m)) : ms]));
-      return reorder(out);
-    }),
-  };
-}
-
-/** Keeps the usual key order (id, type, description, depends_on first) so the YAML reads well. */
-function reorder(n: Step): Step {
-  const { id, type, description, depends_on, ...rest } = n;
-  return { id, type, ...(description !== undefined ? { description } : {}), ...(depends_on?.length ? { depends_on } : {}), ...rest };
-}
 
 export function WorkflowEditor({ slug }: { slug: string }) {
   const me = useMe();
@@ -300,7 +285,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   };
   const cardSettings = (n: PlanNode) => {
     const s = (n.def ?? { id: n.id, type: n.type }) as Step;
-    const changed = changedKeys(s);
+    // The card shows the step with its contexts merged in; "changed" is judged on what is actually written in the step.
+    const changed = changedKeys(def.nodes.find((x) => x.id === n.id) ?? s);
     return keySettings(s, tools.data ?? []).map((r) => ({ ...r, changed: r.keys.some((k) => changed.has(k)) }));
   };
 
@@ -496,7 +482,9 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
   };
   const summary = keySettings(step, harness.tools);
   const changes = saved ? Object.keys({ ...saved, ...step }).filter((k) => JSON.stringify(saved[k]) !== JSON.stringify(step[k])).length : 0;
-  const typed = (FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key)));
+  // A step that joins branches (merge: any) cannot take a context: a bundle would make it run when no branch did.
+  const noContext = step.merge === 'any';
+  const typed = (FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key)) && !(noContext && f.key === 'context'));
   const row = (f: Field) => <FieldInput key={f.key} row field={{ ...f, help: helpFor(step.type, f.key) }} value={step[f.key]} was={was(f.key)} onChange={(v) => set(f.key, v)} />;
   return (
     <section className="panel step-panel" aria-label={`Step ${step.id}`}>
@@ -563,6 +551,7 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
             <h3>{t?.label ?? step.type} settings</h3>
             {step.type !== 'agent' ? <p className="muted small">{TYPE_HELP[step.type]}</p> : null}
             {typed.map(row)}
+            {noContext && (FIELDS[step.type] ?? []).some((f) => f.key === 'context') ? <p className="muted small">Shared contexts are not available on a step that joins branches (merge: any): a value taken from a step that always runs would make it run when no branch did. Write its input out, with has() guards.</p> : null}
           </section>
         ) : null}
 
@@ -653,7 +642,9 @@ function ListInput({ field: f, value, onChange, row, was }: { field: Field; valu
       spellCheck={false}
       onChange={(e) => {
         setText(e.target.value);
-        onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean));
+        const names = e.target.value.split(',').map((x) => x.trim()).filter(Boolean);
+        // A step's context list needs at least one name; emptying the field takes the key away.
+        onChange(names.length || f.key !== 'context' ? names : undefined);
       }}
     />
   );
@@ -707,6 +698,11 @@ function ValueInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
+/** Contexts defined in the workflow that no step lists. */
+function unusedContexts(def: Definition): string[] {
+  return Object.keys((def.contexts ?? {}) as Record<string, unknown>).filter((name) => !def.nodes.some((n) => Array.isArray(n.context) && n.context.includes(name)));
+}
+
 function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: Definition) => void; plan?: RunPlan }) {
   const set = (key: string, value: unknown) => {
     const next: Definition = { ...def };
@@ -728,6 +724,8 @@ function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: 
         </SettingRow>
         {plan ? <div className="set-row"><div className="set-label"><p>Model of each agent step, with this edit.</p></div><div className="set-control"><ModelSteps plan={plan} /></div></div> : null}
         <ValueInput row field={{ key: 'config', label: 'Config', kind: 'value', help: 'Fixed values such as the Slack channel. Steps read them as config.name.' }} value={def.config} onChange={(v) => set('config', v)} />
+        <ValueInput row field={{ key: 'contexts', label: 'Shared contexts', kind: 'value', help: 'Named sets of values several steps need, written once. A step that lists the name under Shared context takes the keys into its input. Every value becomes a dependency of every step that uses it, so keep it small and keep values from conditional branches out.', hint: 'name: {key: {ref: nodes.step.output.field}}' }} value={def.contexts} onChange={(v) => set('contexts', v)} />
+        {unusedContexts(def).length ? <p className="muted small">Not used by any step: {unusedContexts(def).join(', ')}.</p> : null}
       </div>
     </section>
   );

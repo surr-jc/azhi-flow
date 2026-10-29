@@ -551,6 +551,17 @@ export async function applyChange(
 
 const describe = (d: Diagnostic) => `${d.severity} ${d.code}${d.node ? ` [${d.node}]` : ''}${d.path ? ` at ${d.path}` : ''}: ${d.message}`;
 
+/** One line per step that takes keys from shared contexts, so the summary for the person can say where its input comes from. */
+export function contextNotes(nodes: unknown[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes as Array<{ id: string; inputParts?: Array<{ key: string; source: string }> }>) {
+    const by = new Map<string, string[]>();
+    for (const p of n.inputParts ?? []) if (p.source.startsWith('context:')) by.set(p.source.slice('context:'.length), [...(by.get(p.source.slice('context:'.length)) ?? []), p.key]);
+    if (by.size) out.push(`step '${n.id}' takes ${[...by].map(([bundle, keys]) => `${keys.join(', ')} from shared context '${bundle}'`).join('; ')}`);
+  }
+  return out;
+}
+
 /** Checks a proposed package's paths and id, compiles it, and builds its run plan. */
 export async function checkProposal(
   ctx: AppContext,
@@ -613,7 +624,7 @@ export async function checkProposal(
     id: r.definition.id,
     name: r.definition.name,
     files: clean,
-    nodes: r.compiled.plan.nodes.map((n) => ({ id: n.id, type: n.type, deps: n.deps, ...(n.route ? { route: n.route } : {}), def: n.def })),
+    nodes: r.compiled.plan.nodes.map((n) => ({ id: n.id, type: n.type, deps: n.deps, ...(n.route ? { route: n.route } : {}), ...(n.inputParts ? { inputParts: n.inputParts } : {}), def: n.def })),
     warnings: r.compiled.diagnostics.filter((d) => d.severity !== 'error'),
     missing,
     blockers,
@@ -713,6 +724,7 @@ export async function builderTurn(
           } else {
             const notes = [
               ...r.warnings.map(describe),
+              ...contextNotes(r.nodes),
               ...r.missing.map((m) => `missing ${m.kind} '${m.name}' (step ${m.node})`),
               ...r.blockers.map((b) => `run plan blocker ${b.code}: ${b.message}`),
             ];

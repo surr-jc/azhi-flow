@@ -26,6 +26,8 @@ export interface PlanNode {
   deps: string[];
   route?: { condition: string; route: string };
   def?: Record<string, any>;
+  /** Shared contexts the step takes input from, and the steps each one reads. */
+  bundles?: Array<{ name: string; from: string[] }>;
 }
 
 export interface NodeRunState {
