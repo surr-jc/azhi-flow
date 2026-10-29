@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Jira intake reads through the workspace's `jira-ccp_get_issue@1` tool instead of the bundled mcp-atlassian
+  `jira.get-issue`, which is removed along with the `jira_url` setting. Register `jira-ccp_get_issue@1` (and
+  `jira-ccp_jira_search@1` if a step should search) before installing; the Confluence tool is unchanged.
+- Meant for workers running OpenCode 2 (`AZHI_OPENCODE_MAJOR=2`, `azhi setup --opencode2`); the steps still say
+  `executor: opencode`, the worker picks the version.
+
 ## 1.0.0
 
 Derived from AI-SDLC v2 (see `../ai-sdlc-v2/CHANGELOG.md` for its history).

@@ -5,10 +5,6 @@ settings:
       must be in it).
     placeholder: C0123ABCD
     required: true
-  - name: jira_url
-    title: Jira site
-    description: Your Jira Cloud address. Needed only for source=jira.
-    placeholder: https://your-company.atlassian.net
   - name: confluence_url
     title: Confluence site
     description: Your Confluence Cloud address (usually the Jira address plus
@@ -20,37 +16,6 @@ settings:
       and Confluence).
     placeholder: you@example.com
 tools:
-  - id: jira.get-issue
-    version: 1
-    description: One Jira issue, read through the Atlassian MCP server
-      (mcp-atlassian, read-only)
-    effect: read
-    source: atlassian
-    credential: atlassian-api-token
-    transport:
-      kind: mcp-stdio
-      command:
-        - uvx
-        - mcp-atlassian
-      tool: jira_get_issue
-      credential_env: JIRA_API_TOKEN
-      env:
-        READ_ONLY_MODE: "true"
-        JIRA_URL: "{{jira_url}}"
-        JIRA_USERNAME: "{{atlassian_username}}"
-        ENABLED_TOOLS: jira_get_issue
-    timeout: 120s
-    input_schema:
-      type: object
-      properties:
-        issue_key:
-          type: string
-          pattern: ^[A-Z][A-Z0-9_]*-[0-9]+$
-      required:
-        - issue_key
-      additionalProperties: false
-    output_schema:
-      type: object
   - id: confluence.get-page
     version: 1
     description: One Confluence page as markdown, read through the Atlassian MCP

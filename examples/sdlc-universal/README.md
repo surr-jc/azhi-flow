@@ -13,7 +13,7 @@ same nine-field ticket.
 
 | Part | Works with | Not covered |
 |---|---|---|
-| **Ticket** | Jira Cloud (`jira_get_issue`), GitHub issues, one Confluence Cloud page | Jira Server/Data Center (see below), GitLab/Linear/other trackers |
+| **Ticket** | Jira through the workspace's `jira-ccp_get_issue@1` tool, GitHub issues, one Confluence Cloud page | Jira Server/Data Center (see below), GitLab/Linear/other trackers |
 | **Models** | Anthropic, GitHub Copilot, ChatGPT plan, through OpenCode; one model per role (tiers) or one model for all | Plain OpenAI API keys: the built-in model agent drives them but cannot open a checkout |
 | **Harness** | `opencode` (every agent step needs a checkout, and only OpenCode can give one) | `claude-agent-sdk` and `codex` cannot run workspace steps; see "Other harnesses" |
 | **Language / test stack** | Node (npm, pnpm, yarn), Rust, Go, Python by detection; anything else through `.azhi/commands.json` | A repository with no runnable tests: the run goes to the static path or is paused |
@@ -29,7 +29,6 @@ node examples/sdlc-universal/scripts/apply_models.mjs anthropic     # or github-
 azhi example needs sdlc-universal
 azhi example install sdlc-universal --repo OWNER/REPO \
   --set slack_channel=C0123ABCD \
-  --set jira_url=https://your-company.atlassian.net \
   --set confluence_url=https://your-company.atlassian.net/wiki \
   --set atlassian_username=you@example.com
 
@@ -82,9 +81,10 @@ confluence_gate ─ confluence_page ──────┴─ intake ─ dor_chec
 characters. Every later step reads only `nodes.intake.output`: `source, key, title, description,
 priority, reporter, status, labels, url`. Ticket and page text are untrusted data.
 
-A Jira key must match `^[A-Z][A-Z0-9_]*-[0-9]+$` and a page id must be numeric before the MCP server sees
-them. Jira Server or Data Center: change the two `credential_env` values to `JIRA_PERSONAL_TOKEN` /
-`CONFLUENCE_PERSONAL_TOKEN` and drop the username, as described in [docs/sdlc.md](../../docs/sdlc.md).
+A page id must be numeric before the MCP server sees it. The Jira ticket is read by `jira-ccp_get_issue@1`,
+which must already be registered in the workspace (as must `jira-ccp_jira_search@1` if you add a step that
+searches); its key check and credential belong to that tool, not to this example. For Jira Server or Data Center
+the Confluence tool still follows [docs/sdlc.md](../../docs/sdlc.md).
 
 ## Models and tokens
 
