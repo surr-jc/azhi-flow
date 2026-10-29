@@ -38,7 +38,8 @@ describe('context-sharing regression baseline', () => {
         writeFileSync(golden, text);
       }
       expect(existsSync(golden), `${golden} is missing; take the baseline before changing the compiler`).toBe(true);
-      expect(text).toBe(readFileSync(golden, 'utf8'));
+      // A Windows checkout may have turned the golden's line endings into CRLF.
+      expect(text).toBe(readFileSync(golden, 'utf8').replace(/\r\n/g, '\n'));
     });
   }
 });
