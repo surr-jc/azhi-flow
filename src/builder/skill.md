@@ -37,7 +37,9 @@ written in Markdown; the platform renders them for approvers and in run pages. S
    in place. Agent profiles you did not need to change keep their provider and model. Harness
    files (agent and command prompts, skills) and tools are part of the change when the idea needs
    them: a new skill is a new `harness/skills/<name>/SKILL.md` that the profile's
-   `harness.opencode.skills` lists. A new tool is proposed with `propose_tool`.
+   `harness.opencode.skills` lists. A new tool is proposed with `propose_tool`. Keep a workflow's
+   `contexts:` block and each step's `context:` list when you rewrite `workflow.yaml`; a step's
+   bundle keys are merged into its input when it compiles, so do not copy them into `input`.
 2. **Interview with `ask_user`.** Ask 2 to 5 questions per round, grouped, each with short
    options when there are natural choices (mark the one you recommend with "(recommended)").
    Always allow a free answer. Cover, over one to three rounds, only what the requirement leaves
@@ -98,6 +100,9 @@ inputs:                      # JSON Schema for run inputs (a form in the UI)
   required: [team]
 config:                      # constants the steps read as config.<key>
   channel: C0123456789
+contexts:                    # optional: named sets of input values several steps share
+  brief:
+    ticket: {ref: nodes.intake.output}
 nodes: [...]
 ```
 
@@ -125,7 +130,8 @@ CEL has `now`, `duration('24h')`, `timestamp(...)`, `size()`, `.filter()`, `.map
   `tools: [tool refs]` the agent may call, `datasets: [name@tag]` it may search,
   `budget: {max_output_tokens, max_tool_calls, max_cost_usd}`, optional
   `context_budget: {max_item_bytes, max_input_bytes, on_exceed: fail|withhold}` (see
-  "Fewer tokens"), optional
+  "Fewer tokens"), optional `context: [names]` from `contexts` (see "Sharing context between
+  steps"; also on `script` and `report`), optional
   `workspace: {repo, ref, credential, mode: read|write, from}` (only with `executor: opencode`:
   a repository checkout; `mode: write` returns the change as `output.workspace`), where
   `from: {ref: nodes.<step>.output.workspace}` starts the checkout from an earlier write-mode
@@ -225,6 +231,26 @@ limits. If the person says "just draft it", use your recommendation and say so.
 - Refs must name existing nodes and `.output`; no cycles; no node in two routes.
 - Every file the workflow names (profile, schema, template, script) must be in the package.
 - Valid cron and IANA timezone.
+- Contexts: `context` names must exist (`unknown_context`); a key may not repeat across bundles or
+  with the step's own `input` (`context_collision`); a step with `context` has an object `input`
+  or none (`context_input_shape`); `context` is not allowed on `merge: any` steps
+  (`context_on_merge`) or on subworkflows. Warnings to act on: `context_may_skip`,
+  `context_taints`, `unused_context`.
+
+## Sharing context between steps
+
+- A **context** (`contexts:` at the top, `context: [name]` on an agent, script or report step)
+  writes the same input values once. The compiler adds the bundle's keys to the step's `input`;
+  nothing else changes. Use it when three or more steps need the same fields, not for one-offs.
+- A step with `context` takes an object `input` (each key a literal, `{ref}` or `{cel}`), or none.
+  To combine a `{map: ...}` input with a bundle, write each key as its own `{cel: ...}`.
+- Keep a context small. Every value in it becomes a dependency of every step that uses it, so one
+  untrusted field taints all of them (`context_taints`).
+- Never put a value from a conditional branch, or from below an approval, in a shared context:
+  steps that use it are skipped when that step is (`context_may_skip`). A step that joins
+  branches (`merge: any`) cannot use a context; write its input out with `has()` guards.
+- Notes for the next step are an ordinary output field: declare a `notes` string with
+  `maxLength` in the producer's `output_schema` and pass it by `{ref}`.
 
 ## Policies and controls to offer when they fit
 

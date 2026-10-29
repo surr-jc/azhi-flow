@@ -46,6 +46,29 @@ config:
   lite_max_files: 5
   lite_min_confidence: 6
   min_confidence: 80
+# Written once, used by several steps (see docs/context-sharing.md). Every value here comes from a step that
+# the steps using it already wait on, so a bundle never makes a step wait on something new.
+contexts:
+  # The engineer's brief: the same for the tested, the static-checks and the untested build.
+  delivery_brief:
+    environment:
+      cel: "{'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}"
+    ticket: {ref: nodes.intake.output}
+    requirements: {ref: nodes.plan.output.requirements}
+    design: {ref: nodes.plan.output.design}
+    decisions: {ref: nodes.design_review.output.data}
+  # What the lite reviewer and the verifier are told about the first build, and then about the fixed one.
+  round_1:
+    requirements: {ref: nodes.plan.output.requirements}
+    design: {ref: nodes.plan.output.design}
+    change:
+      cel: "{'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}"
+  round_2:
+    requirements: {ref: nodes.plan.output.requirements}
+    design: {ref: nodes.plan.output.design}
+    change:
+      cel: "{'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}"
+
 nodes:
   - id: source
     type: condition
@@ -436,11 +459,7 @@ nodes:
           && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})"
         timeout: 15m
         attempts: 3
-    input:
-      map: "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification':
-        nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static'
-        : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements,
-        'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    context: [delivery_brief]
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -462,11 +481,7 @@ nodes:
       credential: github-read-token
       depth: 1
       mode: write
-    input:
-      map: "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification':
-        nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static'
-        : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements,
-        'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    context: [delivery_brief]
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -494,11 +509,7 @@ nodes:
           "eval(require('zlib').inflateRawSync(Buffer.from('hVPbTtwwEH1faf9hkCpsq8iAVPUhKKCtgF5UqMRuXwpoFZwJGcg6qe3sRUv+vbKdhYVW6pvtM5cz54xVra0D1UAKBn+3ZJAzVVKVTxtTK7SWiaPhQIWowm5HFdvQq/wmc2XANqhpNaTA1SzfA9RzAekxrIcDAGdW8QCgGolLVOOVVjFwDdblVCfASJdoyLGQnMAapJQ9O4l6vufvqOfQQee7+moGXWs0HIRrBypzqtx06rHDiA0HXWBKBXDTas50MwNFsLsL/uSpu1WDqkT1uP1411KVJwu8Y0LAM5slOX64PbolrRBSuMhcKWekuZSysNJgludkwrRMMiFnWcN5EZQprLQucwErhJAFVQ4N5zagVpI9pwq56JM2zzNHM7ywQsB7+IgfXlyjCr1x17dHwwEvWq0c1RoWWfXIczIiylLUBnhMQKgLeMMxJ+MdWZArffPJqkGbgDMtQifEs4exIaTQyIeadExDqbMZbpzxOqMke0oGlavNir/kb1AfDztpCkzXOU5ndd5WaJmXP4LXB7cRl0zESYpN/Q6wshgK7d9Ih9bdyOsHd2uXJ+/2w71vsN229wrSN+IfbfN6lhiOo60iaiub1pZ8DcUekL3ERQJW3pFx5evol+XsNosngvdb2+Lp+Z9SkXXB1nCSFep7V8IJ9Au6hDmFUL+IDN5DiArbsAxp38Y/LqV1hvQ9FSu+lH6PgiMMmPBOjn59+TqdnI0n09PRZPRpND6b/rz6ngBr7itymOzvM+gEJHDg+fnx46yRSi9dJK1xcZ5RhTmkYYA+crO2kdFSBm1E1KBftJwc5v/P3fk7ua5QVvU9Z3GO0dXns8nZaRhoHBThL6yenl53OgFWhBMDP29mLebM/xoWMrfnDI/+gVvBYncvxXPtf/38bjj4Aw==','base64'))+'')"
         timeout: 15m
         attempts: 3
-    input:
-      map: "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification':
-        nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static'
-        : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements,
-        'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+    context: [delivery_brief]
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -535,13 +546,7 @@ nodes:
       depth: 1
       from:
         ref: nodes.change_1.output.workspace
-    input:
-      map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
-        {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations,
-        'tests_added': nodes.change_1.output.tests_added, 'stats':
-        nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff,
-        'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests':
-        nodes.change_1.output.workspace.tests}}"
+    context: [round_1]
     output_schema: schemas/verdict.json
     timeout: 20m
     budget:
@@ -562,15 +567,10 @@ nodes:
       depth: 1
       from:
         ref: nodes.change_1.output.workspace
+    context: [round_1]
     input:
-      map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
-        {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations,
-        'tests_added': nodes.change_1.output.tests_added, 'stats':
-        nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff,
-        'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests':
-        nodes.change_1.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings':
-        nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity ==
-        'major'))}]}"
+      findings:
+        cel: "[{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]"
     output_schema: schemas/verification.json
     timeout: 20m
     budget:
@@ -742,13 +742,7 @@ nodes:
       depth: 1
       from:
         ref: nodes.change_2.output.workspace
-    input:
-      map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
-        {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations,
-        'tests_added': nodes.change_2.output.tests_added, 'stats':
-        nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff,
-        'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests':
-        nodes.change_2.output.workspace.tests}}"
+    context: [round_2]
     output_schema: schemas/verdict.json
     timeout: 20m
     budget:
@@ -769,15 +763,10 @@ nodes:
       depth: 1
       from:
         ref: nodes.change_2.output.workspace
+    context: [round_2]
     input:
-      map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
-        {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations,
-        'tests_added': nodes.change_2.output.tests_added, 'stats':
-        nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff,
-        'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests':
-        nodes.change_2.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings':
-        nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity ==
-        'major'))}]}"
+      findings:
+        cel: "[{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]"
     output_schema: schemas/verification.json
     timeout: 20m
     budget:

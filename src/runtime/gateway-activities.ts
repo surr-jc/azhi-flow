@@ -387,10 +387,22 @@ function textOf(v: unknown): string {
   return '';
 }
 
+/**
+ * What the retrieval query is built from. A step that takes keys from a context bundle asks the dataset with
+ * the keys it wrote itself, so adding a bundle does not change what it retrieves; a step with only bundle keys
+ * has nothing else to ask with and uses them all.
+ */
+export function queryInput(input: Pick<AgentBeginInput, 'input' | 'inputParts'>): unknown {
+  const own = input.inputParts?.filter((p) => p.source === 'input');
+  const value = input.input;
+  if (!own?.length || !value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(own.map((p) => [p.key, (value as Record<string, unknown>)[p.key]]));
+}
+
 /** The context builder retrieves with the node input as the query (spec section 11). */
 async function withChunksFor(ctx: AppContext, input: AgentBeginInput): Promise<AgentBeginInput> {
   if (!input.datasets?.length) return input;
-  const found = await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(input.input), principal: input.principal });
+  const found = await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(queryInput(input)), principal: input.principal });
   return { ...input, chunks: found.map((c) => ({ id: c.citation_id, dataset: c.dataset, revision: c.revision, heading: c.heading, text: c.text })) };
 }
 

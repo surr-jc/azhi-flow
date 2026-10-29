@@ -131,6 +131,22 @@ In a workflow, a local server with no secret goes in the agent profile as `harne
 or one that needs a secret cannot (a package never holds secrets); its tools are registered through a gateway
 connection with `propose_tool` instead.
 
+## Shared contexts, input caps and continuing a change
+
+The skill teaches three opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
+
+- **Shared contexts** (`contexts:` and `context: [name]` on agent, script and report steps) for the same
+  input values written once. The skill says when to use one, that the step's input must then be an object,
+  to keep contexts small, never to put a conditional branch's value in one, and not to use one on a
+  `merge: any` step. When it patches an existing workflow it keeps `contexts:` and each step's `context:`.
+- **`context_budget`** on an agent step, to cap the bytes of input that reach the model.
+- **`workspace.from`** on an OpenCode step, to start its checkout from an earlier step's change.
+
+A draft's notes to the model include the compiler's warnings (`context_may_skip`, `context_taints`,
+`unused_context`) and one line per step that takes keys from a context. The draft panel lists those steps
+and the context each key came from. A patch that drops `contexts:` while a step still lists the name fails
+with `unknown_context`, so it is caught before the person sees it.
+
 ## API
 
 - `POST /v1/builder/register-mcp` `{server}`: re-checks and adds a proposed MCP server.

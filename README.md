@@ -61,6 +61,9 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
   `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
   [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
+- Sharing context between steps: shared `contexts` for inputs several steps need, a byte cap on what reaches
+  an agent (`context_budget`), and `workspace.from` to start a checkout from an earlier step's change, so a
+  reviewer reads the code it reviews. All opt-in. See [docs/context-sharing.md](docs/context-sharing.md).
 - Issue splitter (`examples/issue-splitter` for GitHub, `examples/issue-splitter-jira` for Jira): sizes an
   issue, or a request typed as text, against the code and, when it is too big for one pull request, splits it
   into ordered sub-issues (sub-tasks in Jira) linked under it, after a person approves the plan and may leave

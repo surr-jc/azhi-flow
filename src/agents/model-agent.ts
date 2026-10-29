@@ -108,6 +108,8 @@ export interface AgentBeginInput {
   input: unknown;
   /** The node's `context_budget`; each limit overrides the server default. */
   contextBudget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
+  /** Only for a step that uses `context`: where each top-level input key came from (`input` or `context:<name>`). */
+  inputParts?: Array<{ key: string; source: string }>;
   /** Upstream nodes the input came from, for the manifest. */
   inputSources: string[];
   chunks?: Chunk[];
@@ -233,7 +235,17 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { tr
     i.nodeId,
   );
   const inputText = `Input:\n\`\`\`json\n${JSON.stringify(input ?? null, null, 2)}\n\`\`\``;
-  items.push(item('input', i.inputSources.length ? i.inputSources.map((s) => `nodes.${s}`).join(', ') : 'inputs', 'node input', inputText, store));
+  const fields = i.inputParts && input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+  if (fields && i.inputParts) {
+    // One item per field, so the manifest says which values came from a shared context. A withheld field has its own item below.
+    const gone = new Set(withheld.map((w) => w.key));
+    for (const p of i.inputParts) {
+      if (gone.has(p.key) || !(p.key in fields)) continue;
+      items.push(item('input', `${p.source}.${p.key}`, p.source === 'input' ? `node input field '${p.key}'` : `node input field '${p.key}', from ${p.source.replace(':', " '")}'`, JSON.stringify(fields[p.key] ?? null), store));
+    }
+  } else {
+    items.push(item('input', i.inputSources.length ? i.inputSources.map((s) => `nodes.${s}`).join(', ') : 'inputs', 'node input', inputText, store));
+  }
   for (const w of withheld) {
     items.push({ kind: 'input', source: `input.${w.key}`, reason: `withheld by context_budget (${w.bytes} bytes); the agent cannot read it`, tokens: 0, content_hash: `sha256:${w.sha256}` });
   }

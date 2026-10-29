@@ -25,7 +25,7 @@ package:
 | Approvals | `src/runtime/workflow.ts`, `POST /v1/runs/:id/approvals`, `azhi approve` | Role and decision-schema checks; rejection skips descendants; `on_expiry` reject or fail |
 | Model agent | `src/agents/` | One activity per model turn; Anthropic adapter and a scripted provider |
 | Usage and cost | `usage_records`, `azhi inspect` | Null when unknown; cost estimated only from profile pricing; completeness per run |
-| Context manifest | `context_manifests`, `azhi inspect --context <node>` | Source, reason, token estimate and hash per item; content only with `AZHI_STORE_CONTEXT_CONTENT=1` |
+| Context manifest | `context_manifests`, `azhi inspect --context <node>` | Source, reason, token estimate and hash per item; content only with `AZHI_STORE_CONTEXT_CONTENT=1`. A step that uses a shared context gets one item per input field, and a field withheld by `context_budget` is recorded by hash and size only ([docs/context-sharing.md](context-sharing.md)) |
 | Knowledge datasets | `src/knowledge/`, `azhi dataset ...` | Markdown and text, immutable revisions, tags, hybrid retrieval, citations, dataset ACL, revocation |
 | Test node | `azhi test-node` | Upstream outputs from a fixture; writes mocked; a `test` run |
 

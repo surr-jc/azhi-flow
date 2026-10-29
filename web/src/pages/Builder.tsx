@@ -46,7 +46,8 @@ interface Proposal {
   name?: string;
   summary: string;
   files: Record<string, string>;
-  nodes: PlanNode[];
+  /** `inputParts`: for a step that uses a shared context, where each input key came from. */
+  nodes: Array<PlanNode & { inputParts?: Array<{ key: string; source: string }> }>;
   warnings: Array<{ code: string; message: string; node?: string }>;
   missing: Array<{ kind: string; name: string; node: string }>;
   blockers: Array<{ code: string; message: string; node?: string }>;
@@ -607,6 +608,8 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
   const paths = Object.keys(p.files).sort((a, b) => (a === 'workflow.yaml' ? -1 : b === 'workflow.yaml' ? 1 : a.localeCompare(b)));
   const [file, setFile] = useState<string>('workflow.yaml');
   const [tab, setTab] = useState<'graph' | 'files'>('graph');
+  // Which steps take keys from a shared context, from what the compiler recorded for each.
+  const shared = p.nodes.flatMap((n) => (n.inputParts ?? []).filter((x) => x.source.startsWith('context:')).map((x) => ({ node: n.id, bundle: x.source.slice('context:'.length), key: x.key })));
   const save = useMutation({
     mutationFn: () => api<{ ok: boolean; errors?: string[]; version?: { id: string; workflow: string; version: number } }>('/v1/builder/save', { method: 'POST', body: { files: p.files, new_version_of: p.new_version_of } }),
     onSuccess: (r) => {
@@ -628,8 +631,14 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
         <div><dt>Files</dt><dd>{paths.length}</dd></div>
         <div><dt>To set up</dt><dd>{p.missing.length}</dd></div>
         <div><dt>Warnings</dt><dd>{p.warnings.length}</dd></div>
+        {shared.length ? <div><dt>Shared context</dt><dd>{[...new Set(shared.map((s) => s.bundle))].join(', ')}</dd></div> : null}
       </dl>
       {p.summary ? <p className="draft-summary">{p.summary}</p> : null}
+      {shared.length ? (
+        <ul className="muted small draft-context" aria-label="Shared context">
+          {[...new Set(shared.map((s) => s.node))].map((node) => <li key={node}>{node} takes {[...new Set(shared.filter((s) => s.node === node).map((s) => s.bundle))].map((b) => `${shared.filter((s) => s.node === node && s.bundle === b).map((s) => s.key).join(', ')} from ${b}`).join('; ')}</li>)}
+        </ul>
+      ) : null}
       {p.missing.length || p.blockers.length ? (
         <div className="draft-todo">
           <strong>Before it can run</strong>

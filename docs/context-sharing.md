@@ -1,14 +1,98 @@
 # Context sharing between steps
 
 Nodes already share data through explicit refs (`ref: nodes.X.output.field`, CEL). This page covers
-the opt-in mechanisms that make sharing cheaper and safer. Each ships on its own; sections are added
-as they land. Plan and decisions: `.claude/plans/node-context-sharing.md`.
+the opt-in mechanisms that make sharing cheaper and safer. Each is separate and none changes a workflow
+that does not use it. Plan and decisions: `.claude/plans/node-context-sharing.md`.
 
 | Mechanism | Status |
 |---|---|
 | Input cap (`context_budget`) | built |
 | Workspace continuation (`workspace.from`) | built |
-| Context bundles (`contexts:` / `context:`) | planned |
+| Context bundles (`contexts:` / `context:`) | built |
+
+## Shared contexts
+
+A context is a set of input values that several steps need, written once.
+
+```yaml
+contexts:
+  brief:
+    topic: {ref: inputs.topic}
+    facts: {ref: nodes.gather.output.facts}
+
+nodes:
+  - id: draft
+    type: agent
+    profile: writer@1
+    context: [brief]                   # gets topic and facts in its input
+    output_schema: schemas/draft.json
+  - id: critique
+    type: agent
+    profile: critic@1
+    context: [brief]
+    input:
+      draft: {ref: nodes.draft.output.text}   # the step's own keys come after the context's
+    output_schema: schemas/critique.json
+```
+
+`examples/context-review-revise` is a small runnable example; `ai-sdlc-v2` uses three contexts.
+
+- **Only a way to write an input once.** The compiler adds the context's keys to the step's `input`
+  (keys of the contexts in the order the step lists them and each context declares them, then the
+  step's own keys) before it checks anything else. The plan holds an ordinary `input`, so every ref in
+  a context is type-checked, ordered and tainted exactly like one written by hand, and an older
+  interpreter runs the plan unchanged. The definition you wrote, its hash and its signature are
+  untouched; only the plan's copy of the step has the merged input.
+- **Where.** `context: [names]` on agent, script and report steps. The step's `input` must be an object
+  of keys (each a literal, a `{ref}` or a `{cel}`), or absent: a `{map: ...}` or `{ref: ...}` input
+  cannot be merged with keys (`context_input_shape`; to combine them write each key as its own
+  `{cel: ...}`). A subworkflow cannot take a context, because its inputs are checked against the child
+  workflow's schema when it runs.
+- **Errors.** `unknown_context` (the message lists what exists), `context_collision` (the same key from
+  two contexts, or from a context and the step's own input), `context_input_shape`, `context_on_merge`,
+  `context_unsupported_node`. Errors point at `input.<key>` and name the context. A cycle a context
+  causes says which step takes which step through which context.
+- **Not on a step that joins branches.** A `merge: any` step runs when any dependency got through, and
+  every value in a context is a dependency. A value from a step that always runs would make the join
+  run when no branch did, so `context` on `merge: any` is `context_on_merge`. Write that step's input
+  out, with `has()` guards.
+- **Every value is a dependency of every step that uses the context.** That has two consequences, both
+  shown as warnings that name the key:
+  - `context_may_skip`: the context makes a step wait on a step that can be skipped (it is on a condition
+    route, below an approval that can be rejected, or it is a join of branches that may all be skipped),
+    for a reason that would not already skip this step. When that step is skipped, this one is too. A
+    dependency the step already reaches, or one on the same route, is not reported.
+  - `context_taints`: a context carries untrusted data, and it is the only reason a step is tainted. One
+    untrusted key taints every step that uses the context, and the taint rule (ungated writes after a
+    tainted agent are an error) applies exactly as if the ref were written inline.
+  Keep a context small, and keep values from conditional branches and untrusted values in their own
+  context or inline.
+- **`unused_context`** (a warning) is a context no step lists.
+- **At run time.** A step that uses a context gets one manifest item per input field (source
+  `context:<name>` or `input`), so the run shows what came from where. Its dataset retrieval query is
+  built from its own keys, so adding a context does not change what an agent with `datasets` retrieves
+  (with no keys of its own, it uses them all). The input cap applies to the merged input.
+- **Editing.** The editor draws an edge for every step a used context reads, shows a using step as it
+  compiles, renames steps inside contexts, and edits contexts in the workflow form. The workflow
+  settings list each context and the steps that use it. The workflow builder is taught all of this and
+  keeps `contexts:` and `context:` when it changes a workflow.
+- **Updating an installed example.** The marketplace update merges `contexts` three ways: a local edit
+  to one key survives an update to another. If you edited an old `{map}` input that an update moved into
+  a context, the update reports a conflict and the merged step fails to compile until you resolve it.
+
+### Notes for the next step, without a special feature
+
+To pass a hint from one step to the next, declare a `notes` string with a `maxLength` in the producer's
+`output_schema` and pass it with a `{ref}`, as `examples/context-review-revise` does. It is an ordinary
+output field: typed, bounded, recorded in the manifest, and untrusted data to the step that reads it. There
+is deliberately no engine-owned handoff field, which would reserve a name and invite a channel for
+instructions.
+
+### What is not here
+
+Shared memory between steps, inheriting another step's transcript, an automatic summary of earlier steps,
+passing every upstream output to every step, and contexts with parameters. Contexts do not remove the
+repeated `workspace:` block in a workflow like ai-sdlc; that is a separate change.
 
 ## Workspace continuation
 
