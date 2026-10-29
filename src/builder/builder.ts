@@ -211,13 +211,13 @@ const TOOLS: ModelTool[] = [
   },
   {
     name: 'read_workflow',
-    description: "An existing workflow's latest version: an index of every package file, then the contents of as many as fit (workflow.yaml, profiles, harness agents, commands and skills, schemas, templates, scripts), then the registered tools it names. Use when the person wants to change or extend one, or to call it as a subworkflow.",
-    input_schema: { type: 'object', properties: { slug: { type: 'string' } }, required: ['slug'], additionalProperties: false },
+    description: "An existing workflow's latest version (or the one numbered `version`, when the person chose it): an index of every package file, then the contents of as many as fit (workflow.yaml, profiles, harness agents, commands and skills, schemas, templates, scripts), then the registered tools it names. Use when the person wants to change or extend one, or to call it as a subworkflow.",
+    input_schema: { type: 'object', properties: { slug: { type: 'string' }, version: { type: 'integer', description: 'Version number to read; leave out for the latest.' } }, required: ['slug'], additionalProperties: false },
   },
   {
     name: 'read_workflow_file',
     description: 'One file of an existing workflow, by the path read_workflow listed. Use for files read_workflow marked not loaded.',
-    input_schema: { type: 'object', properties: { slug: { type: 'string' }, path: { type: 'string' } }, required: ['slug', 'path'], additionalProperties: false },
+    input_schema: { type: 'object', properties: { slug: { type: 'string' }, path: { type: 'string' }, version: { type: 'integer', description: 'The same version read_workflow was given; leave out for the latest.' } }, required: ['slug', 'path'], additionalProperties: false },
   },
   {
     name: 'ask_user',
@@ -321,6 +321,7 @@ const TOOLS: ModelTool[] = [
         files: { type: 'object', additionalProperties: { type: 'string' }, description: 'Package path to file text. A new workflow must include workflow.yaml; a change (new_version_of) lists only added or changed files.' },
         remove: { type: 'array', items: { type: 'string' }, description: 'With new_version_of: paths of the current version to delete.' },
         new_version_of: { type: 'string', description: 'Set to the workflow id only when the person asked to change that existing workflow.' },
+        base_version: { type: 'integer', description: 'With new_version_of: the version number the change starts from, when the person chose one; leave out for the latest.' },
       },
       required: ['summary', 'files'],
     },
@@ -412,10 +413,11 @@ function readExample(id: string): string {
   return out.join('\n\n');
 }
 
-async function latestVersion(ctx: AppContext, workspaceId: string, slug: string): Promise<VersionRow | undefined> {
+/** The latest version of a workflow, or the numbered one when `version` is given. */
+async function latestVersion(ctx: AppContext, workspaceId: string, slug: string, version?: number): Promise<VersionRow | undefined> {
   const r = await ctx.pool.query(
-    `SELECT v.id FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE v.workspace_id=$1 AND w.slug=$2 ORDER BY v.version DESC LIMIT 1`,
-    [workspaceId, slug],
+    `SELECT v.id FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE v.workspace_id=$1 AND w.slug=$2 AND ($3::int IS NULL OR v.version=$3) ORDER BY v.version DESC LIMIT 1`,
+    [workspaceId, slug, version ?? null],
   );
   return r.rows[0] ? getVersion(ctx, workspaceId, r.rows[0].id) : undefined;
 }
@@ -483,9 +485,9 @@ const isLicense = (path: string) => /(?:^|\/)(?:LICENSE|NOTICE)$/.test(path);
  * An existing workflow's latest version for editing: an index of every file, then the contents of as
  * many as fit (definition first), then the registered tools its text names. Nothing is dropped silently.
  */
-export async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string): Promise<string> {
-  const v = await latestVersion(ctx, workspaceId, slug);
-  if (!v) throw new Error(`no workflow '${slug}'`);
+export async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string, version?: number): Promise<string> {
+  const v = await latestVersion(ctx, workspaceId, slug, version);
+  if (!v) throw new Error(version ? `no version ${version} of workflow '${slug}'` : `no workflow '${slug}'`);
   const files = [...v.manifest.files].sort((a, b) => readRank(a.path) - readRank(b.path) || a.path.localeCompare(b.path));
   const status = new Map<string, string>();
   const load: string[] = [];
@@ -528,9 +530,9 @@ export async function readWorkflow(ctx: AppContext, workspaceId: string, slug: s
 }
 
 /** One file of an existing workflow's latest version, for files `read_workflow` did not load. */
-async function readWorkflowFile(ctx: AppContext, workspaceId: string, slug: string, path: string): Promise<string> {
-  const v = await latestVersion(ctx, workspaceId, slug);
-  if (!v) throw new Error(`no workflow '${slug}'`);
+async function readWorkflowFile(ctx: AppContext, workspaceId: string, slug: string, path: string, version?: number): Promise<string> {
+  const v = await latestVersion(ctx, workspaceId, slug, version);
+  if (!v) throw new Error(version ? `no version ${version} of workflow '${slug}'` : `no workflow '${slug}'`);
   const f = v.manifest.files.find((x) => x.path === path);
   if (!f || !PACKAGE_PATH.test(path)) throw new Error(`no file '${path}' in workflow '${slug}'; see the file list from read_workflow`);
   if (f.size > FILE_BYTES) throw new Error(`${path} is over ${FILE_BYTES / 1024} KB`);
@@ -547,8 +549,9 @@ export async function applyChange(
   slug: string,
   files: Record<string, unknown>,
   remove: unknown,
+  version?: number,
 ): Promise<{ ok: true; files: Record<string, unknown> } | { ok: false; errors: string[] }> {
-  const v = await latestVersion(ctx, workspaceId, slug);
+  const v = await latestVersion(ctx, workspaceId, slug, version);
   if (!v) return { ok: false, errors: [`there is no workflow '${slug}' to make a new version of; leave new_version_of out for a new workflow`] };
   const base: Record<string, unknown> = {};
   for (const f of v.manifest.files) {
@@ -564,6 +567,8 @@ export async function applyChange(
   }
   return errors.length ? { ok: false, errors } : { ok: true, files: { ...base, ...files } };
 }
+
+const versionOf = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
 
 const describe = (d: Diagnostic) => `${d.severity} ${d.code}${d.node ? ` [${d.node}]` : ''}${d.path ? ` at ${d.path}` : ''}: ${d.message}`;
 
@@ -680,6 +685,11 @@ export async function builderTurn(
 ): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
   const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
+  // A workflow read in an earlier turn may have a newer version by now (a saved draft, an edit in the
+  // editor); blank those reads so the model reads the latest again instead of editing from a stale copy.
+  const reads = new Set<string>();
+  for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && (b.name === 'read_workflow' || b.name === 'read_workflow_file') && !versionOf((b.input as any)?.version)) reads.add(b.id);
+  for (const m of messages) for (const b of m.content) if (b.type === 'tool_result' && reads.has(b.tool_use_id)) b.content = 'Stale: read from an earlier turn, and the workflow may have changed since. Call read_workflow again before changing it.';
   // After tool results the transcript ends on a user message; the person's words join it.
   const last = messages.at(-1);
   if (last?.role === 'user') last.content.push({ type: 'text', text: o.text });
@@ -708,9 +718,9 @@ export async function builderTurn(
         } else if (u.name === 'read_example') {
           answer(u.id, readExample(String(input.id)));
         } else if (u.name === 'read_workflow') {
-          answer(u.id, await readWorkflow(ctx, workspaceId, String(input.slug)));
+          answer(u.id, await readWorkflow(ctx, workspaceId, String(input.slug), versionOf(input.version)));
         } else if (u.name === 'read_workflow_file') {
-          answer(u.id, await readWorkflowFile(ctx, workspaceId, String(input.slug), String(input.path)));
+          answer(u.id, await readWorkflowFile(ctx, workspaceId, String(input.slug), String(input.path), versionOf(input.version)));
         } else if (u.name === 'ask_user') {
           const questions = (Array.isArray(input.questions) ? input.questions : []).slice(0, 5).map((q: any, i: number) => ({
             id: String(q?.id ?? `q${i + 1}`),
@@ -737,7 +747,7 @@ export async function builderTurn(
           event = { kind: 'mcp_connection_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
         } else if (u.name === 'propose_workflow') {
           const base = input.new_version_of ? String(input.new_version_of) : undefined;
-          const change = base ? await applyChange(ctx, workspaceId, base, input.files ?? {}, input.remove) : undefined;
+          const change = base ? await applyChange(ctx, workspaceId, base, input.files ?? {}, input.remove, versionOf(input.base_version)) : undefined;
           const r = change && !change.ok ? change : await checkProposal(ctx, workspaceId, change ? change.files : input.files, base);
           if (!r.ok) {
             answer(u.id, `The draft does not compile yet. Fix these and propose the whole package again:\n${r.errors.map((e) => `- ${e}`).join('\n')}`, true);

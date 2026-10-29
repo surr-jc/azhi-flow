@@ -29,6 +29,10 @@ written in Markdown; the platform renders them for approvers and in run pages. S
    the harness (agents, commands, skills), schemas, templates and scripts, then the registered
    tools the package names. Anything the index marks "not loaded" you read with
    `read_workflow_file` before you change or rely on it; never guess at a file you have not seen.
+   Call `read_workflow` again at the start of each new change request, even in the same conversation:
+   the person may have saved or edited a newer version since, and you change the latest.
+   If the person chose a version number, pass it as `version` to `read_workflow` and `read_workflow_file`
+   and as `base_version` to `propose_workflow`; the change is saved as a new draft on top of the latest.
    Ask only what the change needs, from the person's own suggestions and ideas. Then propose with
    `new_version_of` set to the workflow id and send **only the files you add or change** in
    `files`, plus `remove` for paths to delete: every other file of the current version is kept

@@ -196,6 +196,12 @@ export function WorkflowBuilder() {
 
   const existing = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
   const [editSlug, setEditSlug] = useState('');
+  const [editVersion, setEditVersion] = useState('');
+  const editVersions = useQuery({
+    queryKey: ['versions', editSlug],
+    queryFn: () => api<Array<{ id: string; version: number; draft: boolean; signed: boolean }>>(`/v1/workflows/${encodeURIComponent(editSlug)}/versions`),
+    enabled: Boolean(editSlug),
+  });
   const submit = (text: string) => {
     const t = text.trim();
     if (!t || send.isPending) return;
@@ -291,11 +297,15 @@ export function WorkflowBuilder() {
                     <div className="edit-existing">
                       <label htmlFor="edit-existing">Or change an existing workflow</label>
                       <div className="row">
-                        <select id="edit-existing" value={editSlug} onChange={(e) => setEditSlug(e.target.value)}>
+                        <select id="edit-existing" value={editSlug} onChange={(e) => { setEditSlug(e.target.value); setEditVersion(''); }}>
                           <option value="">Choose a workflow…</option>
                           {existing.data.map((w) => <option key={w.slug} value={w.slug}>{w.latest?.name ? `${w.latest.name} (${w.slug})` : w.slug}</option>)}
                         </select>
-                        <button type="button" disabled={!editSlug || send.isPending} onClick={() => submit(`I want to change the existing workflow ${editSlug}. Read it first, then ask me what to change.`)}>Edit workflow</button>
+                        <select aria-label="Version to start from" value={editVersion} disabled={!editSlug} onChange={(e) => setEditVersion(e.target.value)}>
+                          <option value="">Latest version</option>
+                          {(editVersions.data ?? []).map((v) => <option key={v.id} value={v.version}>{`v${v.version}${v.draft ? ' (draft)' : v.signed ? ' (signed)' : ''}`}</option>)}
+                        </select>
+                        <button type="button" disabled={!editSlug || send.isPending} onClick={() => submit(`I want to change the existing workflow ${editSlug}${editVersion ? `, starting from version ${editVersion}` : ' (its latest version)'}. Read it first${editVersion ? ` with version ${editVersion}` : ''}, then ask me what to change.`)}>Edit workflow</button>
                       </div>
                     </div>
                   ) : null}
