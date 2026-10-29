@@ -100,6 +100,11 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
           </div>
         ) : null}
         <div className="question"><Markdown text={approvalQuestion(a)} inline={!approvalQuestion(a).includes('\n')} /></div>
+        {a.request.context_withheld?.length ? (
+          <p className="muted small" role="note">
+            <strong>An agent before this step was not sent</strong> {a.request.context_withheld.map((f, i) => <span key={f}>{i ? ', ' : ''}<code>{f}</code></span>)} (over its input cap). It could not read {a.request.context_withheld.length === 1 ? 'it' : 'them'}, so check what it decided without.
+          </p>
+        ) : null}
         {isChangeReview(payload) ? (
           <ChangeReview payload={payload} />
         ) : payload !== undefined && payload !== null ? (

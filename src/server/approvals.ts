@@ -56,13 +56,14 @@ const text = (v: unknown) => (v === null || v === undefined ? '' : typeof v === 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** The Slack message for a waiting approval: what is asked, who may decide, and the two buttons. */
-export function approvalBlocks(a: { runId: string; nodeId: string; workflow: string; message: unknown; payload: unknown; role: string; expires_at: string; baseUrl: string }) {
+export function approvalBlocks(a: { runId: string; nodeId: string; workflow: string; message: unknown; payload: unknown; role: string; expires_at: string; baseUrl: string; context_withheld?: string[] }) {
   const value = JSON.stringify({ run: a.runId, node: a.nodeId });
   const link = `${a.baseUrl.replace(/\/$/, '')}/ui/runs/${encodeURIComponent(a.runId)}`;
   const payload = text(a.payload);
   return [
     { type: 'section', text: { type: 'mrkdwn', text: `:raised_hand: *Approval needed* on *${a.workflow}* (${a.nodeId})\n${clip(text(a.message) || 'Approve this step?', 2500)}` } },
     ...(payload ? [{ type: 'section', text: { type: 'mrkdwn', text: `\`\`\`${clip(payload, 2500)}\`\`\`` } }] : []),
+    ...(a.context_withheld?.length ? [{ type: 'section', text: { type: 'mrkdwn', text: `:warning: *An agent before this step was not sent:* ${clip(a.context_withheld.map((f) => `\`${f}\``).join(', '), 1500)} (over its input cap). It could not read ${a.context_withheld.length === 1 ? 'it' : 'them'}, so check what it decided without.` } }] : []),
     { type: 'context', elements: [{ type: 'mrkdwn', text: `Role ${a.role} or higher decides. Expires ${a.expires_at}. <${link}|Open in mission control>` }] },
     {
       type: 'actions',
@@ -79,7 +80,7 @@ export function approvalBlocks(a: { runId: string; nodeId: string; workflow: str
  * Posts a waiting approval to the workspace's approvals channel, once (retried activities find
  * the row and skip). Best effort: deciding in mission control or the API works without it.
  */
-export async function postApprovalToSlack(ctx: AppContext, workspaceId: string, runId: string, nodeId: string, request: { message: unknown; payload: unknown; role: string; expires_at: string }) {
+export async function postApprovalToSlack(ctx: AppContext, workspaceId: string, runId: string, nodeId: string, request: { message: unknown; payload: unknown; role: string; expires_at: string; context_withheld?: string[] }) {
   const s = await approvalSettings(ctx, workspaceId);
   if (!s.slack_channel) return;
   const claimed = await ctx.pool.query(`INSERT INTO approval_messages(run_id, node_id, workspace_id, channel) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [runId, nodeId, workspaceId, s.slack_channel]);
