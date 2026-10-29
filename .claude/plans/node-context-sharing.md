@@ -2,6 +2,8 @@
 
 The following plan should be complete, but validate documentation and codebase patterns and task sanity before you start implementing. Pay special attention to the naming of existing types and helpers (`Value`, `ValueScope`, `PlanNode`, `WORKSPACE_CHANGE_SCHEMA`, `AgentBeginInput`, `Checkout`). Import from the right files. Branch: `dev`. Conventional commits (`feat:`, `docs:`). Nothing merges, closes or force-pushes.
 
+**Revision 2 (2026-10-29): re-validated against `origin/dev` at `2d99c8e`.** Since the first draft, `dev` gained the chat-first Build-with-chat redesign, builder edits of existing workflows by patch (`new_version_of` + `remove`), MCP-server proposals, and canvas/page restyling (61 files). The compiler, definition, runtime, agents, API, plan, config and security modules are unchanged (only a 2-line git stall setting in `cloneWorkspace`), so Tasks 1-14 stand with shifted line numbers. Tasks 15-17 and 25 were rewritten, a builder-edit preservation requirement and test were added, and the line references below are current as of `2d99c8e`. Line numbers drift; match by symbol name if they do not line up.
+
 ## Feature Description
 
 Nodes already share data through explicit refs (`ref: nodes.X.output.field`, CEL maps). Four gaps make sharing context clumsy, costly or lossy. This feature closes them with four **opt-in, definition-level** mechanisms that any workflow can adopt, from YAML upload, the "Build with chat" builder, or the visual editor:
@@ -28,7 +30,7 @@ Verified in the code (file:line):
 - `materialise()` (`src/agents/model-agent.ts:172`) expands every artifact in an agent's input in full. Only output tokens are budgeted (`AgentBeginInput`, `model-agent.ts:99-123`); nothing caps input size.
 - The manifest records the whole input as one item with a comma-joined source (`model-agent.ts:220`), so you cannot see which field cost what, or which carried untrusted text.
 - Only `output_schema` fields cross nodes. There is no sanctioned slot for "notes to the next agent".
-- The chat builder cannot author any of this: `src/builder/skill.md:104-110` never mentions `workspace`, and nothing teaches bundles or budgets.
+- The chat builder cannot author any of this: the agent-node reference in `src/builder/skill.md` (the `- \`agent\`` bullet, ~line 123) never mentions `workspace`, and nothing teaches bundles or budgets. It can also now **edit** an existing workflow by sending only changed files, so a rewrite of `workflow.yaml` can silently drop a `contexts:` block it was never taught about.
 
 ## Solution Statement
 
@@ -92,7 +94,7 @@ Agents
 - `src/config/settings.ts` (63 `storeContextContent` - the env-setting pattern to mirror).
 
 Worker
-- `src/worker/workspace.ts` (all): `WorkspaceSpec` (18-33), `Checkout`, `cloneWorkspace` (68-125; clone, `refs/azhi/head`, write-mode moves `.git` to `gitDir`), `CHANGE_LIMITS`, `WorkspaceChange` (127-138), `stageChange`, `collectChange` (computes diff from `c.head` to the staged tree - so after continuation the new change is **cumulative from the original base**, which is what push tools want).
+- `src/worker/workspace.ts` (all): `WorkspaceSpec` (18-33), `Checkout`, `cloneWorkspace` (68-127; clone, `refs/azhi/head`, write-mode moves `.git` to `gitDir`; the new `stall` git config on the fetch at ~96-99 is unrelated, insert the continuation after `head` is read at ~101), `CHANGE_LIMITS`, `WorkspaceChange` (127-138), `stageChange`, `collectChange` (computes diff from `c.head` to the staged tree - so after continuation the new change is **cumulative from the original base**, which is what push tools want).
 - `src/worker/harness-activity.ts` (72 `HarnessResult`, 104-150 `runHarness`, 137-147 workspace token + `cloneWorkspace` call) and `src/worker/harness-opencode2.ts` (74-83 same pattern). `src/worker/api-client.ts` - `ApiClient.get`.
 - `src/security/tokens.ts` (`signRunToken` claims: `ws, run, node, tools, creds, exp`).
 - `src/api/app.ts` (485 `GET /v1/artifacts/:hash`; 679-690 `GET /v1/gateway/credentials/:name` - **the pattern for the new artifact endpoint**).
@@ -100,10 +102,12 @@ Worker
 
 Plan/UI/authoring
 - `src/plan/run-plan.ts` (120-160 `opencodeSetup`: workspace `requirements`/`coverage` rows - add continuation and budget rows).
-- `src/builder/skill.md` (65-135 reference; 104-110 agent node; 148-182 token-usage strategy; 184-208 rules/controls) and `src/builder/builder.ts` (425-483 `proposal` result: `nodes` carry `def`; 560-580 the summary hand-off to the model).
-- `web/src/pages/Editor.tsx` (130-150 `renameStep` - **only rewrites inside `nodes`**; 731 `HARNESS_FIELDS`; 778-973 agent step editor incl. `WorkspaceFields` 958 and Budget 964; 667 YAML-text editing helpers).
-- `web/src/components/WorkflowSettings.tsx` (37 `SectionId`; 96-100 `sectionsOf`; 136-180 section rendering) and `web/src/stepHelp.ts` (35 `agent.workspace` help; 94, 115, 188 summaries).
-- `web/src/pages/Builder.tsx` (250-262 draft card).
+- `src/builder/skill.md` (84 "workflow.yaml reference"; bullets `script` 120, `agent` 123, `subworkflow` 136, `report` 141; 167 "Token usage strategy"; 203 "Rules the compiler enforces"; 216 "Policies and controls to offer"; 228 "Suggest what is available"; 247 "Adding an MCP server"; the new "Changing an existing workflow" paragraph inside step 1 at ~22-40 and the revised step 5 "Revise on request" at ~69).
+- `src/builder/builder.ts`: `BuilderProposal` (53-65; `nodes: unknown[]`), `checkProposal` (~555-620; line ~616 builds `nodes: [{id, type, deps, route?, def}]` so **the web already receives each step's `def`**), `applyChange` (merges a patch onto the latest version: `files` replace/add, `remove` deletes), `readWorkflow`/`readWorkflowFile`, the `propose_workflow` handler in `builderTurn` (~710-725) and the post-compile `notes` handed back to the model (~726-735).
+- `test/builder-edit.test.ts` - **the pattern for testing patch edits** (registers tools, uploads `examples/sdlc-universal`, calls `readWorkflow`, `applyChange`, `checkProposal` directly with a real PGlite context).
+- `web/src/pages/Editor.tsx` (140-150 `renameStep` - **only rewrites inside `nodes`**; 735 `HARNESS_FIELDS`; ~782-977 agent step editor incl. `setBudget` 810, `Workspace` section 963, `Budget` section 968; 989 `WorkspaceFields`; 671 YAML-text helper). The recent change here is only the `WorkflowCanvas` `head`/`foot` props (~342-365); it does not affect these tasks.
+- `web/src/components/WorkflowSettings.tsx` (37 `SectionId`; 96-100 `sectionsOf`; 136-180 section rendering) and `web/src/stepHelp.ts` (35 `agent.workspace` help; 94, 115, 188 summaries) - both unchanged since the first draft.
+- `web/src/pages/Builder.tsx` (rewritten): `Proposal` type (43-55), `MessageView` draft card (~469-480), and `DraftPanel` (~604-665) whose `draft-facts` list (Status / Steps / Files / To set up / Warnings) and Steps/Files tabs are where draft details show. There is **no** per-step model/limits line in the UI; that text comes from the model's own `summary`.
 
 Examples / docs / tests (patterns)
 - `examples/ai-sdlc-v2/workflow.yaml` (the adopter; lines 98-100, 316-318, 416-444, 600-632, 506-522, 903-915).
@@ -279,29 +283,35 @@ Execute in order. After every task run its VALIDATE command; do not continue on 
 
 ### 15. UPDATE `src/builder/skill.md`
 - **IMPLEMENT**:
-  - In the agent node reference (`:104-110`) document `workspace` (repo, ref, credential, depth, mode, test, `from`), `context`, `context_budget`, `handoff`; add a `contexts:` entry to the workflow.yaml reference with a 6-line example; add `context` to script/report/subworkflow.
-  - A short **"When to use shared context"** rule list: two or more steps need the same upstream fields -> define a bundle; a revise/fix step after a write-mode agent -> `workspace.from`, never a diff in `input`; a step whose input can hold documents/diffs/tool dumps -> `context_budget`; the next agent needs the previous agent's reasoning -> `handoff`, never transcripts.
-  - Tie it to the token-usage question (`:148-182`): Economical sets tight `context_budget`; Highest quality leaves it unset.
-  - Add the new compile errors to "Rules the compiler enforces".
+  - In the `workflow.yaml` reference: add a top-level `contexts:` entry with a 6-line example; in the `agent` bullet (~line 123) document `workspace` (repo, ref, credential, depth, mode, test, `from`; OpenCode only), `context`, `context_budget`, `handoff`; add `context: [names]` to the `script`, `subworkflow` and `report` bullets (~120, 136, 141).
+  - New section **"## Sharing context between steps"** placed after "Policies and controls to offer" (~216) and before "Suggest what is available" (~228), so it sits with the other design guidance and not in the interview steps. Rules, each one sentence: two or more steps need the same upstream fields -> define a `contexts` bundle instead of repeating a map; a revise/fix step after a write-mode agent -> `workspace.from`, never the diff in `input`; a step whose input can hold documents, diffs or tool dumps -> `context_budget`; the next agent needs the previous agent's reasoning -> `handoff`, never transcripts; never invent a way to pass context that is not listed here.
+  - Tie it to the token-usage guidance ("Token usage strategy", ~167): Economical sets tight `context_budget` values, Highest quality leaves it unset.
+  - **Editing an existing workflow** (the new step-1 paragraph, ~22-40): add one sentence that in a changed `workflow.yaml` the model must keep the `contexts:` block and every node's `context:` list unless the change is about them, and that renaming or dropping a bundle means updating every node that lists it. This matters because a change rewrites whole files and the model could drop the block; the compiler's `unknown_context` error is the safety net that sends it back.
+  - Add the new compile errors (`unknown_context`, `context_collision`, `context_input_shape`, `workspace_from_invalid`, `handoff_output`) to "Rules the compiler enforces" (~203).
 - **PATTERN**: existing bullet/reference style in `skill.md`.
-- **GOTCHA**: `skill.md` is read at server start; tests that assert on it must re-read.
-- **VALIDATE**: `npx vitest run test/builder.test.ts`
+- **GOTCHA**: `skill.md` is read once at server start (`readFileSync(new URL('./skill.md', ...))`, `builder.ts`), so tests that assert on its text read the file directly. Keep the new section short; the whole skill is sent on every builder turn and adds to every user's token bill.
+- **VALIDATE**: `npx vitest run test/builder.test.ts test/builder-edit.test.ts`
 
 ### 16. UPDATE `src/builder/builder.ts` - draft summary and examples
-- **IMPLEMENT**: the compiled proposal already returns `nodes[].def` (`builder.ts:481`); add a `context` summary to the returned proposal: per agent node the bundles, `context_budget`, `workspace.from` and `handoff`, and add the same lines to the `notes` handed back to the model (`builder.ts:~571`). Ensure `workspace_overview`'s example list includes `context-review-revise` once installed.
-- **VALIDATE**: `npx vitest run test/builder.test.ts`
+- **IMPLEMENT**: `checkProposal` already returns `nodes[].def` (`builder.ts:~616`), and the web `Proposal` type already carries `nodes`, so **no new API shape is needed**. Add the context details to the `notes` handed back to the model after a successful compile (the `propose_workflow` branch of `builderTurn`, ~726-735), as lines like "step `revise` continues from `draft`'s workspace; step `critique` caps context at N bytes; bundle `brief` is used by 3 steps", so the model's plain-language summary mentions them. Put the summarising logic in one small exported function (for example `contextNotes(nodes)` in `src/builder/builder.ts` or a new `src/builder/context-notes.ts`) so the web can reuse the same wording rules in Task 17 without importing server code: duplicate the 15-line formatter in `web/` instead of importing, matching how `stepHelp.ts` duplicates logic today.
+  - Do **not** change `applyChange`/`readWorkflow`: they treat `workflow.yaml` as opaque text. Contexts survive a patch edit as long as the model keeps the block, which Task 15's rule asks for and the compiler enforces.
+  - `workspace_overview` lists examples from `examples/`, so `context-review-revise` (Task 20) is discoverable by the model through `read_example` without code changes. Confirm in a test.
+- **VALIDATE**: `npx vitest run test/builder.test.ts test/builder-edit.test.ts`
 
 ### 17. UPDATE `web/src/pages/Builder.tsx` (draft card/panel)
-- **IMPLEMENT**: in the draft panel show, per step, "Context: <bundles> · cap <limits> · continues <node> · handoff <n>" next to the existing model/limits line (the same place steps list their model and limits). Read from `p.nodes[].def`, not from a new API shape.
+- **IMPLEMENT**: in `DraftPanel` (~604-665): (a) add one `draft-facts` entry **Shared context** (`<n> bundles · <n> steps use them`, or `none`; shown only when the draft uses any of the four features, so unrelated drafts look exactly as before); (b) under the facts, a short `muted small` list, one line per step that uses any feature: "`revise`: shared context `brief` · continues from `draft` · cap 8 KB per item · handoff 500 chars". Read everything from `p.nodes[].def` and the workflow's `contexts` (parse it from `p.files['workflow.yaml']` with the `yaml` package already imported in `Editor.tsx`, or have the server include `contexts` in the proposal; prefer the former to avoid an API change). The draft **card** in `MessageView` (~472-480) stays as is.
+  - There is no existing per-step model/limits line to extend (the first draft of this plan assumed one); the model's `summary` text carries that.
+  - Since the builder can now edit an existing workflow, the panel title reads "Save as a new draft of <id>"; make sure the facts row also appears for patch edits.
+- **PATTERN**: the other `draft-facts` entries and the `draft-todo`/`draft-warnings` lists (Builder.tsx:625-645); styles in `web/src/styles.css` (restyled recently: reuse existing classes, add none unless needed).
 - **VALIDATE**: `npm run typecheck && npm run build:web`
 
 ### 18. UPDATE `web/src/pages/Editor.tsx` - rename fix and agent fields
 - **IMPLEMENT**:
-  - `renameStep` (`:140-150`): also run the `nodes.<from>` -> `nodes.<to>` swap over `def.contexts` and `workspace.from` (inside `rest` already). Keep key order.
-  - Agent step editor (`~:958-973`): new `HbSection`s **Shared context** (multi-select of defined bundles; hidden if the workflow has none), **Context budget** (two number inputs, empty = unset, mirror Budget at `:964-973`), **Handoff** (number input; empty removes the key). In `Workspace` (`WorkspaceFields`) add a "Continue from" select listing earlier write-mode agent steps; choosing one sets `from: {ref: nodes.<id>.output.workspace}`. Add `context`, `context_budget`, `handoff` to `HARNESS_FIELDS`-style field handling where unknown keys are preserved (`:731`).
+  - `renameStep` (`:140-150`): the function returns `{...def, nodes: ...}`, so `def.contexts` is carried over untouched; add `contexts: swap(def.contexts)` using the same `swap` regex (`nodes.<from>` -> `nodes.<to>`); `workspace.from` is inside each node's `rest` and is already swapped. Omit the key when `def.contexts` is undefined so existing workflows' YAML does not change. Keep key order.
+  - Agent step editor (`~:963-977`): new `HbSection`s **Shared context** (multi-select of defined bundles; hidden if the workflow has none), **Context budget** (two number inputs, empty = unset, mirror the Budget section at `:968-977` and `setBudget` at `:810`), **Handoff** (number input; empty removes the key). In `WorkspaceFields` (`:989`) add a "Continue from" select listing earlier write-mode agent steps; choosing one sets `from: {ref: nodes.<id>.output.workspace}`. Add `context`, `context_budget`, `handoff` to the agent field handling so unknown keys are preserved (`HARNESS_FIELDS`, `:735`).
   - Script/report/subworkflow editors: the same "Shared context" picker.
-- **PATTERN**: `setBudget` and `set(...)` helpers (`:805-810`).
-- **GOTCHA**: preserve unknown keys and key order so saved YAML diffs stay small (`reorder`, `:156-160`).
+- **PATTERN**: `setBudget` and `set(...)` helpers (`:805-815`).
+- **GOTCHA**: preserve unknown keys and key order so saved YAML diffs stay small (`reorder`, `:156-160`). `WorkflowCanvas` now takes `head`/`foot` props (recent restyle): do not touch the canvas wiring, only the step drawer content.
 - **VALIDATE**: `npm run typecheck && npx vitest run test/editor.test.ts`
 
 ### 19. UPDATE `web/src/components/WorkflowSettings.tsx` and `web/src/stepHelp.ts`
@@ -326,12 +336,12 @@ Execute in order. After every task run its VALIDATE command; do not continue on 
 - See Testing Strategy.
 - **VALIDATE**: `npx vitest run test/context-budget.test.ts test/workspace-continuation.test.ts test/handoff.test.ts`
 
-### 24. UPDATE `test/compiler.test.ts`, `test/taint.test.ts`, `test/builder.test.ts`, `test/editor.test.ts`
-- See Testing Strategy.
-- **VALIDATE**: `npx vitest run test/compiler.test.ts test/taint.test.ts test/builder.test.ts test/editor.test.ts`
+### 24. UPDATE `test/compiler.test.ts`, `test/taint.test.ts`, `test/builder.test.ts`, `test/builder-edit.test.ts`, `test/editor.test.ts`
+- See Testing Strategy. `test/builder-edit.test.ts` gets a second `it`: upload `examples/context-review-revise`, `applyChange` a patch that changes only one profile and assert `workflow.yaml` (with its `contexts:` block) is carried over byte-for-byte; then `checkProposal` a patch that rewrites `workflow.yaml` **without** the `contexts:` block and assert it fails with `unknown_context` (the safety net the skill rule relies on).
+- **VALIDATE**: `npx vitest run test/compiler.test.ts test/taint.test.ts test/builder.test.ts test/builder-edit.test.ts test/editor.test.ts`
 
 ### 25. CREATE `docs/context-sharing.md`; UPDATE `docs/workflow-builder.md`, `docs/phase-2.md`, `README.md` (link only)
-- **IMPLEMENT**: follow `docs/loops-and-subworkflows.md` structure: one section per mechanism with a YAML snippet, exact semantics, error codes, the "not supported / rejected" list, the D4 honesty note (withheld fields cannot be read by the agent), the server env settings (task 9), executor support table (OpenCode only for `workspace.from`), and a "how to adopt in an existing workflow" 5-line recipe. Add a "Shared context" paragraph to `workflow-builder.md` (what the builder will now propose and when) and a line in `phase-2.md` (the manifest now has per-field items when `context` is used).
+- **IMPLEMENT**: follow `docs/loops-and-subworkflows.md` structure: one section per mechanism with a YAML snippet, exact semantics, error codes, the "not supported / rejected" list, the D4 honesty note (withheld fields cannot be read by the agent), the server env settings (task 9), executor support table (OpenCode only for `workspace.from`), and a "how to adopt in an existing workflow" 5-line recipe. In `docs/workflow-builder.md` add a "## Shared context" section **between** "Suggesting what is available, and adding MCP servers" and "## API" (what the builder proposes and when; that changes to an existing workflow keep `contexts:` because the model is told to and the compiler rejects a dangling `context:`; the draft panel's "Shared context" fact), and tie one sentence into "## Token usage" (Economical sets `context_budget`). Add a line to `docs/phase-2.md:28` (the manifest has per-field input items when `context` is used).
 - **VALIDATE**: `npx vitest run test/bundle-inventory.test.ts` (docs referenced by the inventory, if any), then manual proofreading
 
 ---
@@ -352,7 +362,8 @@ Framework: vitest. Run on PGlite with `npm run test:local`. Compile-only tests n
 - Run against Temporal with the model-agent and the scripted provider: the `context-review-revise` example runs end to end; the manifest (`GET` run context manifest, see `docs/phase-2.md:28`) has one `input` item per field with the right sources; an over-budget field is withheld and the node still succeeds; a total over-budget input fails with `budget_exceeded`.
 - OpenCode wiring (mirror `test/opencode2.test.ts`, `test/harness-executors.test.ts`): both adapters receive a `continuation` and call `cloneWorkspace` with it; the Temporal payload to `runHarness` contains `{artifact, baseSha}` and **no file content** (assert serialized size).
 - API: `GET /v1/gateway/artifacts/:hash` allows only hashes in the token's `arts`, only for run tokens, only in the owning workspace.
-- Builder (scripted model, `test/builder.test.ts` pattern): the skill text contains the new reference; a scripted draft-review-revise proposal using `workspace.from` + a bundle compiles and the summary lists them; a proposal with a bad `workspace.from` is sent back with the compiler error.
+- Builder (scripted model, `test/builder.test.ts` pattern): the skill text contains the new reference and the "Sharing context between steps" section; a scripted draft-review-revise proposal using `workspace.from` + a bundle compiles and the post-compile notes list them; a proposal with a bad `workspace.from` is sent back with the compiler error.
+- Builder **edits** (`test/builder-edit.test.ts` pattern, real PGlite context, no model): a patch that changes one file carries `workflow.yaml` and its `contexts:` block over unchanged; a patch that rewrites `workflow.yaml` without `contexts:` while nodes still list `context:` fails with `unknown_context`; a patch that adds `context:` to a node of an existing workflow compiles.
 - **Backward compatibility**: `test/context-regression.test.ts` compiles every example and fixture package and compares plan JSON to a snapshot taken **before** the change; `test/gate2.test.ts` golden must not change.
 - Editor: renaming a step rewrites refs inside `contexts:` and `workspace.from`; saving preserves unknown keys; picking a bundle/continuation produces the expected YAML.
 
@@ -437,7 +448,8 @@ Mechanism behaviour
 - [ ] `handoff` adds an optional string to the node's submit schema and downstream ref types; it is taint-equivalent to the node's other output; a user-declared `handoff` or a non-object schema is a compile error.
 
 Authoring surfaces
-- [ ] "Build with chat": `skill.md` documents all four with when-to-use rules; a scripted draft-review-revise proposal compiles; the draft panel summarises context per step; a builder test proves it.
+- [ ] "Build with chat": `skill.md` documents all four with when-to-use rules; a scripted draft-review-revise proposal compiles; the draft panel shows a "Shared context" fact and per-step lines; a builder test proves it.
+- [ ] "Build with chat" **edits**: changing an existing workflow keeps its `contexts:` block and `context:` lists (the skill says so; `test/builder-edit.test.ts` proves a patch preserves them and that dropping the block is rejected with `unknown_context`).
 - [ ] Visual editor: Contexts section, step pickers (bundles, budget, handoff, continue-from), and rename rewrites refs inside `contexts:` and `workspace.from`.
 - [ ] YAML upload: schema and compiler diagnostics are specific and quote the node and path.
 
@@ -465,6 +477,14 @@ Quality
 
 ## NOTES
 
+**Revision 2 (re-validation against `origin/dev` @ `2d99c8e`)**
+- Unchanged and still valid: every compiler, definition, runtime, agents, worker, API, plan and config reference (Tasks 1-14). Only `cloneWorkspace` gained a 2-line git stall setting; line numbers there moved by about 2.
+- Changed: the builder can now edit existing workflows by patch (`new_version_of` + changed `files` + `remove`), so a patch that rewrites `workflow.yaml` could drop `contexts:`. Added the skill rule (Task 15), a test (Task 24) and the acceptance criterion; the compiler's `unknown_context` error is the backstop, so no change to `applyChange` is needed.
+- Corrected a wrong assumption in the first draft: the Builder page has no per-step "model/limits line". Task 17 now adds a "Shared context" fact and per-step lines to `DraftPanel`, computed in the browser from `p.nodes[].def` and `workflow.yaml`, with no API change.
+- `skill.md` grew by about 65 lines (new-vs-existing question, `read_workflow`, MCP proposals). The whole skill is sent every turn, so the new section must stay short.
+- `web/src/styles.css`, `WorkflowCanvas.tsx`, `Examples.tsx` and `Run.tsx` were restyled/rewritten: reuse existing classes and do not touch canvas wiring. `Examples.tsx` lists examples from the API, so `context-review-revise` appears without a code change (confirm visually in Level 5).
+- The regression snapshot (Validation, "Before touching code") must be taken from the **current** `dev` HEAD, because `examples/pr-review` and `examples/sdlc-universal` changed in the same range.
+
 **Corrections to the earlier brainstorm (found by reading the code)**
 1. `harnessPrepare` calls `agentBegin`, so the input budget in `agentBegin` covers every executor; the earlier claim that harnesses build their own prompts was wrong.
 2. Continuation applies `workspace.files[]`, not `git apply` of `diff` (the diff can be truncated).
@@ -484,4 +504,4 @@ Quality
 - Workspace support for the Claude and Codex harnesses (then continuation extends to them).
 - A `first_of(...)` CEL helper to replace selector scripts like `pick_change.py`.
 
-**Confidence for one-pass success: 6.5/10.** The compiler, runtime and tests are well specified; the riskiest parts are the sandboxed runtime merge, the worker path-safety/continuation wiring across two adapters (needs a real OpenCode only for optional manual checks), and the editor work, which I read only at the structural level.
+**Confidence for one-pass success: 7/10** (up from 6.5 after re-validation). The compiler, runtime and tests are well specified and unchanged by recent work; the builder tasks now rest on code I read in full (`builder.ts`, `skill.md`, `Builder.tsx`, `builder-edit.test.ts`). The riskiest parts remain the sandboxed runtime merge, the worker path-safety and continuation wiring across two adapters (real OpenCode is only needed for optional manual checks), and the editor work, which I read at the structural level and did not run.
