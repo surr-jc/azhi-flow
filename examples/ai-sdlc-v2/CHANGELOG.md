@@ -1,5 +1,14 @@
 # Changelog
 
+## Reviewers and verifiers see the change they review
+
+| Gap | Change |
+|---|---|
+| The lite reviewers and the finding verifiers checked out the base branch and got the change only as diff text, so a verifier told to "refute the finding in a fresh checkout" had a checkout without the code it was checking | Those four steps (`lite_review_1/2`, `lite_verify_1/2`) set `workspace.from` to the change they review (`change_1` or `change_2`). The worker fetches that change's own base commit, applies its files and commits them locally, so the files are in the checkout and a diff against `refs/azhi/base` shows them. The diff stays in the message. |
+| The reviewer and verifier instructions said the change was not in the folder | The command, skill, agent and profile text now says the folder holds the base with the change applied, and to confirm findings against the code as it is there. |
+
+Needs a worker and a server on a build with workspace continuation (`docs/context-sharing.md`); a worker without it is refused for these steps at plan time, and the run plan says so. Not verified by a live run yet: the definition and plan checks pass, and the next delivery run is the check. Fix rounds still start from a fresh base and receive the previous diff as text; continuing them needs the fix skill rewritten, which is a separate change.
+
 ## Spec-driven planning (after OpenSpec and GitHub Spec Kit)
 
 | Gap | Change |

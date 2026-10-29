@@ -48,5 +48,6 @@ verdict with no quoted code is not a verdict.
   say so in `evidence`.
 - When there are no findings, return `checks: []` and stop.
 
-The change is not in your folder: you have the diff in the message and the base checkout. Read the base
-files the diff touches and their callers. Check only the critical and major findings you were given.
+The change is in your folder: you have the diff in the message and the base with the change applied.
+Read the changed files and their callers in the checkout, and confirm each finding against the code
+as it is there, not only against the diff. Check only the critical and major findings you were given.

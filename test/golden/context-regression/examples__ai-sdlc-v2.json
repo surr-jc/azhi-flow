@@ -5,13 +5,41 @@
       "severity": "warning",
       "code": "catalog_unavailable",
       "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_review_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_verify_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_review_2",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.change_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "lite_verify_2",
+      "path": "workspace.from"
     }
   ],
   "plan": {
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-v2",
-    "definitionHash": "sha256:468b08d2ee29adeb951db49efb6e958750893b4a24b601a1ec055265ba67619f",
+    "definitionHash": "sha256:687b510da260b39a80632de5090fa564b61155cf8bbfab5edb18146ae0e97885",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -1248,7 +1276,10 @@
               "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
             },
             "credential": "github-read-token",
-            "depth": 1
+            "depth": 1,
+            "from": {
+              "ref": "nodes.change_1.output.workspace"
+            }
           },
           "input": {
             "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
@@ -1294,7 +1325,10 @@
               "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
             },
             "credential": "github-read-token",
-            "depth": 1
+            "depth": 1,
+            "from": {
+              "ref": "nodes.change_1.output.workspace"
+            }
           },
           "input": {
             "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
@@ -1662,7 +1696,10 @@
               "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
             },
             "credential": "github-read-token",
-            "depth": 1
+            "depth": 1,
+            "from": {
+              "ref": "nodes.change_2.output.workspace"
+            }
           },
           "input": {
             "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
@@ -1708,7 +1745,10 @@
               "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
             },
             "credential": "github-read-token",
-            "depth": 1
+            "depth": 1,
+            "from": {
+              "ref": "nodes.change_2.output.workspace"
+            }
           },
           "input": {
             "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"

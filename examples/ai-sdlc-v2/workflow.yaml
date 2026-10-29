@@ -533,6 +533,8 @@ nodes:
           'HEAD'"
       credential: github-read-token
       depth: 1
+      from:
+        ref: nodes.change_1.output.workspace
     input:
       map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
         {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations,
@@ -558,6 +560,8 @@ nodes:
           'HEAD'"
       credential: github-read-token
       depth: 1
+      from:
+        ref: nodes.change_1.output.workspace
     input:
       map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
         {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations,
@@ -736,6 +740,8 @@ nodes:
           'HEAD'"
       credential: github-read-token
       depth: 1
+      from:
+        ref: nodes.change_2.output.workspace
     input:
       map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
         {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations,
@@ -761,6 +767,8 @@ nodes:
           'HEAD'"
       credential: github-read-token
       depth: 1
+      from:
+        ref: nodes.change_2.output.workspace
     input:
       map: "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change':
         {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations,
