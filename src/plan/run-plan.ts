@@ -226,6 +226,15 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           enforcement: c.ambientTools === 'uncontrolled' ? 'unobservable' : c.ambientTools === 'disableable' && executor === 'model-agent' ? 'enforced' : 'harness',
           detail: executor === 'model-agent' ? 'none exist' : `${c.ambientTools}: ${decl.notes.join('; ')}`,
         });
+        const cap = { item: def.context_budget?.max_item_bytes ?? ctx.settings.contextBudget.maxItemBytes, input: def.context_budget?.max_input_bytes ?? ctx.settings.contextBudget.maxInputBytes };
+        if (cap.item !== undefined || cap.input !== undefined) {
+          const withhold = def.context_budget?.on_exceed === 'withhold';
+          np.coverage.push({
+            action: 'input cap',
+            enforcement: 'enforced',
+            detail: `${[cap.item !== undefined ? `${cap.item} bytes per field` : '', cap.input !== undefined ? `${cap.input} bytes in all` : ''].filter(Boolean).join(', ')}; ${withhold ? 'a field over the cap is withheld from the agent, recorded on the run, and shown to approvers' : 'the step fails (budget_exceeded) when the input is over the cap'}`,
+          });
+        }
         for (const d of def.datasets ?? []) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
         if (executor === 'opencode') await opencodeSetup(def, n.id, np);
         break;

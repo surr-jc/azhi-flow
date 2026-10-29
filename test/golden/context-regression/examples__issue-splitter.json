@@ -1,0 +1,1428 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "issue-splitter",
+    "definitionHash": "sha256:0ca3a496b95e18e41dc5d3d897d69d4fa77bbefd0044939577f85e9c462e0107",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The repository the issues live in, owner/name"
+        },
+        "issue": {
+          "type": "string",
+          "title": "Existing issue",
+          "maxLength": 300,
+          "description": "An issue number (27), owner/name#27 or its URL. Leave empty to describe a request instead."
+        },
+        "text": {
+          "type": "string",
+          "title": "Request",
+          "maxLength": 20000,
+          "description": "Free text to analyze when there is no issue yet. Ignored when an issue is given."
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "maxLength": 200,
+          "description": "Branch the analysis reads; leave empty for the default branch"
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "issue"
+          ],
+          "properties": {
+            "issue": {
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}",
+      "split_max_files": 5,
+      "split_sensitive_max_files": 2,
+      "ready_label": "ready",
+      "split_label": "azhi-split"
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source",
+          "type": "condition",
+          "description": "An existing issue, or a request typed as free text.",
+          "expression": "has(inputs.issue) && inputs.issue != '' ? 'issue' : 'text'",
+          "routes": {
+            "issue": [
+              "github_issue"
+            ],
+            "text": [
+              "text_pass"
+            ]
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "cel": "inputs.issue.matches('^[0-9]+$') ? inputs.repo + '#' + inputs.issue : inputs.issue"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "issue"
+        }
+      },
+      {
+        "id": "text_pass",
+        "type": "condition",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "text_pass",
+          "type": "condition",
+          "description": "No issue to read - the request is the text. Marks that branch for the join below.",
+          "expression": "'go'",
+          "routes": {
+            "go": []
+          },
+          "default": "go"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "text"
+        }
+      },
+      {
+        "id": "ticket",
+        "type": "script",
+        "deps": [
+          "github_issue",
+          "text_pass"
+        ],
+        "dataDeps": [
+          "github_issue"
+        ],
+        "def": {
+          "id": "ticket",
+          "type": "script",
+          "description": "The request as one plain ticket (an issue's key, title and body, or the text's first line as the title).",
+          "runtime": "python",
+          "entrypoint": "scripts/ticket.py",
+          "merge": "any",
+          "depends_on": [
+            "text_pass"
+          ],
+          "input": {
+            "map": "{'repo': inputs.repo, 'text': has(inputs.text) ? inputs.text : '', 'issue': has(nodes.github_issue) ? nodes.github_issue.output : null}"
+          },
+          "output_schema": "schemas/ticket.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "analyze",
+        "type": "agent",
+        "deps": [
+          "ticket"
+        ],
+        "dataDeps": [
+          "ticket"
+        ],
+        "def": {
+          "id": "analyze",
+          "type": "agent",
+          "description": "Size the ticket against the code - deliverables, files, sensitive areas, risk - and propose slices when it is wide (scope-analysis and definition-of-ready skills).",
+          "executor": "opencode",
+          "profile": "scope-analyst@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'ticket': nodes.ticket.output, 'repository': inputs.repo, 'limits': {'split_max_files': config.split_max_files, 'split_sensitive_max_files': config.split_sensitive_max_files, 'max_slices': 6}}"
+          },
+          "output_schema": "schemas/scope.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 12
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "scope_gate",
+        "type": "condition",
+        "deps": [
+          "analyze"
+        ],
+        "dataDeps": [
+          "analyze"
+        ],
+        "def": {
+          "id": "scope_gate",
+          "type": "condition",
+          "description": "Only a code change goes on; anything else stops here and nothing is created.",
+          "expression": "nodes.analyze.output.is_code ? 'plan' : 'stop'",
+          "routes": {
+            "plan": [
+              "weight"
+            ],
+            "stop": [
+              "stop_message"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "stop_message",
+        "type": "report",
+        "deps": [
+          "analyze",
+          "scope_gate",
+          "ticket"
+        ],
+        "dataDeps": [
+          "analyze",
+          "ticket"
+        ],
+        "def": {
+          "id": "stop_message",
+          "type": "report",
+          "description": "Why this is not something to split.",
+          "template": "templates/stop.md",
+          "input": {
+            "map": "{'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "scope_gate",
+          "route": "stop"
+        }
+      },
+      {
+        "id": "stop_notify",
+        "type": "notify",
+        "deps": [
+          "stop_message"
+        ],
+        "dataDeps": [
+          "stop_message"
+        ],
+        "def": {
+          "id": "stop_notify",
+          "type": "notify",
+          "description": "Tell the channel nothing was created, and why.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.stop_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "weight",
+        "type": "condition",
+        "deps": [
+          "analyze",
+          "scope_gate"
+        ],
+        "dataDeps": [
+          "analyze"
+        ],
+        "def": {
+          "id": "weight",
+          "type": "condition",
+          "description": "Single or split, by rules: more than one deliverable, more files than split_max_files, or a sensitive area in more than split_sensitive_max_files files - and only when the analyst found at least 2 slices.",
+          "expression": "size(nodes.analyze.output.slices) >= 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files || (nodes.analyze.output.touches_sensitive && nodes.analyze.output.est_files > config.split_sensitive_max_files)) ? 'split' : 'single'",
+          "routes": {
+            "single": [],
+            "split": []
+          },
+          "default": "single"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "scope_gate",
+          "route": "plan"
+        }
+      },
+      {
+        "id": "plan_review",
+        "type": "approval",
+        "deps": [
+          "analyze",
+          "ticket",
+          "weight"
+        ],
+        "dataDeps": [
+          "analyze",
+          "ticket",
+          "weight"
+        ],
+        "def": {
+          "id": "plan_review",
+          "type": "approval",
+          "description": "A person approves the plan before anything is created, and may leave slices out. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "nodes.weight.output.route == 'split' ? 'Split ' + (nodes.ticket.output.key != '' ? nodes.ticket.output.key : nodes.ticket.output.title) + ' into ' + string(size(nodes.analyze.output.slices)) + ' issues' + (nodes.ticket.output.kind == 'issue' ? ' under it' : ', with a new issue tracking them') + '? Name the slices to leave out, if any.' : (nodes.ticket.output.kind == 'issue' ? 'Add a scope comment and the ' + config.ready_label + ' label to ' + nodes.ticket.output.key + '?' : 'Create one issue for ' + nodes.ticket.output.title + '?')"
+          },
+          "payload": {
+            "map": "{'ticket': {'key': nodes.ticket.output.key, 'title': nodes.ticket.output.title, 'url': nodes.ticket.output.url}, 'decision': nodes.weight.output.route, 'analysis': {'summary': nodes.analyze.output.summary, 'deliverables': nodes.analyze.output.deliverables, 'est_files': nodes.analyze.output.est_files, 'touches_sensitive': nodes.analyze.output.touches_sensitive, 'has_migration': nodes.analyze.output.has_migration, 'risk': nodes.analyze.output.risk, 'reasons': nodes.analyze.output.reasons}, 'slices': nodes.analyze.output.slices, 'single': nodes.analyze.output.single, 'note': nodes.weight.output.route == 'single' && size(nodes.analyze.output.slices) < 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files) ? 'The size rules say this is big, but no way to split it was found: it is treated as one issue.' : ''}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "drop": {
+                "type": "string",
+                "maxLength": 40,
+                "pattern": "^[0-9, ]*$",
+                "title": "Slices to leave out",
+                "description": "Slice numbers from the plan, for example 2,4. Leave empty to create them all. Applies to a split only."
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "final_plan",
+        "type": "script",
+        "deps": [
+          "analyze",
+          "plan_review",
+          "ticket",
+          "weight"
+        ],
+        "dataDeps": [
+          "analyze",
+          "plan_review",
+          "ticket",
+          "weight"
+        ],
+        "def": {
+          "id": "final_plan",
+          "type": "script",
+          "description": "The issues to write, with their bodies, after the approver's choices (slices left out are removed, dependencies noted).",
+          "runtime": "python",
+          "entrypoint": "scripts/final_plan.py",
+          "input": {
+            "map": "{'weight': nodes.weight.output.route, 'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output, 'drop': has(nodes.plan_review.output.data.drop) ? nodes.plan_review.output.data.drop : '', 'ready_label': config.ready_label, 'split_label': config.split_label}"
+          },
+          "output_schema": "schemas/final_plan.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "mode",
+        "type": "condition",
+        "deps": [
+          "final_plan"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "mode",
+          "type": "condition",
+          "description": "Which branch writes - comment and label an existing issue, create one issue, split an existing issue, or split free text under a new umbrella.",
+          "expression": "nodes.final_plan.output.mode",
+          "routes": {
+            "single_existing": [
+              "single_comment",
+              "single_label"
+            ],
+            "single_new": [
+              "single_create"
+            ],
+            "split_existing": [
+              "parent_existing"
+            ],
+            "split_new": [
+              "parent_create"
+            ],
+            "none": []
+          },
+          "default": "none"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "single_comment",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "mode",
+          "ticket"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "ticket"
+        ],
+        "def": {
+          "id": "single_comment",
+          "type": "tool",
+          "description": "Leave the scope analysis as a comment on the issue.",
+          "tool": "github.comment-on-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "nodes.ticket.output.number"
+            },
+            "body": {
+              "ref": "nodes.final_plan.output.comment"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == nodes.ticket.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "single_existing"
+        }
+      },
+      {
+        "id": "single_label",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "mode",
+          "ticket"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "ticket"
+        ],
+        "def": {
+          "id": "single_label",
+          "type": "tool",
+          "description": "Mark the issue ready for the delivery workflow.",
+          "tool": "github.label-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "nodes.ticket.output.number"
+            },
+            "labels": {
+              "ref": "nodes.final_plan.output.labels"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == nodes.ticket.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "single_existing"
+        }
+      },
+      {
+        "id": "single_create",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "mode"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "single_create",
+          "type": "tool",
+          "description": "Create one issue from the request.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "ref": "nodes.final_plan.output.single.title"
+            },
+            "body": {
+              "ref": "nodes.final_plan.output.single.body"
+            },
+            "labels": {
+              "ref": "nodes.final_plan.output.single.labels"
+            }
+          },
+          "guard": "args.repo == inputs.repo"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "single_new"
+        }
+      },
+      {
+        "id": "parent_existing",
+        "type": "condition",
+        "deps": [
+          "mode"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "parent_existing",
+          "type": "condition",
+          "description": "The parent is the issue the run started from. Marks that branch for the join below.",
+          "expression": "'go'",
+          "routes": {
+            "go": []
+          },
+          "default": "go"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "split_existing"
+        }
+      },
+      {
+        "id": "parent_create",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "mode"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "parent_create",
+          "type": "tool",
+          "description": "Create the umbrella issue that tracks the slices (free text only).",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "ref": "nodes.final_plan.output.umbrella.title"
+            },
+            "body": {
+              "ref": "nodes.final_plan.output.umbrella.body"
+            },
+            "labels": {
+              "ref": "nodes.final_plan.output.umbrella.labels"
+            }
+          },
+          "guard": "args.repo == inputs.repo"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "split_new"
+        }
+      },
+      {
+        "id": "parent",
+        "type": "script",
+        "deps": [
+          "parent_create",
+          "parent_existing"
+        ],
+        "dataDeps": [
+          "parent_create"
+        ],
+        "def": {
+          "id": "parent",
+          "type": "script",
+          "description": "The parent every slice goes under - the issue given, or the umbrella just created.",
+          "runtime": "python",
+          "entrypoint": "scripts/parent.py",
+          "merge": "any",
+          "depends_on": [
+            "parent_existing"
+          ],
+          "input": {
+            "map": "{'issue': has(inputs.issue) ? inputs.issue : '', 'created': has(nodes.parent_create) ? nodes.parent_create.output : null, 'repo': inputs.repo}"
+          },
+          "output_schema": "schemas/parent.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_1",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_1",
+          "type": "tool",
+          "description": "Create sub-issue 1, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[0].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[0].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[0].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_2",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "issue_1"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "has_2",
+          "type": "condition",
+          "description": "Is there a slice 2?",
+          "expression": "size(nodes.final_plan.output.issues) >= 2 ? 'yes' : 'no'",
+          "depends_on": [
+            "issue_1"
+          ],
+          "routes": {
+            "yes": [
+              "issue_2"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_2",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "has_2",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_2",
+          "type": "tool",
+          "description": "Create sub-issue 2, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[1].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[1].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[1].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_2",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "has_3",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "issue_2"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "has_3",
+          "type": "condition",
+          "description": "Is there a slice 3?",
+          "expression": "size(nodes.final_plan.output.issues) >= 3 ? 'yes' : 'no'",
+          "depends_on": [
+            "issue_2"
+          ],
+          "routes": {
+            "yes": [
+              "issue_3"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_3",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "has_3",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_3",
+          "type": "tool",
+          "description": "Create sub-issue 3, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[2].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[2].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[2].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_3",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "has_4",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "issue_3"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "has_4",
+          "type": "condition",
+          "description": "Is there a slice 4?",
+          "expression": "size(nodes.final_plan.output.issues) >= 4 ? 'yes' : 'no'",
+          "depends_on": [
+            "issue_3"
+          ],
+          "routes": {
+            "yes": [
+              "issue_4"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_4",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "has_4",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_4",
+          "type": "tool",
+          "description": "Create sub-issue 4, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[3].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[3].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[3].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_4",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "has_5",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "issue_4"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "has_5",
+          "type": "condition",
+          "description": "Is there a slice 5?",
+          "expression": "size(nodes.final_plan.output.issues) >= 5 ? 'yes' : 'no'",
+          "depends_on": [
+            "issue_4"
+          ],
+          "routes": {
+            "yes": [
+              "issue_5"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_5",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "has_5",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_5",
+          "type": "tool",
+          "description": "Create sub-issue 5, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[4].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[4].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[4].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_5",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "has_6",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "issue_5"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "has_6",
+          "type": "condition",
+          "description": "Is there a slice 6?",
+          "expression": "size(nodes.final_plan.output.issues) >= 6 ? 'yes' : 'no'",
+          "depends_on": [
+            "issue_5"
+          ],
+          "routes": {
+            "yes": [
+              "issue_6"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "issue_6",
+        "type": "tool",
+        "deps": [
+          "final_plan",
+          "has_6",
+          "parent"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "parent"
+        ],
+        "def": {
+          "id": "issue_6",
+          "type": "tool",
+          "description": "Create sub-issue 6, linked under the parent.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "cel": "nodes.final_plan.output.issues[5].title"
+            },
+            "body": {
+              "cel": "'Part of #' + string(nodes.parent.output.number) + '\\n\\n' + nodes.final_plan.output.issues[5].body"
+            },
+            "labels": {
+              "cel": "nodes.final_plan.output.issues[5].labels"
+            },
+            "parent": {
+              "ref": "nodes.parent.output.number"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.parent == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_6",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "outcome",
+        "type": "script",
+        "deps": [
+          "final_plan",
+          "issue_1",
+          "issue_2",
+          "issue_3",
+          "issue_4",
+          "issue_5",
+          "issue_6",
+          "parent",
+          "single_comment",
+          "single_create",
+          "single_label"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "issue_1",
+          "issue_2",
+          "issue_3",
+          "issue_4",
+          "issue_5",
+          "issue_6",
+          "parent",
+          "single_comment",
+          "single_create",
+          "single_label"
+        ],
+        "def": {
+          "id": "outcome",
+          "type": "script",
+          "description": "The Slack message and the comment for the parent, from what was actually created.",
+          "runtime": "python",
+          "entrypoint": "scripts/outcome.py",
+          "merge": "any",
+          "input": {
+            "map": "{'mode': nodes.final_plan.output.mode, 'label': nodes.final_plan.output.label, 'dropped': nodes.final_plan.output.dropped, 'parent': has(nodes.parent) ? nodes.parent.output : null, 'created': [has(nodes.issue_1) ? nodes.issue_1.output : null, has(nodes.issue_2) ? nodes.issue_2.output : null, has(nodes.issue_3) ? nodes.issue_3.output : null, has(nodes.issue_4) ? nodes.issue_4.output : null, has(nodes.issue_5) ? nodes.issue_5.output : null, has(nodes.issue_6) ? nodes.issue_6.output : null], 'single': has(nodes.single_create) ? nodes.single_create.output : null, 'labelled': has(nodes.single_label) ? nodes.single_label.output : null, 'commented': has(nodes.single_comment) ? nodes.single_comment.output : null}"
+          },
+          "output_schema": "schemas/outcome.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "comment_gate",
+        "type": "condition",
+        "deps": [
+          "final_plan",
+          "outcome"
+        ],
+        "dataDeps": [
+          "final_plan"
+        ],
+        "def": {
+          "id": "comment_gate",
+          "type": "condition",
+          "description": "Leave a summary on the parent only after a split.",
+          "expression": "nodes.final_plan.output.mode == 'split_existing' || nodes.final_plan.output.mode == 'split_new' ? 'yes' : 'no'",
+          "depends_on": [
+            "outcome"
+          ],
+          "routes": {
+            "yes": [
+              "parent_comment"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "parent_comment",
+        "type": "tool",
+        "deps": [
+          "comment_gate",
+          "outcome",
+          "parent"
+        ],
+        "dataDeps": [
+          "outcome",
+          "parent"
+        ],
+        "def": {
+          "id": "parent_comment",
+          "type": "tool",
+          "description": "List the sub-issues on the parent.",
+          "tool": "github.comment-on-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "nodes.parent.output.number"
+            },
+            "body": {
+              "ref": "nodes.outcome.output.parent_comment"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == nodes.parent.output.number"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "comment_gate",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "notify",
+        "type": "notify",
+        "deps": [
+          "outcome"
+        ],
+        "dataDeps": [
+          "outcome"
+        ],
+        "def": {
+          "id": "notify",
+          "type": "notify",
+          "description": "Tell the channel what was created.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.outcome.output.message"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "analyze": "output of tainted agent analyze",
+        "scope_gate": "output of tainted agent analyze",
+        "stop_message": "output of tainted agent analyze",
+        "stop_notify": "output of tainted agent analyze",
+        "weight": "output of tainted agent analyze",
+        "final_plan": "output of tainted agent analyze",
+        "mode": "output of tainted agent analyze",
+        "single_comment": "output of tainted agent analyze",
+        "single_label": "output of tainted agent analyze",
+        "single_create": "output of tainted agent analyze",
+        "parent_create": "output of tainted agent analyze",
+        "parent": "output of tainted agent analyze",
+        "issue_1": "output of tainted agent analyze",
+        "has_2": "output of tainted agent analyze",
+        "issue_2": "output of tainted agent analyze",
+        "has_3": "output of tainted agent analyze",
+        "issue_3": "output of tainted agent analyze",
+        "has_4": "output of tainted agent analyze",
+        "issue_4": "output of tainted agent analyze",
+        "has_5": "output of tainted agent analyze",
+        "issue_5": "output of tainted agent analyze",
+        "has_6": "output of tainted agent analyze",
+        "issue_6": "output of tainted agent analyze",
+        "outcome": "output of tainted agent analyze",
+        "comment_gate": "output of tainted agent analyze",
+        "parent_comment": "output of tainted agent analyze",
+        "notify": "output of tainted agent analyze"
+      },
+      "tainted": {
+        "analyze": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "analyze",
+          "write": "stop_notify",
+          "path": [
+            "analyze",
+            "stop_message",
+            "stop_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "analyze",
+          "write": "notify",
+          "path": [
+            "analyze",
+            "final_plan",
+            "outcome",
+            "notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "analyze",
+          "write": "notify",
+          "path": [
+            "analyze",
+            "…",
+            "plan_review",
+            "…",
+            "notify"
+          ],
+          "gate": "approval"
+        }
+      ]
+    }
+  }
+}

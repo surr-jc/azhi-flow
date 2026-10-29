@@ -124,6 +124,8 @@ CEL has `now`, `duration('24h')`, `timestamp(...)`, `size()`, `.filter()`, `.map
   `output_schema: schemas/x.json` (required; the output is validated), optional
   `tools: [tool refs]` the agent may call, `datasets: [name@tag]` it may search,
   `budget: {max_output_tokens, max_tool_calls, max_cost_usd}`, optional
+  `context_budget: {max_item_bytes, max_input_bytes, on_exceed: fail|withhold}` (see
+  "Fewer tokens"), optional
   `executor: opencode | claude-agent-sdk` (default is the built-in model agent; only use
   another executor when the person asks for a coding harness on a repository checkout).
 - `retrieve`: `datasets: [name@tag]`, `query: <value>`, `top_k: 5`: excerpts with citations.
@@ -195,6 +197,12 @@ Apply the answer in the draft, per agent step:
   unknown and the cap is not enforced; on github-copilot it is only counted after the step).
 - **Fewer tokens**: move counting, joining and formatting into script steps, use `project` on tool
   steps so agents see only the fields they need, and `top_k` small on retrieval.
+- **Input cap** (agent node): `context_budget` caps the bytes of input that reach the model
+  (exact bytes, `max_item_bytes` >= 256 per field, `max_input_bytes` >= 1024 in all). Offer it on
+  steps whose input can be large (a diff, a log, a document). The default `on_exceed: fail` stops
+  the step; use `withhold` only where the step can do without the largest fields, because the
+  agent cannot read a withheld field, it is told so, and people are shown which fields were left
+  out. Never withhold the one field a reviewer's verdict depends on.
 
 In the final summary, list each agent step with the model and limits you chose, and mention that
 an admin can add a daily or monthly spend limit for the workflow under Governance › Usage and

@@ -137,6 +137,8 @@ export interface RetrieveNodeInput {
 export interface HarnessPlan {
   system: string;
   prompt: string;
+  /** Input fields the node's context_budget withheld from the prompt (hash and size only). */
+  withheld?: Array<{ key: string; bytes: number; sha256: string }>;
   tools: Array<{ name: string; ref: string; description: string; input_schema: Record<string, unknown> }>;
   outputSchema: Record<string, unknown>;
   model: string;

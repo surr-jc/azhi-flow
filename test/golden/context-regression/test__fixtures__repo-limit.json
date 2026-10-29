@@ -1,0 +1,103 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "approval_without_payload",
+      "message": "approval 'approve' shows no payload; approvers should see the concrete target and payload",
+      "node": "approve"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "repo-limit",
+    "definitionHash": "sha256:4fd52ff60a4507e74b37a83de7ba22901283d320b891b619aa4d4f22814b5ea0",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo"
+      ]
+    },
+    "config": {},
+    "nodes": [
+      {
+        "id": "approve",
+        "type": "approval",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "approve",
+          "type": "approval",
+          "role": "operator",
+          "message": "Build it?",
+          "expires_in": "1h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "build",
+        "type": "agent",
+        "deps": [
+          "approve"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "build",
+          "type": "agent",
+          "depends_on": [
+            "approve"
+          ],
+          "executor": "opencode",
+          "profile": "coder@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": "HEAD"
+          },
+          "output_schema": "schemas/out.json"
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "build": "output of tainted agent build"
+      },
+      "tainted": {
+        "build": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": []
+    }
+  }
+}

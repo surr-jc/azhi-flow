@@ -1,0 +1,157 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "approval-check",
+    "definitionHash": "sha256:906cf74714c5546fc97da30049e7805f76d0a05fc08eb198a95e5d0996abc227",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "type": "string"
+        },
+        "expires": {
+          "type": "string"
+        }
+      }
+    },
+    "config": {
+      "channel": "C-QUALITY"
+    },
+    "nodes": [
+      {
+        "id": "fetch",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "fetch",
+          "type": "tool",
+          "tool": "ci.list-runs@1",
+          "arguments": {
+            "team": {
+              "ref": "inputs.team"
+            },
+            "since": {
+              "cel": "string(now - duration('24h'))"
+            }
+          },
+          "project": [
+            "id",
+            "status"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "approve",
+        "type": "approval",
+        "deps": [
+          "fetch"
+        ],
+        "dataDeps": [
+          "fetch"
+        ],
+        "def": {
+          "id": "approve",
+          "type": "approval",
+          "role": "operator",
+          "message": {
+            "cel": "'Post ' + string(size(nodes.fetch.output)) + ' runs to ' + config.channel + '?'"
+          },
+          "payload": {
+            "map": "{'destination': config.channel, 'runs': nodes.fetch.output}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "note": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "1h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "post",
+        "type": "notify",
+        "deps": [
+          "approve"
+        ],
+        "dataDeps": [
+          "approve"
+        ],
+        "def": {
+          "id": "post",
+          "type": "notify",
+          "depends_on": [
+            "approve"
+          ],
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'approved by ' + nodes.approve.output.by"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

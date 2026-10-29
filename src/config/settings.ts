@@ -61,6 +61,8 @@ export function settings() {
     copilotGithubUrl: process.env.AZHI_COPILOT_GITHUB_URL || 'https://github.com',
     /** Context manifests always record hashes and token counts; content only on opt-in. */
     storeContextContent: process.env.AZHI_STORE_CONTEXT_CONTENT === '1',
+    /** Server-wide cap on the bytes of input that reach an agent (exact bytes; a node's own context_budget overrides each limit). Unset means no cap. */
+    contextBudget: { maxItemBytes: byteLimit('AZHI_CONTEXT_MAX_ITEM_BYTES', 256), maxInputBytes: byteLimit('AZHI_CONTEXT_MAX_INPUT_BYTES', 1024) },
     /** Agent steps' transcripts (prompts, model text, tool calls and results, redacted) for the run page; on unless set to 0. */
     agentTranscripts: process.env.AZHI_AGENT_TRANSCRIPTS !== '0',
     /** Top-level runs that may work on one repository at once, unless the workspace sets its own; 0 means no limit. */
@@ -74,6 +76,16 @@ export type Settings = ReturnType<typeof settings>;
 function positive(v: string | undefined): number | undefined {
   const n = v === undefined || v.trim() === '' ? NaN : Number(v);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+/** A byte limit from the environment; a value that is not a whole number at or above the minimum is ignored, with a warning. */
+function byteLimit(name: string, min: number): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= min) return n;
+  console.warn(`${name}=${raw} ignored: it must be a whole number of bytes, at least ${min}`);
+  return undefined;
 }
 
 function nonNegativeInt(v: string | undefined): number | undefined {

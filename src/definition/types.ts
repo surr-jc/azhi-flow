@@ -63,6 +63,8 @@ export interface AgentNode extends NodeCommon {
   tools?: string[];
   output_schema: string | JsonSchema;
   budget?: { max_output_tokens?: number; max_tool_calls?: number; max_cost_usd?: number };
+  /** Cap on the bytes of input that reach the model: fail (default) or withhold the largest fields. */
+  context_budget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
   requires?: { enforced_restrictions?: boolean };
   /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
   workspace?: AgentWorkspace;

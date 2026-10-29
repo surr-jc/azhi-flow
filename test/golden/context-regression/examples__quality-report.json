@@ -1,0 +1,271 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "quality-report",
+    "definitionHash": "sha256:5c8520cc72d55482ac5e5dead46183ac8aae95cf9f73683e26fd6d810d9e2a8a",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "team"
+      ]
+    },
+    "config": {
+      "channel": "C-QUALITY"
+    },
+    "trigger": {
+      "schedule": {
+        "cron": "0 8 * * 1",
+        "timezone": "Asia/Kolkata"
+      },
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "ci_runs",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "ci_runs",
+          "type": "tool",
+          "tool": "ci.list-runs@1",
+          "arguments": {
+            "team": {
+              "ref": "inputs.team"
+            },
+            "since": {
+              "cel": "string(now - duration('336h'))"
+            }
+          },
+          "project": [
+            "id",
+            "status",
+            "branch",
+            "started_at",
+            "finished_at",
+            "failed_tests"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "flaky",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "flaky",
+          "type": "tool",
+          "tool": "tests.list-flaky@1",
+          "arguments": {
+            "team": {
+              "ref": "inputs.team"
+            }
+          },
+          "project": [
+            "test",
+            "failures",
+            "quarantined"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "incidents",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "incidents",
+          "type": "tool",
+          "tool": "incidents.list-open@1",
+          "arguments": {
+            "team": {
+              "ref": "inputs.team"
+            }
+          },
+          "project": [
+            "id",
+            "title",
+            "severity",
+            "opened_at"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "metrics",
+        "type": "script",
+        "deps": [
+          "ci_runs",
+          "flaky",
+          "incidents"
+        ],
+        "dataDeps": [
+          "ci_runs",
+          "flaky",
+          "incidents"
+        ],
+        "def": {
+          "id": "metrics",
+          "type": "script",
+          "runtime": "python",
+          "entrypoint": "scripts/metrics.py",
+          "input": {
+            "map": "{'runs': nodes.ci_runs.output, 'flaky': nodes.flaky.output, 'incidents': nodes.incidents.output}"
+          },
+          "output_schema": "schemas/metrics.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "analyse",
+        "type": "agent",
+        "deps": [
+          "incidents",
+          "metrics"
+        ],
+        "dataDeps": [
+          "incidents",
+          "metrics"
+        ],
+        "def": {
+          "id": "analyse",
+          "type": "agent",
+          "profile": "quality-analyst@1",
+          "datasets": [
+            "quality-guidelines@approved"
+          ],
+          "input": {
+            "map": "{'team': inputs.team, 'metrics': nodes.metrics.output, 'incidents': nodes.incidents.output}"
+          },
+          "output_schema": "schemas/analysis.json",
+          "budget": {
+            "max_output_tokens": 4000,
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "report",
+        "type": "report",
+        "deps": [
+          "analyse",
+          "metrics"
+        ],
+        "dataDeps": [
+          "analyse",
+          "metrics"
+        ],
+        "def": {
+          "id": "report",
+          "type": "report",
+          "template": "templates/report.md",
+          "input": {
+            "map": "{'team': inputs.team, 'm': nodes.metrics.output, 'a': nodes.analyse.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "post",
+        "type": "notify",
+        "deps": [
+          "report"
+        ],
+        "dataDeps": [
+          "report"
+        ],
+        "def": {
+          "id": "post",
+          "type": "notify",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.report.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}
