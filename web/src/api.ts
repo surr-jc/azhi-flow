@@ -89,7 +89,7 @@ export interface Approval {
   run_state: string;
   test: boolean;
   requested_at: string;
-  request: { message?: unknown; payload?: unknown; role?: string; expires_at?: string; on_expiry?: string };
+  request: { message?: unknown; payload?: unknown; role?: string; expires_at?: string; on_expiry?: string; context_withheld?: string[] };
   role: string;
   decision_schema: JsonSchema | null;
   expires_at: string | null;

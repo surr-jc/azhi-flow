@@ -28,6 +28,7 @@ import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
 import { resolveValue, type ValueScope } from './values.js';
+import { withheldBefore } from './withheld.js';
 import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
@@ -281,12 +282,15 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const awaitApproval = async (node: PlanNode, def: ApprovalNode, s: ValueScope) => {
     const expiresAt = new Date(Date.now() + node.timeoutMs).toISOString();
     const onExpiry = def.on_expiry ?? 'fail';
+    // Input a context_budget kept from an agent that this approval comes after: the person deciding is told.
+    const withheld = withheldBefore(plan.nodes, status.flags.context_withheld, node.id);
     await bookkeeping.requestApproval(runId, workspaceId, node.id, {
       message: resolveValue(def.message, s) ?? null,
       payload: resolveValue(def.payload, s) ?? null,
       role: def.role ?? 'operator',
       expires_at: expiresAt,
       on_expiry: onExpiry,
+      ...(withheld.length ? { context_withheld: withheld } : {}),
     });
     pendingApprovals.set(node.id, expiresAt);
     await refreshWaiting();
