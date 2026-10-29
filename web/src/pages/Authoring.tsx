@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { signVersion } from '../signing';
 import { api, type JsonSchema, type ScheduleRow } from '../api';
+import { closeSignIn, openSignInWindow, pointSignIn, statusLabel, useMcpConnection, useReconnect } from '../components/McpSignIn';
 import { Link } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, Table, useConfirm, when } from '../ui';
 
@@ -311,31 +312,51 @@ export function ToolForm({ from }: { from?: Record<string, unknown> }) {
   );
 }
 
-interface RemoteConnection { id: string; name: string; url: string; auth_kind: 'none' | 'oauth'; status: string; oauth?: { connected: boolean } }
+interface RemoteConnection { id: string; name: string; url: string; auth_kind: 'none' | 'oauth'; status: string; last_error?: string; authorization_url?: string; oauth?: { connected: boolean } }
 interface RemoteTool { name: string; description: string; input_schema: JsonSchema }
 
-/** Guided registration keeps endpoints and OAuth tokens out of free-form tool JSON. */
-export function McpForm({ initial }: { initial?: { name?: string; url?: string } } = {}) {
+/**
+ * Guided registration keeps endpoints and OAuth tokens out of free-form tool JSON. With OAuth only the
+ * name and URL are asked for: Azhi finds the server's sign-in endpoints and registers itself, then
+ * opens sign-in and lists the tools once it is done. Bringing your own OAuth client is under Advanced.
+ */
+export function McpForm({ initial }: { initial?: { name?: string; url?: string; auth?: 'none' | 'oauth' } } = {}) {
   const qc = useQueryClient();
   const [name, setName] = useState(initial?.name ?? '');
   const [url, setUrl] = useState(initial?.url ?? '');
-  const [auth, setAuth] = useState<'none' | 'oauth'>('none');
+  const [auth, setAuth] = useState<'none' | 'oauth'>(initial?.auth ?? 'none');
   const [authorizationUrl, setAuthorizationUrl] = useState('');
   const [tokenUrl, setTokenUrl] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [scopes, setScopes] = useState('');
   const [connection, setConnection] = useState<RemoteConnection>();
+  const [signInUrl, setSignInUrl] = useState<string>();
   const [tools, setTools] = useState<RemoteTool[]>([]);
   const [selected, setSelected] = useState('');
   const [toolId, setToolId] = useState('');
   const [effect, setEffect] = useState('read');
+  const win = useRef<Window | null>(null);
+  const discovered = useRef(false);
+  const own = Object.fromEntries(Object.entries({ authorization_url: authorizationUrl, token_url: tokenUrl, client_id: clientId, client_secret: clientSecret, scopes }).filter(([, v]) => v));
   const create = useMutation({
-    mutationFn: () => api<RemoteConnection>('/v1/mcp/connections', { method: 'POST', body: { name, url, auth_kind: auth, ...(auth === 'oauth' ? { oauth: { authorization_url: authorizationUrl, token_url: tokenUrl, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}), ...(scopes ? { scopes } : {}) } } : {}) } }),
-    onSuccess: (r) => { setConnection(r); void qc.invalidateQueries({ queryKey: ['mcp-connections'] }); },
+    mutationFn: () => api<RemoteConnection>('/v1/mcp/connections', { method: 'POST', body: { name, url, auth_kind: auth, ...(auth === 'oauth' && Object.keys(own).length ? { oauth: own } : {}) } }),
+    onSuccess: (r) => {
+      setConnection(r);
+      if (r.authorization_url && !pointSignIn(win.current, r.authorization_url)) setSignInUrl(r.authorization_url);
+      void qc.invalidateQueries({ queryKey: ['mcp-connections'] });
+    },
+    onError: () => closeSignIn(win.current),
   });
-  const connect = useMutation({ mutationFn: () => api<{ authorization_url: string }>(`/v1/mcp/connections/${connection!.id}/oauth/start`, { method: 'POST', body: {} }), onSuccess: (r) => window.open(r.authorization_url, '_blank', 'noopener') });
+  const live = useMcpConnection(connection?.id);
+  const current = live.data ?? connection;
+  const retry = useReconnect((u) => setSignInUrl(u));
   const discover = useMutation({ mutationFn: () => api<RemoteTool[]>(`/v1/mcp/connections/${connection!.id}/tools`), onSuccess: (r) => { setTools(r); if (r[0]) choose(r[0]); } });
+  // Signing in finished in the other window: list the tools straight away.
+  useEffect(() => {
+    if (current?.status === 'ready' && current.auth_kind === 'oauth' && !discovered.current) { discovered.current = true; setSignInUrl(undefined); discover.mutate(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.status]);
   const register = useMutation({
     mutationFn: () => {
       const remote = tools.find((t) => t.name === selected)!;
@@ -344,26 +365,32 @@ export function McpForm({ initial }: { initial?: { name?: string; url?: string }
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
   });
   const choose = (tool: RemoteTool) => { setSelected(tool.name); setToolId(tool.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'remote-tool'); };
+  const signingIn = current?.status === 'authorizing';
+  const failed = current && current.auth_kind === 'oauth' && (current.status === 'error' || current.status === 'disconnected');
   return (
     <div className="fields">
-      {!connection ? <form onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
+      {!connection ? <form onSubmit={(e) => { e.preventDefault(); if (auth === 'oauth') win.current = openSignInWindow(); create.mutate(); }}>
         <div className="fields">
           <div className="field"><label htmlFor="mcp-name">Connection name</label><input id="mcp-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="linear" pattern="[a-z0-9][a-z0-9._\-]*" required /></div>
           <div className="field"><label htmlFor="mcp-url">Streamable HTTP MCP URL</label><input id="mcp-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" required /></div>
-          <div className="field"><label htmlFor="mcp-auth">Authentication</label><select id="mcp-auth" value={auth} onChange={(e) => setAuth(e.target.value as 'none' | 'oauth')}><option value="none">None</option><option value="oauth">OAuth 2.0</option></select></div>
-          {auth === 'oauth' ? <>
-            <div className="field"><label htmlFor="mcp-authorize">Authorization URL</label><input id="mcp-authorize" type="url" value={authorizationUrl} onChange={(e) => setAuthorizationUrl(e.target.value)} required /></div>
-            <div className="field"><label htmlFor="mcp-token">Token URL</label><input id="mcp-token" type="url" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} required /></div>
-            <div className="field"><label htmlFor="mcp-client">Client ID</label><input id="mcp-client" value={clientId} onChange={(e) => setClientId(e.target.value)} required /></div>
+          <div className="field"><label htmlFor="mcp-auth">Authentication</label><select id="mcp-auth" value={auth} onChange={(e) => setAuth(e.target.value as 'none' | 'oauth')}><option value="none">None</option><option value="oauth">OAuth 2.0</option></select>{auth === 'oauth' ? <span className="hint">Azhi finds the server's sign-in details and registers itself. You only approve access.</span> : null}</div>
+          {auth === 'oauth' ? <details>
+            <summary>Advanced: use my own OAuth client</summary>
+            <p className="muted small">Only for servers that cannot register clients automatically. Anything left empty is found from the server.</p>
+            <div className="field"><label htmlFor="mcp-authorize">Authorization URL</label><input id="mcp-authorize" type="url" value={authorizationUrl} onChange={(e) => setAuthorizationUrl(e.target.value)} /></div>
+            <div className="field"><label htmlFor="mcp-token">Token URL</label><input id="mcp-token" type="url" value={tokenUrl} onChange={(e) => setTokenUrl(e.target.value)} /></div>
+            <div className="field"><label htmlFor="mcp-client">Client ID</label><input id="mcp-client" value={clientId} onChange={(e) => setClientId(e.target.value)} /></div>
             <div className="field"><label htmlFor="mcp-client-secret">Client secret</label><input id="mcp-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} /><span className="hint">Stored encrypted; omit for public clients.</span></div>
             <div className="field"><label htmlFor="mcp-scopes">Scopes</label><input id="mcp-scopes" value={scopes} onChange={(e) => setScopes(e.target.value)} /></div>
-          </> : null}
+          </details> : null}
         </div>
-        <button type="submit" className="primary" disabled={create.isPending}>Save connection</button><ErrorNote error={create.error} />
+        <button type="submit" className="primary" disabled={create.isPending}>{auth === 'oauth' ? 'Save and sign in' : 'Save connection'}</button><ErrorNote error={create.error} />
       </form> : <>
-        <p><strong>{connection.name}</strong> is {connection.status}.</p>
-        {connection.auth_kind === 'oauth' && connection.status !== 'ready' ? <div className="row"><button type="button" onClick={() => connect.mutate()} disabled={connect.isPending}>Connect with OAuth</button><span className="muted small">Complete authorization in the opened window, then discover tools.</span><ErrorNote error={connect.error} /></div> : null}
-        <div className="row"><button type="button" onClick={() => discover.mutate()} disabled={discover.isPending}>Discover tools</button><ErrorNote error={discover.error} /></div>
+        <p role="status"><strong>{connection.name}</strong> is {statusLabel(current!.status)}.</p>
+        {signingIn ? <p className="muted small">Approve access in the sign-in window. This page updates when you are done.{signInUrl ? <> Window did not open? <a href={signInUrl} target="_blank" rel="noreferrer">Continue sign-in</a>.</> : null}</p> : null}
+        {failed ? <div className="row"><span className="error">{current.last_error ?? 'Sign-in did not finish.'}</span><button type="button" onClick={() => retry.reconnect(connection.id)} disabled={retry.isPending}>Try again</button><ErrorNote error={retry.error} /></div> : null}
+        <ErrorNote error={live.error} />
+        {connection.auth_kind === 'none' || current?.status === 'ready' ? <div className="row"><button type="button" onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? 'Listing tools…' : 'Discover tools'}</button><ErrorNote error={discover.error} /></div> : null}
         {tools.length ? <div className="fields"><div className="field"><label htmlFor="mcp-tool">MCP tool</label><select id="mcp-tool" value={selected} onChange={(e) => { const t = tools.find((x) => x.name === e.target.value); if (t) choose(t); }}>{tools.map((t) => <option key={t.name} value={t.name}>{t.name}{t.description ? ` — ${t.description}` : ''}</option>)}</select></div><div className="field"><label htmlFor="mcp-tool-id">Azhi tool ID</label><input id="mcp-tool-id" value={toolId} onChange={(e) => setToolId(e.target.value)} required /></div><div className="field"><label htmlFor="mcp-effect">Effect</label><select id="mcp-effect" value={effect} onChange={(e) => setEffect(e.target.value)}><option>read</option><option>write-idempotent</option><option>write-dedupable</option><option>write-unsafe</option></select></div><button type="button" className="primary" onClick={() => register.mutate()} disabled={register.isPending}>Register selected tool</button><ErrorNote error={register.error} />{register.isSuccess ? <span className="ok-note">Tool registered. It is now available in workflow tool dropdowns.</span> : null}</div> : null}
       </>}
     </div>

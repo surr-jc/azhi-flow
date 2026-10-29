@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, atLeast, type JsonSchema } from '../api';
 import { useMe } from '../App';
+import { McpStatusBadge, useReconnect, type McpStatus } from '../components/McpSignIn';
 import { RepoList } from '../components/RepoAccess';
 import { Link, useRoute } from '../router';
-import { Badge, ErrorNote, Loading, PageHead, Table } from '../ui';
+import { Badge, ErrorNote, Loading, PageHead, Panel, Table } from '../ui';
 
 /**
  * Everything the workflows reach outside Azhi, one page per system: its tokens, the repositories
@@ -61,7 +62,31 @@ export function Connections({ system }: { system?: string }) {
           </div>
         </div>
       )}
+      {admin ? <McpConnections /> : null}
     </>
+  );
+}
+
+/** Remote MCP connections and whether their sign-in still works. Reconnect starts a fresh sign-in. */
+function McpConnections() {
+  const q = useQuery({ queryKey: ['mcp-connections'], queryFn: () => api<Array<McpStatus & { url: string; auth_kind: 'none' | 'oauth' }>>('/v1/mcp/connections'), refetchInterval: (s) => (s.state.data?.some((c) => c.status === 'authorizing') ? 2000 : false) });
+  const re = useReconnect();
+  if (!q.data?.length) return q.error ? <ErrorNote error={q.error} /> : null;
+  return (
+    <Panel title="MCP connections">
+      <Table head={['Name', 'URL', 'Sign-in', 'Status', '']}>
+        {q.data.map((c) => (
+          <tr key={c.id}>
+            <td className="mono">{c.name}</td>
+            <td className="mono small">{c.url}</td>
+            <td>{c.auth_kind === 'oauth' ? 'OAuth' : 'None'}</td>
+            <td><McpStatusBadge c={c} />{c.last_error ? <div className="muted small">{c.last_error}</div> : null}</td>
+            <td>{c.auth_kind === 'oauth' ? <button type="button" className="small" disabled={re.isPending} onClick={() => re.reconnect(c.id)}>{c.status === 'ready' ? 'Sign in again' : 'Reconnect'}</button> : null}</td>
+          </tr>
+        ))}
+      </Table>
+      <ErrorNote error={re.error} />
+    </Panel>
   );
 }
 

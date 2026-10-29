@@ -79,8 +79,8 @@ export function McpWizard({ onDone, onBrowse }: { onDone: () => void; onBrowse: 
         {gateway && saved.url ? (
           <>
             <h4>Connect it to Azhi's gateway too</h4>
-            <p className="muted small">This lets tool steps and model agents call it, with every write recorded in the run's action ledger.</p>
-            <McpForm initial={{ name: saved.name, url: saved.url }} />
+            <p className="muted small">This lets tool steps and model agents call it, with every write recorded in the run's action ledger. If the server asks you to sign in, Azhi finds the sign-in details itself; choose None under Authentication if it needs no sign-in.</p>
+            <McpForm initial={{ name: saved.name, url: saved.url, auth: auth === 'none' ? 'oauth' : 'none' }} />
           </>
         ) : null}
         <div className="row"><button type="button" className="primary" onClick={onDone}>Finish setup</button></div>
