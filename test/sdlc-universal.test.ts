@@ -15,7 +15,7 @@ const pkg = packageFromDirectory(PKG);
 const config = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8'));
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
 // The Jira tools are registered in the workspace (a gateway connection), not defined by this example; stand-ins let it compile.
-const jiraCcp = ['jira-ccp_get_issue', 'jira-ccp_jira_search'].map((id) => ({ id, version: 1, description: id, effect: 'read', source: 'jira-ccp', input_schema: { type: 'object' }, output_schema: { type: 'object' }, transport: { kind: 'mcp-streamable-http', connection: 'jira-ccp', tool: id.replace('jira-ccp_', '') } }));
+const jiraCcp = ['jira-ccp_get_issue', 'jira-ccp_jira_search'].map((id) => ({ id, version: 1, description: id, effect: 'read', source: 'jira-ccp', input_schema: { type: 'object', properties: { issue_key: { type: 'string' }, include_all_fields: { type: 'boolean' }, fields: { type: 'array', items: { type: 'string' } } } }, output_schema: { type: 'object' }, transport: { kind: 'mcp-streamable-http', connection: 'jira-ccp', tool: id.replace('jira-ccp_', '') } }));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 
 describe('SDLC universal: definition', () => {
@@ -36,7 +36,10 @@ describe('SDLC universal: definition', () => {
     const tools = config.tools.map((t: { id: string }) => t.id);
     expect(tools).toEqual(expect.arrayContaining(['confluence.get-page', 'github.get-issue']));
     expect(tools).not.toContain('jira.get-issue');
-    expect((def.nodes as Array<{ id: string; tool?: string }>).find((n) => n.id === 'jira_issue')!.tool).toBe('jira-ccp_get_issue@1');
+    const jira = (def.nodes as Array<{ id: string; tool?: string; arguments?: Record<string, unknown> }>).find((n) => n.id === 'jira_issue')!;
+    expect(jira.tool).toBe('jira-ccp_get_issue@1');
+    // Without this the tool returns a trimmed field set that has no description.
+    expect(jira.arguments!.include_all_fields).toBe(true);
   });
 
   it('names no repository-specific command and no hard-coded channel', () => {

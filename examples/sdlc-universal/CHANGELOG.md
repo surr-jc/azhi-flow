@@ -5,6 +5,8 @@
 - Jira intake reads through the workspace's `jira-ccp_get_issue@1` tool instead of the bundled mcp-atlassian
   `jira.get-issue`, which is removed along with the `jira_url` setting. Register `jira-ccp_get_issue@1` (and
   `jira-ccp_jira_search@1` if a step should search) before installing; the Confluence tool is unchanged.
+- Jira intake requests all fields (`include_all_fields: true`), so the description reaches `normalize` instead of
+  an empty ticket.
 - Meant for workers running OpenCode 2 (`AZHI_OPENCODE_MAJOR=2`, `azhi setup --opencode2`); the steps still say
   `executor: opencode`, the worker picks the version.
 

@@ -71,6 +71,7 @@ nodes:
     arguments:
       issue_key:
         ref: inputs.ticket
+      include_all_fields: true
   - id: github_issue
     type: tool
     description: Read the GitHub issue and its first comments.
