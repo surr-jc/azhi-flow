@@ -23,6 +23,7 @@ import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
 import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 
 /**
  * The OpenCode 2 harness adapter, used when the worker sets AZHI_OPENCODE_MAJOR=2. Same isolation as the 1.x adapter
@@ -79,7 +80,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
             })
           ).value
         : undefined);
-      checkout = await cloneWorkspace(input.workspace, { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
+      checkout = await cloneWorkspace(await resolveWorkspace(input.workspace, runApi), { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
       project = checkout.dir;
     } else {
       mkdirSync(project);

@@ -2,6 +2,8 @@ import { ApplicationFailure } from '@temporalio/common';
 import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ErrorClass } from '../lib/errors.js';
+import type { ApiClient } from './api-client.js';
+import type { WorkspaceSpec } from './workspace.js';
 
 /**
  * Workspace continuation: a step starts from an earlier step's change. The change is data written by
@@ -20,6 +22,29 @@ export interface Continuation {
   /** The commit the earlier change was made against; the worker checks this out. */
   baseSha: string;
   files: ContinuationFile[];
+}
+
+/** A workspace as the workflow sends it: the continuation is an artifact to fetch, never the files themselves. */
+export type HarnessWorkspace = Omit<WorkspaceSpec, 'continuation'> & { continuation?: { artifact: string; baseSha: string } };
+
+/** Fetches a continuation's change with the run token and returns the spec `cloneWorkspace` takes. */
+export async function resolveWorkspace(w: HarnessWorkspace, api: Pick<ApiClient, 'raw'>): Promise<WorkspaceSpec> {
+  const { continuation, ...rest } = w;
+  if (!continuation) return rest;
+  let bytes: Buffer;
+  try {
+    bytes = await api.raw(`/v1/artifacts/${encodeURIComponent(continuation.artifact)}`);
+  } catch (e) {
+    throw ApplicationFailure.create({ type: ErrorClass.transient, message: `could not fetch the change to continue from: ${(e as Error).message}` });
+  }
+  let data: { baseSha?: unknown; files?: unknown };
+  try {
+    data = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw invalid('the change to continue from is not valid JSON');
+  }
+  if (data.baseSha !== continuation.baseSha || !Array.isArray(data.files)) throw invalid('the change to continue from does not match the one the server prepared');
+  return { ...rest, continuation: { baseSha: continuation.baseSha, files: data.files as ContinuationFile[] } };
 }
 
 /** What a step may hand on; the same ceiling `collectChange` enforces when it is collected. */

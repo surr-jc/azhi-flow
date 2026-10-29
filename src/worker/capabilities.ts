@@ -10,7 +10,13 @@ export interface WorkerCapabilities {
   runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string; major?: 1 | 2 }; ripgrep?: { version: string; path: string }; dcp?: { version: string; path: string; dir?: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
+  /** Behaviours this worker build has that a step can require (a worker without the field predates them all). */
+  features?: WorkerFeature[];
 }
+
+/** `workspace_continuation`: a workspace can start from an earlier step's change (`workspace.from`). */
+export type WorkerFeature = 'workspace_continuation';
+export const WORKER_FEATURES: WorkerFeature[] = ['workspace_continuation'];
 
 function tryRun(cmd: string, args: string[]): string | undefined {
   try {
@@ -67,6 +73,7 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     },
     limits: { memory: process.platform === 'linux' && Boolean(tryRun('prlimit', ['--version'])), time: true },
     executors: ['script', ...(oc ? ['opencode'] : []), ...(sdk ? ['claude-agent-sdk'] : []), ...(codex ? ['codex'] : [])],
+    features: WORKER_FEATURES,
   };
 }
 

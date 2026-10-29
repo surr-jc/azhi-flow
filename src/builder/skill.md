@@ -126,6 +126,11 @@ CEL has `now`, `duration('24h')`, `timestamp(...)`, `size()`, `.filter()`, `.map
   `budget: {max_output_tokens, max_tool_calls, max_cost_usd}`, optional
   `context_budget: {max_item_bytes, max_input_bytes, on_exceed: fail|withhold}` (see
   "Fewer tokens"), optional
+  `workspace: {repo, ref, credential, mode: read|write, from}` (only with `executor: opencode`:
+  a repository checkout; `mode: write` returns the change as `output.workspace`), where
+  `from: {ref: nodes.<step>.output.workspace}` starts the checkout from an earlier write-mode
+  step's change, for review, verify and fix steps that must see that step's files (never together
+  with `base_ref`), optional
   `executor: opencode | claude-agent-sdk` (default is the built-in model agent; only use
   another executor when the person asks for a coding harness on a repository checkout).
 - `retrieve`: `datasets: [name@tag]`, `query: <value>`, `top_k: 5`: excerpts with citations.

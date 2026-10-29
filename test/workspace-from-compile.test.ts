@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { compile } from '../src/compiler/compile.js';
 import { loadDefinitionText } from '../src/definition/load.js';
+import { graphOf } from '../web/src/graph.js';
 
 const WS = `
       repo: acme/shop
@@ -88,6 +89,12 @@ describe('workspace.from', () => {
   it('names an unknown step and refuses a step that continues from itself', () => {
     expect(codes(wf('      from: {ref: nodes.nope.output.workspace}')).codes).toContain('error:unknown_ref_node');
     expect(codes(wf('      from: {ref: nodes.review.output.workspace}')).codes).toContain('error:self_reference');
+  });
+
+  it('is drawn as an edge by the editor, as the compiler orders it', () => {
+    const loaded = loadDefinitionText(wf('      from: {ref: nodes.build.output.workspace}'));
+    const edges = graphOf({ nodes: loaded.definition!.nodes as never }).find((n) => n.id === 'review')!.deps;
+    expect(edges).toEqual(['build']);
   });
 
   it('keeps the existing rule that a workspace needs the OpenCode executor', () => {
