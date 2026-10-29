@@ -42,6 +42,13 @@ export const OPENCODE2_EDIT_TOOLS = ['edit', 'write'];
 const stepsFor = (maxToolCalls: number | undefined) => (maxToolCalls ?? 100) + MAX_REPAIRS + 2;
 
 type Rule = { action: string; resource: string; effect: 'allow' | 'deny' };
+/** A request the provider rejected as malformed (a 400-class refusal other than auth, timeout or rate limit): resending it fails the same way. */
+export function isRejectedRequest(err: { type?: string; status?: number }): boolean {
+  if (/invalid.?request/i.test(err.type ?? '')) return true;
+  const s = err.status;
+  return s !== undefined && s >= 400 && s < 500 && ![401, 403, 408, 409, 425, 429].includes(s);
+}
+
 type Message = { id: string; type: string; finish?: string; error?: { type: string; message: string; status?: number; response?: { body: string } }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }; cost?: number };
 
 export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }, input: HarnessInput): Promise<HarnessResult> {
@@ -217,7 +224,9 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
           ? ` OpenAI refused the ChatGPT sign-in (secret ${input.credential}). Run \`azhi chatgpt check\`, or sign in again with \`azhi chatgpt login\`, and start a new run.`
           : chatgpt && (/usage.?limit|rate.?limit/i.test(text) || err.status === 429)
             ? ' The ChatGPT plan\'s usage limit is reached; it resets on its own (see your ChatGPT usage page). Start a new run after that.'
-            : '';
+            : isRejectedRequest(err)
+              ? ` The provider rejected the request itself, so retrying will not help. Model '${input.model}' may not work with this OpenCode version; try another model for this step (the profile's model or the workspace's model tiers) and start a new run.`
+              : '';
       return `${text}${hint}${saveLog()}`;
     };
     const step = async <T>(name: string, f: () => Promise<T>, idempotent = false): Promise<T> => {
@@ -349,7 +358,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
       if (state.output !== undefined) return await finish({ output: state.output }, state);
       if (err) {
         const message = describe(err);
-        return await finish({ error: { class: /auth/i.test(message) || err.status === 401 || err.status === 403 ? ErrorClass.authorization : ErrorClass.transient, message: `opencode: ${message}` } }, state);
+        return await finish({ error: { class: /auth/i.test(message) || err.status === 401 || err.status === 403 ? ErrorClass.authorization : isRejectedRequest(err) ? ErrorClass.needsOperator : ErrorClass.transient, message: `opencode: ${message}` } }, state);
       }
       if (++reminders > MAX_REPAIRS || Date.now() > deadline) {
         return await finish({ error: { class: ErrorClass.contractViolation, message: `the agent did not call ${SUBMIT_TOOL} after ${MAX_REPAIRS} reminders` } }, state);

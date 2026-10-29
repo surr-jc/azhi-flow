@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { isRejectedRequest } from '../src/worker/harness-opencode2.js';
 import { opencodeVersion } from '../src/worker/capabilities.js';
 import { DCP_PACKAGE, DCP_VERSION, dcpPlugin, OPENCODE2_VERSION, opencode2Binary, opencode2Dir } from '../src/worker/tools.js';
 
@@ -42,5 +43,12 @@ describe('OpenCode 2 setup', () => {
     expect(dcpPlugin({ AZHI_TOOLS_DIR: tools })).toEqual({ version: DCP_VERSION, path: join(root, 'dist', 'index.js'), dir: root });
     writeFileSync(join(root, 'package.json'), JSON.stringify({ version: '0.0.1' }));
     expect(dcpPlugin({ AZHI_TOOLS_DIR: tools })).toBeUndefined();
+  });
+
+  it('treats a rejected request (400 invalid_request) as final, and auth, rate limits and server errors as before', () => {
+    expect(isRejectedRequest({ type: 'AI.Error.InvalidRequest', status: 400 })).toBe(true);
+    expect(isRejectedRequest({ type: 'unknown', status: 422 })).toBe(true);
+    for (const status of [401, 403, 408, 429, 500, 502, 503]) expect(isRejectedRequest({ type: 'unknown', status })).toBe(false);
+    expect(isRejectedRequest({ type: 'unknown' })).toBe(false);
   });
 });
