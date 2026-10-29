@@ -23,7 +23,7 @@ import {
 } from './plan.js';
 import { compatible, projectSchema, resolvePath, schemaOfLiteral, typesOf } from './schema-path.js';
 import { analyseTaint, type DatasetInfo } from './taint.js';
-import { expandContexts, skipCoupling, skippableNodes } from './contexts.js';
+import { expandContexts, skipCauses, skipCoupling } from './contexts.js';
 
 export interface CompileOptions {
   pkg?: PackageSource;
@@ -519,7 +519,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
       ownData.set(c, data);
       ownDeps.set(c, new Set([...(original.depends_on ?? []), ...data, ...(routeOf.has(c) ? [routeOf.get(c)!.condition] : [])]));
     }
-    const out = skipCoupling({ consumers, fromBundle: expansion.fromBundle, targets: targetsOf, ownDeps, deps, skippable: skippableNodes(topoOrder, byId, deps, new Set(routeOf.keys())), byId });
+    const out = skipCoupling({ consumers, fromBundle: expansion.fromBundle, targets: targetsOf, ownDeps, deps, causes: skipCauses(topoOrder, byId, deps, routeOf), routeOf, byId });
 
     // Taint again with the edges that exist only because of a bundle removed: a step tainted only through one is named.
     const bundleOnly = new Map<string, Set<string>>();

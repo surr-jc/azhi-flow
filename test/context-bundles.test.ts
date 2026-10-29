@@ -51,8 +51,8 @@ nodes:
     expires_in: 1d
 ${nodes}`;
 
-const build = (contexts: string, nodes: string, catalogToUse = catalog) => {
-  const text = wf(contexts, nodes);
+const build = (contexts: string, nodes: string, catalogToUse = catalog, tweak: (text: string) => string = (x) => x) => {
+  const text = tweak(wf(contexts, nodes));
   const loaded = loadDefinitionText(text);
   if (!loaded.definition) throw new Error(JSON.stringify(loaded.diagnostics));
   const r = compile(loaded.definition, { catalog: catalogToUse, pkg: packageFromFiles('workflow.yaml', new Map([...files, ['workflow.yaml', Buffer.from(text)]])) });
@@ -196,6 +196,31 @@ describe('context bundles: coupling', () => {
     // Its own condition route is not new either.
     const gated = build(`contexts:\n  c:\n    v: {ref: nodes.gate.output.route}\n`, agent('a1', '    context: [c]\n'));
     expect(gated.codes.filter((c) => c.includes('may_skip'))).toEqual([]);
+  });
+
+  it('does not warn for a step on the same route as the one it reads: they are skipped together', () => {
+    const bundle = 'contexts:\n  c:\n    v: {ref: nodes.branch.output.v}\n';
+    const sameRoute = (text: string) => text.replace('routes: {a: [branch], b: []}', 'routes: {a: [branch, a1], b: []}');
+    const r = build(bundle, agent('a1', '    context: [c]\n'), catalog, sameRoute);
+    expect(r.ok).toBe(true);
+    expect(r.codes.filter((c) => c.includes('may_skip'))).toEqual([]);
+    // On the other route of the same condition it is skipped when the other route runs, which is new.
+    const otherRoute = (text: string) => text.replace('routes: {a: [branch], b: []}', 'routes: {a: [branch], b: [a1]}');
+    const other = build(bundle, agent('a1', '    context: [c]\n'), catalog, otherRoute);
+    expect(other.diagnostics.find((d) => d.code === 'context_may_skip')!.message).toContain("route 'a' of condition 'gate'");
+  });
+
+  it('warns about a join that may be skipped, and not about one that has an always-running branch', () => {
+    const twoRoutes = (text: string) => text.replace('routes: {a: [branch], b: []}', 'routes: {a: [branch], b: [other]}');
+    const script = (id: string, extra: string) => `  - id: ${id}\n    type: script\n    runtime: python\n    entrypoint: scripts/s.py\n${extra}    output_schema: {type: object, properties: {v: {type: string}}}\n`;
+    const join = (deps: string) => script('join', `    merge: any\n    depends_on: [${deps}]\n`);
+    const bundle = 'contexts:\n  c:\n    v: {ref: nodes.join.output.v}\n';
+    const use = agent('a1', '    context: [c]\n');
+    const skippable = build(bundle, script('other', '') + join('branch, other') + use, catalog, twoRoutes);
+    expect(skippable.diagnostics.find((d) => d.code === 'context_may_skip')!.message).toContain("'join' joins branches that may all be skipped");
+    // `intake` always runs, so the join always runs.
+    const safe = build(bundle, script('other', '') + join('branch, intake') + use, catalog, twoRoutes);
+    expect(safe.codes.filter((c) => c.includes('may_skip'))).toEqual([]);
   });
 
   it('warns once per skippable step, not once per key', () => {

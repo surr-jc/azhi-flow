@@ -97,19 +97,29 @@ export function expandContexts(authored: WorkflowDefinition): Expansion {
 }
 
 /**
- * Steps that can be skipped, in the interpreter's own terms (`shouldSkip`): a step on a condition route, a
- * step after a skippable step or an approval (a rejection skips everything below it), and a merge step only
- * when every dependency can be. Failures also skip steps, but that is a run-time event, not structure.
+ * Why each step can be skipped, in the interpreter's own terms (`shouldSkip`). A cause is a condition route a
+ * step sits on (`route:<condition>:<route>`), an approval above it that can be rejected (`approval:<id>`), or, for
+ * a step that joins branches, the join itself (`merge:<id>`), which is skipped only when every branch was.
+ * A step has the causes of everything it waits on, so two steps on the same route are skipped together.
+ * Failures also skip steps, but that is a run-time event, not structure.
  */
-export function skippableNodes(order: string[], byId: Map<string, NodeDef>, deps: Map<string, Set<string>>, routed: Set<string>): Set<string> {
-  const skippable = new Set<string>();
-  const canBlock = (d: string) => skippable.has(d) || byId.get(d)?.type === 'approval';
+export function skipCauses(order: string[], byId: Map<string, NodeDef>, deps: Map<string, Set<string>>, routeOf: Map<string, { condition: string; route: string }>): Map<string, Set<string>> {
+  const causes = new Map<string, Set<string>>();
+  const through = (d: string) => new Set([...(causes.get(d) ?? []), ...(byId.get(d)?.type === 'approval' ? [`approval:${d}`] : [])]);
   for (const id of order) {
+    const mine = new Set<string>();
+    const r = routeOf.get(id);
+    if (r) mine.add(`route:${r.condition}:${r.route}`);
     const ds = [...(deps.get(id) ?? [])];
-    const s = routed.has(id) || (byId.get(id)?.merge === 'any' ? ds.length > 0 && ds.every(canBlock) : ds.some(canBlock));
-    if (s) skippable.add(id);
+    if (byId.get(id)?.merge === 'any') {
+      // Runs when any branch got through, so it is skipped only when all were: one cause of its own, if all can be.
+      if (ds.length && ds.every((d) => through(d).size)) mine.add(`merge:${id}`);
+    } else {
+      for (const d of ds) for (const c of through(d)) mine.add(c);
+    }
+    causes.set(id, mine);
   }
-  return skippable;
+  return causes;
 }
 
 /** Every step reached by following `deps` from `start`. */
@@ -126,8 +136,9 @@ export function ancestorsOf(start: Iterable<string>, deps: Map<string, Set<strin
 }
 
 /**
- * `context_may_skip`: a bundle added a dependency the step did not have, on a step that can be skipped. The step
- * is then skipped whenever that one is. A dependency the step already reached some other way adds nothing new.
+ * `context_may_skip`: a bundle added a dependency the step did not have, and that step can be skipped for a reason
+ * that would not already skip this one. The step is then skipped whenever that one is. A dependency the step already
+ * reaches some other way, or one on the same condition route, adds nothing new.
  */
 export function skipCoupling(o: {
   consumers: string[];
@@ -137,22 +148,28 @@ export function skipCoupling(o: {
   /** depends_on, the condition route and refs outside bundles, per consumer. */
   ownDeps: Map<string, Set<string>>;
   deps: Map<string, Set<string>>;
-  skippable: Set<string>;
+  causes: Map<string, Set<string>>;
+  routeOf: Map<string, { condition: string; route: string }>;
   byId: Map<string, NodeDef>;
 }): Diagnostic[] {
   const out: Diagnostic[] = [];
+  const through = (d: string) => new Set([...(o.causes.get(d) ?? []), ...(o.byId.get(d)?.type === 'approval' ? [`approval:${d}`] : [])]);
   for (const c of o.consumers) {
     const already = ancestorsOf(o.ownDeps.get(c) ?? [], o.deps);
+    // Every reason this step is skipped without the bundle: its own route and what it already waits on.
+    const own = new Set<string>(o.routeOf.has(c) ? [`route:${o.routeOf.get(c)!.condition}:${o.routeOf.get(c)!.route}`] : []);
+    for (const a of already) for (const cause of through(a)) own.add(cause);
     const said = new Set<string>();
     for (const k of o.fromBundle.get(c) ?? []) {
       for (const d of o.targets(k.value)) {
         if (d === c || already.has(d) || said.has(d)) continue;
-        if (!(o.skippable.has(d) || o.byId.get(d)?.type === 'approval')) continue;
+        const added = [...through(d)].filter((cause) => !own.has(cause));
+        if (!added.length) continue;
         said.add(d);
         out.push({
           severity: 'warning',
           code: 'context_may_skip',
-          message: `context '${k.bundle}' key '${k.key}' makes step '${c}' wait on '${d}', which can be skipped (it is on a condition branch, or below an approval that can be rejected); when it is, '${c}' is skipped too. Keep branch-only values out of a shared context`,
+          message: `context '${k.bundle}' key '${k.key}' makes step '${c}' wait on '${d}', which can be skipped (${added.map(describeCause).join('; ')}); when it is, '${c}' is skipped too. Keep branch-only values out of a shared context`,
           node: c,
           path: `input.${k.key}`,
         });
@@ -160,4 +177,11 @@ export function skipCoupling(o: {
     }
   }
   return out;
+}
+
+function describeCause(cause: string): string {
+  const [kind, a, b] = cause.split(':');
+  if (kind === 'route') return `it is on route '${b}' of condition '${a}'`;
+  if (kind === 'approval') return `approval '${a}' can reject it`;
+  return `'${a}' joins branches that may all be skipped`;
 }
