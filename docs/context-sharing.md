@@ -192,6 +192,11 @@ that created it, and an older interpreter would drop the field and check out the
   manifest keeps only its hash and size (also when `AZHI_STORE_CONTEXT_CONTENT=1`). The run gets a
   `run.context_withheld` event for the node with the fields, and a `context_withheld` flag listing
   `node.field`, shown as a badge on the run page.
+- **Approvers are told.** An approval that comes after a step with a withheld field (anywhere it waits
+  on, directly or through other steps) carries the list in its request. The approval card in mission
+  control, and the Slack message, say "An agent before this step was not sent `node.field` (over its
+  input cap). It could not read it, so check what it decided without." A field withheld from a step on
+  another branch, or after the approval, is not listed.
 - **Every executor.** The cap is applied where the context is built, so it covers the built-in
   model agent and all harness executors (OpenCode, Claude Agent SDK, Codex).
 - **Retrieval is unchanged.** A node with `datasets` still builds its retrieval query from the whole

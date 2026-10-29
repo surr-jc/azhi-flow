@@ -104,6 +104,8 @@ export interface ApprovalRequest {
   role: string;
   expires_at: string;
   on_expiry: 'fail' | 'reject';
+  /** `step.field` for input an upstream agent was not sent because of its context_budget: what the approver is deciding without the agent having seen it. */
+  context_withheld?: string[];
 }
 
 export interface ApprovalDecision {
