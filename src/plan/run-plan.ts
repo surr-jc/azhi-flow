@@ -75,7 +75,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const secrets = new Set((await ctx.pool.query(`SELECT DISTINCT name FROM secrets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const workers = (
     await ctx.pool.query(`SELECT id, name, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds'`, [workspaceId])
-  ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean } } }>;
+  ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean }; features?: string[] } }>;
   const trust = await evaluateWorkerTrust(ctx, workspaceId, (version.signature as PackageSignature | null) ?? null, version.package_hash);
   const accepting = new Set(trust.workers.filter((w) => w.accepted).map((w) => w.worker));
 
@@ -138,6 +138,23 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         enforcement: 'harness',
         detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
       });
+      const fromRef = ws.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
+      if (fromRef) {
+        const producer = fromRef.split('.')[1] ?? fromRef;
+        const continuing = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_continuation'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker supports workspace continuation', mark: 'unverified', detail: 'no worker online' }
+            : continuing.length
+              ? { name: 'worker supports workspace continuation', mark: 'native', detail: continuing.map((w) => w.name).join(', ') }
+              : { name: 'worker supports workspace continuation', mark: 'unsupported', detail: 'no online OpenCode worker has a build with workspace continuation; upgrade the worker' },
+        );
+        np.coverage.push({
+          action: `workspace continues from ${producer}`,
+          enforcement: 'harness',
+          detail: `starts from the change step ${producer} made: the worker fetches that change's own base commit (not the step's ref, which may have moved on), checks every path, applies the files and commits them locally. The files are untrusted data from an agent; nothing is pushed`,
+        });
+      }
       if (ws.mode === 'write') {
         np.coverage.push({
           action: 'edits in the checkout',

@@ -77,6 +77,12 @@ export interface AgentWorkspace {
   ref: Value;
   /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
   base_ref?: Value;
+  /**
+   * Continue from an earlier change: a plain `{ref: nodes.<id>.output...}` to a workspace change (the `workspace`
+   * field of a write-mode step, or anything shaped like it). The worker checks out the change's own `base_sha`
+   * and applies its files as a local commit, so this step starts with the earlier files already in place.
+   */
+  from?: Value;
   /** Literal git host base URL. Default https://github.com. */
   host?: string;
   /** Workspace secret holding a read-only token, sent only to `host`. */

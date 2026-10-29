@@ -11,6 +11,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
+import { WORKSPACE_CHANGE_SCHEMA } from '../compiler/plan.js';
 import { CLAUDE_PLAN_ONLY_SDK, EXECUTORS, isClaudePlanToken } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
 import { applyContextBudget, type Withheld } from './context-budget.js';
@@ -473,13 +474,52 @@ export function estimateCost(u: Usage, pricing: AgentProfile['pricing']): number
   return per(u.input_tokens, pricing.input_per_mtok) + per(u.output_tokens, pricing.output_per_mtok) + per(u.cache_read_tokens, pricing.cache_read_per_mtok) + per(u.cache_write_tokens, pricing.cache_write_per_mtok);
 }
 
+/** Where a continuing step's change comes from: a ref into this run's stored outputs, or (test runs) a fixture value. */
+export type WorkspaceFrom = { ref: string } | { value: unknown; producer: string };
+
+const changeValidator = ajv.compile({ ...WORKSPACE_CHANGE_SCHEMA, required: ['repo', 'base_sha', 'files'] });
+
+/**
+ * Finds the change a step continues from, in the stored output of the step that made it (never in
+ * workflow history: a change carries up to 1 MB of file contents), checks it, and keeps the part the
+ * worker needs as an artifact it fetches with its run token.
+ */
+async function loadContinuation(ctx: AppContext, i: { runId: string; workspaceId: string }, from: WorkspaceFrom, repo: string) {
+  let producer: string;
+  let value: unknown;
+  if ('value' in from) {
+    producer = from.producer;
+    value = materialise(ctx, from.value);
+  } else {
+    const seg = from.ref.split('.');
+    if (seg[0] !== 'nodes' || seg[2] !== 'output' || !seg[1]) throw new AzhiError(ErrorClass.invalidInput, `workspace.from '${from.ref}' is not a ref to a step's output`);
+    producer = seg[1];
+    const row = (await ctx.pool.query(`SELECT output FROM node_attempts WHERE run_id=$1 AND workspace_id=$2 AND node_id=$3 AND state='succeeded' ORDER BY attempt DESC LIMIT 1`, [i.runId, i.workspaceId, producer])).rows[0] as { output: unknown } | undefined;
+    if (!row) throw new AzhiError(ErrorClass.invalidInput, `workspace.from '${from.ref}': step '${producer}' has no output in this run (it did not run, or was skipped), so there is no change to continue from`);
+    value = materialise(ctx, row.output);
+    for (const k of seg.slice(3)) value = materialise(ctx, (value as Record<string, unknown> | null | undefined)?.[k]);
+  }
+  if (!changeValidator(value)) {
+    throw new AzhiError(ErrorClass.invalidInput, `workspace.from: the output of '${producer}' is not a workspace change (${ajv.errorsText(changeValidator.errors, { dataVar: 'change' })}); point it at the 'workspace' field of the step that made the change`);
+  }
+  const change = value as { repo: string; base_sha: string; files: Array<{ path: string; status: string; mode: string; content?: string; encoding?: string }> };
+  if (change.repo.toLowerCase() !== repo.toLowerCase()) throw new AzhiError(ErrorClass.invalidInput, `workspace.from: the change in '${producer}' is for ${change.repo}, but this step works in ${repo}`);
+  const files = change.files.map((f) => ({ path: f.path, status: f.status, mode: f.mode, ...(f.content !== undefined ? { content: f.content } : {}), ...(f.encoding ? { encoding: f.encoding } : {}) }));
+  const a = ctx.artifacts.put(JSON.stringify({ baseSha: change.base_sha, files }));
+  // Awaited, unlike asArtifact: the worker asks for it as soon as this activity returns.
+  await ctx.pool.query(`INSERT INTO artifacts(workspace_id, hash, size, media_type) VALUES ($1,$2,$3,'application/json') ON CONFLICT DO NOTHING`, [i.workspaceId, a.hash, a.size]);
+  return { producer, artifact: a.hash, baseSha: change.base_sha, files: change.files.map((f) => f.path) };
+}
+
 /**
  * Harness executors get the same context the model agent would: platform rules and profile as
  * the system prompt, the input and retrieved excerpts as the prompt, the node's gateway tools.
  * The manifest adds one item for what the harness owns and Azhi cannot see.
  */
-export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string } }, executor: string) {
+export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write' }; workspaceFrom?: WorkspaceFrom }, executor: string) {
   const state = await agentBegin(ctx, i, { transcript: false });
+  const continuation = i.workspaceFrom && i.workspace ? await loadContinuation(ctx, i, i.workspaceFrom, i.workspace.repo) : undefined;
+  if (i.workspaceFrom && !i.workspace) throw new AzhiError(ErrorClass.invalidInput, 'workspace.from needs a workspace');
   const t = loadTranscript(ctx, state.transcript);
   const { profile } = await loadProfile(ctx, i.workspaceId, i.packageHash, i.profile, i.modelDefaults);
   // The run plan marks providers an adapter cannot drive as unsupported; this is the same check at run time.
@@ -500,6 +540,19 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
   if (i.workspace) {
     items.push({ kind: 'input', source: `workspace ${i.workspace.repo}@${i.workspace.ref}${i.workspace.baseRef ? ` (base ${i.workspace.baseRef})` : ''}`, reason: 'cloned on the worker; the files the agent reads are untrusted and not observable here', tokens: 0, content_hash: 'unobservable' });
   }
+  // Tells a continued agent what its checkout already holds; skills written for a fresh base would otherwise redo the change.
+  let note = '';
+  if (continuation) {
+    const shown = continuation.files.slice(0, 12).map((p) => (p.length > 120 ? `${p.slice(0, 120)}...` : p));
+    const more = continuation.files.length - shown.length;
+    // File names are written by an agent: listed as quoted data, never as instructions.
+    const names = `${JSON.stringify(shown)}${more > 0 ? ` and ${more} more` : ''}`;
+    note =
+      i.workspace?.mode === 'write'
+        ? `\n\nYour checkout already contains the change made by step ${continuation.producer} (${continuation.files.length} files, names given as data: ${names}). Build on it; do not apply it again.`
+        : `\n\nYour checkout contains the change made by step ${continuation.producer} (${continuation.files.length} files, names given as data: ${names}), committed on top of the base commit, so its files are in the checkout and a diff against refs/azhi/base shows them. Inspect the files in the checkout.`;
+    items.push({ kind: 'input', source: `workspace continuation from nodes.${continuation.producer}`, reason: `the checkout starts from this earlier change (${continuation.files.length} files, base ${continuation.baseSha.slice(0, 12)}); its files are untrusted and not observable here`, tokens: 0, content_hash: `sha256:${continuation.artifact.replace(/^sha256:/, '')}` });
+  }
   await ctx.pool.query(
     `INSERT INTO context_manifests(workspace_id, run_id, node_id, attempt, turn, tainted, items, total_tokens, token_source) VALUES ($1,$2,$3,1,1,$4,$5,NULL,'estimated')
      ON CONFLICT (run_id, node_id, attempt, turn) DO UPDATE SET items=EXCLUDED.items`,
@@ -508,8 +561,9 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
   const first = t.messages[0]!.content[0];
   return {
     system: t.system,
-    prompt: first && first.type === 'text' ? first.text : '',
+    prompt: `${first && first.type === 'text' ? first.text : ''}${note}`,
     withheld: state.withheld ?? [],
+    ...(continuation ? { continuation: { artifact: continuation.artifact, baseSha: continuation.baseSha, files: continuation.files.length } } : {}),
     tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
     outputSchema: t.outputSchema,
     model: t.model,

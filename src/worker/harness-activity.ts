@@ -23,7 +23,8 @@ import { runCodex } from './harness-codex.js';
 import { runOpencode2 } from './harness-opencode2.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
-import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange, type WorkspaceSpec } from './workspace.js';
+import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 import { OpencodeTranscript } from './opencode-transcript.js';
 import { TranscriptSink } from './transcript.js';
 
@@ -62,8 +63,8 @@ export interface HarnessInput {
   timeoutMs: number;
   /** The agent profile, read from the verified package for its harness section. Absent in older histories. */
   profile?: string;
-  /** A checkout the harness works in (OpenCode only). */
-  workspace?: WorkspaceSpec;
+  /** A checkout the harness works in (OpenCode only). A continuation is an artifact the worker fetches with the run token. */
+  workspace?: HarnessWorkspace;
 }
 
 export interface HarnessResult {
@@ -142,7 +143,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
                 })
               ).value
             : undefined);
-          checkout = await cloneWorkspace(input.workspace, { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
+          checkout = await cloneWorkspace(await resolveWorkspace(input.workspace, runApi), { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
           project = checkout.dir;
         } else {
           mkdirSync(project);

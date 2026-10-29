@@ -168,6 +168,11 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             ...(ws.mode === 'write' && ws.test ? { test: { command: ws.test.command, timeoutMs: ws.test.timeout ? parseDuration(ws.test.timeout) : 600_000, attempts: ws.test.attempts ?? 1 } } : {}),
           }
         : undefined;
+      // Where the continuing step's change lives. Only the ref goes through here: the server reads the change from
+      // the producing step's stored output, because a change carries up to 1 MB of file contents that must not be
+      // copied into workflow history again. A test run has no stored outputs, only fixtures, so it passes the value.
+      const fromRef = ws?.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
+      const workspaceFrom = fromRef ? (testNode ? { value: resolveValue(ws!.from!, s), producer: fromRef.split('.')[1] ?? '' } : { ref: fromRef }) : undefined;
       const prep = await act.harnessPrepare({
         runId,
         workspaceId,
@@ -182,10 +187,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
-        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}) } } : {}),
+        ...(workspaceFrom ? { workspaceFrom } : {}),
       });
       await noteWithheld(node.id, prep.withheld);
-      const queue = await selectWorker(node.id, executor, 1);
+      // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
+      const queue = await selectWorker(node.id, executor, 1, prep.continuation ? ['workspace_continuation'] : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
@@ -206,7 +213,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
         profile: def.profile,
-        ...(workspace ? { workspace } : {}),
+        ...(workspace ? { workspace: { ...workspace, ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
@@ -301,8 +308,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     return d;
   };
 
-  const selectWorker = async (nodeId: string, runtime: string, attempt: number): Promise<string> => {
-    let sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+  const selectWorker = async (nodeId: string, runtime: string, attempt: number, needs?: string[]): Promise<string> => {
+    // `needs` is passed only when a step requires something, so every other call keeps the shape older histories recorded.
+    const check = () => (needs ? bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime, needs) : bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime));
+    let sel = await check();
     if (sel.online > 0 && sel.accepted.length === 0) {
       throw ApplicationFailure.create({
         type: 'worker_trust_denied',
@@ -316,7 +325,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       while (sel.accepted.length === 0) {
         if (Date.now() >= expiresAt) throw ApplicationFailure.create({ type: 'expired', message: `no worker came online for node ${nodeId} within 30 minutes`, nonRetryable: true });
         await sleep('10s');
-        sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+        sel = await check();
       }
       const { waiting_reason: _cleared, ...flags } = status.flags;
       await setState('running', { flags, event: 'run.worker_online' });

@@ -321,6 +321,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
         files,
         fileText: (path) => (path in fileEdits ? (fileEdits[path] ?? undefined) : source.data?.files.find((f) => f.path === path)?.text),
         setFile: (path, t) => setFileEdits((p) => ({ ...p, [path]: t })),
+        changes: def.nodes.filter((n) => n.id !== step.id && n.type === 'agent' && n.workspace?.mode === 'write').map((n) => ({ id: n.id, ref: `nodes.${n.id}.output.workspace` })),
       }}
       diagnostics={diagnostics.filter((d) => d.node === step.id)}
       onChange={(s) => updateStep(step.id, () => s)}
@@ -744,6 +745,8 @@ interface HarnessContext {
   files: string[];
   fileText: (path: string) => string | undefined;
   setFile: (path: string, text: string | null) => void;
+  /** Earlier steps that make a workspace change a later step can continue from. */
+  changes: Array<{ id: string; ref: string }>;
 }
 
 /** The profile as the builder edits it: the fields it knows, with everything else kept as written. */
@@ -969,7 +972,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
 
       {step.executor === 'opencode' || step.workspace ? (
         <HbSection icon="subworkflow" title="Workspace" summary={step.workspace ? 'Clones a repository for this step' : 'None'}>
-          <WorkspaceFields value={step.workspace} onChange={(w) => set('workspace', w)} />
+          <WorkspaceFields value={step.workspace} changes={ctx.changes} onChange={(w) => set('workspace', w)} />
         </HbSection>
       ) : null}
 
@@ -1012,8 +1015,9 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
  * The repository an OpenCode step reviews or works in: cloned by the worker into a fresh folder for
  * the step (isolated git settings, the credential only in the fetch) and deleted afterwards.
  */
-function WorkspaceFields({ value, onChange }: { value: Record<string, any> | undefined; onChange: (w: Record<string, any> | undefined) => void }) {
+function WorkspaceFields({ value, changes, onChange }: { value: Record<string, any> | undefined; changes: Array<{ id: string; ref: string }>; onChange: (w: Record<string, any> | undefined) => void }) {
   const w = value ?? {};
+  const fromRef: string = typeof w.from?.ref === 'string' ? w.from.ref : '';
   const set = (k: string, v: unknown) => {
     const n = { ...w };
     if (v === undefined || v === '') delete n[k];
@@ -1031,7 +1035,17 @@ function WorkspaceFields({ value, onChange }: { value: Record<string, any> | und
         <>
           <ValueInput field={{ key: 'repo', label: 'Repository (owner/name)', kind: 'value', hint: 'For example {ref: inputs.repo} or acme/api' }} value={w.repo} onChange={(v) => set('repo', v)} />
           <ValueInput field={{ key: 'ref', label: 'Ref to check out', kind: 'value', hint: "A branch, tag or PR ref, for example {cel: \"'refs/pull/' + string(inputs.pr) + '/head'\"}" }} value={w.ref} onChange={(v) => set('ref', v)} />
-          <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Fetched too, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />
+          {changes.length || fromRef ? (
+            <label>Continue from an earlier change (optional)
+              <select value={fromRef} onChange={(e) => onChange(e.target.value ? (({ base_ref: _b, ...rest }) => ({ ...rest, from: { ref: e.target.value } }))(w) : (({ from: _f, ...rest }) => rest)(w))}>
+                <option value="">Start from the ref above</option>
+                {changes.map((c) => <option key={c.id} value={c.ref}>The change made by {c.id}</option>)}
+                {fromRef && !changes.some((c) => c.ref === fromRef) ? <option value={fromRef}>{fromRef}</option> : null}
+              </select>
+              <span className="muted small">{fromRef ? 'The worker starts from that change\'s own base commit and applies its files, so the ref above only labels the result. Not combined with a base ref.' : 'Starts the checkout with an earlier step\'s files already in place.'}</span>
+            </label>
+          ) : null}
+          {fromRef ? null : <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Fetched too, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />}
           <div className="row wrap">
             <label>Clone credential (secret)
               <input value={w.credential ?? ''} spellCheck={false} placeholder="github-read-token" onChange={(e) => set('credential', e.target.value)} />

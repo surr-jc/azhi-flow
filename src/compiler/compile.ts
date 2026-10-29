@@ -69,7 +69,7 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'tool':
       return { arguments: n.arguments as Value };
     case 'agent':
-      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref } : { input: n.input };
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.from': n.workspace.from } : { input: n.input };
     case 'script':
     case 'subworkflow':
       return { input: n.input };
@@ -355,6 +355,23 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
             parseDuration(n.workspace.test.timeout);
           } catch {
             err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
+          }
+        }
+        const from = n.workspace?.from;
+        if (from !== undefined) {
+          const plain = isValueExpr(from) && 'ref' in from && from.ref.startsWith('nodes.') ? from.ref : undefined;
+          if (!plain) {
+            err('workspace_from_invalid', "workspace.from must be a plain {ref: nodes.<id>.output...} to a workspace change; a CEL expression, a map or a literal cannot name the step the worker continues from", n.id, 'workspace.from');
+          } else if (n.workspace?.base_ref !== undefined) {
+            err('workspace_from_base_ref', 'workspace.from and workspace.base_ref cannot be used together: the worker starts from the change\'s own base_sha', n.id, 'workspace.from');
+          } else if (byId.has(plain.split('.')[1] ?? '') && plain.split('.')[1] !== n.id) {
+            const t = refTypes.get('workspace.from');
+            const props = (t as { properties?: Record<string, unknown> } | undefined)?.properties;
+            if (!t) warn('workspace_from_untyped', `workspace.from '${plain}' has no declared type, so it is checked when the step runs (it must carry base_sha and files)`, n.id, 'workspace.from');
+            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with base_sha and files)`, n.id, 'workspace.from');
+            else if (props && (!('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
+              err('workspace_from_type', `workspace.from '${plain}' does not carry base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
+            }
           }
         }
         if (n.workspace?.mode === 'write') {

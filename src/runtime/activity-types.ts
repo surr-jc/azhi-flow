@@ -1,5 +1,5 @@
 import type { HarnessInput, HarnessResult } from '../worker/harness-activity.js';
-import type { AgentBeginInput, AgentState, AgentTurnInput, AgentTurnResult } from '../agents/model-agent.js';
+import type { AgentBeginInput, AgentState, AgentTurnInput, AgentTurnResult, WorkspaceFrom } from '../agents/model-agent.js';
 /** Activity signatures shared by the interpreter workflow and the processes that implement them. */
 import type { NodeError, RunFlags, RunInput, RunState } from './types.js';
 
@@ -74,14 +74,14 @@ export interface GatewayActivities {
   notifyNode(input: NotifyNodeInput): Promise<{ action_id: string; delivered: boolean; receipt: unknown }>;
   reportNode(input: ReportNodeInput): Promise<unknown>;
   /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
-  checkWorkers(workspaceId: string, packageHash: string, runtime: string): Promise<WorkerSelection>;
+  checkWorkers(workspaceId: string, packageHash: string, runtime: string, needs?: string[]): Promise<WorkerSelection>;
   issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[], creds?: string[]): Promise<string>;
   /** Model agent: builds the context and the first manifest items (attempt row goes running). */
   agentBegin(input: AgentBeginInput): Promise<AgentState>;
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Harness executors: builds the same context as the model agent, for a worker to run. */
-  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string } }): Promise<HarnessPlan>;
+  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write' }; workspaceFrom?: WorkspaceFrom }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */
@@ -137,6 +137,8 @@ export interface RetrieveNodeInput {
 export interface HarnessPlan {
   system: string;
   prompt: string;
+  /** The change a `workspace.from` step continues from, stored as an artifact the worker fetches (never carried in history). */
+  continuation?: { artifact: string; baseSha: string; files: number };
   /** Input fields the node's context_budget withheld from the prompt (hash and size only). */
   withheld?: Array<{ key: string; bytes: number; sha256: string }>;
   tools: Array<{ name: string; ref: string; description: string; input_schema: Record<string, unknown> }>;
