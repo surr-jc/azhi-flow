@@ -111,8 +111,13 @@ spec (and refuses anything that looks like a secret value). The chat shows a car
 admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
 for a token: it names the credential and you set its value on the Secrets page. Local stdio MCP servers and
 admin-managed remote Streamable HTTP MCP connections run today. Add a remote connection on Tools (or with
-`azhi mcp`), authorize it once for the workspace when required, discover its tools, and register the selected
-ones. After registering, ask the builder to draft the workflow that uses it.
+`azhi mcp add`) with just its name and URL, approve access once for the workspace when it asks for sign-in, discover
+its tools, and register the selected ones. After registering, ask the builder to draft the workflow that uses it.
+
+The builder can propose the connection itself with `propose_mcp_connection` (name, https URL, OAuth by default). The
+chat shows a card; an admin clicks **Connect and sign in**, approves access in the pop-up and the card shows the
+status. It never asks for a client ID, secret or token. Tools are then discovered on the Tools page, and the builder
+proposes each one with `propose_tool`.
 
 ## Suggesting what is available, and adding MCP servers
 
