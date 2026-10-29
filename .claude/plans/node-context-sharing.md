@@ -1,62 +1,65 @@
 # Feature: Generic node-to-node context sharing
 
-The following plan should be complete, but validate documentation and codebase patterns and task sanity before you start implementing. Pay special attention to the naming of existing types and helpers (`Value`, `ValueScope`, `PlanNode`, `WORKSPACE_CHANGE_SCHEMA`, `AgentBeginInput`, `Checkout`). Import from the right files. Branch: `dev`. Conventional commits (`feat:`, `docs:`). Nothing merges, closes or force-pushes.
+The following plan should be complete, but validate documentation and codebase patterns and task sanity before you start implementing. Pay special attention to the naming of existing types and helpers (`Value`, `PlanNode`, `WORKSPACE_CHANGE_SCHEMA`, `AgentBeginInput`, `Checkout`, `WorkerCapabilities`). Branch: `dev`. Conventional commits (`feat:`, `docs:`). Nothing merges, closes or force-pushes.
 
-**Revision 2 (2026-10-29): re-validated against `origin/dev` at `2d99c8e`.** Since the first draft, `dev` gained the chat-first Build-with-chat redesign, builder edits of existing workflows by patch (`new_version_of` + `remove`), MCP-server proposals, and canvas/page restyling (61 files). The compiler, definition, runtime, agents, API, plan, config and security modules are unchanged (only a 2-line git stall setting in `cloneWorkspace`), so Tasks 1-14 stand with shifted line numbers. Tasks 15-17 and 25 were rewritten, a builder-edit preservation requirement and test were added, and the line references below are current as of `2d99c8e`. Line numbers drift; match by symbol name if they do not line up.
+**Revision 3 (2026-10-29).** Every load-bearing claim was re-verified against the code at `dev` `2d99c8e` (probes run with `tsx`, not inferred). Verification overturned seven design decisions of revision 2; see "What changed in revision 3 and why" at the end. Confidence tags: **[Certain]** = read in code or reproduced; **[Likely]** = strong inference; **[Guessing]** = not verified.
 
 ## Feature Description
 
-Nodes already share data through explicit refs (`ref: nodes.X.output.field`, CEL maps). Four gaps make sharing context clumsy, costly or lossy. This feature closes them with four **opt-in, definition-level** mechanisms that any workflow can adopt, from YAML upload, the "Build with chat" builder, or the visual editor:
+Nodes already share data through explicit refs (`ref: nodes.X.output.field`, CEL). This feature adds three **opt-in, definition-level** mechanisms any workflow can adopt from YAML upload, "Build with chat", or the visual editor:
 
-1. **Context bundles.** A workflow-level `contexts:` block names a set of upstream fields once. A node adds `context: [name]` and receives those fields in its input. Bundles are declared once, and the manifest records one item per field.
-2. **Context budget.** An agent node's `context_budget` caps how much of its input reaches the model. An oversized field is withheld and replaced by `{note, artifact, shape}`. Default OFF.
-3. **Workspace continuation.** `workspace.from: {ref: nodes.X.output.workspace}` starts a node's checkout from the change a previous write-mode agent made: same base commit, previous files applied. The diff no longer travels through the prompt, and review findings point at real files.
-4. **Handoff notes.** `handoff: {max_chars}` on an agent node adds an engine-owned optional `handoff` string to its output, for notes to the next agent. Taint follows the producer like any other output field.
+1. **Context bundles.** A workflow-level `contexts:` block names a set of upstream values once. Nodes add `context: [name]`. The compiler **expands bundles statically into the node's `input`**, so the runtime is unchanged.
+2. **Input cap.** On an agent node, `context_budget` limits the bytes of input that reach the model. The default on exceed is **fail**. Withholding a field is a per-node opt-in that is recorded and shown to people.
+3. **Workspace continuation.** `workspace.from: {ref: …}` starts a checkout from an earlier change: the same base commit, with the previous files applied **as a local commit**, so existing diff tooling sees them.
 
-Explicitly **not** built (decided in brainstorming): shared memory / blackboard, transcript inheritance, LLM "summary" mode, auto-passing all upstream outputs. Each would create hidden data edges, bypass taint analysis, or break Temporal replay determinism.
+**Dropped from v1: handoff notes.** They add nothing an author can't already get by declaring a `notes` string in `output_schema`. They reserve an engine-owned field name, and they create a channel framed as "instructions for the next step", which suits prompt injection. The builder skill teaches the schema-field pattern instead (Task 15).
+
+Still rejected: shared memory / blackboard, transcript inheritance, LLM "summary" mode, auto-passing all upstream outputs.
 
 ## User Story
 
-As a workflow author (writing YAML, using "Build with chat", or using the visual editor)
-I want to declare once which upstream results a step needs, cap how much of them the model sees, hand a previous agent's code change to the next agent as a checkout, and pass short notes between agents
-So that multi-step workflows cost fewer tokens, stay consistent when edited, and keep the taint, approval and ledger guarantees without any copy-pasted CEL.
+As a workflow author (YAML, Build with chat, or visual editor)
+I want to declare once which upstream values several steps need, cap how much input reaches a model, and let a later agent continue from an earlier agent's code change
+So that multi-step workflows stay consistent when edited, cost less, and keep their taint, approval and audit guarantees.
 
-## Problem Statement
+## Problem Statement (verified)
 
-Verified in the code (file:line):
+- The same 4–8 line CEL context map is copy-pasted across about 10 agent nodes in `examples/ai-sdlc-v2/workflow.yaml` (`build*`, `lite_fix*`, `lite_review_*`, `lite_verify_*`). [Certain]
+- YAML anchors don't solve it. Whole-value aliases work, but **merge keys (`<<`) are not enabled**, and a `<<` key silently becomes a literal input key (reproduced with `parseYaml`). The visual editor also stores the definition as JSON and re-serialises it, so aliases are lost on the first visual edit (`Editor.tsx:200`, `:247`). [Certain]
+- Fix rounds pass `previous_diff` as prompt text into a fresh base checkout, and the agent has to re-type the change (`implement-change/SKILL.md:22-24`). [Certain]
+- `materialise()` (`model-agent.ts:172`) expands every input artifact in full. Only *output* tokens are budgeted. [Certain]
+- The manifest records the whole input as one item (`model-agent.ts:220`). [Certain]
+- The builder can't author any of this, and it now edits existing workflows by patch. [Certain]
 
-- `examples/ai-sdlc-v2/workflow.yaml` repeats the same 4-8 line CEL context map in `build`, `build_untested`, `build_static`, `lite_fix`, `lite_fix_untested`, `lite_fix_static`, `lite_review_1/2` and `lite_verify_1/2`. One missed edit gives one variant different context, with no diagnostic.
-- Fix rounds pass `previous_diff` as JSON in the prompt into a **fresh base checkout** (`workflow.yaml` `lite_fix` input; `implement-change/SKILL.md:22-24` tells the agent to "re-apply the change"). The agent has edit tools only (no shell), so it retypes the diff.
-- `materialise()` (`src/agents/model-agent.ts:172`) expands every artifact in an agent's input in full. Only output tokens are budgeted (`AgentBeginInput`, `model-agent.ts:99-123`); nothing caps input size.
-- The manifest records the whole input as one item with a comma-joined source (`model-agent.ts:220`), so you cannot see which field cost what, or which carried untrusted text.
-- Only `output_schema` fields cross nodes. There is no sanctioned slot for "notes to the next agent".
-- The chat builder cannot author any of this: the agent-node reference in `src/builder/skill.md` (the `- \`agent\`` bullet, ~line 123) never mentions `workspace`, and nothing teaches bundles or budgets. It can also now **edit** an existing workflow by sending only changed files, so a rewrite of `workflow.yaml` can silently drop a `contexts:` block it was never taught about.
+## Solution Statement and decisions
 
-## Solution Statement
-
-All four mechanisms are declared in the **definition schema** (`src/definition/schema.ts`), never in profiles or skills, and compiled into the existing data-edge machinery so taint, type-checking and the run plan work unchanged.
-
-Key design decisions (with the corrections to the brainstorm that reading the code forced):
-
-| # | Decision | Why |
+| # | Decision | Evidence / reason |
 |---|---|---|
-| D1 | Bundles are **flattened** into the node input (`{...bundleKeys, ...inputKeys}`), bundle keys first. | Matches how `input.requirements` etc. are read by existing skills today, and puts stable content first for prompt caching. Collisions are a compile error when statically detectable (literal-object `input`, two bundles) and a deterministic run-time `contract_violation` otherwise (`input` as `{map: "<CEL>"}` / `{ref}`). Never silently overwritten. |
-| D2 | The plan stores bundle definitions once in `ExecutionPlan.contexts` (omitted when unused); node `def` keeps `context: [names]`. | Existing workflows compile to byte-identical plans (regression test). The runtime resolves bundles from the plan inside the workflow sandbox (pure, deterministic). |
-| D3 | `context_budget` is enforced in `agentBegin` (`model-agent.ts:196`). | **Correction:** `harnessPrepare` (`model-agent.ts:462`) calls `agentBegin`, so this single point covers the model agent **and every harness executor**. (The brainstorm wrongly said harnesses build their own prompts.) |
-| D4 | Withheld input fields are stored in the artifact store and referenced by hash, but the agent has **no tool to read artifacts** (only `gateway-activities.ts` references them). | State this honestly in docs: a capped field is withheld, not deferred. Pair with `workspace.from` so agents read files instead of a diff. |
-| D5 | Continuation applies the previous change from `workspace.files[]` (complete content, up to 1 MB), **not** by `git apply` of `diff`. | **Correction:** `diff` can be truncated at 200k chars (`CHANGE_LIMITS.diffChars`, `workspace.ts`); `files` is complete. |
-| D6 | The change travels to the worker via the **artifact store**, not the Temporal payload. | `files` can be ~1 MB; Temporal's default blob limit is 2 MB. Mirror the `creds` run-token pattern (`src/api/app.ts:679`): add an `arts` claim and `GET /v1/gateway/artifacts/:hash`. |
-| D7 | v1 scope: **OpenCode only** (both adapters). | `compile.ts:350` already restricts `workspace` to `executor: opencode`; `harness-claude.ts`/`harness-codex.ts` have no workspace support. Both OpenCode adapters share `cloneWorkspace` (`harness-activity.ts:145`, `harness-opencode2.ts:82`), so one change point covers them. Other executors get a compile error naming the executor, which `workspace_unsupported` already does. |
-| D8 | The workspace-wide `context_budget` default is a **server setting** (env), default off. | Settings live in `src/config/settings.ts` as env vars; a DB-backed Governance page is a larger change. Listed as a follow-up in NOTES. |
-| D9 | `context_budget` is **agent-only** in v1. | Scripts, reports and subworkflows are not token-metered; `context:` bundles (not budgets) apply to them. |
-| D10 | Continuation **hard-fails** if the checked-out commit is not `from.base_sha`. | The error names both SHAs and tells the author to pin `ref: {ref: nodes.<id>.output.workspace.base_sha}`. No silent fallback to the base. |
+| D1 | **Bundles expand at compile time** into `PlanNode.def.input`. A node using `context` must have an object-literal `input` or none. Values inside can still be `{ref}`, `{cel}`, or `{map}` per key. The authored definition (and `definitionHash`) is untouched; only the plan node's `def` is a copy with the merged input. | Removes all sandbox/runtime merge code and makes every collision a compile error. An **older interpreter build runs the plan correctly** because it only sees an ordinary `input` (runs are pinned to the interpreter build that created them: `runs.ts:100`, `outbox.ts:102`). [Certain] |
+| D2 | `PlanNode.inputParts?: Array<{key, source}>` (omitted when unused) feeds the per-field manifest. | Old builds ignore it, and the only loss is manifest granularity. [Certain] |
+| D3 | Bundles are **not** allowed on `subworkflow` in v1 (agent, script, report only). | Child inputs are validated with ajv against the child's `inputs` schema (`runs.ts:51-55`, reached through `prepareChildRun` -> `createRun`). Flattened bundle keys fail an `additionalProperties:false` child at **run** time, and the compiler can't check that because the child resolves at run time. [Certain] |
+| D4 | New compile diagnostics for bundle **coupling**: `context_may_skip` (warning), `context_taints` (warning), `context_ref_on_merge` (error). | Every bundle ref becomes a dep **and** a data dep of every consumer. (a) A consumer with a dep that can be skipped is itself skipped unless `merge: any` (`workflow.ts:515-525`). (b) In a `merge: any` consumer, a `{ref}` to a node that did not run is silently **dropped** (`{"j":1}`), and `{cel}` throws `No such key` (both reproduced). (c) Taint upstream is "any untrusted data dep" (`taint.ts`), so one untrusted field taints every consumer. [Certain] |
+| D5 | `context_budget: {max_item_bytes?, max_input_bytes?, on_exceed?: fail \| withhold}`. **Bytes, not tokens.** Default `on_exceed: fail` (`budget_exceeded`). | A token cap would be enforced on a `chars/4` guess, which breaks the repository's "never guessed" rule. Silently withholding by default could let a reviewer agent "approve" a diff it never saw. With `withhold`, the run gets a `context_withheld` event and flag, shown on the run page and in approval context. [Certain about mechanism; the reviewer hazard is Likely] |
+| D6 | Withheld values are **not** stored again; the manifest records the hash and size only. | They already exist as upstream outputs, the agent has no tool to read artifacts, and storing again would persist data even when `AZHI_STORE_CONTEXT_CONTENT` is off. [Certain] |
+| D7 | Retrieval query: when `inputParts` is present, `withChunksFor` builds the query from the node's **own** input keys only. | Today the query is `textOf(whole input)`, built before any budget is applied (`gateway-activities.ts:380-393`). Adding a bundle would otherwise silently change what an agent with `datasets` retrieves, and could send a huge diff to the embedding call. [Certain] |
+| D8 | `workspace.from` must be a plain `{ref}` whose type is compatible with `WORKSPACE_CHANGE_SCHEMA` (any node type, for example a selector script). It is **not** limited to write-mode agents. | The content is untrusted wherever it comes from. Safety comes from run-time validation (schema, base SHA, path rules) and the fact that nothing pushes without a gate. A type-based rule is more generic and fixes the ai-sdlc fix-round case (`change_N` scripts). Untyped producer: warning plus run-time validation. [Likely] |
+| D9 | The server resolves the continuation from **stored node outputs** (`node_attempts.output`, artifacted when large; `gateway-activities.ts:279-281`) by `{node, path}`. Only the ref string travels through the workflow. | A write-mode harness returns its full change (file contents up to 1 MB) as the activity result straight into workflow history (`harness-activity.ts:406`, `workflow.ts:207`). Resolving it inline would add two more copies (the `harnessPrepare` and `runHarness` inputs). [Certain] |
+| D10 | Continuation is applied as a **local commit** in the checkout. `refs/azhi/base` points at `from.base_sha`. `Checkout.head` stays `base_sha` so `collectChange` still reports the cumulative change from the real base. `base_ref` together with `from` is a compile error. | The existing diff tooling diffs commits (`refs/azhi/base...HEAD`, `examples/pr-review/harness/mcp/repo-facts.mjs:18-31`). Uncommitted files would make it report "no changes … do not review". [Certain] |
+| D11 | **Worker feature gating.** Workers advertise `features: ['workspace_continuation']` in `WorkerCapabilities`. `checkWorkers` refuses workers without it for nodes that use `from`, and the run plan shows it. | Workers are selected by runtime name only (`gateway-activities.ts:171-190`). An older worker would silently drop the unknown `continuation` field and let the agent work on the bare base. [Certain] |
+| D12 | The engine tells a continued agent what it continues from: one generated prompt line listing the producing step and changed files. | Adopters' skills may assume a fresh base checkout (ai-sdlc's does), and the agent would re-apply the change on top of itself. [Certain about the skill text] |
+| D13 | v1 executor scope is OpenCode only (both adapters share `cloneWorkspace`). Others get the existing `workspace_unsupported` error. | `compile.ts:350`; `harness-claude.ts`/`harness-codex.ts` have no workspace support. [Certain] |
+| D14 | The workspace-wide budget default is a server env setting, default off. | The settings pattern is `settings.ts:63`. A Governance UI setting is a follow-up. |
+
+Corrections to revision 2 claims, for the record:
+- "Bundle keys first help prompt caching" was wrong for the Anthropic provider, which caches the **system** block only (`providers.ts:84`). [Certain] It may help OpenAI's automatic prefix caching. [Guessing]
+- Budget enforcement in `agentBegin` covering every executor is still true: harnesses take `prep.prompt` from `harnessPrepare` -> `agentBegin` (`workflow.ts:164-194`, `model-agent.ts:462`). [Certain]
 
 ## Feature Metadata
 
 **Feature Type**: New Capability (additive, opt-in)
-**Estimated Complexity**: High (schema + compiler + sandboxed runtime + worker + API + builder + editor + docs)
-**Primary Systems Affected**: `src/definition`, `src/compiler`, `src/runtime`, `src/agents`, `src/worker`, `src/api`, `src/plan`, `src/builder`, `web/`, `examples/`, `docs/`
-**Dependencies**: none new. Uses existing `ajv`, `yaml`, `@marcbachmann/cel-js`, git, vitest, `playwright-core` (already used by `test/builder.test.ts`).
+**Estimated Complexity**: High (lower than revision 2: no sandbox runtime merge)
+**Primary Systems Affected**: `src/definition`, `src/compiler`, `src/agents`, `src/runtime` (small), `src/worker`, `src/plan`, `src/builder`, `web/`, `examples/`, `docs/`
+**Dependencies**: none new.
 
 ---
 
@@ -64,444 +67,361 @@ Key design decisions (with the corrections to the brainstorm that reading the co
 
 ### Relevant Codebase Files. YOU MUST READ THESE BEFORE IMPLEMENTING
 
-Definition layer
-- `src/definition/types.ts` (1-56, 57-86, 120-165) - `Value`/`ValueExpr`, `NodeCommon`, `AgentNode`, `AgentWorkspace` (doc comment on `mode`/`test`), `WorkflowDefinition`. New fields go here.
-- `src/definition/schema.ts` (1-30 `common`/`node()` with `additionalProperties:false`; 66-103 top-level props and `$defs/value`; 120-170 agent + `workspace`; 172-230 other nodes). Every new field **must** be added or the schema rejects it.
-- `src/definition/load.ts` (28-45) - how schema errors become `Diagnostic`s (the `if/then` noise filter).
+Definition / compiler
+- `src/definition/types.ts` (1-56, 57-92 `AgentNode`/`AgentWorkspace`, 120-165 `WorkflowDefinition`)
+- `src/definition/schema.ts` (1-30 `common`/`node()` with `additionalProperties:false`; 66-103 top level and `$defs/value`; 120-170 agent + `workspace`)
+- `src/definition/load.ts` (`parseYaml`: `uniqueKeys:true`, no merge keys)
+- `src/compiler/compile.ts`: 45 `REF_ROOTS`; 62-100 `nodeValues`; 125-232 dependency/ref/CEL collection, `routeOf`; 233-300 typing (`typeOfRef`, `refTypes`); 336-394 `case 'agent'` incl. 350 `workspace_unsupported`, 358-370 write-mode `refSchema`; 438-462 `planNodes.set`; 474-495 taint and plan.
+- `src/compiler/plan.ts` (`PlanNode`, `ExecutionPlan`, `WORKSPACE_CHANGE_SCHEMA` 76-110)
+- `src/compiler/taint.ts` (`analyseTaint(nodes, datasets)`, which is pure and can be called twice for D4 `context_taints`)
+- `src/compiler/schema-path.ts` (`compatible`, `resolvePath`, `typesOf`)
 
-Compiler
-- `src/compiler/compile.ts`
-  - 62-100 `nodeValues()` (per-node value sites; drives ref validation, `deps`, `dataDeps`). **Extend this** so bundle/`from` refs become data edges.
-  - 125-232 dependency inference, `dataDeps`, ref-root validation (`REF_ROOTS`, line 45), CEL checks, topo sort.
-  - 233-260 `loadSchema`, `inputSchemaFor`.
-  - 336-394 `case 'agent'`: `workspace_unsupported` (350), `workspace_test_needs_write`, `refSchema` for write-mode workspace (358-370) - **mirror this** for `handoff`.
-  - 438-462 `outputs.set(id, refSchema ?? outputSchema)` and `planNodes.set(...)`.
-  - 474-495 taint call and `ExecutionPlan` construction (omit new fields when unused).
-- `src/compiler/plan.ts` (1-45 `PlanNode`, `ExecutionPlan`; 76-110 `WORKSPACE_CHANGE_SCHEMA` - already engine-owned, reuse it).
-- `src/compiler/taint.ts` (all) - taint flows along `dataDeps`; **no change needed** if the new refs land in `dataDeps` (verify with a test).
-- `src/compiler/schema-path.ts` - `resolvePath`, `compatible`, `typesOf` for ref typing.
-
-Runtime (Temporal sandbox: deterministic, **no Node-only imports**)
-- `src/runtime/values.ts` (all) - `resolveValue`, `resolveRef`, `DeferredRef`. Add `resolveNodeInput` here.
-- `src/runtime/workflow.ts`
-  - 110 `scope()`; 148-212 `runHarness` (workspace spec built at 150-163, `harnessPrepare` call 164-178, `runHarness` activity 180-200, token 179); 214-258 `runAgent` (`agentBegin` at 224-235).
-  - Other `resolveValue(def.input, s)` sites: script 373, report 395, subworkflow 469. Replace all four.
-- `src/runtime/activity-types.ts` (84 `harnessPrepare` signature) and `src/runtime/gateway-activities.ts` (230-241 `harnessPrepare`; 30-31 `withChunks`).
-
-Agents
-- `src/agents/model-agent.ts`
-  - 28-40 `PLATFORM_RULES` (system prompt). 99-123 `AgentBeginInput`. 171-183 `materialise`. 196-249 `agentBegin` (input text 218-221; manifest `item()` 138). 295-298 manifest write. 444-450 `contextSafe` (the existing 8 KiB tool-result ceiling - pattern for the withheld-field shape). 462-504 `harnessPrepare` (calls `agentBegin`, adds harness-owned manifest items, workspace item at ~480).
-- `src/config/settings.ts` (63 `storeContextContent` - the env-setting pattern to mirror).
+Runtime / agents
+- `src/runtime/workflow.ts`: 148-212 `runHarness` (workspace spec 150-163, `harnessPrepare` 164-177, worker selection 178, run token 179, `runHarness` 180-200, `return r.output` 207); 214-258 `runAgent`; 292-310 `selectWorker`; 515-525 `shouldSkip`.
+- `src/runtime/gateway-activities.ts`: 171-190 `checkWorkers`; 230-241 `harnessPrepare`; 243-290 `harnessRecord` (stores output 279-281); 380-393 `textOf` / `withChunksFor`.
+- `src/agents/model-agent.ts`: 28-40 `PLATFORM_RULES` (note: says nothing about input being untrusted; profiles carry that); 99-123 `AgentBeginInput`; 138 `item()`; 171-183 `materialise`; 196-249 `agentBegin`; 444-450 `contextSafe`; 462-504 `harnessPrepare` (workspace manifest item ~480).
+- `src/config/settings.ts` (63)
+- `src/server/runs.ts` (51-55 child input validation; 72-75 test-node needs fixtures for `target.dataDeps`)
 
 Worker
-- `src/worker/workspace.ts` (all): `WorkspaceSpec` (18-33), `Checkout`, `cloneWorkspace` (68-127; clone, `refs/azhi/head`, write-mode moves `.git` to `gitDir`; the new `stall` git config on the fetch at ~96-99 is unrelated, insert the continuation after `head` is read at ~101), `CHANGE_LIMITS`, `WorkspaceChange` (127-138), `stageChange`, `collectChange` (computes diff from `c.head` to the staged tree - so after continuation the new change is **cumulative from the original base**, which is what push tools want).
-- `src/worker/harness-activity.ts` (72 `HarnessResult`, 104-150 `runHarness`, 137-147 workspace token + `cloneWorkspace` call) and `src/worker/harness-opencode2.ts` (74-83 same pattern). `src/worker/api-client.ts` - `ApiClient.get`.
-- `src/security/tokens.ts` (`signRunToken` claims: `ws, run, node, tools, creds, exp`).
-- `src/api/app.ts` (485 `GET /v1/artifacts/:hash`; 679-690 `GET /v1/gateway/credentials/:name` - **the pattern for the new artifact endpoint**).
-- `src/testing/fake-git.ts` - fake git host used by `test/workspace-write.test.ts`.
+- `src/worker/workspace.ts` (`WorkspaceSpec` 18-33, `Checkout`, `cloneWorkspace` 68-127, `CHANGE_LIMITS`, `WorkspaceChange`, `workGit`, `stageChange`, `collectChange`)
+- `src/worker/harness-activity.ts` (104-150; clone 137-147; change returned 406) and `src/worker/harness-opencode2.ts` (74-83)
+- `src/worker/capabilities.ts` (7-13 `WorkerCapabilities`, `detectCapabilities`)
+- `src/api/app.ts` (485-491 `GET /v1/artifacts/:hash`, workspace-scoped and reachable with a run token since run principals carry `workspaceId`, `auth.ts:12,54`); `src/worker/script-activity.ts:71-80` (a worker reading artifacts with a run token: the pattern to reuse)
+- `examples/pr-review/harness/mcp/repo-facts.mjs` (18-31, diff range tooling that D10 must keep working)
 
-Plan/UI/authoring
-- `src/plan/run-plan.ts` (120-160 `opencodeSetup`: workspace `requirements`/`coverage` rows - add continuation and budget rows).
-- `src/builder/skill.md` (84 "workflow.yaml reference"; bullets `script` 120, `agent` 123, `subworkflow` 136, `report` 141; 167 "Token usage strategy"; 203 "Rules the compiler enforces"; 216 "Policies and controls to offer"; 228 "Suggest what is available"; 247 "Adding an MCP server"; the new "Changing an existing workflow" paragraph inside step 1 at ~22-40 and the revised step 5 "Revise on request" at ~69).
-- `src/builder/builder.ts`: `BuilderProposal` (53-65; `nodes: unknown[]`), `checkProposal` (~555-620; line ~616 builds `nodes: [{id, type, deps, route?, def}]` so **the web already receives each step's `def`**), `applyChange` (merges a patch onto the latest version: `files` replace/add, `remove` deletes), `readWorkflow`/`readWorkflowFile`, the `propose_workflow` handler in `builderTurn` (~710-725) and the post-compile `notes` handed back to the model (~726-735).
-- `test/builder-edit.test.ts` - **the pattern for testing patch edits** (registers tools, uploads `examples/sdlc-universal`, calls `readWorkflow`, `applyChange`, `checkProposal` directly with a real PGlite context).
-- `web/src/pages/Editor.tsx` (140-150 `renameStep` - **only rewrites inside `nodes`**; 735 `HARNESS_FIELDS`; ~782-977 agent step editor incl. `setBudget` 810, `Workspace` section 963, `Budget` section 968; 989 `WorkspaceFields`; 671 YAML-text helper). The recent change here is only the `WorkflowCanvas` `head`/`foot` props (~342-365); it does not affect these tasks.
-- `web/src/components/WorkflowSettings.tsx` (37 `SectionId`; 96-100 `sectionsOf`; 136-180 section rendering) and `web/src/stepHelp.ts` (35 `agent.workspace` help; 94, 115, 188 summaries) - both unchanged since the first draft.
-- `web/src/pages/Builder.tsx` (rewritten): `Proposal` type (43-55), `MessageView` draft card (~469-480), and `DraftPanel` (~604-665) whose `draft-facts` list (Status / Steps / Files / To set up / Warnings) and Steps/Files tabs are where draft details show. There is **no** per-step model/limits line in the UI; that text comes from the model's own `summary`.
+Plan / authoring / UI
+- `src/plan/run-plan.ts` (120-160 `opencodeSetup`)
+- `src/builder/skill.md` (84 reference; `script` 120, `agent` 123, `report` 141; 167 token strategy; 203 compiler rules; 216 controls; 228 suggest; step-1 "Changing an existing workflow" ~22-40)
+- `src/builder/builder.ts` (`checkProposal` ~555-620, `nodes` with `def` ~616; `applyChange`; `propose_workflow` handler ~710-735)
+- `web/src/graph.ts` (14-31 `graphOf(def: Pick<Definition,'nodes'>)` builds edges from `nodes.<id>` text in each node; **it never sees `contexts`**)
+- `web/src/components/StepDrawer.tsx` (14 `INPUT_KEYS`; 95 and 118 "Gets" sources: **will report "nothing from other steps" for bundle-fed steps**)
+- `web/src/pages/Editor.tsx` (140-150 `renameStep`; 735 `HARNESS_FIELDS`; 810 `setBudget`; 963 Workspace; 968 Budget; 989 `WorkspaceFields`; 200/247 JSON round-trip)
+- `web/src/components/WorkflowSettings.tsx` (37 `SectionId`, 96-100 `sectionsOf`), `web/src/stepHelp.ts`
+- `web/src/pages/Builder.tsx` (`Proposal` 43-55, `DraftPanel` 604-665 `draft-facts`)
+- `src/api/example-merge.ts` (92-144 `mergeDefinitions`: top-level keys other than `nodes` go through `mergeObject`, so `contexts` is three-way merged as an object [Likely]; confirm with a test)
 
-Examples / docs / tests (patterns)
-- `examples/ai-sdlc-v2/workflow.yaml` (the adopter; lines 98-100, 316-318, 416-444, 600-632, 506-522, 903-915).
-- `docs/loops-and-subworkflows.md` (feature doc style: short, exact semantics, "not supported" list), `docs/workflow-builder.md`, `docs/phase-2.md:28` (context manifest).
-- `test/compiler.test.ts`, `test/taint.test.ts`, `test/loop-subworkflow.test.ts` (compile + Temporal run pattern, `startHarness`, `uploadDir`, `waitForRun`), `test/workspace-write.test.ts` (fake git + `cloneWorkspace`), `test/builder.test.ts` (scripted builder model, `startFakeAnthropic`, `FakeStep`, Playwright), `test/opencode2.test.ts` / `test/harness-executors.test.ts` (harness wiring), `test/gate2.test.ts` (golden plan), `test/ai-sdlc-v2.test.ts`.
+Tests (patterns)
+- `test/compiler.test.ts`, `test/taint.test.ts`, `test/loop-subworkflow.test.ts` (compile + Temporal run), `test/workspace-write.test.ts` (fake git + `cloneWorkspace`), `test/builder.test.ts`, `test/builder-edit.test.ts`, `test/editor.test.ts`, `test/gate2.test.ts` (golden), `test/example-merge.test.ts`, `test/opencode2.test.ts`, `test/harness-executors.test.ts`, `test/pr-review-harness.test.ts` (repo-facts usage).
 
 ### New Files to Create
-
-- `src/compiler/contexts.ts` - bundle helpers shared by the compiler (static collision/shape checks).
-- `src/agents/context-budget.ts` - pure `applyContextBudget()`.
-- `docs/context-sharing.md` - the feature doc (one file per feature).
-- `examples/context-review-revise/` - a **non-SDLC** installable example (research -> draft -> critique -> revise) using all four features (also the fixture for tests).
-- `test/context-bundles.test.ts`, `test/context-budget.test.ts`, `test/workspace-continuation.test.ts`, `test/handoff.test.ts`, `test/context-regression.test.ts`.
+- `src/compiler/contexts.ts`: static bundle expansion, collision checks, `inputParts`, coupling diagnostics.
+- `src/agents/context-budget.ts`: pure `applyContextBudget()`.
+- `src/worker/continuation.ts`: path validation, apply, local commit (keeps `workspace.ts` readable).
+- `docs/context-sharing.md`.
+- `examples/context-review-revise/` (non-SDLC example and fixture; code variant compile-only).
+- `test/context-bundles.test.ts`, `test/context-budget.test.ts`, `test/workspace-continuation.test.ts`, `test/context-regression.test.ts`.
 
 ### Relevant Documentation
-
-- Temporal TypeScript determinism rules and payload limits: https://docs.temporal.io/develop/typescript/core-application#workflow-logic-requirements and https://docs.temporal.io/troubleshooting/blob-size-limit-error - why workflow code must stay pure and why the change goes through the artifact store (2 MB blob limit).
-- git fetch by SHA / `uploadpack.allowReachableSHA1InWant`: https://git-scm.com/docs/git-config#Documentation/git-config.txt-uploadpackallowReachableSHA1InWant - only relevant to the documented "pin `ref` to `base_sha`" advice; the fake git server used in tests needs this enabled for that case.
+- Temporal payload and history limits: https://docs.temporal.io/troubleshooting/blob-size-limit-error (D9). [Likely 2 MB per payload]
+- YAML 1.2 merge keys are not part of the core schema: https://eemeli.org/yaml/#options (`merge` option) (background for the problem statement).
 
 ### Patterns to Follow
-
-**Optional plan fields are omitted when unused** (`compile.ts:482-490`):
-```ts
-...(opts.pkg ? { packageHash: opts.pkg.hash } : {}),
-...(def.inputs ? { inputsSchema: def.inputs } : {}),
-```
-Do the same for `contexts`.
-
-**Diagnostics** (`compile.ts` `err(code, message, nodeId, path)` / `warn(...)`): snake_case codes, messages name the node and quote the offending value, e.g. `err('workspace_output', "output_schema may not declare 'workspace': ...", n.id, 'output_schema')`.
-
-**Engine-added output field for downstream refs** (`compile.ts:358-370`): `refSchema = { ...outputSchema, properties: { ...props, workspace: WORKSPACE_CHANGE_SCHEMA }, required: [...] }`. Mirror for `handoff` (but `handoff` is optional, not required, and also goes into the schema the agent submits against).
-
-**Run-token capability claim** (`src/api/app.ts:679-690`): `if (!c.creds?.includes(name)) throw authorization`. Mirror with `c.arts`.
-
-**Env settings** (`settings.ts:63`): `process.env.AZHI_... ` parsed once into the settings object.
-
-**Errors**: `new AzhiError(ErrorClass.budgetExceeded | contractViolation | invalidInput, msg)` in server code; `ApplicationFailure.create({ type: ErrorClass.x, message, nonRetryable: true })` in worker/workflow code.
-
-**Unknown stays unknown**: token counts for withheld/kept fields are `chars/4` and must be labelled `estimated` in the manifest (`token_source`), never presented as reported.
-
-**Comments**: match the surrounding density (a short doc comment on exported items, rationale-only inline comments). No unrelated refactors.
+- Optional plan fields are spread only when present (`compile.ts:482-490`). Same for `inputParts`.
+- Diagnostics: `err(code, message, nodeId, path)` / `warn(...)` with snake_case codes that quote the node and value.
+- Engine-added output typing: `compile.ts:358-370`.
+- Run-token capability checks: `app.ts:679-690`. Worker artifact fetch: `script-activity.ts:71-80`.
+- Errors: `AzhiError(ErrorClass.x)` on the server; `ApplicationFailure.create({type, message, nonRetryable:true})` on the worker and in workflow code.
+- Unknown stays unknown: hard caps use exact bytes; token figures, where shown, are labelled `estimated`.
 
 ---
 
 ## IMPLEMENTATION PLAN
 
-### Phase 1: Foundation - definition schema and types
-Add the four fields to types and JSON Schema. Nothing behaves differently until used.
-
-### Phase 2: Compiler
-Bundle expansion into data edges and checks; `workspace.from` checks; `handoff` output schema; plan field `contexts`.
-
-### Phase 3: Runtime
-Deterministic input resolution with bundles in the workflow sandbox; budget and per-field manifest in `agentBegin`; handoff instruction; continuation plumbing (server activity -> artifact -> worker).
-
-### Phase 4: Worker and API
-`cloneWorkspace` applies a continuation safely; artifact endpoint and run-token claim; both OpenCode adapters pass it.
-
-### Phase 5: Authoring surfaces
-Run plan rows; builder skill + draft summary; visual editor (Contexts section, step pickers, rename fix).
-
-### Phase 6: Proof and adoption
-Non-SDLC example; unit/integration/regression/builder/UI tests; docs; migrate `ai-sdlc-v2` last.
+1. **Foundation:** types and schema.
+2. **Compiler:** static bundle expansion, coupling diagnostics, `workspace.from` typing.
+3. **Agents/runtime:** byte budget, per-field manifest, retrieval query, continuation lookup.
+4. **Worker:** feature flag, safe apply, local commit, prompt note.
+5. **Authoring surfaces:** run plan, builder, editor graph/drawer/settings.
+6. **Proof:** example, tests, docs, adopter migration.
 
 ---
 
 ## STEP-BY-STEP TASKS
 
-Execute in order. After every task run its VALIDATE command; do not continue on failure.
+Before any code change, take the regression baseline: compile every package under `examples/` and `test/fixtures/` with the current compiler and store each plan JSON under `test/golden/context-regression/` (script in the scratchpad, not committed).
 
 ### 1. UPDATE `src/definition/types.ts`
-- **IMPLEMENT**:
-  - `WorkflowDefinition.contexts?: Record<string, Record<string, Value>>` with a doc comment ("named sets of upstream fields a node pulls in with `context`").
-  - `context?: string[]` on `AgentNode`, `ScriptNode`, `SubworkflowNode`, `ReportNode` (not on `NodeCommon`; other node types have no `input`).
-  - `AgentNode.context_budget?: { max_item_bytes?: number; max_total_tokens?: number }` and `AgentNode.handoff?: { max_chars: number }`.
-  - `AgentWorkspace.from?: Value` ("start from the change a previous write-mode step made: `{ref: nodes.<id>.output.workspace}`").
-- **PATTERN**: doc-comment style of `AgentWorkspace.mode` (`types.ts:84-88`).
-- **GOTCHA**: `ref` stays required on `AgentWorkspace`; with `from` it is still fetched and must resolve to `from.base_sha` (D10).
+- **IMPLEMENT**: `WorkflowDefinition.contexts?: Record<string, Record<string, Value>>`. `context?: string[]` on `AgentNode`, `ScriptNode`, `ReportNode` (**not** `SubworkflowNode`, D3). `AgentNode.context_budget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' }`. `AgentWorkspace.from?: Value`.
 - **VALIDATE**: `npm run typecheck`
 
 ### 2. UPDATE `src/definition/schema.ts`
-- **IMPLEMENT**: top-level `contexts` (`type: object`, `propertyNames: id`, each value an object whose keys match `^[A-Za-z_][A-Za-z0-9_]*$` and values are `{ $ref: '#/$defs/value' }`, `minProperties: 1`); a shared `contextProp = { type: 'array', items: id, uniqueItems: true, minItems: 1 }` added to `scriptProps`, the `agent` props, `subworkflow` and `report`; agent `context_budget` (`max_item_bytes` integer >= 256, `max_total_tokens` integer >= 100, `additionalProperties:false`, `minProperties: 1`) and `handoff` (`max_chars` integer 1..8000, required); `workspace.from: { $ref: '#/$defs/value' }`.
-- **PATTERN**: `budget` (`schema.ts:129-138`) and `workspace` (`142-163`).
-- **GOTCHA**: `node()` sets `additionalProperties:false`, so each new key must be listed per node type. `workspace.required` stays `['repo','ref']`.
-- **VALIDATE**: `npx vitest run test/compiler.test.ts` (existing schema tests must still pass)
+- **IMPLEMENT**: top-level `contexts` (object; names match `id`; each bundle an object with identifier keys, values `$ref value`, `minProperties:1`). `context` (array of `id`, unique, min 1) on script/agent/report. Agent `context_budget` (`max_item_bytes` int >= 256, `max_input_bytes` int >= 1024, `on_exceed` enum, `minProperties:1`, no extra keys). `workspace.from: $ref value`.
+- **GOTCHA**: `node()` sets `additionalProperties:false`, so list each key per node type. Older servers reject these keys (fail closed). That is desired.
+- **VALIDATE**: `npx vitest run test/compiler.test.ts`
 
 ### 3. CREATE `src/compiler/contexts.ts`
-- **IMPLEMENT**: pure helpers, no side effects:
-  - `contextBundles(def)`: normalised `Record<string, Record<string, Value>>`.
-  - `contextKeysOf(def, nodeContext: string[])`: ordered list of `{bundle, key}`.
-  - `literalInputKeys(input: Value | undefined)`: top-level keys when `input` is a plain object literal (not a `ValueExpr`), else `undefined`.
-  - `contextCollisions(...)`: duplicates across bundles and against literal input keys, returned as messages.
-- **IMPORTS**: `isValueExpr`, `Value`, `WorkflowDefinition` from `../definition/types.js`.
-- **GOTCHA**: compiler-only; the runtime merge lives in `values.ts` (sandbox rules).
+- **IMPLEMENT** pure helpers:
+  - `expandContext(node, contexts)`. Returns `{input, parts}` or diagnostics:
+    - `context_input_shape` when `input` is anything but an object literal or absent. The message shows how to convert a `{map: "..."}` input to per-key `{cel: ...}` values.
+    - `unknown_context` for an unknown bundle name.
+    - `context_collision` for a duplicate key across bundles or between a bundle and the node's own `input`.
+    - Merge order: bundle keys in declaration order, then the node's own keys.
+  - `couplingDiagnostics(...)` (Task 4).
 - **VALIDATE**: `npm run typecheck`
 
-### 4. UPDATE `src/compiler/compile.ts` - bundles as data edges
+### 4. UPDATE `src/compiler/compile.ts`: expansion, typing, coupling
 - **IMPLEMENT**:
-  - Extend `nodeValues(n, contexts?)` (`compile.ts:62`): for `agent|script|subworkflow|report` nodes with `n.context`, add one entry per bundle key at path `context.<bundle>.<key>`; for agents with `workspace.from`, add `'workspace.from'`. Pass `def.contexts` at the call site (~line 158).
-  - Before node processing, validate: `unknown_context` (name not in `contexts`), `context_collision` (use `contextCollisions`), `context_input_shape` (`input` is a literal array/scalar while `context` is set), `invalid_context_ref` (bundle values may not use `item`, `state`, `iteration` - the existing root checks at lines 169-181 already raise `invalid_ref` since those sites are not inside a parallel/loop body; confirm the message makes sense), warning `unused_context` for a bundle no node references.
-  - Emit `contexts` on the `ExecutionPlan` only when the definition has any (`compile.ts:482`), and add `contexts?: Record<string, Record<string, Value>>` to `ExecutionPlan` in `src/compiler/plan.ts`.
-- **PATTERN**: ref/CEL handling loop `compile.ts:157-205`; conditional spread at 482-490.
-- **GOTCHA**: type-checking uses `refTypes` keyed by `site.path`, so the `context.<bundle>.<key>` path must be unique per site. Bundle entries on `merge: any` nodes may reference nodes on alternative routes; resolution at run time yields `undefined` for a node that did not run, and CEL `nodes.x.output` on a skipped node throws, which is the same behaviour as today's `input` maps (document: guard with `has(...)`).
-- **VALIDATE**: `npx vitest run test/compiler.test.ts test/taint.test.ts`
+  - **Early step:** build `expanded: Map<id, NodeDef>` from `def.nodes` with the merged `input` for nodes that use `context`. Run **all** existing analysis (`nodeValues`, ref/CEL validation, deps, `dataDeps`, typing) over the expanded nodes. Bundle refs then become ordinary refs: type-checked, ordered, and visible to taint with no other change.
+  - Error paths should read like `input.<key>` and name the bundle in the message ("from context 'brief'"), so authors can find the source.
+  - `planNodes.set(... def: expandedNode ...)`. Add `inputParts` only for nodes that use `context`.
+  - Warning `unused_context` for a bundle nothing references.
+  - **Coupling diagnostics (D4):**
+    - `context_may_skip` (warning): a bundle adds a dependency on a node that can be skipped (it is in a condition route or downstream of one, or downstream of an approval), and the consumer did not already depend on that node and is not `merge: any`. The message names the bundle key and says the step will be skipped when that branch does not run.
+    - `context_ref_on_merge` (error): a `merge: any` consumer's bundle value is a `{ref}` or unguarded `{cel}` to a node that can be skipped. A ref would be silently dropped and CEL would throw. Require a guarded `{cel: "has(nodes.x) ? … : null"}`.
+    - `context_taints` (warning): run `analyseTaint` once more with bundle-only edges removed. If a node is tainted or untrusted only because of a bundle, name the bundle key and the untrusted source.
+  - Keep `ExecutionPlan` unchanged (no `contexts` field needed after expansion).
+- **GOTCHA**: The node's authored `def` (in `def.nodes`) must stay untouched, so `definitionHash` and signing are unaffected. Use copies. "Can be skipped" = a member of `routeOf`, or a descendant of a route member or of an approval node. Compute it once from the existing `deps`.
+- **VALIDATE**: `npx vitest run test/compiler.test.ts test/taint.test.ts test/context-bundles.test.ts`
 
-### 5. UPDATE `src/compiler/compile.ts` - `workspace.from` and `handoff`
-- **IMPLEMENT** in `case 'agent'` (`compile.ts:344`):
-  - `workspace.from` (only when `n.workspace`): must be `{ref: 'nodes.<id>.output.workspace'}` exactly, where `<id>` exists, is an agent node, `<id> !== n.id`, and `byId.get(id).workspace?.mode === 'write'`; otherwise `err('workspace_from_invalid', ..., n.id, 'workspace.from')`. A literal `from` without `workspace` is a schema/`workspace_from_needs_workspace` error. The executor restriction already comes from `workspace_unsupported` (line 350).
-  - `handoff`: require object `output_schema` (`handoff_output` error otherwise, like `workspace_output`); error if the schema already declares `handoff`; otherwise set `outputSchema = {...outputSchema, properties: {...props, handoff: {type:'string', maxLength: n.handoff.max_chars}}}` (not added to `required`). Compose with the write-mode `refSchema` so downstream refs see both `workspace` and `handoff`.
-- **PATTERN**: `compile.ts:358-370`.
-- **GOTCHA**: `planNodes.set(... outputSchema ...)` (`compile.ts:451`) is what the agent **submits against** (`agentBegin` -> `outputSchema`, `model-agent.ts:213`). The handoff property must be in **that** schema (many package schemas use `additionalProperties:false`, e.g. `test/builder.test.ts:20`), and in `outputs.set` for downstream type-checking. The write-mode `workspace` field stays only in `refSchema`.
-- **VALIDATE**: `npx vitest run test/compiler.test.ts` (new cases are added in task 24)
+### 5. UPDATE `src/compiler/compile.ts`: `workspace.from` (D8, D10, D13)
+- **IMPLEMENT** in `case 'agent'`:
+  - `from` requires `workspace`. It must be a plain `{ref: 'nodes.<id>.output…'}` (`workspace_from_invalid` for cel/map/literal, a self ref, or an unknown node).
+  - Typing: the ref's schema (`refTypes`) must be `compatible` with `WORKSPACE_CHANGE_SCHEMA`. An untyped producer gives a warning `workspace_from_untyped` (checked at run time). Incompatible gives an error.
+  - `base_ref` with `from` is an error (`workspace_from_base_ref`).
+  - Add `'workspace.from'` to `nodeValues` for agents so it becomes a data edge (ordering and taint).
+- **VALIDATE**: `npx vitest run test/compiler.test.ts`
 
-### 6. UPDATE `src/runtime/values.ts` - `resolveNodeInput`
-- **IMPLEMENT**: `resolveNodeInput(input: Value | undefined, context: string[] | undefined, contexts: Record<string, Record<string, Value>> | undefined, scope: ValueScope): { value: unknown; parts?: Array<{ key: string; source: string }> }`.
-  - No `context` -> `{ value: resolveValue(input, scope) }` (byte-identical to today; this is the backward-compat guarantee).
-  - With `context`: resolve each bundle key in declaration order, then the node `input`. `input` must resolve to a plain object or `undefined`/`null`; otherwise throw `ApplicationFailure.create({ type: 'contract_violation', nonRetryable: true, message })` naming the node. A key present in both bundle and input, or in two bundles, throws the same. Result is `{...bundleKeys, ...inputKeys}`; `parts` lists each key with `source` `context:<bundle>` or `input`.
-- **PATTERN**: `resolveValue` in the same file. Keep it pure; no Node imports.
-- **GOTCHA**: resolved values may be `DeferredRef` (`$artifact_path`) - leave them untouched; `materialise` expands them in the activity.
-- **VALIDATE**: `npx vitest run test/context-bundles.test.ts` (task 22)
-
-### 7. UPDATE `src/runtime/workflow.ts` - use `resolveNodeInput`
-- **IMPLEMENT**: at the agent sites (`workflow.ts:172`, `:232`) call `resolveNodeInput(def.input, def.context, plan.contexts, s)` and pass `input: r.value ?? null`, `inputParts: r.parts`, `contextBudget: def.context_budget`, `handoff: def.handoff` into `harnessPrepare` / `agentBegin`; at script (`:373`), report (`:395`) and subworkflow (`:469`) replace `resolveValue(def.input, s)` with `.value` (those have no budget/parts).
-- **GOTCHA**: only these four node types accept `context` (schema). Do not touch the parallel/loop inner `node.input` sites (430, 456).
+### 6. UPDATE `src/runtime/workflow.ts` (small)
+- **IMPLEMENT**:
+  - Pass `inputParts: node.inputParts` and `contextBudget: def.context_budget` into `agentBegin` (`:224`) and `harnessPrepare` (`:164`).
+  - For `workspace.from` pass `workspaceFrom: { ref: <the ref string> }` to `harnessPrepare`, **not** the resolved value (D9). The exception is a test-node run (`testNode` set, `workflow.ts:104`), where upstream outputs exist only as fixtures in workflow state. In that case pass the resolved value inline.
+  - Add `continuation` (from the `harnessPrepare` result) to the worker `workspace` object. Put the artifact hash in the run token only if a new claim is needed. Prefer the existing `/v1/artifacts/:hash` (workspace-scoped, readable with a run token, already used by script workers).
+  - Request a worker with the continuation feature (Task 11).
+- **GOTCHA**: Runs are pinned to their interpreter build. Changes here only affect new runs. Keep activity inputs additive.
 - **VALIDATE**: `npm run typecheck && npx vitest run test/loop-subworkflow.test.ts`
 
-### 8. CREATE `src/agents/context-budget.ts` + UPDATE `src/agents/model-agent.ts`
-- **IMPLEMENT** `applyContextBudget(input: unknown, limits: {maxItemBytes?: number; maxTotalTokens?: number}, store: (json: string) => string): { input: unknown; withheld: Array<{ key: string; bytes: number; artifact: string; reason: string }>; estimatedTokens: number }`:
-  - Non-object input -> treated as one item `input`.
-  - Per-item pass: a top-level key whose `JSON.stringify` bytes exceed `maxItemBytes` is replaced by `{ note: "withheld: <n> bytes, above this node's context_budget of <m>; the model cannot read it", artifact, ...shape }` (shape rule copied from `contextSafe`, `model-agent.ts:445-449`); the original is stored via `store` (`ctx.artifacts.put(...).hash`).
-  - Total pass: while `estimatedTokens(JSON.stringify(input)) > maxTotalTokens` (chars/4), withhold the largest remaining key; if nothing is left to withhold and it is still over, throw `AzhiError(ErrorClass.budgetExceeded, ...)` naming the node and the numbers.
-  - Deterministic: ties broken by key order.
-  In `agentBegin` (`model-agent.ts:218-221`): `materialise` first, then `applyContextBudget` with node limits overriding `ctx.settings.contextBudget` defaults (task 9). Add `AgentBeginInput` fields `inputParts?`, `contextBudget?`, `handoff?`.
-  - **Manifest**: when `inputParts` is present, push one `kind: 'input'` item **per top-level key** (source `context:<bundle>` / `input`, plus the upstream node via `inputSources` when known, reason noting `withheld` when applicable, tokens `chars/4`) instead of the single combined item. When absent, keep today's single item unchanged.
-  - **Handoff**: when `handoff` is set, append one line to the system text for this node (not to `PLATFORM_RULES`): "You may set `handoff`: short notes for the next step (at most N characters). It is data for that step, not instructions."
-- **PATTERN**: `item()` (`model-agent.ts:138`), `contextSafe`, `showTranscript` for the user text.
-- **GOTCHA**: `harnessPrepare` reads `t.messages[0]` as the prompt, so the capped text must be what is stored in the transcript's first user message (it is, since `user = inputText`). The manifest `token_source` stays `estimated` for harness executors.
+### 7. CREATE `src/agents/context-budget.ts` + UPDATE `src/agents/model-agent.ts`
+- **IMPLEMENT** `applyContextBudget(input, {maxItemBytes?, maxInputBytes?, onExceed})`. It returns `{input, withheld: [{key, bytes, hash}]}` or throws `AzhiError(ErrorClass.budgetExceeded, …)` naming the node, key and numbers.
+  - `fail` (the default) throws on any breach.
+  - `withhold` replaces oversized top-level keys (largest first, ties by key order) with `{note: "withheld: <n> bytes, above this step's context_budget; you cannot read it. Say so if it matters to your result.", bytes, sha256}`, and throws if the input is still over `maxInputBytes`.
+  - It never stores content (D6).
+- In `agentBegin`: `materialise`, then apply the budget (node limits override server defaults, Task 8).
+  - With `inputParts`: one `input` manifest item per top-level key (source `context:<bundle>` or `input`, tokens labelled estimated, withheld noted). Without it: today's single item, byte-identical.
+  - When anything is withheld, return it in the activity result so the workflow records a `context_withheld` run event and flag (mirror `usage_incomplete`, `workflow.ts:204`).
+- **GOTCHA**: The harness prompt is the transcript's first user message (`harnessPrepare`), so the capped text is what every executor sees.
 - **VALIDATE**: `npx vitest run test/context-budget.test.ts test/agent.test.ts`
 
-### 9. UPDATE `src/config/settings.ts`
-- **IMPLEMENT**: `contextBudget: { maxItemBytes: envInt('AZHI_CONTEXT_MAX_ITEM_BYTES'), maxTotalTokens: envInt('AZHI_CONTEXT_MAX_TOTAL_TOKENS') }`, both `undefined` by default (OFF). Invalid or non-positive values are ignored with a warning, never guessed. Document in `docs/context-sharing.md`.
-- **PATTERN**: `settings.ts:63-65`.
-- **VALIDATE**: `npm run typecheck && npx vitest run test/context-budget.test.ts`
+### 8. UPDATE `src/config/settings.ts` and `src/runtime/gateway-activities.ts` (retrieval)
+- **IMPLEMENT**:
+  - `contextBudget: {maxItemBytes, maxInputBytes}` from `AZHI_CONTEXT_MAX_ITEM_BYTES` / `AZHI_CONTEXT_MAX_INPUT_BYTES`. Both unset by default. Invalid values are ignored with a startup warning. `on_exceed` for the server default is always `fail`.
+  - In `withChunksFor` (`:388-393`), when `input.inputParts` is present, build the query from the keys whose source is `input` (D7). Otherwise behave as today.
+- **VALIDATE**: `npx vitest run test/context-budget.test.ts test/datasets.test.ts`
 
-### 10. UPDATE `src/security/tokens.ts`, `src/runtime/activity-types.ts`, `src/runtime/gateway-activities.ts`, `src/api/app.ts` - artifact claim and endpoint
-- **IMPLEMENT**: add optional `arts?: string[]` to the run-token claims; `issueRunToken(..., creds?, arts?)`; new `GET /v1/gateway/artifacts/:hash` that requires `kind === 'run'`, `c.arts?.includes(hash)`, and the workspace owning the artifact (query `artifacts` table as in `app.ts:485-491`); audit-log the read like `credential.read`.
-- **PATTERN**: `app.ts:679-690`.
-- **GOTCHA**: the token's `exp` is 1 hour (`gateway-activities.ts:192`); fine for a step.
-- **VALIDATE**: `npm run typecheck && npx vitest run test/harness-executors.test.ts`
-
-### 11. UPDATE `harnessPrepare` (`src/agents/model-agent.ts:462`) and `src/runtime/workflow.ts:148-200` - continuation hand-off
-- **IMPLEMENT**: `workflow.ts` resolves `ws.from` with `resolveValue` and passes it as `workspaceFrom` to `harnessPrepare`. In `harnessPrepare`: `materialise` it, validate it against `WORKSPACE_CHANGE_SCHEMA` (ajv, same instance style as `definition/load.ts`; require `base_sha` and `files`), reject if `repo` differs from `i.workspace.repo` (`invalid_input`, non-retryable), store the validated change with `ctx.artifacts.put`, and return `continuation: { artifact, base_sha, files: n }`. `workflow.ts` adds `continuation` (artifact + baseSha) to the `workspace` object passed to the worker `runHarness`, and adds the hash to the run token's `arts`. Manifest: extend the workspace item (`model-agent.ts:~480`) reason with "continued from <n> files of nodes.<id>".
-- **GOTCHA (D6)**: never put `files` content in the Temporal payload. Only `{artifact, baseSha}` goes to the worker.
+### 9. UPDATE `harnessPrepare` (`model-agent.ts:462`): continuation lookup (D9, D12)
+- **IMPLEMENT**:
+  - Given `workspaceFrom.ref`, load the producing node's latest succeeded output for this run (`node_attempts.output`; if it is an artifact handle, read it from the store), walk the ref path, and validate the result with ajv against `WORKSPACE_CHANGE_SCHEMA` (require `base_sha`, `files`). Reject a `repo` mismatch with the node's resolved `workspace.repo`. Fail loud with `invalid_input` if nothing is found (for example the producer was skipped).
+  - Make sure an artifact exists for the change (`asArtifact`, which also writes the `artifacts` row that `/v1/artifacts/:hash` requires) and return `continuation: {artifact, base_sha, files: n}`.
+  - Append the generated note to the prompt: "Your checkout already contains the change made by step `<id>` (<n> files: …). Build on it; do not re-apply it." Add the matching manifest item.
+- **GOTCHA**: `ctx.artifacts.put` alone writes **no** `artifacts` row, and the endpoint would 404. Use `asArtifact` (`gateway.ts:142-146`).
 - **VALIDATE**: `npm run typecheck`
 
-### 12. UPDATE `src/worker/workspace.ts` - apply a continuation
-- **IMPLEMENT**: `WorkspaceSpec.continuation?: { baseSha: string; change: WorkspaceChange }`. In `cloneWorkspace`, after checkout and `head` is known and **before** the write-mode `.git` move: if `continuation` and `head !== baseSha` -> `ApplicationFailure.create({ type: ErrorClass.invalidInput, nonRetryable: true, message: "workspace ref <ref> is at <head>, but the change to continue was made on <baseSha>; pin ref to the change's base: ref: {ref: nodes.<id>.output.workspace.base_sha}" })`. Then apply each `files[]` entry: `deleted` -> unlink (missing file is an error); `added|modified` -> write `content` (`utf-8` or `base64`) and `chmod` 0o755 for `100755`.
-  - **Path safety (the change is agent-written, i.e. untrusted)**: reject (`contract_violation`, non-retryable) any path that is absolute, contains `..`, a backslash, a NUL byte, or any segment equal to `.git` (case-insensitive), or whose resolved target is outside `dir`; create parent directories with `mkdirSync(..., {recursive:true})` after verifying no existing parent is a symlink (`lstat`). Enforce `CHANGE_LIMITS.files` / `contentBytes`.
-- **PATTERN**: `REF`/`REPO` validators and `invalid()` helper at the top of the file; `collectChange` for field names.
-- **GOTCHA**: `core.symlinks=false` is already set, so the base tree has no symlinks; still `lstat`-check parents because the change could add a path under a file that the base has as a regular file. Files absent from `files[]` stay as the base has them.
-- **VALIDATE**: `npx vitest run test/workspace-continuation.test.ts` (task 23)
+### 10. CREATE `src/worker/continuation.ts` + UPDATE `src/worker/workspace.ts`
+- **IMPLEMENT**: `WorkspaceSpec.continuation?: {baseSha, change}`. In `cloneWorkspace`, after `head` is read (~101) and before the write-mode `.git` move:
+  1. If `head !== baseSha`, throw `invalid_input` (non-retryable). Name both SHAs and suggest `ref: {ref: nodes.<id>.output.workspace.base_sha}`.
+  2. Validate every path (untrusted, written by an agent). Reject:
+     - absolute paths, `..`, backslashes, NUL bytes;
+     - any segment equal to `.git` (case-insensitive);
+     - Windows-reserved names (`CON`, `NUL`, `AUX`, `COM1`…), `:`, and segments ending in `.` or space;
+     - case-insensitive duplicates within the change;
+     - any existing parent that is a symlink (`lstat`);
+     - totals above `CHANGE_LIMITS`.
+  3. Apply: delete removed files (a missing file is an error), write `utf-8`/`base64` content, and set the mode for `100755`.
+  4. Commit locally (isolated env, fixed author `azhi <azhi@localhost>`, hooks off as configured) and set `refs/azhi/base` to `baseSha`. The returned `Checkout.head` stays `baseSha` (D10), so `collectChange` reports the cumulative change and `base_sha` stays a commit that exists on the remote.
+- **GOTCHA**: On Windows the exec bit can't be represented, and a re-collected change could drop `100755`. Carry the mode from `change.files` in `collectChange` when the file is unchanged since continuation, or document the limit. [Likely] The cumulative change must still respect `CHANGE_LIMITS`.
+- **VALIDATE**: `npx vitest run test/workspace-continuation.test.ts test/workspace-write.test.ts`
 
-### 13. UPDATE `src/worker/harness-activity.ts` and `src/worker/harness-opencode2.ts`
-- **IMPLEMENT**: when `input.workspace.continuation` is set, fetch `GET /v1/gateway/artifacts/<hash>` with `runApi`, parse, pass as `spec.continuation = { baseSha, change }` to `cloneWorkspace` (v1 call `harness-activity.ts:145`, v2 call `harness-opencode2.ts:82`). Add `continuation?: { artifact: string; baseSha: string }` to the `HarnessInput` workspace type.
-- **PATTERN**: the credential fetch directly above each `cloneWorkspace` call.
-- **GOTCHA**: both adapters must behave identically; share the fetch in a small helper in `workspace.ts` rather than duplicating.
-- **VALIDATE**: `npm run typecheck && npx vitest run test/opencode2.test.ts test/opencode.test.ts`
+### 11. UPDATE `src/worker/capabilities.ts`, `gateway-activities.ts` `checkWorkers`, both OpenCode adapters (D11)
+- **IMPLEMENT**:
+  - `WorkerCapabilities.features?: string[]`; `detectCapabilities` adds `'workspace_continuation'`.
+  - `checkWorkers(workspaceId, packageHash, runtime, needs?: string[])` refuses workers lacking a needed feature, with the reason "worker build does not support workspace continuation; upgrade it".
+  - Both adapters fetch `/v1/artifacts/<hash>` with `runApi` (pattern `script-activity.ts:71-80`) and pass `spec.continuation` to `cloneWorkspace`.
+  - Put the fetch in one helper shared by both adapters.
+- **VALIDATE**: `npm run typecheck && npx vitest run test/opencode2.test.ts test/opencode.test.ts test/harness-executors.test.ts`
 
-### 14. UPDATE `src/plan/run-plan.ts`
-- **IMPLEMENT**: in `opencodeSetup` add a `coverage` row for `workspace.from` ("starts from the change made by <node>; applied on the worker after checkout, base commit must match"); for any agent with a context budget (node or server default) add a row listing the limits; list bundles used by the node in its plan `requirements`/notes so the editor's plan dock shows them.
-- **PATTERN**: `run-plan.ts:128-150`.
-- **VALIDATE**: `npx vitest run test/gate2.test.ts` (golden must be unchanged because `quality-report` uses none of this)
+### 12. UPDATE `src/plan/run-plan.ts`
+- **IMPLEMENT**:
+  - Continuation: a requirement row "worker supports workspace continuation" (native/unsupported per online worker), and a coverage row "starts from the change made by `<node>`, committed locally on the worker; base commit must match".
+  - Budget: a row with the limits and the `on_exceed` mode.
+  - Per node: the bundles it uses and the coupling warnings.
+- **VALIDATE**: `npx vitest run test/gate2.test.ts` (golden unchanged)
+
+### 13. UPDATE `web/src/graph.ts` and `web/src/components/StepDrawer.tsx`
+- **IMPLEMENT**:
+  - `graphOf` accepts `Pick<Definition, 'nodes' | 'contexts'>` and adds `nodes.<id>` refs found in the bundles a node lists, so editor edges, the `upstream()` pickers and cycle hints match the compiler.
+  - In StepDrawer, "Gets" includes bundle sources, labelled "via <bundle>".
+  - The editor's disconnect action on a bundle-derived edge explains that the edge comes from bundle `<name>` instead of silently doing nothing.
+- **VALIDATE**: `npm run typecheck && npx vitest run test/web.test.ts test/step-help.test.ts`
+
+### 14. UPDATE `web/src/pages/Editor.tsx`, `WorkflowSettings.tsx`, `stepHelp.ts`
+- **IMPLEMENT**:
+  - `renameStep` also swaps refs in `def.contexts`; omit the key when it is undefined.
+  - Agent/script/report drawers get a **Shared context** picker.
+  - Agents get **Input cap** (bytes, `on_exceed` select defaulting to fail).
+  - `WorkspaceFields` gets **Continue from** (lists steps whose output type-checks as a workspace change; it disables `base_ref`).
+  - New **Contexts** section in `WorkflowSettings` (edit bundles; flag unused ones).
+  - Help strings.
+- **GOTCHA**: Preserve unknown keys and key order (`reorder`). Do not touch the `WorkflowCanvas` head/foot wiring.
+- **VALIDATE**: `npm run typecheck && npm run build:web && npx vitest run test/editor.test.ts`
 
 ### 15. UPDATE `src/builder/skill.md`
 - **IMPLEMENT**:
-  - In the `workflow.yaml` reference: add a top-level `contexts:` entry with a 6-line example; in the `agent` bullet (~line 123) document `workspace` (repo, ref, credential, depth, mode, test, `from`; OpenCode only), `context`, `context_budget`, `handoff`; add `context: [names]` to the `script`, `subworkflow` and `report` bullets (~120, 136, 141).
-  - New section **"## Sharing context between steps"** placed after "Policies and controls to offer" (~216) and before "Suggest what is available" (~228), so it sits with the other design guidance and not in the interview steps. Rules, each one sentence: two or more steps need the same upstream fields -> define a `contexts` bundle instead of repeating a map; a revise/fix step after a write-mode agent -> `workspace.from`, never the diff in `input`; a step whose input can hold documents, diffs or tool dumps -> `context_budget`; the next agent needs the previous agent's reasoning -> `handoff`, never transcripts; never invent a way to pass context that is not listed here.
-  - Tie it to the token-usage guidance ("Token usage strategy", ~167): Economical sets tight `context_budget` values, Highest quality leaves it unset.
-  - **Editing an existing workflow** (the new step-1 paragraph, ~22-40): add one sentence that in a changed `workflow.yaml` the model must keep the `contexts:` block and every node's `context:` list unless the change is about them, and that renaming or dropping a bundle means updating every node that lists it. This matters because a change rewrites whole files and the model could drop the block; the compiler's `unknown_context` error is the safety net that sends it back.
-  - Add the new compile errors (`unknown_context`, `context_collision`, `context_input_shape`, `workspace_from_invalid`, `handoff_output`) to "Rules the compiler enforces" (~203).
-- **PATTERN**: existing bullet/reference style in `skill.md`.
-- **GOTCHA**: `skill.md` is read once at server start (`readFileSync(new URL('./skill.md', ...))`, `builder.ts`), so tests that assert on its text read the file directly. Keep the new section short; the whole skill is sent on every builder turn and adds to every user's token bill.
+  - Reference entries for `contexts`, `context` (agent/script/report only), `context_budget`, and `workspace` incl. `from` (OpenCode only).
+  - A short section **"Sharing context between steps"** after "Policies and controls to offer":
+    - Bundles for fields that several steps need.
+    - Bundles take an object `input` (per-key `{cel}`, not one `{map}`).
+    - Keep bundles small: everything in a bundle becomes a dependency of every step that uses it, and an untrusted field taints all of them.
+    - Never put a step from a conditional branch into a shared bundle.
+    - `workspace.from` for revise/fix steps.
+    - `context_budget` for inputs that can be large (fail by default).
+    - For notes to the next step, declare a `notes` string with `maxLength` in the producer's `output_schema` and pass it by ref.
+  - In "Changing an existing workflow", tell the model to keep `contexts:` and `context:` lists when it rewrites `workflow.yaml`.
+  - Add the new diagnostics to "Rules the compiler enforces".
+  - Keep the new section under about 25 lines (the skill is sent on every turn).
 - **VALIDATE**: `npx vitest run test/builder.test.ts test/builder-edit.test.ts`
 
-### 16. UPDATE `src/builder/builder.ts` - draft summary and examples
-- **IMPLEMENT**: `checkProposal` already returns `nodes[].def` (`builder.ts:~616`), and the web `Proposal` type already carries `nodes`, so **no new API shape is needed**. Add the context details to the `notes` handed back to the model after a successful compile (the `propose_workflow` branch of `builderTurn`, ~726-735), as lines like "step `revise` continues from `draft`'s workspace; step `critique` caps context at N bytes; bundle `brief` is used by 3 steps", so the model's plain-language summary mentions them. Put the summarising logic in one small exported function (for example `contextNotes(nodes)` in `src/builder/builder.ts` or a new `src/builder/context-notes.ts`) so the web can reuse the same wording rules in Task 17 without importing server code: duplicate the 15-line formatter in `web/` instead of importing, matching how `stepHelp.ts` duplicates logic today.
-  - Do **not** change `applyChange`/`readWorkflow`: they treat `workflow.yaml` as opaque text. Contexts survive a patch edit as long as the model keeps the block, which Task 15's rule asks for and the compiler enforces.
-  - `workspace_overview` lists examples from `examples/`, so `context-review-revise` (Task 20) is discoverable by the model through `read_example` without code changes. Confirm in a test.
+### 16. UPDATE `src/builder/builder.ts`
+- **IMPLEMENT**:
+  - After a successful compile, include coupling warnings and per-step context lines in the notes returned to the model (`propose_workflow` handler).
+  - No change to `applyChange`. The compiler's `unknown_context` error is the backstop when a patch drops `contexts:`.
 - **VALIDATE**: `npx vitest run test/builder.test.ts test/builder-edit.test.ts`
 
-### 17. UPDATE `web/src/pages/Builder.tsx` (draft card/panel)
-- **IMPLEMENT**: in `DraftPanel` (~604-665): (a) add one `draft-facts` entry **Shared context** (`<n> bundles · <n> steps use them`, or `none`; shown only when the draft uses any of the four features, so unrelated drafts look exactly as before); (b) under the facts, a short `muted small` list, one line per step that uses any feature: "`revise`: shared context `brief` · continues from `draft` · cap 8 KB per item · handoff 500 chars". Read everything from `p.nodes[].def` and the workflow's `contexts` (parse it from `p.files['workflow.yaml']` with the `yaml` package already imported in `Editor.tsx`, or have the server include `contexts` in the proposal; prefer the former to avoid an API change). The draft **card** in `MessageView` (~472-480) stays as is.
-  - There is no existing per-step model/limits line to extend (the first draft of this plan assumed one); the model's `summary` text carries that.
-  - Since the builder can now edit an existing workflow, the panel title reads "Save as a new draft of <id>"; make sure the facts row also appears for patch edits.
-- **PATTERN**: the other `draft-facts` entries and the `draft-todo`/`draft-warnings` lists (Builder.tsx:625-645); styles in `web/src/styles.css` (restyled recently: reuse existing classes, add none unless needed).
+### 17. UPDATE `web/src/pages/Builder.tsx`
+- **IMPLEMENT**: in `DraftPanel`, a **Shared context** `draft-facts` entry (shown only when used) and per-step lines, built from `p.nodes[].def` (the expanded plan def) and from `contexts` parsed out of `p.files['workflow.yaml']` with `yaml`. No API change.
 - **VALIDATE**: `npm run typecheck && npm run build:web`
 
-### 18. UPDATE `web/src/pages/Editor.tsx` - rename fix and agent fields
+### 18. CREATE `examples/context-review-revise/`
 - **IMPLEMENT**:
-  - `renameStep` (`:140-150`): the function returns `{...def, nodes: ...}`, so `def.contexts` is carried over untouched; add `contexts: swap(def.contexts)` using the same `swap` regex (`nodes.<from>` -> `nodes.<to>`); `workspace.from` is inside each node's `rest` and is already swapped. Omit the key when `def.contexts` is undefined so existing workflows' YAML does not change. Keep key order.
-  - Agent step editor (`~:963-977`): new `HbSection`s **Shared context** (multi-select of defined bundles; hidden if the workflow has none), **Context budget** (two number inputs, empty = unset, mirror the Budget section at `:968-977` and `setBudget` at `:810`), **Handoff** (number input; empty removes the key). In `WorkspaceFields` (`:989`) add a "Continue from" select listing earlier write-mode agent steps; choosing one sets `from: {ref: nodes.<id>.output.workspace}`. Add `context`, `context_budget`, `handoff` to the agent field handling so unknown keys are preserved (`HARNESS_FIELDS`, `:735`).
-  - Script/report/subworkflow editors: the same "Shared context" picker.
-- **PATTERN**: `setBudget` and `set(...)` helpers (`:805-815`).
-- **GOTCHA**: preserve unknown keys and key order so saved YAML diffs stay small (`reorder`, `:156-160`). `WorkflowCanvas` now takes `head`/`foot` props (recent restyle): do not touch the canvas wiring, only the step drawer content.
-- **VALIDATE**: `npm run typecheck && npx vitest run test/editor.test.ts`
-
-### 19. UPDATE `web/src/components/WorkflowSettings.tsx` and `web/src/stepHelp.ts`
-- **IMPLEMENT**: add `'contexts'` to `SectionId` (`:37`) and `sectionsOf` (`:96`): summary lists bundle names with field counts, chip = count; the popup edits each bundle as name -> key -> value (ref picker reusing the existing "Gets" pickers from `ConfigRow`), with an inline warning for bundles no step uses. Add help strings in `stepHelp.ts` (`agent.context`, `agent.context_budget`, `agent.workspace.from`, `agent.handoff`) and step summaries (`:94`, `:115`, `:188`).
-- **VALIDATE**: `npm run typecheck && npm run build:web && npx vitest run test/step-help.test.ts test/web.test.ts`
-
-### 20. CREATE `examples/context-review-revise/` (non-SDLC fixture and example)
-- **IMPLEMENT**: a small installable workflow that is **not** software delivery: `research` (agent) -> `draft` (agent, `handoff`) -> `critique` (agent, `context_budget`) -> `revise` (agent) with one `contexts:` bundle (`brief`) reused by three steps. Include `workflow.yaml`, `profiles/*.yaml` (scripted/model-agent provider so it runs without OpenCode), `schemas/*.json`, `README.md`. A second variant `workflow.code.yaml` (or a second example dir) shows `workspace.from` with `executor: opencode` for the draft-review-revise-on-a-repo case; keep it compile-only in tests (OpenCode is not run in CI).
-- **PATTERN**: another example's layout, e.g. `examples/ai-sdlc-v2/` and `examples/pr-review/`; check how examples register for install (`src/api/examples.ts`, `test/fixtures/examples`).
+  - A non-SDLC research -> draft -> critique -> revise workflow (model-agent, runnable with the scripted provider).
+  - One small bundle; `context_budget` with `on_exceed: withhold` on the critique step.
+  - A `notes` field in the draft schema, passed by ref (the documented replacement for handoff).
+  - A compile-only code variant that uses `workspace.from`.
 - **VALIDATE**: `npx vitest run test/example-merge.test.ts test/example-update.test.ts`
 
-### 21. UPDATE `examples/ai-sdlc-v2/` - migrate as an adopter (LAST code change)
-- **IMPLEMENT**: add `contexts: delivery_brief` (`ticket`, `requirements`, `design`, `decisions`) and `environment`; replace the repeated maps in `build*`, `lite_fix*`, `lite_review_*`, `lite_verify_*` with `context: [delivery_brief]` plus only their own keys; give the fix nodes `workspace.from: {ref: nodes.<build-variant>.output.workspace}` ... **but** the fix round consumes `change_1` (a script that picks among three build variants), whose output is not a node with `workspace.mode: write` (task 5's `workspace_from_invalid`). Resolve by extending the rule to accept a `script` node whose `output_schema` declares a compatible `workspace` property **only if** the script is a pure selector; if that proves too loose, keep the existing diff-in-prompt path for the fix round and migrate only the bundles in v1 (record the decision in NOTES). Update `implement-change/SKILL.md` and `harness/commands/implement.md` only if the fix round switches to continuation.
-- **GOTCHA**: `ai-sdlc-v2` has tests (`test/ai-sdlc-v2.test.ts`, `ai-sdlc-v2-finalize.test.ts`, `ai-sdlc-e2e.test.ts`) and a CHANGELOG (`examples/ai-sdlc-v2/CHANGELOG.md`): bump and describe. The compiled graph (nodes, edges, taint paths) must be unchanged.
-- **VALIDATE**: `npx vitest run test/ai-sdlc-v2.test.ts test/ai-sdlc-v2-finalize.test.ts test/ai-sdlc-e2e.test.ts`
+### 19. UPDATE `examples/ai-sdlc-v2/` (last, as an adopter)
+- **IMPLEMENT**:
+  - Convert the repeated `{map}` inputs to object inputs and introduce `contexts: delivery_brief`.
+  - **Bundles only in v1.** Continuation for the fix round is now technically possible (D8 accepts `change_N`), but it requires rewriting `implement-change/SKILL.md` and `harness/commands/implement.md`, which assume a fresh base. Do that as a separate change.
+  - Expect `context_may_skip` warnings for anything route-dependent. Keep route-dependent values (`decisions` comes from `design_review`) out of the shared bundle.
+- **GOTCHA**: the compiled graph (deps, dataDeps, taint paths) must be identical before and after. Assert it. Update `CHANGELOG.md`. Installed copies are three-way merged by `example-merge`, so check the update report in `test/example-update.test.ts`.
+- **VALIDATE**: `npx vitest run test/ai-sdlc-v2.test.ts test/ai-sdlc-v2-finalize.test.ts test/ai-sdlc-e2e.test.ts test/example-update.test.ts`
 
-### 22. CREATE `test/context-bundles.test.ts` and `test/context-regression.test.ts`
-- **IMPLEMENT**: see Testing Strategy. Regression test compiles every `examples/*/` and the `test/fixtures` packages with the new code and asserts the plan JSON equals a stored snapshot **produced before this change** (take the snapshot first - see Task 0 note in VALIDATION).
-- **VALIDATE**: `npx vitest run test/context-bundles.test.ts test/context-regression.test.ts`
-
-### 23. CREATE `test/context-budget.test.ts`, `test/workspace-continuation.test.ts`, `test/handoff.test.ts`
-- See Testing Strategy.
-- **VALIDATE**: `npx vitest run test/context-budget.test.ts test/workspace-continuation.test.ts test/handoff.test.ts`
-
-### 24. UPDATE `test/compiler.test.ts`, `test/taint.test.ts`, `test/builder.test.ts`, `test/builder-edit.test.ts`, `test/editor.test.ts`
-- See Testing Strategy. `test/builder-edit.test.ts` gets a second `it`: upload `examples/context-review-revise`, `applyChange` a patch that changes only one profile and assert `workflow.yaml` (with its `contexts:` block) is carried over byte-for-byte; then `checkProposal` a patch that rewrites `workflow.yaml` **without** the `contexts:` block and assert it fails with `unknown_context` (the safety net the skill rule relies on).
-- **VALIDATE**: `npx vitest run test/compiler.test.ts test/taint.test.ts test/builder.test.ts test/builder-edit.test.ts test/editor.test.ts`
-
-### 25. CREATE `docs/context-sharing.md`; UPDATE `docs/workflow-builder.md`, `docs/phase-2.md`, `README.md` (link only)
-- **IMPLEMENT**: follow `docs/loops-and-subworkflows.md` structure: one section per mechanism with a YAML snippet, exact semantics, error codes, the "not supported / rejected" list, the D4 honesty note (withheld fields cannot be read by the agent), the server env settings (task 9), executor support table (OpenCode only for `workspace.from`), and a "how to adopt in an existing workflow" 5-line recipe. In `docs/workflow-builder.md` add a "## Shared context" section **between** "Suggesting what is available, and adding MCP servers" and "## API" (what the builder proposes and when; that changes to an existing workflow keep `contexts:` because the model is told to and the compiler rejects a dangling `context:`; the draft panel's "Shared context" fact), and tie one sentence into "## Token usage" (Economical sets `context_budget`). Add a line to `docs/phase-2.md:28` (the manifest has per-field input items when `context` is used).
-- **VALIDATE**: `npx vitest run test/bundle-inventory.test.ts` (docs referenced by the inventory, if any), then manual proofreading
+### 20. Tests and docs
+- **CREATE/UPDATE** the tests listed in the Testing Strategy.
+- **CREATE** `docs/context-sharing.md` (style: `docs/loops-and-subworkflows.md`). Include:
+  - exact semantics and error codes;
+  - the coupling warnings explained with an example;
+  - the input-cap modes and the reviewer hazard;
+  - executor and worker support;
+  - the deployment note;
+  - the "notes field instead of handoff" pattern;
+  - the rejected list.
+- **UPDATE** `docs/workflow-builder.md` (section before "## API"), `docs/phase-2.md:28`, README link.
+- **VALIDATE**: `npm run test:local`
 
 ---
 
 ## TESTING STRATEGY
 
-Framework: vitest. Run on PGlite with `npm run test:local`. Compile-only tests need no Temporal; run tests use `startHarness` and are skipped when Temporal is unavailable (`temporalAvailable()` pattern from `test/loop-subworkflow.test.ts`, `test/builder.test.ts`).
+### Unit
+- `expandContext`: merge order; every collision form; non-object input rejected with a conversion hint; authored definition unchanged; `definitionHash` unchanged by expansion.
+- Coupling: `context_may_skip` fires for a route member, a descendant of a route, and a descendant of an approval, but not when the consumer already depended on the node or is `merge: any`. `context_ref_on_merge` fires for `{ref}` and unguarded `{cel}`, not for `has()`-guarded CEL. `context_taints` names the bundle key.
+- `applyContextBudget`: `fail` default; `withhold` largest-first with a stable tie-break; still over -> error; the input object is returned unchanged when no limits are set; no storage calls.
+- Continuation (fake git):
+  - applies add/modify/delete/base64/755;
+  - local commit; `refs/azhi/base...HEAD` is **non-empty** (run the same `git diff` that `repo-facts.mjs` runs);
+  - `collectChange` after a further edit reports the cumulative change from the original base, and `base_sha` equals the remote commit;
+  - SHA mismatch fails naming both SHAs;
+  - every unsafe path form is rejected (incl. Windows names, case duplicates, symlinked parent);
+  - limits;
+  - each retried attempt starts from a fresh checkout.
 
-### Unit Tests
-- `resolveNodeInput`: no `context` -> identical to `resolveValue`; bundle keys first, node keys after; collision (bundle vs input, bundle vs bundle) throws `contract_violation`; non-object `input` + `context` throws; `DeferredRef` passes through untouched; deterministic across calls.
-- `applyContextBudget`: per-item withhold; total-token withhold largest-first with stable tie-break; still-over -> `budgetExceeded`; non-object input; unknown/absent limits -> input returned unchanged (reference-equal); withheld note shape matches `contextSafe`.
-- `cloneWorkspace` continuation (fake git, mirror `test/workspace-write.test.ts`): add/modify/delete/base64/mode 755; cumulative `collectChange` afterwards (a second change on top yields one diff from the original base); SHA mismatch hard-fails with both SHAs named; every unsafe path form rejected (`../x`, absolute, `.git/hooks/pre-commit`, `A/.GIT/x`, backslash, NUL, symlinked parent); size limits.
-- `handoff`: schema with `additionalProperties:false` accepts `handoff`; over `max_chars` is a validation error and goes through the repair turn; non-object schema and a user-declared `handoff` are compile errors.
-
-### Integration Tests
-- Compile: all new diagnostics (`unknown_context`, `context_collision`, `context_input_shape`, `unused_context`, `workspace_from_invalid`, `workspace_from_needs_workspace`, `workspace_unsupported` for non-OpenCode executors, `handoff_output`), and positive cases for each of the four node types taking `context`.
-- **Taint** (the main risk): a bundle referencing an untrusted tool output makes the consuming agent tainted and an ungated write after it a `tainted_write_ungated` error, exactly as with an inline ref; same for `workspace.from` chains (taint flows from the producing agent).
-- Run against Temporal with the model-agent and the scripted provider: the `context-review-revise` example runs end to end; the manifest (`GET` run context manifest, see `docs/phase-2.md:28`) has one `input` item per field with the right sources; an over-budget field is withheld and the node still succeeds; a total over-budget input fails with `budget_exceeded`.
-- OpenCode wiring (mirror `test/opencode2.test.ts`, `test/harness-executors.test.ts`): both adapters receive a `continuation` and call `cloneWorkspace` with it; the Temporal payload to `runHarness` contains `{artifact, baseSha}` and **no file content** (assert serialized size).
-- API: `GET /v1/gateway/artifacts/:hash` allows only hashes in the token's `arts`, only for run tokens, only in the owning workspace.
-- Builder (scripted model, `test/builder.test.ts` pattern): the skill text contains the new reference and the "Sharing context between steps" section; a scripted draft-review-revise proposal using `workspace.from` + a bundle compiles and the post-compile notes list them; a proposal with a bad `workspace.from` is sent back with the compiler error.
-- Builder **edits** (`test/builder-edit.test.ts` pattern, real PGlite context, no model): a patch that changes one file carries `workflow.yaml` and its `contexts:` block over unchanged; a patch that rewrites `workflow.yaml` without `contexts:` while nodes still list `context:` fails with `unknown_context`; a patch that adds `context:` to a node of an existing workflow compiles.
-- **Backward compatibility**: `test/context-regression.test.ts` compiles every example and fixture package and compares plan JSON to a snapshot taken **before** the change; `test/gate2.test.ts` golden must not change.
-- Editor: renaming a step rewrites refs inside `contexts:` and `workspace.from`; saving preserves unknown keys; picking a bundle/continuation produces the expected YAML.
+### Integration
+- Taint: a bundle carrying an untrusted tool output taints consumers and makes an ungated write a `tainted_write_ungated` error (fail closed), exactly like an inline ref.
+- Regression: every example and fixture compiles to the baseline plan JSON byte-for-byte; `test/gate2.test.ts` golden unchanged.
+- Temporal run (model agent, scripted provider) of `context-review-revise`:
+  - per-field manifest items;
+  - a withheld field shows a `context_withheld` event and flag;
+  - `fail` mode fails with `budget_exceeded`;
+  - an agent with `datasets` gets the same retrieval query with and without a bundle.
+- Old-worker gating: a worker without `features` is refused for a `from` node with a clear reason; the run plan shows it.
+- Continuation lookup:
+  - `harnessPrepare` resolves from `node_attempts` (inline and artifacted outputs);
+  - the producer being skipped fails loud;
+  - a test-node run uses the inline fixture;
+  - the `runHarness` activity input contains no file content (assert its serialized size).
+- Builder: the skill contains the section; a scripted proposal with a bundle and `from` compiles and its notes list coupling warnings. `builder-edit`: a patch preserves `contexts:`, and a patch dropping it fails with `unknown_context`.
+- Editor/UI: `graphOf` draws bundle edges; "Gets" lists bundle sources; rename rewrites bundle refs.
+- `example-merge`: a local edit to a bundle survives an upstream change to another bundle.
 
 ### Edge Cases
-- `input` absent but `context` set (input is the bundle alone); `input: null`; `input` as `{ref}` resolving to an object; `{map}` returning a non-map.
-- Bundle referencing a node on a skipped route in a `merge: any` consumer (guarded with `has()` vs unguarded).
-- Same bundle used by nodes inside and after a condition route.
-- A bundle key whose value is an artifact handle > 256 KB; `context_budget` on a `DeferredRef` field.
-- `max_item_bytes` smaller than any field (everything withheld) and `max_total_tokens` smaller than the fixed overhead (clear error).
-- Continuation where the previous change deleted a file the base has, added a file under a new directory, or touched a binary file; empty `files[]` (valid, no-op); `diff_truncated: true` (continuation still exact because it uses `files`).
-- `workspace.from` on a `read`-mode node (review): the applied files are present; `.git` stays in the checkout, so confirm no `.git` path can be written.
-- Retried node attempt re-fetches the same artifact and re-applies (idempotent: fresh checkout every attempt).
-- Replay safety: `resolveNodeInput` called twice with the same scope returns deep-equal results.
+- `input` absent (bundle only); a bundle used by script and report nodes; a bundle that references `inputs`/`config`/`run`.
+- A bundle that references a node downstream of a consumer (the cycle error must name the bundle).
+- Bundle values that are artifact handles above 256 KB (`$artifact_path` deferred refs still materialise).
+- `max_item_bytes` smaller than every field; an empty change (`files: []`, which makes a no-op commit, so skip the commit); `diff_truncated: true` (continuation still exact, because it uses `files`).
 
-### E2E / Browser Automation
-
-`CLAUDE.md` does not mention an `agent-browser` skill and none is installed in this repo; use **Playwright via `playwright-core`**, exactly as `test/builder.test.ts` and `test/web.test.ts` do (Chromium is preinstalled at `/opt/pw-browsers/chromium`).
-
-- Happy path: open `/ui/workflows/<slug>/edit` for a draft with two agent steps -> add a bundle in **Contexts**, select it on a step, set a budget and handoff, rename the producing step -> assert the YAML pane shows `context: [..]`, the renamed refs inside `contexts:`, and the plan dock shows no errors.
-- Builder path: `/ui/workflows/new` with the scripted model proposing a draft-review-revise workflow -> assert the draft panel shows the "Context" line per step and the **Save draft and open the editor** flow opens it.
-- Error paths: choose a bundle name that does not exist (hand-edited YAML) -> editor shows `unknown_context`; set `Continue from` to a read-mode step -> not offered.
-- Screenshots: save to `screenshots/context-sharing-editor.png`, `context-sharing-builder.png`, `context-sharing-error.png` (gitignored dir, include paths in the report).
+### E2E (Playwright via `playwright-core`, as in `test/builder.test.ts`)
+- Editor: add a bundle, use it on two steps, rename the producer. Assert the YAML, the drawn edges and "Gets". Screenshot `screenshots/context-editor.png`.
+- Builder: a scripted draft with a bundle. The draft panel shows "Shared context". Screenshot `screenshots/context-builder.png`.
+- Error: a hand-edited unknown bundle shows `unknown_context`. Screenshot `screenshots/context-error.png`.
 
 ---
 
 ## VALIDATION COMMANDS
-
-**Before touching code**, snapshot the baseline for the regression test: write a throwaway script (scratchpad, not committed) that compiles every package under `examples/` and `test/fixtures/` with the **unmodified** compiler and stores the plan JSON (with `packageHash`/`definitionHash` kept) under `test/golden/context-regression/`; commit it in the same commit as `test/context-regression.test.ts`.
-
-### Level 1: Syntax & Style
-```bash
-npm run typecheck
-```
-
-### Level 2: Unit Tests
-```bash
-npx vitest run test/compiler.test.ts test/taint.test.ts test/context-bundles.test.ts test/context-budget.test.ts test/handoff.test.ts test/workspace-write.test.ts test/workspace-continuation.test.ts
-```
-
-### Level 3: Integration Tests
-```bash
-npm run test:local
-npx vitest run test/context-regression.test.ts test/gate2.test.ts test/ai-sdlc-v2.test.ts test/builder.test.ts test/editor.test.ts test/opencode2.test.ts test/harness-executors.test.ts
-```
-
-### Level 4: Manual Validation
-```bash
-npm run azhi -- --help            # find the compile/validate command for a package
-npm run azhi -- <compile-cmd> examples/context-review-revise
-npm run demo                      # alpha demo must still pass
-```
-Install the example in a local server, run it with the scripted provider, open the run page, and confirm the context manifest lists one item per field, and that a node with a tiny `context_budget` shows a withheld note.
-
-### Level 5: E2E / Browser Automation
-```bash
-npm run build:web
-npx vitest run test/web.test.ts test/builder.test.ts test/editor.test.ts   # Playwright flows above
-```
-Confirm screenshots exist under `screenshots/` and there are no console errors in the Playwright logs.
-
-### Level 6: Additional Validation
-- `git diff --stat` shows no unrelated refactors; `grep -rn "ai-sdlc" src/` shows **no** new workflow-specific code (the genericity bar).
-- Search the diff for `executor ===`/`'opencode'` literals outside `compile.ts`, `workspace.ts` adapters and run-plan (continuation must not leak executor logic into the runtime).
+- L1: `npm run typecheck`
+- L2: `npx vitest run test/compiler.test.ts test/taint.test.ts test/context-bundles.test.ts test/context-budget.test.ts test/workspace-write.test.ts test/workspace-continuation.test.ts`
+- L3: `npm run test:local` and `npx vitest run test/context-regression.test.ts test/gate2.test.ts test/builder.test.ts test/builder-edit.test.ts test/editor.test.ts test/example-update.test.ts`
+- L4: `npm run demo`; install `examples/context-review-revise` locally, run it, inspect the manifest and run events.
+- L5: `npm run build:web` and the Playwright tests above.
+- L6: `git diff --stat` shows no unrelated refactors; `grep -rn "ai-sdlc" src/` shows no new workflow-specific code.
 
 ---
 
 ## ACCEPTANCE CRITERIA
 
-Genericity and compatibility
-- [ ] All four mechanisms are declared in `src/definition/schema.ts`; no profile, skill or example file is required for them to work.
-- [ ] Any workflow can adopt each mechanism; the non-SDLC `context-review-revise` example uses all four.
-- [ ] A workflow that uses none of the new fields compiles to a **byte-identical plan** (regression test over every example and fixture) and `test/gate2.test.ts` golden is unchanged.
-- [ ] Bundle and `workspace.from` references appear in `dataDeps`, so taint analysis, type-checking, topological order and the run plan treat them as ordinary data edges (taint test).
-
-Mechanism behaviour
-- [ ] `contexts` + `context: [..]` work on agent, script, report and subworkflow nodes; collisions and shape errors are compile errors when static and `contract_violation` at run time otherwise; never a silent overwrite.
-- [ ] With `context`, the manifest has one input item per field with its source; without it, the manifest is unchanged.
-- [ ] `context_budget` (and the optional server default) is OFF unless set; when set, it applies to the model agent **and** OpenCode, Claude and Codex steps; oversized fields are replaced by `{note, artifact, shape}`; a still-over total fails with `budget_exceeded`; token figures are labelled `estimated`.
-- [ ] `workspace.from` checks out the same base commit, applies the previous change from `files[]` (not `diff`), hard-fails on a SHA mismatch with an actionable message, and works in `read` and `write` mode; the change reaches the worker only through the artifact store (no file content in the Temporal payload).
-- [ ] Continuation paths are validated (traversal, absolute, `.git`, symlinked parents, size limits) with tests for each.
-- [ ] `workspace.from` on a non-OpenCode executor is a compile error naming the executor.
-- [ ] `handoff` adds an optional string to the node's submit schema and downstream ref types; it is taint-equivalent to the node's other output; a user-declared `handoff` or a non-object schema is a compile error.
-
-Authoring surfaces
-- [ ] "Build with chat": `skill.md` documents all four with when-to-use rules; a scripted draft-review-revise proposal compiles; the draft panel shows a "Shared context" fact and per-step lines; a builder test proves it.
-- [ ] "Build with chat" **edits**: changing an existing workflow keeps its `contexts:` block and `context:` lists (the skill says so; `test/builder-edit.test.ts` proves a patch preserves them and that dropping the block is rejected with `unknown_context`).
-- [ ] Visual editor: Contexts section, step pickers (bundles, budget, handoff, continue-from), and rename rewrites refs inside `contexts:` and `workspace.from`.
-- [ ] YAML upload: schema and compiler diagnostics are specific and quote the node and path.
-
-Quality
-- [ ] `npm run typecheck`, `npm run test:local` and `npm run build:web` pass.
-- [ ] `ai-sdlc-v2` adopts bundles (and continuation if the selector issue in task 21 resolves) with an unchanged compiled graph and passing tests; its CHANGELOG is updated.
-- [ ] `docs/context-sharing.md` exists and states the limits honestly (withheld fields are unreadable by the agent; OpenCode-only continuation; server-level budget default).
-- [ ] No new `ai-sdlc`-specific code in `src/`.
-- [ ] Conventional commits on `dev`; no PR opened unless asked.
-
----
-
-## COMPLETION CHECKLIST
-
-- [ ] Baseline plan snapshots taken before any code change
-- [ ] All tasks completed in order, each task's VALIDATE passed
-- [ ] Full suite passes (`npm run test:local`)
-- [ ] No type errors (`npm run typecheck`), web builds (`npm run build:web`)
-- [ ] Playwright E2E flows passed, screenshots saved under `screenshots/`
-- [ ] Manual validation (Level 4) done on the example
-- [ ] All acceptance criteria above checked
-- [ ] Diff reviewed adversarially: taint paths, sandbox purity of `values.ts`, path safety in `cloneWorkspace`, no content in Temporal payloads
+- [ ] All mechanisms are declared in `src/definition/schema.ts`. None needs a profile, skill or example file to work.
+- [ ] Workflows not using them compile to byte-identical plans (regression baseline + golden).
+- [ ] Bundles expand at compile time. The runtime interpreter needs no change to run them, and every collision is a compile error.
+- [ ] Coupling is visible: skip coupling, merge-node refs and bundle-only taint each produce the specified diagnostic.
+- [ ] The input cap uses exact bytes, fails by default, records and shows a withheld field, and never stores content again. It covers the model agent and all harness executors.
+- [ ] Adding a bundle does not change an agent's retrieval query.
+- [ ] Continuation applies `files[]` as a local commit; `refs/azhi/base...HEAD` shows the change; the cumulative change keeps the real `base_sha`; unsafe paths are rejected; SHA mismatch fails loud; no file content enters the workflow-to-worker activity payload.
+- [ ] Workers without the continuation feature are refused with a clear reason, and the run plan shows it.
+- [ ] A continued agent is told it continues from step `<id>`.
+- [ ] Builder: the skill teaches the mechanisms, coupling rules and the notes-field pattern; patch edits keep `contexts:`.
+- [ ] Editor: the graph, "Gets", rename and pickers all account for bundles.
+- [ ] Docs state the limits honestly (OpenCode-only continuation, withheld means unreadable, deployment note, coupling).
+- [ ] `npm run typecheck`, `npm run test:local`, `npm run build:web` pass; conventional commits on `dev`.
 
 ---
 
 ## NOTES
 
-**Revision 2 (re-validation against `origin/dev` @ `2d99c8e`)**
-- Unchanged and still valid: every compiler, definition, runtime, agents, worker, API, plan and config reference (Tasks 1-14). Only `cloneWorkspace` gained a 2-line git stall setting; line numbers there moved by about 2.
-- Changed: the builder can now edit existing workflows by patch (`new_version_of` + changed `files` + `remove`), so a patch that rewrites `workflow.yaml` could drop `contexts:`. Added the skill rule (Task 15), a test (Task 24) and the acceptance criterion; the compiler's `unknown_context` error is the backstop, so no change to `applyChange` is needed.
-- Corrected a wrong assumption in the first draft: the Builder page has no per-step "model/limits line". Task 17 now adds a "Shared context" fact and per-step lines to `DraftPanel`, computed in the browser from `p.nodes[].def` and `workflow.yaml`, with no API change.
-- `skill.md` grew by about 65 lines (new-vs-existing question, `read_workflow`, MCP proposals). The whole skill is sent every turn, so the new section must stay short.
-- `web/src/styles.css`, `WorkflowCanvas.tsx`, `Examples.tsx` and `Run.tsx` were restyled/rewritten: reuse existing classes and do not touch canvas wiring. `Examples.tsx` lists examples from the API, so `context-review-revise` appears without a code change (confirm visually in Level 5).
-- The regression snapshot (Validation, "Before touching code") must be taken from the **current** `dev` HEAD, because `examples/pr-review` and `examples/sdlc-universal` changed in the same range.
+### What changed in revision 3 and why
+1. **Bundles move from run-time merge to compile-time expansion.** Old interpreter builds then run them correctly, collisions become compile-only, and the sandbox runtime needs no change. The price is that inputs using `context` must be object-shaped (per-key CEL).
+2. **Coupling hazards were found and verified.** Skip coupling (`shouldSkip`), silent key drop on merge nodes (reproduced), CEL `No such key` (reproduced), and taint widening. Each now has a diagnostic.
+3. **Subworkflow is excluded from bundles.** Child input validation would reject flattened keys at run time.
+4. **The budget uses bytes and fails by default.** A token cap would rest on a guess. Silent withholding could let a reviewer approve unseen code.
+5. **The retrieval query is protected.** The query is built from the whole input before any budget.
+6. **Continuation design.** It is committed locally (existing diff tools diff commits), resolved server-side from stored outputs (avoids duplicating ~1 MB payloads), gated on a worker feature flag (stale workers would silently ignore it), the agent is told it is continuing, the producer is typed rather than limited to write-mode agents, and `asArtifact` is required (raw `put` makes the artifact endpoint 404).
+7. **Handoff is dropped.** It is equivalent to a schema field, reserves a name, and invites injection. `PLATFORM_RULES` has no "input is data" rule, so the profile is the only defence.
+8. **The prompt-caching claim is withdrawn.** The Anthropic provider caches only the system block.
 
-**Corrections to the earlier brainstorm (found by reading the code)**
-1. `harnessPrepare` calls `agentBegin`, so the input budget in `agentBegin` covers every executor; the earlier claim that harnesses build their own prompts was wrong.
-2. Continuation applies `workspace.files[]`, not `git apply` of `diff` (the diff can be truncated).
-3. Only OpenCode supports `workspace` today (two adapters, one `cloneWorkspace`), so "a continuation test per executor" means OpenCode v1 + v2 wiring plus the shared unit test.
-4. Large changes must go through the artifact store: Temporal's blob limit is 2 MB and `files` can reach ~1 MB.
-5. The editor's `renameStep` only rewrites inside `nodes`; `contexts:` needs explicit handling.
+### Deployment constraint
+Publish workflows that use `workspace.from` or `context_budget` only after **all server instances and workers** run this build:
+- A run is pinned to the interpreter build of the server that created it.
+- An older server ignores `context_budget` (fails open on cost).
+- An older interpreter would drop `workspace.from`. Worker gating catches old workers, not old interpreters.
 
-**Risks**
-- *Taint laundering* is the main risk; mitigated by routing every new reference through `nodeValues` -> `dataDeps`. The taint test is the gate - do not skip it.
-- *Sandbox purity*: `resolveNodeInput` runs in the Temporal workflow sandbox (no Node imports, no randomness, no clocks).
-- *`ai-sdlc-v2` fix round*: its fix nodes consume `change_N`, a script that selects among three build variants, not a write-mode agent. Decide in task 21 whether to widen the `workspace.from` rule to pure selector scripts or leave the fix round on the diff-in-prompt path in v1. Recommendation: leave it for v1 and ship bundles only, unless the widening is a few lines.
-- *Withheld fields* are unreadable by the agent (no artifact-read tool). If that proves too blunt, a follow-up could add a read-only artifact tool; out of scope here.
-- *Moved base branch*: continuation hard-fails if the ref moved between the producing and consuming step; the documented fix is to pin `ref` to `base_sha`.
+Bundles are safe on old interpreters because they compile to a plain `input`. [Certain about the pinning; Guessing about how often your deployments run mixed builds.]
 
-**Follow-ups (not in this plan)**
-- A DB-backed, UI-editable workspace-wide `context_budget` default (Governance › Usage and limits) instead of env settings.
-- Workspace support for the Claude and Codex harnesses (then continuation extends to them).
-- A `first_of(...)` CEL helper to replace selector scripts like `pick_change.py`.
+### Pre-existing issues found in passing (not caused by this feature)
+- A write-mode harness returns its whole change (file contents up to 1 MB, base64 for binaries, plus a 200k-char diff) as an activity result straight into Temporal history. Near the limits this could exceed Temporal's payload limit (2 MB by default). [Likely] Verify with a large-change test before relying on it.
+- A YAML merge key (`<<: *anchor`) in a workflow is accepted by the schema and becomes a literal `<<` input key, silently. [Certain, reproduced]
 
-**Confidence for one-pass success: 7/10** (up from 6.5 after re-validation). The compiler, runtime and tests are well specified and unchanged by recent work; the builder tasks now rest on code I read in full (`builder.ts`, `skill.md`, `Builder.tsx`, `builder-edit.test.ts`). The riskiest parts remain the sandboxed runtime merge, the worker path-safety and continuation wiring across two adapters (real OpenCode is only needed for optional manual checks), and the editor work, which I read at the structural level and did not run.
+### Risks
+- Taint/coupling remains the main risk; Task 4's diagnostics and the taint tests are the gate.
+- Continuation path safety; Task 10's test matrix is the gate.
+- Editor work was read structurally, not run.
+
+**Confidence for one-pass success: 7/10.** Lower runtime risk than revision 2 (no sandbox merge), offset by the added worker gating, local-commit and diagnostic work.
