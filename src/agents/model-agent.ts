@@ -13,6 +13,7 @@ import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { CLAUDE_PLAN_ONLY_SDK, EXECUTORS, isClaudePlanToken } from '../executors/capabilities.js';
 import { citationIds } from '../runtime/report.js';
+import { applyContextBudget, type Withheld } from './context-budget.js';
 import { MAX_REPAIRS, MAX_REPEATED_FAILURES } from './limits.js';
 import { redactor, writeTranscript, type TranscriptEntry } from './transcript.js';
 import { applyModelDefaults, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, parseProfile, type AgentProfile, type ModelDefaults } from './profile.js';
@@ -91,6 +92,8 @@ export interface AgentState {
   cost: number | null;
   repairs: number;
   failures: Record<string, number>;
+  /** Input fields a context_budget withheld (hash and size only; the content is not stored again). */
+  withheld?: Withheld[];
 }
 
 export interface AgentBeginInput {
@@ -102,6 +105,8 @@ export interface AgentBeginInput {
   outputSchema: Record<string, unknown>;
   tools: AgentTool[];
   input: unknown;
+  /** The node's `context_budget`; each limit overrides the server default. */
+  contextBudget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
   /** Upstream nodes the input came from, for the manifest. */
   inputSources: string[];
   chunks?: Chunk[];
@@ -215,9 +220,22 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { tr
   tools.push(submit);
   items.push(item('output_schema', `node ${i.nodeId}`, 'output contract, validated by the platform', JSON.stringify(submitSchema), store));
 
-  const input = materialise(ctx, i.input);
+  const materialised = materialise(ctx, i.input);
+  // Sized after materialise: artifact handles and deferred refs are content by now.
+  const { input, withheld } = applyContextBudget(
+    materialised,
+    {
+      maxItemBytes: i.contextBudget?.max_item_bytes ?? ctx.settings.contextBudget.maxItemBytes,
+      maxInputBytes: i.contextBudget?.max_input_bytes ?? ctx.settings.contextBudget.maxInputBytes,
+      onExceed: i.contextBudget?.on_exceed ?? 'fail',
+    },
+    i.nodeId,
+  );
   const inputText = `Input:\n\`\`\`json\n${JSON.stringify(input ?? null, null, 2)}\n\`\`\``;
   items.push(item('input', i.inputSources.length ? i.inputSources.map((s) => `nodes.${s}`).join(', ') : 'inputs', 'node input', inputText, store));
+  for (const w of withheld) {
+    items.push({ kind: 'input', source: `input.${w.key}`, reason: `withheld by context_budget (${w.bytes} bytes); the agent cannot read it`, tokens: 0, content_hash: `sha256:${w.sha256}` });
+  }
   let user = inputText;
   if (i.chunks?.length) {
     const excerpts = i.chunks.map((c) => `[${c.id}] ${c.heading ? `${c.heading}: ` : ''}${c.text}`);
@@ -245,7 +263,7 @@ export async function agentBegin(ctx: AppContext, i: AgentBeginInput, opts: { tr
     { id: 'system', kind: 'system', text: t.system, at: Date.now() },
     { id: 'u0', kind: 'user', text: user, at: Date.now() },
   ]);
-  return { transcript: saveTranscript(ctx, t), turn: 0, toolCalls: 0, outputTokens: 0, cost: 0, repairs: 0, failures: {} };
+  return { transcript: saveTranscript(ctx, t), turn: 0, toolCalls: 0, outputTokens: 0, cost: 0, repairs: 0, failures: {}, ...(withheld.length ? { withheld } : {}) };
 }
 
 /** One model turn: call the model, run its tool calls through the gateway, validate output. */
@@ -491,6 +509,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
   return {
     system: t.system,
     prompt: first && first.type === 'text' ? first.text : '',
+    withheld: state.withheld ?? [],
     tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
     outputSchema: t.outputSchema,
     model: t.model,

@@ -145,6 +145,14 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     });
 
   /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
+  /** Records, once per field, what a context_budget kept from an agent; the run page shows the flag. */
+  const noteWithheld = async (nodeId: string, withheld: Array<{ key: string; bytes: number; sha256: string }> | undefined) => {
+    if (!withheld?.length) return;
+    const names = withheld.map((w) => `${nodeId}.${w.key}`);
+    status.flags = { ...status.flags, context_withheld: [...new Set([...(status.flags.context_withheld ?? []), ...names])] };
+    await bookkeeping.recordRun(runId, workspaceId, { flags: status.flags, event: { kind: 'run.context_withheld', node: nodeId, data: { fields: withheld } } });
+  };
+
   const runHarness = async (executor: string, node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
     try {
       const ws = def.workspace;
@@ -171,10 +179,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         tools: tools as never,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
+        ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
         ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
       });
+      await noteWithheld(node.id, prep.withheld);
       const queue = await selectWorker(node.id, executor, 1);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
@@ -231,9 +241,11 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         tools,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
+        ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
       });
+      await noteWithheld(node.id, state.withheld);
       for (;;) {
         if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });
         const r = await act.agentTurn({

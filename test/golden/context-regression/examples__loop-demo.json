@@ -1,0 +1,101 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "loop-demo",
+    "definitionHash": "sha256:ab254c634394a4b6e3374b8de5e55edc14dd444b426f22d6acb580c1a3da4963",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target"
+      ]
+    },
+    "config": {},
+    "nodes": [
+      {
+        "id": "count",
+        "type": "loop",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "count",
+          "type": "loop",
+          "initial": {
+            "n": 0
+          },
+          "max_iterations": 10,
+          "exit": "state.n >= inputs.target",
+          "node": {
+            "type": "script",
+            "runtime": "python",
+            "entrypoint": "scripts/inc.py",
+            "input": {
+              "map": "{'n': state.n}"
+            },
+            "output_schema": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "n"
+              ]
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "object",
+              "properties": {
+                "n": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "n"
+              ]
+            },
+            "iterations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "n": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "n"
+                ]
+              }
+            },
+            "count": {
+              "type": "integer"
+            },
+            "exited": {
+              "type": "boolean"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

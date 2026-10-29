@@ -1,0 +1,2686 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "ai-sdlc-v2",
+    "definitionHash": "sha256:468b08d2ee29adeb951db49efb6e958750893b4a24b601a1ec055265ba67619f",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "title": "Source",
+          "enum": [
+            "github"
+          ],
+          "description": "Where the ticket lives"
+        },
+        "ticket": {
+          "type": "string",
+          "title": "Ticket",
+          "maxLength": 300,
+          "description": "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"
+        },
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The repository to change, owner/name"
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "maxLength": 200,
+          "description": "The branch to build on and open the pull request against. Name the integration branch (for example dev): the repository default can be hundreds of commits behind it, and the plan would then miss code the ticket refers to.",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "source",
+        "ticket",
+        "repo",
+        "base_branch"
+      ]
+    },
+    "config": {
+      "channel": "C0C6LTYB0MQ",
+      "test_command": "node -e \"process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})\"",
+      "lite_max_files": 5,
+      "lite_min_confidence": 6,
+      "min_confidence": 80
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source",
+          "type": "condition",
+          "description": "Read the ticket from Jira or from GitHub.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "github_issue"
+            ]
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the GitHub issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "github"
+        }
+      },
+      {
+        "id": "intake",
+        "type": "tool",
+        "deps": [
+          "github_issue"
+        ],
+        "dataDeps": [
+          "github_issue"
+        ],
+        "def": {
+          "id": "intake",
+          "type": "tool",
+          "description": "Turn the Jira ticket or GitHub issue into one plain ticket (key, title, description, priority, reporter).",
+          "tool": "ticket.normalize@1",
+          "merge": "any",
+          "arguments": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "issue": {
+              "ref": "nodes.github_issue.output"
+            }
+          },
+          "project": [
+            "source",
+            "key",
+            "title",
+            "description",
+            "priority",
+            "reporter",
+            "status",
+            "labels",
+            "url"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "dor_check",
+        "type": "agent",
+        "deps": [
+          "intake"
+        ],
+        "dataDeps": [
+          "intake"
+        ],
+        "def": {
+          "id": "dor_check",
+          "type": "agent",
+          "description": "Score the ticket against the seven definition-of-ready gates (definition-of-ready skill).",
+          "executor": "opencode",
+          "profile": "dor-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/dor.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "dor_gate",
+        "type": "condition",
+        "deps": [
+          "dor_check"
+        ],
+        "dataDeps": [
+          "dor_check"
+        ],
+        "def": {
+          "id": "dor_gate",
+          "type": "condition",
+          "description": "Build only a ticket whose seven gates pass with no low-confidence gate and that can be built as code.",
+          "expression": "nodes.dor_check.output.dispatchable ? 'ready' : 'refine'",
+          "routes": {
+            "ready": [
+              "preflight"
+            ],
+            "refine": [
+              "dor_message"
+            ]
+          },
+          "default": "refine"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "dor_message",
+        "type": "report",
+        "deps": [
+          "dor_check",
+          "dor_gate",
+          "intake"
+        ],
+        "dataDeps": [
+          "dor_check",
+          "intake"
+        ],
+        "def": {
+          "id": "dor_message",
+          "type": "report",
+          "description": "The questions that would make the ticket ready.",
+          "template": "templates/dor.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'failed': nodes.dor_check.output.gates.filter(g, g.status == 'fail' || g.confidence == 'low')}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "dor_gate",
+          "route": "refine"
+        }
+      },
+      {
+        "id": "dor_send_back",
+        "type": "notify",
+        "deps": [
+          "dor_message"
+        ],
+        "dataDeps": [
+          "dor_message"
+        ],
+        "def": {
+          "id": "dor_send_back",
+          "type": "notify",
+          "description": "Ask for what is missing instead of building from a vague ticket.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.dor_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "preflight",
+        "type": "agent",
+        "deps": [
+          "dor_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "preflight",
+          "type": "agent",
+          "description": "Run the test command on the untouched base branch with a do-nothing agent, so a repository whose tests cannot run is found before any expensive step.",
+          "executor": "opencode",
+          "profile": "preflight@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})\"",
+              "timeout": "15m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/preflight.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "dor_gate",
+          "route": "ready"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "preflight_gate",
+        "type": "condition",
+        "deps": [
+          "preflight"
+        ],
+        "dataDeps": [
+          "preflight"
+        ],
+        "def": {
+          "id": "preflight_gate",
+          "type": "condition",
+          "description": "Plan and build only when the base branch passes its own tests.",
+          "expression": "nodes.preflight.output.workspace.tests.status == 'passed' ? 'ok' : 'blocked'",
+          "routes": {
+            "ok": [
+              "preflight_ok"
+            ],
+            "blocked": [
+              "test_strategist",
+              "preflight_b"
+            ]
+          },
+          "default": "blocked"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "test_strategist",
+        "type": "agent",
+        "deps": [
+          "preflight",
+          "preflight_gate"
+        ],
+        "dataDeps": [
+          "preflight"
+        ],
+        "def": {
+          "id": "test_strategist",
+          "type": "agent",
+          "description": "Diagnose why the base branch fails its own tests and which approved fallback still verifies a change (test-strategy skill). Advisory: it names a fallback, never a command.",
+          "executor": "opencode",
+          "profile": "test-strategist@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'repository': inputs.repo, 'test': {'command': nodes.preflight.output.workspace.tests.command, 'exit_code': nodes.preflight.output.workspace.tests.exit_code, 'output': nodes.preflight.output.workspace.tests.output}}"
+          },
+          "output_schema": "schemas/test_strategy.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 12
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_gate",
+          "route": "blocked"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "preflight_b",
+        "type": "agent",
+        "deps": [
+          "preflight_gate",
+          "test_strategist"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "preflight_b",
+          "type": "agent",
+          "description": "Fallback rung: run typecheck and build on the untouched base branch. It proves less than the tests, but still catches a change that does not compile.",
+          "executor": "opencode",
+          "profile": "preflight@1",
+          "depends_on": [
+            "test_strategist"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"require('child_process').execSync('npm ci && npm run typecheck && npm run build:web',{stdio:'inherit'})\"",
+              "timeout": "15m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/preflight.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_gate",
+          "route": "blocked"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "preflight_b_gate",
+        "type": "condition",
+        "deps": [
+          "preflight_b"
+        ],
+        "dataDeps": [
+          "preflight_b"
+        ],
+        "def": {
+          "id": "preflight_b_gate",
+          "type": "condition",
+          "description": "Continue with static checks only when typecheck and build pass on the base; otherwise ask a person.",
+          "expression": "nodes.preflight_b.output.workspace.tests.status == 'passed' ? 'ok' : 'blocked'",
+          "routes": {
+            "ok": [
+              "preflight_b_ok",
+              "static_notice"
+            ],
+            "blocked": [
+              "preflight_notify",
+              "preflight_decision"
+            ]
+          },
+          "default": "blocked"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "preflight_b_ok",
+        "type": "condition",
+        "deps": [
+          "preflight_b_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "preflight_b_ok",
+          "type": "condition",
+          "description": "The base passes typecheck and build.",
+          "expression": "'ok'",
+          "routes": {
+            "ok": []
+          },
+          "default": "ok"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_b_gate",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "static_notice",
+        "type": "notify",
+        "deps": [
+          "intake",
+          "preflight_b_gate",
+          "test_strategist"
+        ],
+        "dataDeps": [
+          "intake",
+          "test_strategist"
+        ],
+        "def": {
+          "id": "static_notice",
+          "type": "notify",
+          "description": "Say the run continues with static checks only.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'NOTICE ' + nodes.intake.output.key + ': the full tests cannot run here (' + nodes.test_strategist.output.failure_class + '). Continuing with typecheck and build only; the pull request will open as a draft marked static-checks-only. ' + nodes.test_strategist.output.remediation"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_b_gate",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "preflight_ok",
+        "type": "condition",
+        "deps": [
+          "preflight_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "preflight_ok",
+          "type": "condition",
+          "description": "The base branch passed its own tests.",
+          "expression": "'ok'",
+          "routes": {
+            "ok": []
+          },
+          "default": "ok"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_gate",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "preflight_notify",
+        "type": "notify",
+        "deps": [
+          "intake",
+          "preflight_b_gate",
+          "test_strategist"
+        ],
+        "dataDeps": [
+          "intake",
+          "test_strategist"
+        ],
+        "def": {
+          "id": "preflight_notify",
+          "type": "notify",
+          "description": "Warn that the base branch fails its own tests and that the run is paused for a decision.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'WARNING ' + nodes.intake.output.key + ' is paused: the full tests and the static checks both fail on the base branch (' + nodes.test_strategist.output.failure_class + '). Open the run to continue WITHOUT verification (an untested draft) or to stop. Suggested fix: ' + nodes.test_strategist.output.remediation"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_b_gate",
+          "route": "blocked"
+        }
+      },
+      {
+        "id": "preflight_decision",
+        "type": "approval",
+        "deps": [
+          "preflight",
+          "preflight_b",
+          "preflight_b_gate",
+          "test_strategist"
+        ],
+        "dataDeps": [
+          "preflight",
+          "preflight_b",
+          "test_strategist"
+        ],
+        "def": {
+          "id": "preflight_decision",
+          "type": "approval",
+          "description": "The tests cannot run here. A person decides whether to continue without them (an untested draft) or stop.",
+          "role": "author",
+          "message": {
+            "cel": "'WARNING: neither the tests nor typecheck and build pass on the base branch of ' + inputs.repo + ' (' + nodes.test_strategist.output.failure_class + '), so this change cannot be verified. Continue anyway? It will be planned, built and reviewed, marked UNTESTED, and can only open as a draft pull request.'"
+          },
+          "payload": {
+            "map": "{'tests': nodes.preflight.output.workspace.tests, 'static_checks': nodes.preflight_b.output.workspace.tests, 'diagnosis': nodes.test_strategist.output, 'consequence': 'No test or build result will back this change. Reviewers still read the code. The pull request opens as a draft marked untested.'}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "acknowledged": {
+                "enum": [
+                  "I understand the change will not be verified by tests"
+                ],
+                "title": "Warning",
+                "description": "Pick this to continue without working tests; reject to stop the run."
+              },
+              "notes": {
+                "type": "string",
+                "title": "Notes"
+              }
+            },
+            "required": [
+              "acknowledged"
+            ],
+            "additionalProperties": false
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "preflight_b_gate",
+          "route": "blocked"
+        }
+      },
+      {
+        "id": "plan",
+        "type": "agent",
+        "deps": [
+          "intake",
+          "preflight_b_ok",
+          "preflight_decision",
+          "preflight_ok"
+        ],
+        "dataDeps": [
+          "intake"
+        ],
+        "def": {
+          "id": "plan",
+          "type": "agent",
+          "description": "Write the requirements and the design in one grounded pass over the repository (requirements-brief, implementation-plan and decision-rubric skills).",
+          "executor": "opencode",
+          "profile": "planner@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/plan.json",
+          "timeout": "30m",
+          "budget": {
+            "max_tool_calls": 14
+          },
+          "merge": "any",
+          "depends_on": [
+            "preflight_ok",
+            "preflight_b_ok",
+            "preflight_decision"
+          ]
+        },
+        "timeoutMs": 1800000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "mode",
+        "type": "script",
+        "deps": [
+          "preflight_b_ok",
+          "preflight_decision",
+          "preflight_ok"
+        ],
+        "dataDeps": [
+          "preflight_b_ok",
+          "preflight_decision",
+          "preflight_ok"
+        ],
+        "def": {
+          "id": "mode",
+          "type": "script",
+          "description": "How this change can be verified: the full tests, static checks only, or nothing (a person accepted that).",
+          "runtime": "python",
+          "entrypoint": "scripts/pick_mode.py",
+          "merge": "any",
+          "depends_on": [
+            "preflight_ok",
+            "preflight_b_ok",
+            "preflight_decision"
+          ],
+          "input": {
+            "map": "{'ok': has(nodes.preflight_ok), 'static': has(nodes.preflight_b_ok), 'untested': has(nodes.preflight_decision)}"
+          },
+          "output_schema": "schemas/mode.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "weight_proposal",
+        "type": "condition",
+        "deps": [
+          "plan"
+        ],
+        "dataDeps": [
+          "plan"
+        ],
+        "def": {
+          "id": "weight_proposal",
+          "type": "condition",
+          "description": "Propose the weight of the change from the design's signals: full when the risk is high, a sensitive area or a migration is touched, the change is wide, or confidence is low; otherwise lite.",
+          "expression": "nodes.plan.output.design.risk == 'high' || nodes.plan.output.design.touches_sensitive || nodes.plan.output.design.has_migration || size(nodes.plan.output.design.files) > config.lite_max_files || nodes.plan.output.design.confidence < config.lite_min_confidence ? 'full' : 'lite'",
+          "routes": {
+            "lite": [],
+            "full": []
+          },
+          "default": "full"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "design_review",
+        "type": "approval",
+        "deps": [
+          "intake",
+          "plan",
+          "weight_proposal"
+        ],
+        "dataDeps": [
+          "intake",
+          "plan",
+          "weight_proposal"
+        ],
+        "def": {
+          "id": "design_review",
+          "type": "approval",
+          "description": "A senior engineer answers the open questions, confirms the design and the review path (lite or full) before any code is written.",
+          "role": "author",
+          "message": {
+            "cel": "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.plan.output.design.summary + '? Proposed review path: ' + nodes.weight_proposal.output.route + ' (risk ' + nodes.plan.output.design.risk + ', ' + string(size(nodes.plan.output.design.files)) + ' file(s)). Answer the ' + string(size(nodes.plan.output.requirements.open_questions) + size(nodes.plan.output.design.open_questions)) + ' open question(s) first.'"
+          },
+          "payload": {
+            "map": "{'open_questions': nodes.plan.output.requirements.open_questions + nodes.plan.output.design.open_questions, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'proposed_weight': {'path': nodes.weight_proposal.output.route, 'risk': nodes.plan.output.design.risk, 'risk_reasons': nodes.plan.output.design.risk_reasons, 'sensitive': nodes.plan.output.design.touches_sensitive, 'migration': nodes.plan.output.design.has_migration, 'files': size(nodes.plan.output.design.files), 'confidence': nodes.plan.output.design.confidence}}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "answers": {
+                "type": "string",
+                "minLength": 1,
+                "title": "Answers to the open questions",
+                "description": "One answer per open question, or: use the recommended defaults"
+              },
+              "notes": {
+                "type": "string",
+                "title": "Notes for the engineer"
+              }
+            },
+            "required": [
+              "answers"
+            ],
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "weight",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "weight",
+          "type": "condition",
+          "description": "v2 has one review path: one independent reviewer, one verifier and a single fix round. Sensitive or migration changes still open as a draft pull request for a person.",
+          "expression": "'lite'",
+          "routes": {
+            "lite": [
+              "lite_review_1"
+            ]
+          },
+          "default": "lite"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "build_mode",
+        "type": "condition",
+        "deps": [
+          "design_review",
+          "mode"
+        ],
+        "dataDeps": [
+          "mode"
+        ],
+        "def": {
+          "id": "build_mode",
+          "type": "condition",
+          "description": "Build with the tests, or without them when a person accepted that the tests cannot run here.",
+          "expression": "nodes.mode.output.mode",
+          "routes": {
+            "tested": [
+              "build"
+            ],
+            "static": [
+              "build_static"
+            ],
+            "untested": [
+              "build_untested"
+            ]
+          },
+          "default": "tested",
+          "depends_on": [
+            "design_review"
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "build",
+        "type": "agent",
+        "deps": [
+          "build_mode",
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "build",
+          "type": "agent",
+          "description": "Implement the approved plan in the checkout; the worker then runs the tests (implement-change and ai-sdlc-governance skills).",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "depends_on": [
+            "design_review"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})\"",
+              "timeout": "15m",
+              "attempts": 3
+            }
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "build_mode",
+          "route": "tested"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "build_untested",
+        "type": "agent",
+        "deps": [
+          "build_mode",
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "build_untested",
+          "type": "agent",
+          "description": "Implement the approved plan when the tests cannot run here (a person accepted that): the same step, with no test run.",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "depends_on": [
+            "design_review"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write"
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "build_mode",
+          "route": "untested"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "build_static",
+        "type": "agent",
+        "deps": [
+          "build_mode",
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "design_review",
+          "intake",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "build_static",
+          "type": "agent",
+          "description": "Implement the approved plan when only typecheck and build can run here: the same step, verified by static checks. It also runs the test files the agent added or changed; a new test that fails blocks the change.",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "depends_on": [
+            "design_review"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('hVPbTtwwEH1faf9hkCpsq8iAVPUhKKCtgF5UqMRuXwpoFZwJGcg6qe3sRUv+vbKdhYVW6pvtM5cz54xVra0D1UAKBn+3ZJAzVVKVTxtTK7SWiaPhQIWowm5HFdvQq/wmc2XANqhpNaTA1SzfA9RzAekxrIcDAGdW8QCgGolLVOOVVjFwDdblVCfASJdoyLGQnMAapJQ9O4l6vufvqOfQQee7+moGXWs0HIRrBypzqtx06rHDiA0HXWBKBXDTas50MwNFsLsL/uSpu1WDqkT1uP1411KVJwu8Y0LAM5slOX64PbolrRBSuMhcKWekuZSysNJgludkwrRMMiFnWcN5EZQprLQucwErhJAFVQ4N5zagVpI9pwq56JM2zzNHM7ywQsB7+IgfXlyjCr1x17dHwwEvWq0c1RoWWfXIczIiylLUBnhMQKgLeMMxJ+MdWZArffPJqkGbgDMtQifEs4exIaTQyIeadExDqbMZbpzxOqMke0oGlavNir/kb1AfDztpCkzXOU5ndd5WaJmXP4LXB7cRl0zESYpN/Q6wshgK7d9Ih9bdyOsHd2uXJ+/2w71vsN229wrSN+IfbfN6lhiOo60iaiub1pZ8DcUekL3ERQJW3pFx5evol+XsNosngvdb2+Lp+Z9SkXXB1nCSFep7V8IJ9Au6hDmFUL+IDN5DiArbsAxp38Y/LqV1hvQ9FSu+lH6PgiMMmPBOjn59+TqdnI0n09PRZPRpND6b/rz6ngBr7itymOzvM+gEJHDg+fnx46yRSi9dJK1xcZ5RhTmkYYA+crO2kdFSBm1E1KBftJwc5v/P3fk7ua5QVvU9Z3GO0dXns8nZaRhoHBThL6yenl53OgFWhBMDP29mLebM/xoWMrfnDI/+gVvBYncvxXPtf/38bjj4Aw==','base64'))+'')\"",
+              "timeout": "15m",
+              "attempts": 3
+            }
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "build_mode",
+          "route": "static"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "change_1",
+        "type": "script",
+        "deps": [
+          "build",
+          "build_static",
+          "build_untested"
+        ],
+        "dataDeps": [
+          "build",
+          "build_static",
+          "build_untested"
+        ],
+        "def": {
+          "id": "change_1",
+          "type": "script",
+          "description": "The build that ran (with or without tests).",
+          "runtime": "python",
+          "entrypoint": "scripts/pick_change.py",
+          "merge": "any",
+          "depends_on": [
+            "build",
+            "build_static",
+            "build_untested"
+          ],
+          "input": {
+            "map": "{'tested': has(nodes.build) ? nodes.build.output : null, 'static': has(nodes.build_static) ? nodes.build_static.output : null, 'untested': has(nodes.build_untested) ? nodes.build_untested.output : null}"
+          },
+          "output_schema": "schemas/change_any.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "lite_review_1",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "plan",
+          "weight"
+        ],
+        "dataDeps": [
+          "change_1",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_review_1",
+          "type": "agent",
+          "description": "One pass over correctness, tests and security of the first build (lite path).",
+          "executor": "opencode",
+          "profile": "lite-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
+          },
+          "output_schema": "schemas/verdict.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "weight",
+          "route": "lite"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "lite_verify_1",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "lite_review_1",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_1",
+          "lite_review_1",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_verify_1",
+          "type": "agent",
+          "description": "Try to refute the critical and major findings of lite review 1 in a fresh checkout (finding-verification skill, a different model).",
+          "executor": "opencode",
+          "profile": "finding-verifier@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+          },
+          "output_schema": "schemas/verification.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "lite_gate_1",
+        "type": "condition",
+        "deps": [
+          "lite_review_1",
+          "lite_verify_1"
+        ],
+        "dataDeps": [
+          "lite_review_1",
+          "lite_verify_1"
+        ],
+        "def": {
+          "id": "lite_gate_1",
+          "type": "condition",
+          "description": "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence; otherwise a fix round.",
+          "expression": "[nodes.lite_review_1.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'",
+          "routes": {
+            "ok": [],
+            "fix": [
+              "fix_mode"
+            ]
+          },
+          "default": "fix"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "fix_mode",
+        "type": "condition",
+        "deps": [
+          "lite_gate_1",
+          "mode"
+        ],
+        "dataDeps": [
+          "mode"
+        ],
+        "def": {
+          "id": "fix_mode",
+          "type": "condition",
+          "description": "Fix with the tests, or without them when a person accepted that the tests cannot run here.",
+          "expression": "nodes.mode.output.mode",
+          "routes": {
+            "tested": [
+              "lite_fix"
+            ],
+            "static": [
+              "lite_fix_static"
+            ],
+            "untested": [
+              "lite_fix_untested"
+            ]
+          },
+          "default": "tested"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "lite_gate_1",
+          "route": "fix"
+        }
+      },
+      {
+        "id": "lite_fix",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "design_review",
+          "fix_mode",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_1",
+          "design_review",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_fix",
+          "type": "agent",
+          "description": "Fix the reviewer's critical and major findings (lite path, the only fix round).",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})\"",
+              "timeout": "15m",
+              "attempts": 3
+            }
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "fix_mode",
+          "route": "tested"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "lite_fix_untested",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "design_review",
+          "fix_mode",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_1",
+          "design_review",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_fix_untested",
+          "type": "agent",
+          "description": "Fix the confirmed findings when the tests cannot run here: the same step, with no test run.",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write"
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "fix_mode",
+          "route": "untested"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "lite_fix_static",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "design_review",
+          "fix_mode",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_1",
+          "design_review",
+          "intake",
+          "lite_review_1",
+          "lite_verify_1",
+          "mode",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_fix_static",
+          "type": "agent",
+          "description": "Fix the confirmed findings when only typecheck and build can run here. It also runs the test files the agent added or changed; a new test that fails blocks the change.",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('hVPbTtwwEH1faf9hkCpsq8iAVPUhKKCtgF5UqMRuXwpoFZwJGcg6qe3sRUv+vbKdhYVW6pvtM5cz54xVra0D1UAKBn+3ZJAzVVKVTxtTK7SWiaPhQIWowm5HFdvQq/wmc2XANqhpNaTA1SzfA9RzAekxrIcDAGdW8QCgGolLVOOVVjFwDdblVCfASJdoyLGQnMAapJQ9O4l6vufvqOfQQee7+moGXWs0HIRrBypzqtx06rHDiA0HXWBKBXDTas50MwNFsLsL/uSpu1WDqkT1uP1411KVJwu8Y0LAM5slOX64PbolrRBSuMhcKWekuZSysNJgludkwrRMMiFnWcN5EZQprLQucwErhJAFVQ4N5zagVpI9pwq56JM2zzNHM7ywQsB7+IgfXlyjCr1x17dHwwEvWq0c1RoWWfXIczIiylLUBnhMQKgLeMMxJ+MdWZArffPJqkGbgDMtQifEs4exIaTQyIeadExDqbMZbpzxOqMke0oGlavNir/kb1AfDztpCkzXOU5ndd5WaJmXP4LXB7cRl0zESYpN/Q6wshgK7d9Ih9bdyOsHd2uXJ+/2w71vsN229wrSN+IfbfN6lhiOo60iaiub1pZ8DcUekL3ERQJW3pFx5evol+XsNosngvdb2+Lp+Z9SkXXB1nCSFep7V8IJ9Au6hDmFUL+IDN5DiArbsAxp38Y/LqV1hvQ9FSu+lH6PgiMMmPBOjn59+TqdnI0n09PRZPRpND6b/rz6ngBr7itymOzvM+gEJHDg+fnx46yRSi9dJK1xcZ5RhTmkYYA+crO2kdFSBm1E1KBftJwc5v/P3fk7ua5QVvU9Z3GO0dXns8nZaRhoHBThL6yenl53OgFWhBMDP29mLebM/xoWMrfnDI/+gVvBYncvxXPtf/38bjj4Aw==','base64'))+'')\"",
+              "timeout": "15m",
+              "attempts": 3
+            }
+          },
+          "input": {
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "fix_mode",
+          "route": "static"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "change_2",
+        "type": "script",
+        "deps": [
+          "lite_fix",
+          "lite_fix_static",
+          "lite_fix_untested"
+        ],
+        "dataDeps": [
+          "lite_fix",
+          "lite_fix_static",
+          "lite_fix_untested"
+        ],
+        "def": {
+          "id": "change_2",
+          "type": "script",
+          "description": "The fix that ran (with or without tests).",
+          "runtime": "python",
+          "entrypoint": "scripts/pick_change.py",
+          "merge": "any",
+          "depends_on": [
+            "lite_fix",
+            "lite_fix_static",
+            "lite_fix_untested"
+          ],
+          "input": {
+            "map": "{'tested': has(nodes.lite_fix) ? nodes.lite_fix.output : null, 'static': has(nodes.lite_fix_static) ? nodes.lite_fix_static.output : null, 'untested': has(nodes.lite_fix_untested) ? nodes.lite_fix_untested.output : null}"
+          },
+          "output_schema": "schemas/change_any.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "lite_changed",
+        "type": "condition",
+        "deps": [
+          "change_1",
+          "change_2"
+        ],
+        "dataDeps": [
+          "change_1",
+          "change_2"
+        ],
+        "def": {
+          "id": "lite_changed",
+          "type": "condition",
+          "description": "Review the fix only when it changed the diff; an identical diff has nothing new to review.",
+          "expression": "nodes.change_2.output.workspace.diff != nodes.change_1.output.workspace.diff ? 'changed' : 'same'",
+          "routes": {
+            "changed": [
+              "lite_review_2"
+            ],
+            "same": []
+          },
+          "default": "changed"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "lite_review_2",
+        "type": "agent",
+        "deps": [
+          "change_2",
+          "lite_changed",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_2",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_review_2",
+          "type": "agent",
+          "description": "Review the fixed change (lite path).",
+          "executor": "opencode",
+          "profile": "lite-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
+          },
+          "output_schema": "schemas/verdict.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "lite_changed",
+          "route": "changed"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "lite_verify_2",
+        "type": "agent",
+        "deps": [
+          "change_2",
+          "lite_review_2",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_2",
+          "lite_review_2",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_verify_2",
+          "type": "agent",
+          "description": "Try to refute the critical and major findings of the last lite review in a fresh checkout (finding-verification skill, a different model).",
+          "executor": "opencode",
+          "profile": "finding-verifier@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}, 'findings': [{'reviewer': 'lite', 'findings': nodes.lite_review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}]}"
+          },
+          "output_schema": "schemas/verification.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "finalize",
+        "type": "script",
+        "deps": [
+          "change_1",
+          "change_2",
+          "design_review",
+          "lite_review_1",
+          "lite_review_2",
+          "lite_verify_1",
+          "lite_verify_2",
+          "mode",
+          "test_strategist",
+          "weight_proposal"
+        ],
+        "dataDeps": [
+          "change_1",
+          "change_2",
+          "design_review",
+          "lite_review_1",
+          "lite_review_2",
+          "lite_verify_1",
+          "lite_verify_2",
+          "mode",
+          "test_strategist",
+          "weight_proposal"
+        ],
+        "def": {
+          "id": "finalize",
+          "type": "script",
+          "description": "Pick the last build that ran, aggregate its verdicts (approved only if no critical or major finding survived the verifier, no injection) and write the evidence record.",
+          "runtime": "python",
+          "entrypoint": "scripts/finalize.py",
+          "merge": "any",
+          "input": {
+            "map": "{'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy': has(nodes.test_strategist) ? nodes.test_strategist.output : null, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by': null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.change_1) ? nodes.change_1.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.change_2) ? nodes.change_2.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': []}"
+          },
+          "output_schema": "schemas/finalize.json",
+          "limits": {
+            "time": "2m"
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "ship_gate",
+        "type": "condition",
+        "deps": [
+          "finalize"
+        ],
+        "dataDeps": [
+          "finalize"
+        ],
+        "def": {
+          "id": "ship_gate",
+          "type": "condition",
+          "description": "Ship to approval only when the tests passed and there is a change. Open findings do not block; they flag the pull request for a person.",
+          "expression": "nodes.finalize.output.ship ? 'ship' : 'fix'",
+          "routes": {
+            "ship": [
+              "release_approval"
+            ],
+            "fix": [
+              "send_back"
+            ]
+          },
+          "default": "fix"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release_approval",
+        "type": "approval",
+        "deps": [
+          "finalize",
+          "intake",
+          "ship_gate",
+          "weight"
+        ],
+        "dataDeps": [
+          "finalize",
+          "intake",
+          "weight"
+        ],
+        "def": {
+          "id": "release_approval",
+          "type": "approval",
+          "description": "The release owner approves the exact change, its reviews and its evidence record before a branch is pushed.",
+          "role": "admin",
+          "message": {
+            "cel": "'Push ' + string(nodes.finalize.output.change.stats.files) + ' changed file(s) for ' + nodes.intake.output.key + ' to ' + inputs.repo + ' and open a ' + (nodes.finalize.output.needs_human_attention ? 'draft ' : '') + 'pull request? Tests ' + nodes.finalize.output.change.tests.status + ', review path ' + nodes.weight.output.route + (nodes.finalize.output.needs_human_attention ? ', reviewers still have critical or major findings' : ', reviewers approve') + '.' + (nodes.finalize.output.verification == 'none' ? ' WARNING: UNTESTED - nothing could run, so this opens as a draft.' : (nodes.finalize.output.verification == 'static' ? ' NOTICE: static checks only (typecheck and build) - the tests could not run, so this opens as a draft.' : ''))"
+          },
+          "payload": {
+            "map": "{'criteria': nodes.finalize.output.criteria, 'criteria_counts': nodes.finalize.output.criteria_counts, 'closes_removed': nodes.finalize.output.closes_removed, 'targeted_tests': nodes.finalize.output.targeted_tests, 'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title': nodes.finalize.output.change.pr_title, 'stats': nodes.finalize.output.change.stats, 'diff': nodes.finalize.output.change.diff, 'tests': nodes.finalize.output.change.tests, 'review_path': nodes.weight.output.route, 'fix_rounds_used': nodes.finalize.output.round, 'needs_human_attention': nodes.finalize.output.needs_human_attention, 'verdict': nodes.finalize.output.verdict, 'evidence': nodes.finalize.output.evidence}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "ship_gate",
+          "route": "ship"
+        }
+      },
+      {
+        "id": "push_branch",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "intake",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "finalize",
+          "intake"
+        ],
+        "def": {
+          "id": "push_branch",
+          "type": "tool",
+          "description": "Commit the change onto the base commit and push it as an azhi/ branch (Git Data API).",
+          "tool": "github.push-branch@1",
+          "depends_on": [
+            "release_approval"
+          ],
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "branch": {
+              "cel": "'azhi/' + nodes.intake.output.key"
+            },
+            "base_sha": {
+              "ref": "nodes.finalize.output.change.base_sha"
+            },
+            "message": {
+              "cel": "nodes.finalize.output.change.commit_message + '\\n\\nRefs: ' + nodes.intake.output.key"
+            },
+            "files": {
+              "ref": "nodes.finalize.output.change.files"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "open_pr",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "intake",
+          "plan",
+          "push_branch",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "finalize",
+          "intake",
+          "plan",
+          "push_branch",
+          "release_approval"
+        ],
+        "def": {
+          "id": "open_pr",
+          "type": "tool",
+          "description": "Open a pull request for the branch (draft when reviewers still have findings), or return the one already open.",
+          "tool": "github.create-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "head": {
+              "ref": "nodes.push_branch.output.branch"
+            },
+            "base": {
+              "cel": "has(inputs.base_branch) ? inputs.base_branch : ''"
+            },
+            "title": {
+              "ref": "nodes.finalize.output.change.pr_title"
+            },
+            "body": {
+              "cel": "nodes.finalize.output.change.pr_body + '\\n\\n' + nodes.finalize.output.evidence_markdown + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (ai-sdlc) after a person approved this change._'"
+            },
+            "draft": {
+              "cel": "nodes.finalize.output.needs_human_attention || nodes.finalize.output.verification != 'full' || nodes.plan.output.design.touches_sensitive || nodes.plan.output.design.has_migration"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release",
+        "type": "notify",
+        "deps": [
+          "finalize",
+          "intake",
+          "open_pr"
+        ],
+        "dataDeps": [
+          "finalize",
+          "intake",
+          "open_pr"
+        ],
+        "def": {
+          "id": "release",
+          "type": "notify",
+          "description": "Announce the pull request.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'Pull request for ' + nodes.intake.output.key + ': ' + nodes.open_pr.output.url + ' (' + nodes.finalize.output.change.summary + ')' + (nodes.finalize.output.needs_human_attention ? ' - needs human attention: reviewers still have findings' : '')"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "send_back",
+        "type": "notify",
+        "deps": [
+          "finalize",
+          "intake",
+          "ship_gate"
+        ],
+        "dataDeps": [
+          "finalize",
+          "intake"
+        ],
+        "def": {
+          "id": "send_back",
+          "type": "notify",
+          "description": "Send the change back with the reasons (tests failed, or nothing changed).",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).'"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "ship_gate",
+          "route": "fix"
+        }
+      },
+      {
+        "id": "retro",
+        "type": "report",
+        "deps": [
+          "dor_check",
+          "finalize",
+          "intake",
+          "open_pr",
+          "plan",
+          "push_branch",
+          "release",
+          "weight"
+        ],
+        "dataDeps": [
+          "dor_check",
+          "finalize",
+          "intake",
+          "open_pr",
+          "plan",
+          "push_branch",
+          "weight"
+        ],
+        "def": {
+          "id": "retro",
+          "type": "report",
+          "description": "Write the delivery record and retro notes (planned vs actual).",
+          "depends_on": [
+            "release"
+          ],
+          "template": "templates/retro.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'dor': nodes.dor_check.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'weight': nodes.weight.output.route, 'final': nodes.finalize.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "dor_check": "output of tainted agent dor_check",
+        "dor_gate": "output of tainted agent dor_check",
+        "dor_message": "output of tainted agent dor_check",
+        "dor_send_back": "output of tainted agent dor_check",
+        "preflight": "output of tainted agent preflight",
+        "preflight_gate": "output of tainted agent preflight",
+        "test_strategist": "output of tainted agent test_strategist",
+        "preflight_b": "output of tainted agent preflight_b",
+        "preflight_b_gate": "output of tainted agent preflight_b",
+        "static_notice": "output of tainted agent test_strategist",
+        "preflight_notify": "output of tainted agent test_strategist",
+        "plan": "output of tainted agent plan",
+        "weight_proposal": "output of tainted agent plan",
+        "build": "output of tainted agent build",
+        "build_untested": "output of tainted agent build_untested",
+        "build_static": "output of tainted agent build_static",
+        "change_1": "output of tainted agent build",
+        "lite_review_1": "output of tainted agent lite_review_1",
+        "lite_verify_1": "output of tainted agent lite_verify_1",
+        "lite_gate_1": "output of tainted agent lite_review_1",
+        "lite_fix": "output of tainted agent lite_fix",
+        "lite_fix_untested": "output of tainted agent lite_fix_untested",
+        "lite_fix_static": "output of tainted agent lite_fix_static",
+        "change_2": "output of tainted agent lite_fix",
+        "lite_changed": "output of tainted agent build",
+        "lite_review_2": "output of tainted agent lite_review_2",
+        "lite_verify_2": "output of tainted agent lite_verify_2",
+        "finalize": "output of tainted agent build",
+        "ship_gate": "output of tainted agent build",
+        "push_branch": "output of tainted agent build",
+        "open_pr": "output of tainted agent build",
+        "release": "output of tainted agent build",
+        "send_back": "output of tainted agent build",
+        "retro": "output of tainted agent dor_check"
+      },
+      "tainted": {
+        "dor_check": "reads a cloned repository (its files are untrusted)",
+        "preflight": "reads a cloned repository (its files are untrusted)",
+        "test_strategist": "reads a cloned repository (its files are untrusted)",
+        "preflight_b": "reads a cloned repository (its files are untrusted)",
+        "plan": "reads a cloned repository (its files are untrusted)",
+        "build": "reads a cloned repository (its files are untrusted)",
+        "build_untested": "reads a cloned repository (its files are untrusted)",
+        "build_static": "reads a cloned repository (its files are untrusted)",
+        "lite_review_1": "reads a cloned repository (its files are untrusted)",
+        "lite_verify_1": "reads a cloned repository (its files are untrusted)",
+        "lite_fix": "reads a cloned repository (its files are untrusted)",
+        "lite_fix_untested": "reads a cloned repository (its files are untrusted)",
+        "lite_fix_static": "reads a cloned repository (its files are untrusted)",
+        "lite_review_2": "reads a cloned repository (its files are untrusted)",
+        "lite_verify_2": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "dor_check",
+          "write": "dor_send_back",
+          "path": [
+            "dor_check",
+            "dor_message",
+            "dor_send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "preflight",
+          "write": "send_back",
+          "path": [
+            "preflight",
+            "…",
+            "preflight_decision",
+            "…",
+            "send_back"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "preflight",
+          "write": "release",
+          "path": [
+            "preflight",
+            "…",
+            "preflight_decision",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "static_notice",
+          "path": [
+            "test_strategist",
+            "static_notice"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "preflight_notify",
+          "path": [
+            "test_strategist",
+            "preflight_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "release",
+          "path": [
+            "test_strategist",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "send_back",
+          "path": [
+            "test_strategist",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "send_back",
+          "path": [
+            "test_strategist",
+            "…",
+            "preflight_decision",
+            "…",
+            "send_back"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "release",
+          "path": [
+            "test_strategist",
+            "…",
+            "preflight_decision",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "test_strategist",
+          "write": "release",
+          "path": [
+            "test_strategist",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "preflight_b",
+          "write": "send_back",
+          "path": [
+            "preflight_b",
+            "…",
+            "preflight_decision",
+            "…",
+            "send_back"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "preflight_b",
+          "write": "release",
+          "path": [
+            "preflight_b",
+            "…",
+            "preflight_decision",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "plan",
+          "write": "release",
+          "path": [
+            "plan",
+            "open_pr",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "plan",
+          "write": "send_back",
+          "path": [
+            "plan",
+            "weight_proposal",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "plan",
+          "write": "send_back",
+          "path": [
+            "plan",
+            "…",
+            "design_review",
+            "…",
+            "send_back"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "plan",
+          "write": "release",
+          "path": [
+            "plan",
+            "…",
+            "design_review",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "plan",
+          "write": "release",
+          "path": [
+            "plan",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "build",
+          "write": "release",
+          "path": [
+            "build",
+            "change_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build",
+          "write": "send_back",
+          "path": [
+            "build",
+            "change_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build",
+          "write": "release",
+          "path": [
+            "build",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "build_untested",
+          "write": "release",
+          "path": [
+            "build_untested",
+            "change_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build_untested",
+          "write": "send_back",
+          "path": [
+            "build_untested",
+            "change_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build_untested",
+          "write": "release",
+          "path": [
+            "build_untested",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "build_static",
+          "write": "release",
+          "path": [
+            "build_static",
+            "change_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build_static",
+          "write": "send_back",
+          "path": [
+            "build_static",
+            "change_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "build_static",
+          "write": "release",
+          "path": [
+            "build_static",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_review_1",
+          "write": "release",
+          "path": [
+            "lite_review_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_review_1",
+          "write": "send_back",
+          "path": [
+            "lite_review_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_review_1",
+          "write": "release",
+          "path": [
+            "lite_review_1",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_verify_1",
+          "write": "release",
+          "path": [
+            "lite_verify_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_verify_1",
+          "write": "send_back",
+          "path": [
+            "lite_verify_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_verify_1",
+          "write": "release",
+          "path": [
+            "lite_verify_1",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_fix",
+          "write": "release",
+          "path": [
+            "lite_fix",
+            "change_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix",
+          "write": "send_back",
+          "path": [
+            "lite_fix",
+            "change_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix",
+          "write": "release",
+          "path": [
+            "lite_fix",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_fix_untested",
+          "write": "release",
+          "path": [
+            "lite_fix_untested",
+            "change_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix_untested",
+          "write": "send_back",
+          "path": [
+            "lite_fix_untested",
+            "change_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix_untested",
+          "write": "release",
+          "path": [
+            "lite_fix_untested",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_fix_static",
+          "write": "release",
+          "path": [
+            "lite_fix_static",
+            "change_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix_static",
+          "write": "send_back",
+          "path": [
+            "lite_fix_static",
+            "change_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_fix_static",
+          "write": "release",
+          "path": [
+            "lite_fix_static",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_review_2",
+          "write": "release",
+          "path": [
+            "lite_review_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_review_2",
+          "write": "send_back",
+          "path": [
+            "lite_review_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_review_2",
+          "write": "release",
+          "path": [
+            "lite_review_2",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_verify_2",
+          "write": "release",
+          "path": [
+            "lite_verify_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_verify_2",
+          "write": "send_back",
+          "path": [
+            "lite_verify_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_verify_2",
+          "write": "release",
+          "path": [
+            "lite_verify_2",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        }
+      ]
+    }
+  }
+}

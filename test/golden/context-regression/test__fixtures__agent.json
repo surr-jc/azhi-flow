@@ -1,0 +1,143 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "agent-check",
+    "definitionHash": "sha256:0893b5370b1f56232798f15fb0aa973e3c9b4c3e06506ec352c949bf6f1a5b97",
+    "config": {
+      "channel": "C-QUALITY"
+    },
+    "nodes": [
+      {
+        "id": "fetch",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "fetch",
+          "type": "tool",
+          "tool": "ci.list-runs@1",
+          "arguments": {
+            "team": "payments"
+          },
+          "project": [
+            "id",
+            "status"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "explain",
+        "type": "agent",
+        "deps": [
+          "fetch"
+        ],
+        "dataDeps": [
+          "fetch"
+        ],
+        "def": {
+          "id": "explain",
+          "type": "agent",
+          "profile": "analyst@1",
+          "input": {
+            "map": "{'runs': nodes.fetch.output}"
+          },
+          "tools": [
+            "ci.list-runs@1"
+          ],
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "failed": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "summary",
+              "failed"
+            ],
+            "additionalProperties": false
+          },
+          "budget": {
+            "max_tool_calls": 3
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "failed": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "summary",
+            "failed"
+          ],
+          "additionalProperties": false
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "post",
+        "type": "notify",
+        "deps": [
+          "explain"
+        ],
+        "dataDeps": [
+          "explain"
+        ],
+        "def": {
+          "id": "post",
+          "type": "notify",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.explain.output.summary"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

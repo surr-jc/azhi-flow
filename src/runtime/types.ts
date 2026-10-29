@@ -10,6 +10,8 @@ export interface RunFlags {
   termination_unconfirmed?: boolean;
   interrupted_sessions?: string[];
   usage_incomplete?: boolean;
+  /** `node.field` for every input field a context_budget withheld from an agent, so people know what it did not see. */
+  context_withheld?: string[];
 }
 
 export type NodeStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';

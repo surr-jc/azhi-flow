@@ -138,6 +138,16 @@ export const workflowSchema = {
           },
           additionalProperties: false,
         },
+        context_budget: {
+          type: 'object',
+          properties: {
+            max_item_bytes: { type: 'integer', minimum: 256 },
+            max_input_bytes: { type: 'integer', minimum: 1024 },
+            on_exceed: { enum: ['fail', 'withhold'] },
+          },
+          minProperties: 1,
+          additionalProperties: false,
+        },
         requires: { type: 'object', properties: { enforced_restrictions: { type: 'boolean' } }, additionalProperties: false },
         workspace: {
           type: 'object',

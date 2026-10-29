@@ -813,6 +813,14 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
     else b[k] = v;
     set('budget', Object.keys(b).length ? b : undefined);
   };
+  const cap: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: string } = step.context_budget ?? {};
+  const setCap = (k: string, v: number | string | undefined) => {
+    const c: Record<string, unknown> = { ...cap };
+    if (v === undefined || (typeof v === 'number' && Number.isNaN(v))) delete c[k];
+    else c[k] = v;
+    // The block goes away with its last key (the schema wants at least one); a mode alone caps nothing.
+    set('context_budget', Object.keys(c).length ? c : undefined);
+  };
   const provider = doc?.model?.provider;
   const modelProvider = PROFILE_PROVIDER_MODELS[provider ?? ''];
   const modelList = useQuery({
@@ -977,6 +985,24 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
           <input type="number" min="0" step="0.01" value={budget.max_cost_usd ?? ''} onChange={(e) => setBudget('max_cost_usd', e.target.value === '' ? undefined : Number(e.target.value))} />
         </label>
       </div>
+      </HbSection>
+
+      <HbSection icon="gate" title="Input cap" summary={Object.keys(cap).length ? [cap.max_item_bytes !== undefined ? `${cap.max_item_bytes} bytes per field` : '', cap.max_input_bytes !== undefined ? `${cap.max_input_bytes} bytes in all` : '', cap.on_exceed === 'withhold' ? 'withhold' : 'fail'].filter(Boolean).join(' · ') : 'No cap set'}>
+        <div className="row wrap">
+          <label>Bytes per field
+            <input type="number" min="256" value={cap.max_item_bytes ?? ''} onChange={(e) => setCap('max_item_bytes', e.target.value === '' ? undefined : Number(e.target.value))} />
+          </label>
+          <label>Bytes in all
+            <input type="number" min="1024" value={cap.max_input_bytes ?? ''} onChange={(e) => setCap('max_input_bytes', e.target.value === '' ? undefined : Number(e.target.value))} />
+          </label>
+          <label>When over the cap
+            <select value={cap.on_exceed ?? 'fail'} onChange={(e) => setCap('on_exceed', e.target.value === 'fail' ? undefined : e.target.value)}>
+              <option value="fail">Stop the step</option>
+              <option value="withhold">Withhold the largest fields</option>
+            </select>
+          </label>
+        </div>
+        <p className="muted small">{cap.on_exceed === 'withhold' ? 'A withheld field is recorded on the run and shown to approvers. The agent is told it cannot read it, so only use this where the step can do without it.' : 'The step stops with budget_exceeded instead of sending more than the cap to the model.'}</p>
       </HbSection>
     </div>
   );

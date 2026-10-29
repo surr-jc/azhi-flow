@@ -1,0 +1,113 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "caller",
+    "definitionHash": "sha256:12e14cdff1a0d78cf4e481930a1e0394ace994df6c847176aea517d80d03bbc0",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x"
+      ]
+    },
+    "config": {},
+    "nodes": [
+      {
+        "id": "child",
+        "type": "subworkflow",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "child",
+          "type": "subworkflow",
+          "workflow": "doubler",
+          "input": {
+            "x": {
+              "ref": "inputs.x"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "plus_one",
+        "type": "script",
+        "deps": [
+          "child"
+        ],
+        "dataDeps": [
+          "child"
+        ],
+        "def": {
+          "id": "plus_one",
+          "type": "script",
+          "runtime": "python",
+          "entrypoint": "scripts/inc.py",
+          "input": {
+            "map": "{'n': nodes.child.output.nodes.double.doubled}"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "n"
+            ]
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "n"
+          ]
+        },
+        "timeoutMs": 600000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "child": "output of a subworkflow is not marked trusted",
+        "plus_one": "derived from child"
+      },
+      "tainted": {},
+      "paths": []
+    }
+  }
+}
