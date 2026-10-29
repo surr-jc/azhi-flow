@@ -50,6 +50,8 @@ export interface ScriptNode extends NodeCommon {
   entrypoint: string;
   lockfile?: string;
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   output_schema?: string | JsonSchema;
   limits?: { time?: string; memory_mb?: number };
 }
@@ -59,6 +61,8 @@ export interface AgentNode extends NodeCommon {
   executor?: string;
   profile: string;
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   datasets?: string[];
   tools?: string[];
   output_schema: string | JsonSchema;
@@ -160,6 +164,8 @@ export interface ReportNode extends NodeCommon {
   template: string;
   format?: 'markdown' | 'html' | 'csv';
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   summary?: Value;
 }
 
@@ -195,6 +201,11 @@ export interface WorkflowDefinition {
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;
+  /**
+   * Named sets of upstream values several steps need. A step lists `context: [name]`; the compiler adds the
+   * bundle's keys to the step's `input`, so a bundle is only a way to write the same input once.
+   */
+  contexts?: Record<string, Record<string, Value>>;
   /** Provider and model for every agent step whose profile says `name: default`; a run may override it. Steps that name a model keep it. */
   model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
   nodes: NodeDef[];

@@ -185,6 +185,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
+        ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
         ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}) } } : {}),
@@ -249,6 +250,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
         ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
+        ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
       });
