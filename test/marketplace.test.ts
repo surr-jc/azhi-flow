@@ -89,6 +89,10 @@ describe('GitHub plugin marketplaces', () => {
     expect(found.at(-1)).toMatchObject({ repo: 'amd/skills', ref: 'abc123' });
     expect(unlisted).toEqual([]);
   });
+  it('finds skills kept under .claude/ in the plugin folder, not duplicated copies elsewhere', () => {
+    const { found } = locate([{ name: 'ui', source: './' }] as any, ['.claude/skills/ui-ux-pro-max/SKILL.md', '.claude/skills/ui-ux-pro-max/data/x.md', 'cli/assets/skills/brand/SKILL.md']);
+    expect(found.map((f) => `${f.kind}:${f.path}`)).toEqual(['skill:.claude/skills/ui-ux-pro-max/SKILL.md']);
+  });
   it('says which plugins it could not list when the tree is unavailable', () => {
     const { found, unlisted } = locate(plugins as any, undefined);
     expect(found).toHaveLength(3);

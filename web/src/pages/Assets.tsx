@@ -89,7 +89,7 @@ function Discover({ kind, canEdit, onImported }: { kind: Kind; canEdit: boolean;
         <label className="lib-q"><Icon name="search" size={18} /><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${kind === 'mcp' ? 'MCP servers' : KINDS[kind].label.toLowerCase()} in live marketplaces`} aria-label={`Search ${KINDS[kind].label}`} autoComplete="off" /></label>
         {sources.length > 1 ? <select aria-label="Marketplace" value={source} onChange={(e) => setSource(e.target.value)}><option value="">All marketplaces</option>{sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select> : null}
       </div>
-      <p className="muted small lib-sources">Searching: {sources.length ? sources.map((s) => s.name).join(', ') : '…'}. Results come live from each marketplace. Nothing runs and nothing is saved until you import.</p>
+      <p className="muted small lib-sources">Searching: {sources.length ? (source ? sources.filter((s) => s.id === source) : sources).map((s) => s.name).join(', ') : '…'}. Results come live from each marketplace. Nothing runs and nothing is saved until you import.</p>
       {pages[0]?.disabled ? <div className="update-note" role="status">The marketplace is turned off for this workspace. An admin can turn it on below.</div> : null}
       {warnings.map((w) => <div key={w.source + w.message} className="update-note" role="status"><b>{sources.find((x) => x.id === w.source)?.name ?? w.source}:</b> {w.message}</div>)}
       <ErrorNote error={res.error} />
@@ -148,11 +148,17 @@ function Mine({ kind, assets, error, canEdit }: { kind: Kind; assets?: Asset[]; 
   const refresh = () => qc.invalidateQueries({ queryKey: ['portable-assets'] });
   const publish = useMutation({ mutationFn: (id: string) => api(`/v1/assets/${id}/publish`, { method: 'POST' }), onSuccess: refresh });
   const archive = useMutation({ mutationFn: (id: string) => api(`/v1/assets/${id}/archive`, { method: 'POST' }), onSuccess: refresh });
-  const attach = useMutation({ mutationFn: ({ slug, id }: { slug: string; id: string }) => api(`/v1/workflows/${encodeURIComponent(slug)}/assets`, { method: 'POST', body: { asset_id: id } }) });
+  const [attachedMsg, setAttachedMsg] = useState<string | null>(null);
+  const attach = useMutation({
+    mutationFn: ({ slug, id }: { slug: string; id: string; name: string }) => api(`/v1/workflows/${encodeURIComponent(slug)}/assets`, { method: 'POST', body: { asset_id: id } }),
+    onMutate: () => setAttachedMsg(null),
+    onSuccess: (_r, v) => { setAttachedMsg(`Attached ${v.name} to ${v.slug}. See it under Library items in that workflow's settings.`); void qc.invalidateQueries({ queryKey: ['workflow-assets', v.slug] }); },
+  });
   const shown = assets?.filter((a) => a.kind === kind && a.status !== 'archived') ?? [];
   return (
     <>
       <ErrorNote error={error ?? publish.error ?? archive.error ?? attach.error} />
+      {attachedMsg ? <p className="ok-note" role="status">{attachedMsg}</p> : null}
       {!assets ? <Loading /> : !shown.length ? <p className="muted lib-empty">Nothing in your {KINDS[kind].label.toLowerCase()} library yet. Use <b>Discover</b> to import one, or write your own.</p> : null}
       <div className="lib-list">
         {shown.map((a) => {
@@ -174,7 +180,7 @@ function Mine({ kind, assets, error, canEdit }: { kind: Kind; assets?: Asset[]; 
               <div className="lib-row-actions">
                 <button type="button" onClick={() => setSetup(setup === a.id ? null : a.id)} aria-expanded={setup === a.id}>Use in a harness</button>
                 {canEdit && a.status !== 'published' ? <button type="button" className="primary" onClick={() => publish.mutate(a.id)}>Publish</button> : null}
-                {a.status === 'published' && workflows.data?.length ? <select aria-label={`Attach ${a.name}`} defaultValue="" onChange={(e) => { if (e.target.value) attach.mutate({ slug: e.target.value, id: a.id }); e.currentTarget.value = ''; }}><option value="">Attach to workflow…</option>{workflows.data.map((w) => <option value={w.slug} key={w.slug}>{w.slug}</option>)}</select> : null}
+                {a.status === 'published' && workflows.data?.length ? <select aria-label={`Attach ${a.name}`} defaultValue="" onChange={(e) => { if (e.target.value) attach.mutate({ slug: e.target.value, id: a.id, name: a.name }); e.currentTarget.value = ''; }}><option value="">Attach to workflow…</option>{workflows.data.map((w) => <option value={w.slug} key={w.slug}>{w.slug}</option>)}</select> : null}
                 {canEdit ? <button type="button" onClick={() => archive.mutate(a.id)}>Archive</button> : null}
               </div>
               {setup === a.id ? <AssetGuides id={a.id} /> : null}

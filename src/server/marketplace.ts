@@ -285,10 +285,13 @@ export function locate(plugins: Plugin[], tree: string[] | undefined): { found: 
     if (!tree) { unlisted.push(plugin.name); continue; }
     const base = clean(plugin.source);
     const at = (rest: string) => (base ? `${base}/${rest}` : rest);
-    for (const f of tree) {
-      if (f.startsWith(at('agents/')) && f.endsWith('.md')) found.push({ kind: 'agent', path: f, plugin });
-      else if (f.startsWith(at('commands/')) && f.endsWith('.md')) found.push({ kind: 'command', path: f, plugin });
-      else if (f.startsWith(at('skills/')) && f.endsWith('/SKILL.md') && f.split('/').length === at('skills/x/SKILL.md').split('/').length) found.push({ kind: 'skill', path: f, plugin });
+    // Some plugins keep their files under .claude/ (agents, commands, skills) instead of at the plugin root.
+    for (const root of ['', '.claude/']) {
+      for (const f of tree) {
+        if (f.startsWith(at(`${root}agents/`)) && f.endsWith('.md')) found.push({ kind: 'agent', path: f, plugin });
+        else if (f.startsWith(at(`${root}commands/`)) && f.endsWith('.md')) found.push({ kind: 'command', path: f, plugin });
+        else if (f.startsWith(at(`${root}skills/`)) && f.endsWith('/SKILL.md') && f.split('/').length === at(`${root}skills/x/SKILL.md`).split('/').length) found.push({ kind: 'skill', path: f, plugin });
+      }
     }
   }
   return { found, unlisted };
@@ -343,7 +346,8 @@ export async function search(deps: MarketDeps, sources: MarketSource[], input: S
   const page = filtered.slice(offset, offset + limit);
   items.push(...page);
   if (offset + limit < filtered.length) next = `o:${offset + limit}`;
-  return { items, ...(next ? { next_cursor: next } : {}), warnings, sources: usable.map((s) => ({ id: s.id, name: s.name })) };
+  // Every marketplace for this kind, not just the one searched, so the picker can switch back.
+  return { items, ...(next ? { next_cursor: next } : {}), warnings, sources: sources.filter((s) => s.kinds.includes(input.kind)).map((s) => ({ id: s.id, name: s.name })) };
 }
 
 /** Fetches one item and turns it into a portable definition. This is what a preview shows and what an import stores. */

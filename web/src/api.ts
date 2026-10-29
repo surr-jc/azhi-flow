@@ -197,9 +197,22 @@ export function getTheme(): Theme {
   }
 }
 
+/** Colours the browser's own chrome (address bar, installed-app title bar) like the top bar, so it follows the chosen theme. */
+export function syncChromeColor(): void {
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+  }
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  if (bg) meta.content = bg;
+}
+
 export function applyTheme(t: Theme): void {
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
+  syncChromeColor();
   try {
     if (t === 'system') localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, t);
