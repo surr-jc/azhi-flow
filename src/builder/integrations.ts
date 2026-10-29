@@ -1,4 +1,5 @@
 import { OPENCODE_READ_TOOLS } from '../agents/profile.js';
+import { checkEgress } from '../gateway/egress.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { addMcpServer, listAssets, validateAsset, type AssetKind, type AssetScope, type PortableDefinition } from '../server/assets.js';
 import type { AppContext } from '../server/context.js';
@@ -9,6 +10,27 @@ import { defaultDeps, marketConfig, resolve, search, sourcesFor, type MarketDeps
  * commands, the gateway's MCP connections, the harness's built-in tools, and live marketplaces. It also
  * checks and stores the MCP server a person confirms in chat.
  */
+
+/** A hosted MCP server the builder proposes to connect to the gateway. An admin's click creates it and starts sign-in; nothing is stored before. */
+export interface BuilderMcpConnectionProposal { tool_use_id: string; summary: string; name: string; url: string; auth_kind: 'none' | 'oauth' }
+
+/** Checks a proposed gateway connection the way creating it will, so the person is only offered one that can work. Throws a repairable message. */
+export async function checkMcpConnectionProposal(ctx: AppContext, workspaceId: string, raw: unknown): Promise<Omit<BuilderMcpConnectionProposal, 'tool_use_id' | 'summary'>> {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const errors: string[] = [];
+  const name = typeof o.name === 'string' ? o.name : '';
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) errors.push('name must use lower-case letters, digits, dots, dashes or underscores');
+  const auth_kind = o.auth_kind === 'none' ? 'none' : 'oauth';
+  let url = '';
+  try {
+    const u = new URL(String(o.url));
+    if (u.protocol !== 'https:') errors.push('url must be an https URL');
+    else { await checkEgress(u.toString()); url = u.toString(); }
+  } catch (e) { errors.push(e instanceof AzhiError ? e.message : 'url must be an https URL'); }
+  if (!errors.length && (await ctx.pool.query(`SELECT 1 FROM mcp_connections WHERE workspace_id=$1 AND name=$2`, [workspaceId, name])).rows.length) errors.push(`a gateway connection named '${name}' already exists; pick another name or use the existing one`);
+  if (errors.length) throw new AzhiError(ErrorClass.invalidInput, `The MCP connection is not valid yet. Fix these and propose it again: ${errors.join('; ')}`);
+  return { name, url, auth_kind };
+}
 
 /** An MCP server the builder proposes to add to the library; nothing is stored until a person confirms. */
 export interface BuilderMcpProposal {

@@ -4,6 +4,7 @@ import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Markdown } from '../components/Rich';
+import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
 /**
@@ -39,6 +40,7 @@ interface McpProposal {
   marketplace_id?: string;
   runs_code: boolean;
 }
+interface McpConnectionProposal { tool_use_id: string; summary: string; name: string; url: string; auth_kind: 'none' | 'oauth' }
 interface Question { id: string; question: string; why?: string; options?: string[]; multiple?: boolean }
 interface Proposal {
   tool_use_id: string;
@@ -58,10 +60,10 @@ interface ModelList { provider: string; models: Array<{ id: string; label: strin
 interface Choice { provider?: string; model?: string }
 /** Tokens the provider reported; null when it did not say (never estimated). */
 interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal }; provider: string; model: string; usage: Usage }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal }; provider: string; model: string; usage: Usage }
 /** One answered turn: what it used and how long it took, kept by the index of its last message. */
 interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; shown?: string; stats?: Record<number, TurnStat> }
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
 const KEY = 'azhi-builder';
 // The server refuses a longer conversation (src/api/builder.ts), so the size meter counts toward these.
@@ -159,6 +161,7 @@ export function WorkflowBuilder() {
         const proposals = { ...s.proposals };
         const tools = { ...s.tools };
         const mcps = { ...s.mcps };
+        const conns = { ...s.conns };
         let shown = s.shown;
         if (r.event.kind === 'proposal' && r.event.proposal) {
           proposals[r.event.proposal.tool_use_id] = r.event.proposal as Proposal;
@@ -166,8 +169,8 @@ export function WorkflowBuilder() {
         }
         if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
         if (r.event.kind === 'mcp_proposal' && r.event.proposal) mcps[r.event.proposal.tool_use_id] = r.event.proposal as McpProposal;
-        
-        return { messages: r.messages, proposals, tools, mcps, shown, stats };
+        if (r.event.kind === 'mcp_connection_proposal' && r.event.proposal) conns[r.event.proposal.tool_use_id] = r.event.proposal as McpConnectionProposal;
+        return { messages: r.messages, proposals, tools, mcps, conns, shown, stats };
       });
       setDraft('');
     },
@@ -299,7 +302,7 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
               {send.isPending ? (
                 <div className="pending">
@@ -418,12 +421,13 @@ function TurnMeta({ s }: { s: TurnStat }) {
   );
 }
 
-function MessageView({ m, proposals, tools, mcps, openAsk, busy, onAnswer, onShow, shown, stat }: {
+function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
   m: Message;
   stat?: TurnStat;
   proposals: Record<string, Proposal>;
   tools: Record<string, ToolProposal>;
   mcps: Record<string, McpProposal>;
+  conns: Record<string, McpConnectionProposal>;
   openAsk?: string;
   busy: boolean;
   onAnswer: (text: string) => void;
@@ -465,6 +469,10 @@ function MessageView({ m, proposals, tools, mcps, openAsk, busy, onAnswer, onSho
         if (b.name === 'propose_mcp_server') {
           const t = mcps[b.id];
           return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>));
+        }
+        if (b.name === 'propose_mcp_connection') {
+          const t = conns[b.id];
+          return void (t ? push(false, <McpConnectionCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP connection the server sent back; fixing it…</div>));
         }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
@@ -549,6 +557,38 @@ function McpCard({ t, busy, onAnswer }: { t: McpProposal; busy: boolean; onAnswe
       {add.data
         ? <button type="button" className="primary" disabled={busy} onClick={() => onAnswer(`I added the MCP server ${t.slug}. Use it in the workflow.`)}>Use in this workflow</button>
         : <button type="button" className="primary" disabled={add.isPending} onClick={() => add.mutate()}>{t.runs_code ? 'Add (admin)' : 'Add MCP server'}</button>}
+    </div>
+  );
+}
+
+/** A hosted MCP server the builder proposes to connect to the gateway: an admin's click creates it and opens sign-in. */
+function McpConnectionCard({ t, busy, onAnswer }: { t: McpConnectionProposal; busy: boolean; onAnswer: (text: string) => void }) {
+  const qc = useQueryClient();
+  const win = useRef<Window | null>(null);
+  const [link, setLink] = useState<string>();
+  const create = useMutation({
+    mutationFn: () => api<McpStatus & { authorization_url?: string }>('/v1/mcp/connections', { method: 'POST', body: { name: t.name, url: t.url, auth_kind: t.auth_kind } }),
+    onSuccess: (r) => {
+      if (r.authorization_url && !pointSignIn(win.current, r.authorization_url)) setLink(r.authorization_url);
+      void qc.invalidateQueries({ queryKey: ['mcp-connections'] });
+    },
+    onError: () => closeSignIn(win.current),
+  });
+  const live = useMcpConnection(create.data?.id);
+  const now = live.data ?? create.data;
+  return (
+    <div className="draft-card">
+      <div>
+        <strong className="mono">{t.name}</strong> <Badge tone="ok">{t.auth_kind === 'oauth' ? 'OAuth' : 'no sign-in'}</Badge> {now ? <McpStatusBadge c={now} /> : null}
+        <div className="muted small">{t.url}</div>
+        {now?.status === 'authorizing' ? <div className="muted small">Approve access in the sign-in window.{link ? <> Did not open? <a href={link} target="_blank" rel="noreferrer">Continue sign-in</a>.</> : null}</div> : null}
+        {now?.status === 'ready' ? <div className="ok-note" role="status">Connected. <Link to="/ui/tools">Discover its tools on the Tools page</Link> to use them in a workflow.</div> : null}
+        {now && (now.status === 'error' || now.status === 'disconnected') ? <div className="error">{now.last_error ?? 'Sign-in did not finish.'} Reconnect it from the Connections page.</div> : null}
+        <ErrorNote error={create.error} />
+      </div>
+      {now?.status === 'ready'
+        ? <button type="button" className="primary" disabled={busy} onClick={() => onAnswer(`I connected the MCP server ${t.name} to the gateway. Continue.`)}>Continue</button>
+        : <button type="button" className="primary" disabled={create.isPending || Boolean(create.data)} onClick={() => { win.current = t.auth_kind === 'oauth' ? openSignInWindow() : null; create.mutate(); }}>{t.auth_kind === 'oauth' ? 'Connect and sign in (admin)' : 'Connect (admin)'}</button>}
     </div>
   );
 }

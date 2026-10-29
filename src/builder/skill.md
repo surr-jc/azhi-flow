@@ -316,8 +316,18 @@ and the shape of its input and output.
   credential_env?: <env var the server reads its token from>}` or `{kind: http, method, url,
   headers?}`. One registered tool is one MCP tool; propose each tool you need.
 - A hosted MCP server is reached through a gateway connection: `{kind: mcp-streamable-http,
-  connection: <id from gateway_mcp_connections>, tool}`. When no connection exists, an admin adds
-  one (Connections page, or `azhi mcp add`); until then offer the plain `http` transport.
+  connection: <id from gateway_mcp_connections>, tool}`. When no connection exists, propose one
+  with `propose_mcp_connection` (below); until it is connected offer the plain `http` transport.
+
+### Connecting a hosted MCP server
+
+`propose_mcp_connection` needs only a `name` and the https `url`. For a server that asks for
+sign-in (`auth_kind: oauth`, the default) Azhi finds the sign-in details itself and registers its
+own client; an admin approves access in a pop-up when they confirm. Never ask for a client ID,
+client secret or token. Use `auth_kind: none` only when the server needs no sign-in. After the
+person has connected it, its tools are discovered on the Tools page; then propose each tool you
+need with `propose_tool`. This is for the gateway (tool steps and model agents); a server for
+harness agents goes in the library with `propose_mcp_server`.
 - Name a `credential` (a secret such as `acme-api-token`) when it needs a token. **Never ask for
   or write a secret value in chat**; tell the person to set it on the Secrets page.
 - Give precise `input_schema` (`additionalProperties: false`, required fields) and an

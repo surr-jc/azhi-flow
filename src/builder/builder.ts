@@ -16,7 +16,7 @@ import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
-import { addProposedMcp, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpProposal } from './integrations.js';
+import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
 import { workflowAssets } from '../server/assets.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
@@ -80,6 +80,7 @@ export interface BuilderToolProposal {
 export type BuilderEvent =
   | { kind: 'text' }
   | { kind: 'mcp_proposal'; proposal: BuilderMcpProposal }
+  | { kind: 'mcp_connection_proposal'; proposal: BuilderMcpConnectionProposal }
   | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
@@ -292,6 +293,21 @@ const TOOLS: ModelTool[] = [
         definition: { type: 'object' },
       },
       required: ['summary', 'slug', 'scope'],
+    },
+  },
+  {
+    name: 'propose_mcp_connection',
+    description:
+      'Propose connecting a hosted (https) MCP server to the Azhi gateway so tool steps and model agents can call it, with every write in the run ledger. Only a name and URL are needed: with auth_kind oauth (the default) Azhi finds the sign-in details of the server and registers itself, and an admin approves access in a pop-up. Different from propose_mcp_server, which adds a server to the library for harness agents. Nothing is created until an admin confirms; never ask for or write a client secret or token.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What it gives workflows and what the admin will be asked to approve.' },
+        name: { type: 'string', description: 'Lower-case letters, digits, dots, dashes or underscores, for example confluence.' },
+        url: { type: 'string', description: 'The Streamable HTTP MCP URL, starting with https://.' },
+        auth_kind: { type: 'string', enum: ['oauth', 'none'], description: 'oauth when the server asks for sign-in (default); none when it needs no sign-in.' },
+      },
+      required: ['summary', 'name', 'url'],
     },
   },
   {
@@ -715,6 +731,10 @@ export async function builderTurn(
           const r = await checkMcpProposal(ctx, workspaceId, input);
           answer(u.id, `The MCP server is valid. The person now sees '${r.slug}' (${r.scope}${r.workflow ? ` · ${r.workflow}` : ''}) with an Add button${r.needs.length ? `; they must set ${r.needs.map((n) => n.name).join(', ')} where the harness runs` : ''}${r.runs_code ? '; it is a program that runs on a worker, so say where it comes from' : ''}. Summarise in a few plain sentences, and ask whether to use it in the workflow once it is added.`);
           event = { kind: 'mcp_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
+        } else if (u.name === 'propose_mcp_connection') {
+          const r = await checkMcpConnectionProposal(ctx, workspaceId, input);
+          answer(u.id, `The connection is valid. The person now sees '${r.name}' with a button; an admin clicks it to connect${r.auth_kind === 'oauth' ? ' and sign in through a pop-up' : ''}. Say that tools are discovered and registered after that, and a workflow can only call them once they are. Summarise in a few plain sentences.`);
+          event = { kind: 'mcp_connection_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
         } else if (u.name === 'propose_workflow') {
           const base = input.new_version_of ? String(input.new_version_of) : undefined;
           const change = base ? await applyChange(ctx, workspaceId, base, input.files ?? {}, input.remove) : undefined;
@@ -742,7 +762,7 @@ export async function builderTurn(
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
     if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
-    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal') {
+    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal' || event?.kind === 'mcp_connection_proposal') {
       const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');

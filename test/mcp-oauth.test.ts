@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { registerMcpRoutes } from '../src/api/mcp.js';
+import { checkMcpConnectionProposal } from '../src/builder/integrations.js';
 import { migrate } from '../src/db/migrate.js';
 import { createContext, type AppContext } from '../src/server/context.js';
 import { discoverMcpTools } from '../src/server/mcp.js';
@@ -26,7 +27,7 @@ describe('remote MCP OAuth by discovery', () => {
   let seq = 0;
 
   beforeAll(async () => {
-    process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
+    process.env.AZHI_EGRESS_ALLOW = '127.0.0.1,mcp.example.com';
     const dir = mkdtempSync(join(tmpdir(), 'azhi-mcp-oauth-'));
     ctx = createContext({ databaseUrl: await freshDatabase(), dataDir: dir, artifactDir: join(dir, 'artifacts'), publicUrl: PUBLIC });
     await migrate(ctx.pool);
@@ -191,5 +192,16 @@ describe('remote MCP OAuth by discovery', () => {
     expect(c.status).toBe(200);
     expect(c.body).toMatchObject({ status: 'ready', auth_kind: 'none' });
     expect(c.body.authorization_url).toBeUndefined();
+  });
+
+  it('offers the builder only a connection that can be created', async () => {
+    fx = await startMcpOAuthServer();
+    await expect(checkMcpConnectionProposal(ctx, WS, { name: 'wiki', url: 'https://mcp.example.com/mcp' })).resolves.toEqual({ name: 'wiki', url: 'https://mcp.example.com/mcp', auth_kind: 'oauth' });
+    await expect(checkMcpConnectionProposal(ctx, WS, { name: 'Wiki!', url: 'https://mcp.example.com/mcp' })).rejects.toThrow(/lower-case/);
+    await expect(checkMcpConnectionProposal(ctx, WS, { name: 'wiki', url: 'http://mcp.example.com/mcp' })).rejects.toThrow(/https/);
+    await expect(checkMcpConnectionProposal(ctx, WS, { name: 'wiki', url: 'https://10.1.2.3/mcp' })).rejects.toThrow(/private address/);
+    const made = await create({ auth_kind: 'none', name: 'taken' });
+    expect(made.status).toBe(200);
+    await expect(checkMcpConnectionProposal(ctx, WS, { name: 'taken', url: 'https://mcp.example.com/mcp' })).rejects.toThrow(/already exists/);
   });
 });
