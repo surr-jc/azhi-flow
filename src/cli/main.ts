@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -649,28 +649,57 @@ tool
   });
 
 const mcp = program.command('mcp').description('MCP servers: `server` for the library (harness agents), the rest for gateway connections (admin)');
+/** Best effort: the URL is always printed too, so a headless machine can open it elsewhere. */
+function openBrowser(url: string) {
+  const [cmd, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try { const child = spawn(cmd!, args as string[], { stdio: 'ignore', detached: true }); child.on('error', () => {}); child.unref(); } catch { /* printed above */ }
+}
+interface McpStatus { id: string; name: string; status: string; last_error?: string }
 mcp
   .command('add')
-  .description('Add a remote MCP endpoint; use --auth oauth with the OAuth client settings when required')
+  .description('Add a remote MCP endpoint. With --auth oauth only the URL is needed: Azhi finds the OAuth endpoints, registers itself and opens sign-in')
   .requiredOption('--name <name>', 'connection name')
   .requiredOption('--url <url>', 'Streamable HTTP MCP URL')
   .option('--auth <none|oauth>', 'authentication mode', 'none')
-  .option('--authorization-url <url>', 'OAuth authorization endpoint')
-  .option('--token-url <url>', 'OAuth token endpoint')
-  .option('--client-id <id>', 'OAuth client ID')
-  .option('--client-secret <secret>', 'OAuth client secret')
-  .option('--scopes <scopes>', 'OAuth scopes')
+  .option('--no-wait', 'with --auth oauth, print the sign-in URL and return instead of waiting for sign-in')
+  .option('--authorization-url <url>', 'advanced, bring your own OAuth client: authorization endpoint')
+  .option('--token-url <url>', 'advanced, bring your own OAuth client: token endpoint')
+  .option('--client-id <id>', 'advanced, bring your own OAuth client: client ID')
+  .option('--client-secret <secret>', 'advanced, bring your own OAuth client: client secret')
+  .option('--scopes <scopes>', 'advanced, bring your own OAuth client: scopes')
   .action(async (opts) => {
-    const oauth = opts.auth === 'oauth' ? { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes } : undefined;
-    const r = await client().post<{ id: string; status: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
+    const given = { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes };
+    const oauth = opts.auth === 'oauth' ? Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined)) : undefined;
+    const api = client();
+    const r = await api.post<McpStatus & { authorization_url?: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
     console.log(`${green('added')} ${opts.name} (${r.id}), ${r.status}`);
-    if (opts.auth === 'oauth') console.log(`authorize it with: azhi mcp login ${r.id}`);
+    if (!r.authorization_url) return;
+    console.log(`sign in at:
+${r.authorization_url}`);
+    openBrowser(r.authorization_url);
+    if (opts.wait === false) return console.log(dim(`when you have approved it, run: azhi mcp discover ${r.id}`));
+    console.log(dim('waiting for you to approve it in the browser (up to 5 minutes)...'));
+    const deadline = Date.now() + 5 * 60_000;
+    let now: McpStatus = r;
+    while (now.status === 'authorizing' && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 2000));
+      now = await api.get<McpStatus>(`/v1/mcp/connections/${encodeURIComponent(r.id)}`);
+    }
+    if (now.status !== 'ready') {
+      console.log(`${red('not connected')}: ${now.last_error ?? 'timed out waiting for sign-in'}`);
+      console.log(dim(`try again with: azhi mcp login ${r.id}`));
+      process.exitCode = 1;
+      return;
+    }
+    const tools = await api.get<unknown[]>(`/v1/mcp/connections/${encodeURIComponent(r.id)}/tools`).catch(() => undefined);
+    console.log(`${green('connected')}${tools ? `, ${tools.length} tool${tools.length === 1 ? '' : 's'} available` : ''}`);
+    console.log(dim(`list them with: azhi mcp discover ${r.id}`));
   });
 mcp.command('list').action(async () => {
   const rows = await client().get<Array<{ id: string; name: string; url: string; auth_kind: string; status: string }>>('/v1/mcp/connections');
   table([['ID', 'Name', 'Auth', 'Status', 'URL'], ...rows.map((r) => [r.id, r.name, r.auth_kind, r.status, r.url])]);
 });
-mcp.command('login').argument('<connection>').description('Print the browser URL that authorizes a shared OAuth MCP connection').action(async (id: string) => {
+mcp.command('login').argument('<connection>').description('Print the browser URL that signs a shared OAuth MCP connection in again').action(async (id: string) => {
   const r = await client().post<{ authorization_url: string }>(`/v1/mcp/connections/${encodeURIComponent(id)}/oauth/start`, {});
   console.log(r.authorization_url);
 });
@@ -682,14 +711,23 @@ mcp
   .command('register-tool')
   .argument('<connection>')
   .argument('<remote-tool>')
-  .requiredOption('--id <id>', 'Azhi tool id')
+  .option('--id <id>', 'Azhi tool id (default: the remote tool name)')
   .option('--version <number>', 'tool version', '1')
-  .requiredOption('--description <text>', 'tool description')
+  .option('--description <text>', 'tool description (default: the server description)')
   .option('--effect <effect>', 'read, write-idempotent, write-dedupable, or write-unsafe', 'read')
-  .option('--input-schema <json>', 'JSON Schema for tool arguments', '{"type":"object"}')
+  .option('--input-schema <json>', 'JSON Schema for tool arguments (default: the server schema)')
   .option('--output-schema <json>', 'JSON Schema for tool output', '{"type":"object"}')
   .action(async (connection: string, remoteTool: string, opts) => {
-    const r = await client().post<{ ref: string; revision: number }>(`/v1/mcp/connections/${encodeURIComponent(connection)}/tools`, { id: opts.id, version: Number(opts.version), name: remoteTool, description: opts.description, effect: opts.effect, input_schema: JSON.parse(opts.inputSchema), output_schema: JSON.parse(opts.outputSchema) });
+    const api = client();
+    const base = `/v1/mcp/connections/${encodeURIComponent(connection)}`;
+    let description: string | undefined = opts.description;
+    if (!description) {
+      const found = (await api.get<Array<{ name: string; description: string }>>(`${base}/tools`)).find((t) => t.name === remoteTool);
+      if (!found) throw new Error(`the server does not list a tool named '${remoteTool}'; see: azhi mcp discover ${connection}`);
+      description = found.description || remoteTool;
+    }
+    const id = opts.id ?? remoteTool.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '');
+    const r = await api.post<{ ref: string; revision: number }>(`${base}/tools`, { id, version: Number(opts.version), name: remoteTool, description, effect: opts.effect, ...(opts.inputSchema ? { input_schema: JSON.parse(opts.inputSchema) } : {}), output_schema: JSON.parse(opts.outputSchema) });
     console.log(`${green('registered')} ${r.ref} revision ${r.revision}`);
   });
 
