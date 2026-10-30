@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, atLeast, type Approval } from '../api';
 import { useMe } from '../App';
 import { Link } from '../router';
-import { Markdown, MarkdownValue } from '../components/Rich';
+import { Formatted, Markdown } from '../components/Rich';
 import { DiffView, looksLikeDiff } from '../components/DiffView';
 import { ChangeReview, isChangeReview } from '../components/ChangeReview';
 import { choicesComplete, composeAnswers, OpenQuestions, readOpenQuestions, type QuestionChoice } from '../components/OpenQuestions';
@@ -112,7 +112,7 @@ export function ApprovalCard({ approval: a, compact }: { approval: Approval; com
             {diffText ? <h3 className="small payload-title">What changes</h3> : null}
             {diffText ? <div className="payload"><DiffView text={diffText} /></div> : null}
             {diffText ? <h3 className="small payload-title">Details</h3> : null}
-            <div className="payload"><MarkdownValue value={restPayload} rawLabel="the full payload as JSON" /></div>
+            <div className="payload"><Formatted value={restPayload} rawLabel="the full payload as JSON" /></div>
           </>
         ) : (
           <p className="muted small">The workflow shows the approver no details for this step.</p>
