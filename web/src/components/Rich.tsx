@@ -145,3 +145,54 @@ export function Formatted({ value, plain, rawLabel = 'raw JSON' }: { value: unkn
     </div>
   );
 }
+
+const CODE_KEY = /command|cmd|script|stdout|stderr|log|trace|diff|patch/i;
+const fence = (s: string) => {
+  const ticks = '`'.repeat(Math.max(3, ...(s.match(/`+/g) ?? []).map((m) => m.length + 1)));
+  return `${ticks}\n${s}\n${ticks}`;
+};
+const inline = (v: unknown) => (typeof v === 'boolean' ? (v ? 'yes' : 'no') : v === null || v === undefined ? '—' : String(v));
+
+/** A JSON value written as Markdown: fields as a list, nested records and long text under headings, code in fences. */
+export function toMarkdown(value: unknown, depth = 0, key?: string): string {
+  if (typeof value === 'string') {
+    const parsed = depth < 6 ? parseJsonText(value) : undefined;
+    if (parsed !== undefined) return toMarkdown(parsed, depth, key);
+    return key && CODE_KEY.test(key) ? fence(value) : value;
+  }
+  if (isScalar(value)) return inline(value);
+  if (Array.isArray(value)) {
+    if (!value.length) return '_none_';
+    if (value.every((v) => isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > 160)))) return value.map((v) => `- ${inline(v)}`).join('\n');
+    return value.map((v, i) => `**${i + 1}.**\n\n${toMarkdown(v, depth + 1)}`).join('\n\n');
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return '_none_';
+  const hashes = '#'.repeat(Math.min(depth + 3, 6));
+  const out: string[] = [];
+  let list: string[] = [];
+  const flush = () => { if (list.length) out.push(list.join('\n')); list = []; };
+  for (const [k, v] of entries) {
+    const short = isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > 120 || CODE_KEY.test(k) || parseJsonText(v) !== undefined));
+    if (short) list.push(`- **${fieldLabel(k)}:** ${inline(v)}`);
+    else {
+      flush();
+      out.push(`${hashes} ${fieldLabel(k)}\n\n${toMarkdown(v, depth + 1, k)}`);
+    }
+  }
+  flush();
+  return out.join('\n\n');
+}
+
+/** Any JSON value shown as rendered Markdown, with the raw JSON one click away. */
+export function MarkdownValue({ value, rawLabel = 'raw JSON' }: { value: unknown; rawLabel?: string }) {
+  const [raw, setRaw] = useState(false);
+  if (value === undefined) return <span className="muted">—</span>;
+  const structured = typeof value === 'object' && value !== null;
+  return (
+    <div className="formatted">
+      {raw ? <pre className="json">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre> : <Markdown text={toMarkdown(value)} />}
+      {structured ? <button type="button" className="link small" onClick={() => setRaw((x) => !x)}>{raw ? 'Show formatted' : `Show ${rawLabel}`}</button> : null}
+    </div>
+  );
+}
