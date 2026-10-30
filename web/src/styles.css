@@ -183,32 +183,40 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .signin { max-width: 480px; margin: 12vh auto; padding: 16px; }
 .signin .row input { flex: 1; min-width: 220px; }
 
-/* sign-ins page: one card per integration, needs-attention first */
-.si-summary { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
-.si-summary .muted { grid-column: 2; }
-.si-summary strong { font-size: var(--t-head); grid-column: 2; grid-row: 1; }
-.si-meter { grid-column: 1; grid-row: 1 / span 2; width: 96px; height: 6px; border-radius: 999px; background: var(--idle-bg); overflow: hidden; }
-.si-meter span { display: block; height: 100%; border-radius: 999px; background: var(--ok); }
-.si-summary.warn .si-meter span { background: var(--attention); }
-.si-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
-.si-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; }
-.si-card.needs { border-color: color-mix(in srgb, var(--attention) 55%, var(--line)); }
-.si-head { display: flex; gap: 12px; align-items: flex-start; padding: 16px 16px 12px; }
-.si-title { flex: 1; min-width: 0; }
-.si-title h2 { font-size: var(--t-head); }
-.si-title p { margin: 2px 0 0; }
-.si-mark { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 600; font-size: var(--t-head); background: var(--ok-bg); color: var(--ok); }
-.si-mark.warn { background: var(--warn-bg); color: var(--warn); }
-.si-mark.bad { background: var(--bad-bg); color: var(--bad); }
-.si-secrets { list-style: none; margin: 0; padding: 0 16px; }
-.si-secrets li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+/* sign-ins page: equal-height cards, one status per card, filter on top */
+.si-tabs { display: inline-flex; gap: 4px; padding: 4px; background: var(--idle-bg); border-radius: var(--r-md); margin-bottom: 16px; }
+.si-tabs button { border: 0; background: transparent; min-height: 32px; padding: 4px 12px; color: var(--muted); font-weight: 500; }
+.si-tabs button:hover:not(:disabled) { color: var(--ink); }
+.si-tabs button.on { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.si-count { margin-left: 4px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.si-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+.si-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; transition: border-color var(--dur-150); }
+.si-card:hover { border-color: var(--idle); }
+.si-card.open { grid-column: 1 / -1; }
+.si-head { display: grid; grid-template-columns: 40px 1fr auto; gap: 12px; align-items: start; padding: 18px 18px 14px; }
+.si-title { min-width: 0; }
+.si-title h2 { font-size: var(--t-head); line-height: 22px; }
+.si-title p { margin: 2px 0 0; font-size: var(--t-ui); }
+.si-mark { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--idle-bg); color: var(--ink); }
+.si-secrets { list-style: none; margin: 0 18px; padding: 0; border: 1px solid var(--line); border-radius: var(--r-md); }
+.si-secrets li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; }
+.si-secrets li + li { border-top: 1px solid var(--line); }
 .si-secret-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.si-name { overflow-wrap: anywhere; }
-.si-foot { padding: 12px 16px 16px; }
-.si-action { border-top: 1px solid var(--line); padding: 16px; background: color-mix(in srgb, var(--bg) 60%, var(--panel)); border-radius: 0 0 var(--r-lg) var(--r-lg); animation: si-in var(--dur-200) var(--ease-out); }
+.si-name { overflow-wrap: anywhere; color: var(--ink); }
+.si-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+.si-dot.warn { background: var(--attention); }
+.si-dot.bad { background: var(--bad); }
+.si-note { margin: 10px 18px 0; padding: 8px 12px; border-radius: var(--r-md); background: var(--warn-bg); color: var(--ink); }
+.si-foot { margin-top: auto; padding: 16px 18px 18px; }
+.si-foot button { min-height: 36px; padding: 6px 16px; }
+button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.si-action { border-top: 1px solid var(--line); padding: 18px; background: color-mix(in srgb, var(--bg) 60%, var(--panel)); border-radius: 0 0 var(--r-lg) var(--r-lg); animation: si-in var(--dur-200) var(--ease-out); }
 .si-other { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 16px; }
 .si-other summary { font-weight: 500; }
-.si-other .si-secrets { padding: 8px 0 0; }
+.si-other .si-secrets { margin: 8px 0 0; }
+@keyframes si-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .si-action { animation: none; } }
+
 /* usage and limits */
 .gv-stats { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .gv-stats .stat { padding: 16px; gap: 2px; }
