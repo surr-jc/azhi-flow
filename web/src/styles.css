@@ -1586,7 +1586,7 @@ button.danger.solid { background: var(--bad); border-color: var(--bad); color: v
 /* a run step's activity in that column: input, output, events and agent messages, kept compact */
 @media (min-width: 901px) { .wf-body > .wf-step.has-activity { width: 420px; } }
 .wf-step.has-activity footer { position: sticky; bottom: -16px; margin: 0 -16px -16px; padding: 10px 16px; background: var(--panel); border-top: 1px solid var(--line); border-radius: 0 0 22px 22px; }
-.sa { display: flex; flex-direction: column; gap: 8px; min-height: 0; font-size: calc(12.5px * var(--fs, 1)); }
+.sa { display: flex; flex-direction: column; flex: none; gap: 8px; font-size: calc(12.5px * var(--fs, 1)); }
 .sa-tabs { display: flex; gap: 2px; padding: 3px; background: var(--idle-bg); border-radius: 10px; }
 .sa-tabs button { flex: 1; padding: 5px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: inherit; cursor: pointer; }
 .sa-tabs button[aria-selected="true"] { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
@@ -1614,6 +1614,7 @@ button.danger.solid { background: var(--bad); border-color: var(--bad); color: v
 .sa-tool > summary::-webkit-details-marker { display: none; }
 .sa-tool > summary i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
 .sa-tool.ok > summary i { background: var(--accent); } .sa-tool.bad > summary i { background: var(--bad); } .sa-tool.run > summary i { background: var(--run, var(--accent)); }
+.sa-tool > summary b { flex: none; white-space: nowrap; }
 .sa-tool > summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sa-tool-io { margin: 2px 0 6px 13px; padding-left: 10px; border-left: 2px solid var(--line); display: grid; gap: 4px; }
 .sa-label { font-size: calc(11px * var(--fs, 1)); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
