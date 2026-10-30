@@ -245,6 +245,16 @@ export async function collectChange(c: Checkout, home: string, tree: string, met
 }
 
 /**
+ * A test command as a person should read it in the activity log. The sdlc-universal gate is a compressed script of
+ * several thousand characters; it is named by its mode instead. Any other long command is cut.
+ */
+export function describeTestCommand(command: string): string {
+  const gate = /^node -e\s+"eval\(require\('zlib'\)\.inflateRawSync\(Buffer\.from\('[^']*','base64'\)\)\+''\)"\s+(full|static)\s*$/.exec(command);
+  if (gate) return `the Azhi test gate, ${gate[1] === 'full' ? 'full (install, typecheck, test)' : 'static (install, typecheck, build)'}; it runs every project it finds, each from its own folder`;
+  return command.length > 300 ? `${command.slice(0, 300)}... (${command.length} characters)` : command;
+}
+
+/**
  * Runs the step's test command in the checkout. This is repository code (possibly written by the agent)
  * running on the worker, so its environment carries no secrets: PATH, the step's own home and temp
  * folders, CI=true and the proxy settings. The command comes from the workflow, never from the agent.

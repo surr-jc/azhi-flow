@@ -22,7 +22,7 @@ import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
-import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { cloneWorkspace, collectChange, describeTestCommand, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 
 /**
@@ -350,7 +350,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
         if (test) {
           testRuns++;
           mkdirSync(join(root, 'test-tmp'), { recursive: true });
-          sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${test.command}`, at: Date.now() });
+          sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${describeTestCommand(test.command)}`, at: Date.now() });
           const left = deadline - Date.now();
           const unfilled = /\{\{(\w+)\}\}/.exec(test.command);
           const r = unfilled

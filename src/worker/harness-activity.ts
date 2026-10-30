@@ -23,7 +23,7 @@ import { runCodex } from './harness-codex.js';
 import { runOpencode2 } from './harness-opencode2.js';
 import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
-import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { cloneWorkspace, collectChange, describeTestCommand, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 import { OpencodeTranscript } from './opencode-transcript.js';
 import { TranscriptSink } from './transcript.js';
@@ -385,7 +385,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
             if (test) {
               testRuns++;
               mkdirSync(join(root, 'test-tmp'), { recursive: true });
-              sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${test.command}`, at: Date.now() });
+              sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${describeTestCommand(test.command)}`, at: Date.now() });
               const left = deadline - Date.now();
               // An example installed without its setting still has the placeholder: report it instead of running it.
               const unfilled = /\{\{(\w+)\}\}/.exec(test.command);
