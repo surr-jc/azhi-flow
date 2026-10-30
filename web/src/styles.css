@@ -1741,3 +1741,37 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .back-ico { transform: rotate(180deg); }
 .tb-alert { margin-bottom: 20px; border-radius: var(--r-lg); padding: 10px 16px; }
 .tb-h { margin: 8px 0 0; font-size: var(--t-ui); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* run usage: totals first, then the Copilot note, then one row per model call with its tokens as a bar */
+.us { display: grid; gap: 16px; }
+.us-kicker { font-size: calc(11px * var(--fs, 1)); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.us-num { font-variant-numeric: tabular-nums; }
+.us-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.us-tile { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.us-tile b { font-size: calc(22px * var(--fs, 1)); line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
+.us-tile.main { border-color: var(--accent); background: var(--accent-bg); }
+.us-note { display: grid; gap: 10px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; font-size: calc(13px * var(--fs, 1)); }
+.us-note p { margin: 0; }
+.us-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.us-note-head > span { color: var(--muted); }
+.us-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.us-chip { display: inline-flex; gap: 8px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); font-size: calc(12px * var(--fs, 1)); }
+.us-chip b { font-variant-numeric: tabular-nums; }
+.us-quota { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.us-meter { display: grid; grid-template-columns: minmax(110px, auto) minmax(80px, 1fr) auto; align-items: center; gap: 12px; text-transform: capitalize; }
+.us-meter .us-num { text-transform: none; color: var(--muted); }
+.us-track { height: 8px; border-radius: 99px; background: var(--idle-bg); overflow: hidden; }
+.us-track i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.us-legend { display: flex; gap: 16px; font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
+.us-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.us-legend i, .us-bar i { display: block; border-radius: 99px; }
+.us-legend i { width: 10px; height: 10px; }
+.us-legend .in, .us-bar .in { background: var(--run); } .us-legend .cache, .us-bar .cache { background: var(--accent); opacity: .55; } .us-legend .out, .us-bar .out { background: var(--attention); }
+.us-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.us-table th { padding: 10px 14px; text-align: left; font-size: calc(11px * var(--fs, 1)); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--bg); border-bottom: 1px solid var(--line); }
+.us-table td { padding: 10px 14px; vertical-align: top; border-bottom: 1px solid var(--line); }
+.us-table tr:last-child td { border-bottom: 0; }
+.us-table .r { text-align: right; white-space: nowrap; }
+.us-table td:nth-child(3) { min-width: 260px; width: 42%; }
+.us-bar { display: flex; gap: 2px; overflow: hidden; height: 8px; margin: 5px 0 4px; }
+.us-bar i { height: 100%; flex: none; }
