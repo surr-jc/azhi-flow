@@ -66,8 +66,8 @@ const fence = (s: string, lang = '') => {
 };
 const inline = (v: unknown) => (typeof v === 'boolean' ? (v ? 'yes' : 'no') : v === null || v === undefined ? '—' : String(v));
 /** Text shown as it is: Markdown characters in it are escaped so they stay literal. */
-const esc = (s: string) => s.replace(/[\`*_{}[\]<>#|~]/g, '\$&');
-const TITLE_KEYS = ['title', 'name', 'criterion', 'id', 'key', 'summary'];
+const esc = (s: string) => s.replace(/[\\`*_{}[\]<>#|~]/g, '\\$&');
+const TITLE_KEYS = ['title', 'name', 'gate', 'criterion', 'id', 'key', 'summary'];
 const LONG = 120;
 
 /** A JSON value written as Markdown: fields as a list, long text as paragraphs, nested records under headings, code in fences. */
