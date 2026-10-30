@@ -7,6 +7,7 @@ import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, useConfirm, when } from '../ui';
 import { RunTable } from './Overview';
+import { workflowCategory } from './Examples';
 import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { Popup } from '../components/Popup';
@@ -21,8 +22,12 @@ export function Workflows() {
   const isAdmin = atLeast(me.data?.role, 'admin');
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
   const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
   const needle = search.trim().toLowerCase();
-  const shown = (q.data ?? []).filter((w) => !needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''}`.toLowerCase().includes(needle));
+  const all = q.data ?? [];
+  const categories = [...new Set(all.map((w) => workflowCategory(w.slug)))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w.slug) === c).length;
+  const shown = all.filter((w) => (!category || workflowCategory(w.slug) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''}`.toLowerCase().includes(needle)));
   return (
     <>
       <PageHead
@@ -35,11 +40,25 @@ export function Workflows() {
         <div className="empty"><p className="empty-title">No workflows yet.</p><p className="muted">Run <code>azhi init</code>, then <code>azhi publish</code>, or build one with chat.</p></div>
       ) : (
         <>
-          {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+          <div className="wfl-filters">
+            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+            {categories.length > 1 ? (
+              <div className="tpl-cats" role="group" aria-label="Category">
+                {['', ...categories].map((c) => (
+                  <button key={c || 'all'} type="button" className={`tpl-cat${category === c ? ' on' : ''}`} aria-pressed={category === c} onClick={() => setCategory(c)}>
+                    {c || 'All'} <span className="tpl-count">{countIn(c)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <p className="sr-only" role="status">{shown.length} workflow{shown.length === 1 ? '' : 's'} shown</p>
           <div className="wfl-grid">
             {shown.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} />)}
           </div>
-          {!shown.length ? <p className="muted">No workflows match “{search}”.</p> : null}
+          {!shown.length ? (
+            <div className="empty"><p className="empty-title">No workflows match.</p><button type="button" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button></div>
+          ) : null}
         </>
       )}
     </>
@@ -53,6 +72,7 @@ function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) 
     <article className="wfl-card">
       <header className="wfl-head">
         <div className="wfl-title">
+          <span className="tpl-cat-label">{workflowCategory(w.slug)}</span>
           <h2><Link to={href}>{name}</Link></h2>
           <span className="muted small mono">{w.slug}</span>
         </div>

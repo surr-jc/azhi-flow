@@ -90,6 +90,9 @@ const META: Record<string, { category: string; steps: number; works_with: string
 };
 const metaOf = (e: Example) => META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
 
+/** The marketplace category of an installed workflow; the delivery variants not listed above are found by name. */
+export const workflowCategory = (slug: string): string => META[slug]?.category ?? (/sdlc|^issue-/.test(slug) ? 'Delivery' : 'Other');
+
 /** What an install lets the workflow change, read from its tools' effects. */
 function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
   const writes = e.tools.filter((t) => t.effect !== 'read');

@@ -218,7 +218,8 @@ button.ghost { background: transparent; border-color: transparent; color: var(--
 @media (prefers-reduced-motion: reduce) { .si-action { animation: none; } }
 
 /* workflows list: one card per workflow */
-.wfl-search { width: 100%; max-width: 360px; margin-bottom: 16px; }
+.wfl-filters { display: grid; gap: 12px; margin-bottom: 16px; }
+.wfl-search { width: 100%; max-width: 360px; }
 .wfl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 16px; }
 .wfl-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; transition: border-color var(--dur-150); }
 .wfl-card:hover { border-color: var(--idle); }
