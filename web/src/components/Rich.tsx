@@ -65,9 +65,14 @@ const fence = (s: string, lang = '') => {
   return `${ticks}${lang}\n${s}\n${ticks}`;
 };
 const inline = (v: unknown) => (typeof v === 'boolean' ? (v ? 'yes' : 'no') : v === null || v === undefined ? '—' : String(v));
+/** Text shown as it is: Markdown characters in it are escaped so they stay literal. */
+const esc = (s: string) => s.replace(/[\`*_{}[\]<>#|~]/g, '\$&');
+const TITLE_KEYS = ['title', 'name', 'criterion', 'id', 'key', 'summary'];
+const LONG = 120;
 
-/** A JSON value written as Markdown: fields as a list, nested records and long text under headings, code in fences. */
+/** A JSON value written as Markdown: fields as a list, long text as paragraphs, nested records under headings, code in fences. */
 export function toMarkdown(value: unknown, depth = 0, key?: string, plain?: boolean): string {
+  const shown = (v: unknown) => (plain && typeof v === 'string' ? esc(v) : inline(v));
   if (typeof value === 'string') {
     const parsed = depth < 6 ? parseJsonText(value) : undefined;
     if (parsed !== undefined) return toMarkdown(parsed, depth, key, plain);
@@ -75,14 +80,26 @@ export function toMarkdown(value: unknown, depth = 0, key?: string, plain?: bool
     if (looksLikeDiff(value)) return fence(value, 'diff');
     if (key && CODE_KEY.test(key)) return fence(value);
     // Tool input and output is text to read as it is, so Markdown must not reinterpret it.
-    if (plain) return value.includes('\n') || value.length > 100 ? fence(value) : `\`${value}\``;
+    if (plain) return value.includes('\n') ? fence(value) : value.length > 100 ? esc(value) : `\`${value}\``;
     return value;
   }
   if (isScalar(value)) return inline(value);
   if (Array.isArray(value)) {
     if (!value.length) return '_none_';
-    if (value.every((v) => isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > 160)))) return value.map((v) => `- ${inline(v)}`).join('\n');
-    return value.map((v, i) => `**${i + 1}.**\n\n${toMarkdown(v, depth + 1, undefined, plain)}`).join('\n\n');
+    if (value.every((v) => isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > LONG)))) return value.map((v) => `- ${shown(v)}`).join('\n');
+    return value.map((v, i) => {
+      let body = v;
+      let title = '';
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const rec = v as Record<string, unknown>;
+        const tk = TITLE_KEYS.find((k) => typeof rec[k] === 'string' && !(rec[k] as string).includes('\n') && (rec[k] as string).length <= LONG);
+        if (tk) {
+          title = ` ${shown(rec[tk])}`;
+          body = Object.fromEntries(Object.entries(rec).filter(([k]) => k !== tk));
+        }
+      }
+      return `**${i + 1}.${title}**\n\n${toMarkdown(body, depth + 1, undefined, plain)}`;
+    }).join('\n\n');
   }
   const entries = Object.entries(value as Record<string, unknown>);
   if (!entries.length) return '_none_';
@@ -91,12 +108,14 @@ export function toMarkdown(value: unknown, depth = 0, key?: string, plain?: bool
   let list: string[] = [];
   const flush = () => { if (list.length) out.push(list.join('\n')); list = []; };
   for (const [k, v] of entries) {
-    const short = isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > 120 || CODE_KEY.test(k) || parseJsonText(v) !== undefined));
-    if (short) list.push(`- **${fieldLabel(k)}:** ${inline(v)}`);
-    else {
+    const block = !isScalar(v) || (typeof v === 'string' && (v.includes('\n') || CODE_KEY.test(k) || parseJsonText(v) !== undefined));
+    if (block) {
       flush();
       out.push(`${hashes} ${fieldLabel(k)}\n\n${toMarkdown(v, depth + 1, k, plain)}`);
-    }
+    } else if (typeof v === 'string' && v.length > LONG) {
+      flush();
+      out.push(`**${fieldLabel(k)}:** ${shown(v)}`);
+    } else list.push(`- **${fieldLabel(k)}:** ${shown(v)}`);
   }
   flush();
   return out.join('\n\n');

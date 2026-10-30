@@ -1775,3 +1775,11 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .us-table td:nth-child(3) { min-width: 260px; width: 42%; }
 .us-bar { display: flex; gap: 2px; overflow: hidden; height: 8px; margin: 5px 0 4px; }
 .us-bar i { height: 100%; flex: none; }
+
+/* Markdown from JSON: tight lists with no nested circles, and code that wraps instead of being cut off */
+.formatted .md ul { list-style: none; padding-left: 0; margin: 0 0 6px; }
+.formatted .md li { margin: 0 0 2px; }
+.formatted .md p { margin: 0 0 6px; }
+.formatted .md h3, .formatted .md h4, .formatted .md h5 { margin: 12px 0 4px; font-size: calc(13px * var(--fs, 1)); }
+.formatted .md pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.formatted .md pre code { white-space: inherit; }
