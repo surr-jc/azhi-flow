@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { Formatted, Markdown } from '../components/Rich';
+import { DiffView, EditDiff, editInput, patchInput } from '../components/DiffView';
 import { Feed, FeedEmpty, FeedItem, FeedSkeleton, offsetOf, type FeedTone } from '../components/ActivityFeed';
 import { Icon } from '../icons';
 import { money, num, Panel } from '../ui';
@@ -298,6 +299,8 @@ function Block({ block, start, maxTokens, fresh, dcp }: { block: Block; start?: 
  */
 function ToolLine({ e, single, dcp }: { e: TranscriptEntry; single: boolean; dcp: boolean }) {
   const tone = e.status === 'completed' ? 'ok' : e.status === 'error' ? 'bad' : 'run';
+  const edit = editInput(e.input);
+  const patch = edit ? undefined : patchInput(e.input);
   return (
     <details className={`af-tool ${tone}`} open={e.status === 'error' && single}>
       <summary>
@@ -310,7 +313,7 @@ function ToolLine({ e, single, dcp }: { e: TranscriptEntry; single: boolean; dcp
       <div className="af-io">
         {dcp ? <p className="muted small">DCP replaced the messages in the given range with the summary in the input, so later model calls send fewer tokens.{e.status === 'error' ? ' This run failed, so nothing was pruned.' : ''}</p> : null}
         <div className="af-label">Input</div>
-        <Formatted value={e.input ?? {}} plain />
+        {edit ? <EditDiff {...edit} /> : patch ? <DiffView text={patch} /> : <Formatted value={e.input ?? {}} plain />}
         {e.status === 'error' ? <><div className="af-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="af-label">Result</div><Formatted value={e.output} plain /></> : <p className="muted small">Running…</p>}
       </div>
     </details>

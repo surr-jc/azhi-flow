@@ -112,6 +112,69 @@ function FileCard({ file, open, version }: { file: FileDiff; open: boolean; vers
   );
 }
 
+const pick = (rec: Record<string, unknown>, keys: string[]) => {
+  const k = keys.find((x) => typeof rec[x] === 'string');
+  return k ? (rec[k] as string) : undefined;
+};
+
+/** The path and the old and new text of an edit tool call's input, or undefined when it is not one. */
+export function editInput(input: unknown): { path: string; oldText: string; newText: string } | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const rec = input as Record<string, unknown>;
+  const oldText = pick(rec, ['old_string', 'oldString', 'old_str', 'oldText']);
+  const newText = pick(rec, ['new_string', 'newString', 'new_str', 'newText']);
+  if (oldText === undefined || newText === undefined) return undefined;
+  return { path: pick(rec, ['path', 'file_path', 'filePath', 'file']) ?? '', oldText, newText };
+}
+
+/** The unified diff held in a patch tool call's input, or undefined. */
+export function patchInput(input: unknown): string | undefined {
+  if (typeof input === 'string') return looksLikeDiff(input) ? input : undefined;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  return Object.values(input as Record<string, unknown>).find((v): v is string => typeof v === 'string' && looksLikeDiff(v));
+}
+
+/** An edit tool call as a diff, like Claude Code: the file, +/- counts, removed lines in red and added lines in green. */
+export function EditDiff({ path, oldText, newText }: { path: string; oldText: string; newText: string }) {
+  const rows = useMemo(() => {
+    const a = oldText.split('\n');
+    const b = newText.split('\n');
+    let s = 0;
+    while (s < a.length && s < b.length && a[s] === b[s]) s++;
+    let e = 0;
+    while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+    const out: Line[] = [];
+    for (const t of a.slice(s, a.length - e)) out.push({ kind: 'del', text: t });
+    for (const t of b.slice(s, b.length - e)) out.push({ kind: 'add', text: t });
+    return out;
+  }, [oldText, newText]);
+  const del = rows.filter((r) => r.kind === 'del').length;
+  const add = rows.length - del;
+  const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+  return (
+    <div className="diff edit-diff">
+      <div className="edit-head">
+        <span className="diff-path"><span className="diff-dir">{dir}</span><strong>{path.slice(dir.length) || 'edit'}</strong></span>
+        <span className="diff-counts"><span className="plus">+{add}</span> <span className="minus">-{del}</span></span>
+      </div>
+      {rows.length ? (
+        <div className="diff-scroll">
+          <table className="diff-table">
+            <tbody>
+              {rows.map((l, i) => (
+                <tr key={i} className={l.kind}>
+                  <td className="sign" aria-hidden="true">{l.kind === 'add' ? '+' : '-'}</td>
+                  <td className="code">{l.text === '' ? ' ' : l.text}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="muted small diff-note">No change.</p>}
+    </div>
+  );
+}
+
 /** A unified diff as per-file cards with line numbers and added/removed lines, with an overview on top. */
 export function DiffView({ text }: { text: string }) {
   const files = useMemo(() => parseDiff(text), [text]);

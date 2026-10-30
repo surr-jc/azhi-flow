@@ -1339,6 +1339,9 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .diff-table tr.add td.sign { color: var(--ok); }
 .diff-table tr.del td.sign { color: var(--bad); }
 .diff-table tr.hunk td { background: color-mix(in srgb, var(--run) 12%, transparent); color: var(--muted); padding: 3px 8px; }
+.edit-diff { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); margin: 4px 0 8px; }
+.edit-diff .edit-head { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; background: color-mix(in srgb, var(--idle) 8%, transparent); border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs, 1)); }
+.edit-diff .diff-table td.sign { padding-left: 12px; }
 .diff-table tr.note td { color: var(--muted); font-style: italic; }
 .diff-note { padding: 8px 12px; }
 .payload-title { margin: 16px 0 4px; }
