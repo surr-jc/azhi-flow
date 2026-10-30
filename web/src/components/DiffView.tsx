@@ -134,7 +134,10 @@ export function patchInput(input: unknown): string | undefined {
   return Object.values(input as Record<string, unknown>).find((v): v is string => typeof v === 'string' && looksLikeDiff(v));
 }
 
-/** An edit tool call as a diff, like Claude Code: the file, +/- counts, removed lines in red and added lines in green. */
+type Row = { kind: 'add' | 'del' | 'ctx'; text: string; hi?: [number, number] };
+const CONTEXT = 2;
+
+/** An edit tool call as a diff, like an editor's inline diff: full-width red and green rows, the changed characters marked, and a little context around. */
 export function EditDiff({ path, oldText, newText }: { path: string; oldText: string; newText: string }) {
   const rows = useMemo(() => {
     const a = oldText.split('\n');
@@ -143,13 +146,26 @@ export function EditDiff({ path, oldText, newText }: { path: string; oldText: st
     while (s < a.length && s < b.length && a[s] === b[s]) s++;
     let e = 0;
     while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
-    const out: Line[] = [];
-    for (const t of a.slice(s, a.length - e)) out.push({ kind: 'del', text: t });
-    for (const t of b.slice(s, b.length - e)) out.push({ kind: 'add', text: t });
+    const dels = a.slice(s, a.length - e);
+    const adds = b.slice(s, b.length - e);
+    // Lines replaced one for one show which characters changed.
+    const mark = (x: string, y: string): [number, number] | undefined => {
+      let p = 0;
+      while (p < x.length && p < y.length && x[p] === y[p]) p++;
+      let q = 0;
+      while (q < x.length - p && q < y.length - p && x[x.length - 1 - q] === y[y.length - 1 - q]) q++;
+      return p + q < x.length || p + q < y.length ? [p, q] : undefined;
+    };
+    const paired = dels.length === adds.length;
+    const out: Row[] = [];
+    for (const t of a.slice(Math.max(0, s - CONTEXT), s)) out.push({ kind: 'ctx', text: t });
+    dels.forEach((t, i) => { const m = paired ? mark(t, adds[i]!) : undefined; out.push({ kind: 'del', text: t, hi: m && [m[0], t.length - m[1]] }); });
+    adds.forEach((t, i) => { const m = paired ? mark(dels[i]!, t) : undefined; out.push({ kind: 'add', text: t, hi: m && [m[0], t.length - m[1]] }); });
+    for (const t of b.slice(b.length - e, b.length - e + CONTEXT)) out.push({ kind: 'ctx', text: t });
     return out;
   }, [oldText, newText]);
   const del = rows.filter((r) => r.kind === 'del').length;
-  const add = rows.length - del;
+  const add = rows.filter((r) => r.kind === 'add').length;
   const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
   return (
     <div className="diff edit-diff">
@@ -163,8 +179,10 @@ export function EditDiff({ path, oldText, newText }: { path: string; oldText: st
             <tbody>
               {rows.map((l, i) => (
                 <tr key={i} className={l.kind}>
-                  <td className="sign" aria-hidden="true">{l.kind === 'add' ? '+' : '-'}</td>
-                  <td className="code">{l.text === '' ? ' ' : l.text}</td>
+                  <td className="sign" aria-hidden="true">{l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ''}</td>
+                  <td className="code">
+                    {l.hi ? <>{l.text.slice(0, l.hi[0])}<mark>{l.text.slice(l.hi[0], l.hi[1])}</mark>{l.text.slice(l.hi[1])}</> : l.text === '' ? ' ' : l.text}
+                  </td>
                 </tr>
               ))}
             </tbody>

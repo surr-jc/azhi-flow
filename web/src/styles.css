@@ -1342,6 +1342,12 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .edit-diff { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); margin: 4px 0 8px; }
 .edit-diff .edit-head { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; background: color-mix(in srgb, var(--idle) 8%, transparent); border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs, 1)); }
 .edit-diff .diff-table td.sign { padding-left: 12px; }
+.edit-diff .diff-table td.code { width: 100%; }
+.edit-diff .diff-table tr.add { background: color-mix(in srgb, var(--ok) 20%, transparent); box-shadow: inset 3px 0 0 var(--ok); }
+.edit-diff .diff-table tr.del { background: color-mix(in srgb, var(--bad) 20%, transparent); box-shadow: inset 3px 0 0 var(--bad); }
+.edit-diff .diff-table tr.ctx { color: var(--muted); }
+.edit-diff .diff-table tr.add mark { background: color-mix(in srgb, var(--ok) 42%, transparent); color: inherit; border-radius: 2px; }
+.edit-diff .diff-table tr.del mark { background: color-mix(in srgb, var(--bad) 42%, transparent); color: inherit; border-radius: 2px; }
 .diff-table tr.note td { color: var(--muted); font-style: italic; }
 .diff-note { padding: 8px 12px; }
 .payload-title { margin: 16px 0 4px; }
