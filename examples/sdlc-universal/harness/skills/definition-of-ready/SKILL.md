@@ -19,7 +19,11 @@ Score each gate `pass` or `fail`, with a `confidence` of `high`, `medium` or `lo
 `finding` that cites what you saw, and, on a fail, one `question` that would make it pass.
 
 1. **testable_criteria**: every acceptance criterion (stated or clearly implied) can be checked
-   true or false by someone who did not write the ticket. "Fast", "better", "clean" fail.
+   true or false by someone who did not write the ticket. "Fast", "better", "clean" fail. A ticket that
+   states no criteria at all does not fail for that alone: the planner derives them from the request
+   and a person confirms them at the design review. Pass it when the request describes a behaviour
+   concrete enough that checkable criteria follow from it, and say in `finding` that they would be
+   derived. Fail it when even derived criteria would be guesses (the outcome is not described).
 2. **no_placeholders**: no TBD, TODO, "???", "as discussed", "etc." standing in for content.
 3. **no_bare_references**: every link, ticket or document the ticket depends on is named and
    readable in the ticket ("see the doc" with no link fails).
@@ -27,7 +31,8 @@ Score each gate `pass` or `fail`, with a `confidence` of `high`, `medium` or `lo
    a change that plainly spans many subsystems, fail.
 5. **specific_surface**: it names where the change lands: a file, module, route, screen, table or
    command that exists in the repository. "The API" with no endpoint fails.
-6. **done_state**: from the ticket alone you can describe what is true when it is done.
+6. **done_state**: from the ticket alone you can describe what is true when it is done. Missing
+   acceptance criteria are covered by gate 1; this gate is about the end state itself.
 7. **stated_assumptions**: nothing important is assumed silently (who the user is, what happens on
    failure, what is out of scope); the ticket says so, or it is trivially obvious.
 

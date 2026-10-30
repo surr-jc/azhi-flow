@@ -19,7 +19,11 @@ the tests run, not that they are good.
 4. **Weakened tests**: an existing test deleted, skipped, loosened or rewritten to match new
    behaviour without the requirements calling for it is `critical`.
 5. **Determinism**: no network, wall-clock time or randomness without control; no order dependence.
-6. **Mirroring**: location, naming and framework follow the project's other tests.
+6. **Mirroring**: location, naming and framework follow the project's other tests, in whatever
+   language they are written.
+7. **Traceability**: the engineer lists, per test, the acceptance criteria it covers
+   (`covers AC<n>`). A criterion with no test and no stated reason is `major`; one waived with a
+   reason that is not true (the code could be tested) is `major` too.
 
 ## Do not require tests for
 

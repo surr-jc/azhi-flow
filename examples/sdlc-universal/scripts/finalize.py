@@ -10,6 +10,10 @@ reviewer approved (or all of their critical and major findings were refuted), no
 finding was confirmed, none is left unverified, and no reviewer saw a prompt injection attempt. If findings remain
 after the last allowed round, the change is flagged needs_human_attention, never silently shipped.
 
+Some problems block instead of flag: a confirmed critical finding, an unmet acceptance criterion, a reviewer
+that did not judge every acceptance criterion of the requirements, and a build that ran out of steps. A
+blocked change has ship=false and `blockers` says why; the workflow sends it back instead of asking for release.
+
 The evidence record is a plain digest of what was reviewed and tested. It is not a signature.
 """
 import hashlib
@@ -31,18 +35,23 @@ index, last = ran[-1]
 change = last["change"]
 ws = change.get("workspace") or {}
 
+# The verdicts and checks come from the latest round, up to the last build, that was reviewed. A fix whose diff is
+# identical to the build before it is not reviewed again, and then the earlier round's findings still stand.
+reviewed_index = next((i for i in range(index, -1, -1) if any((rounds[i].get("verdicts") or {}).values())), index)
+review = rounds[reviewed_index]
+
 # Critical and major findings count only when the verifier confirmed them with enough confidence.
 # Refuted ones (or confirmed below the bar) are dropped and listed; unverifiable ones, or ones the
 # verifier gave no check for, are kept apart and flag the change for a person instead of blocking it.
 minimum = int(data.get("min_confidence", 80))
 checks = {}
-for c in last.get("checks") or []:
+for c in review.get("checks") or []:
     checks.setdefault(c["id"], c)
 
 reviewers, counts, findings, dropped, unverified = [], {"critical": 0, "major": 0, "minor": 0, "suggestion": 0}, [], [], []
 injection = False
 reviewers_ok = True
-for name, v in (last.get("verdicts") or {}).items():
+for name, v in (review.get("verdicts") or {}).items():
     if not v:
         continue
     injection = injection or bool(v.get("prompt_injection_detected"))
@@ -76,13 +85,17 @@ tests = ws.get("tests") or {}
 tests_passed = tests.get("status") == "passed"
 # What the reviewers say about each acceptance criterion (the first reviewer that returned them).
 criteria = []
-for _v in (last.get("verdicts") or {}).values():
+for _v in (review.get("verdicts") or {}).values():
     if _v and _v.get("criteria"):
         criteria = _v["criteria"]
         break
 crit_counts = {k: sum(1 for c in criteria if c.get("status") == k) for k in ("met", "partial", "unmet", "unverifiable")}
 all_met = bool(criteria) and crit_counts["met"] == len(criteria)
-incomplete = crit_counts["partial"] + crit_counts["unmet"] > 0
+# The reviewer must judge every acceptance criterion of the requirements; a short or missing list is not a pass.
+expected = (data.get("requirements") or {}).get("acceptance_criteria") or []
+criteria_missing = max(0, len(expected) - len(criteria))
+incomplete = crit_counts["partial"] + crit_counts["unmet"] + criteria_missing > 0
+step_limit = bool(ws.get("step_limit_reached"))
 
 # Whether the new or changed test files were run (the static test command prints a marker line).
 _m = re.search(r"AZHI_TARGETED_TESTS (passed|failed) (\d+) file", tests.get("output") or "")
@@ -94,8 +107,18 @@ targeted = {"result": _m.group(1), "files": int(_m.group(2))} if _m else None
 verification = data.get("verification") or ("none" if data.get("untested") else "full")
 untested = verification == "none" and not tests_passed
 static = verification == "static"
-ship = (tests_passed or untested) and len(files) > 0
-flagged = (not approved) or untested or static or incomplete
+# Blockers keep the change from release approval altogether; everything else only flags the pull request.
+blockers = []
+if counts["critical"]:
+    blockers.append(f"{counts['critical']} confirmed critical finding(s): " + ", ".join(f["id"] for f in findings if f["severity"] == "critical"))
+if crit_counts["unmet"]:
+    blockers.append(f"{crit_counts['unmet']} acceptance criterion(s) unmet")
+if criteria_missing:
+    blockers.append(f"the reviewer judged {len(criteria)} of {len(expected)} acceptance criteria")
+if step_limit:
+    blockers.append("the build ran out of steps and may be unfinished")
+ship = (tests_passed or untested) and len(files) > 0 and not blockers
+flagged = (not approved) or untested or static or incomplete or step_limit
 strategy = data.get("strategy") or {}
 
 # A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
@@ -117,10 +140,14 @@ record = {
     "weight": weight,
     "design_review": data.get("design_review"),
     "fix_rounds_used": index,
+    "reviewed_round": reviewed_index,
+    "blockers": blockers,
+    "step_limit_reached": step_limit,
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
     "coverage": strategy or None,
     "criteria": criteria,
+    "criteria_expected": len(expected),
     "targeted_tests": targeted,
     "closing_keyword_replaced": closes_removed,
     "reviewers": [{k: r[k] for k in ("reviewer", "approved", "critical", "major", "minor", "suggestion")} for r in reviewers],
@@ -143,6 +170,36 @@ lines = ["## Evidence record", "",
          f"- Record SHA-256: `{record['record_sha256']}`",
          "", "This is a digest of what was reviewed and tested, not a signature.", "",
          "<details><summary>Record</summary>", "", "```json", json.dumps(record, indent=2, sort_keys=True), "```", "</details>"]
+def cell(text, limit=300):
+    t = " ".join(str(text).split()).replace("|", "\\|")
+    return t if len(t) <= limit else t[: limit - 3] + "..."
+
+
+# Reviewer text is model output about untrusted code: it goes into the pull request as table cells and list items only.
+detail = []
+if blockers:
+    detail += ["### Blockers", ""] + [f"- {b}" for b in blockers] + [""]
+if findings:
+    detail += ["### Review findings", "", "| ID | Severity | Where | Message | Confidence |", "|---|---|---|---|---|"]
+    for f in findings:
+        where = f.get("path", "") + (f":{f['line']}" if f.get("line") else "")
+        detail.append(f"| {f['id']} | {f['severity']} | {cell(where, 120)} | {cell(f['message'])} | {f.get('confidence', '-')} |")
+    detail.append("")
+if unverified:
+    detail += ["### Findings the verifier could not settle", ""] + [f"- {u.get('id')} ({u['severity']}, {cell(u.get('path', ''), 120)}): {cell(u['message'])} - {u['why']}" for u in unverified] + [""]
+if dropped:
+    detail += ["### Findings dropped by the verifier", ""] + [f"- {d['id']} ({d['severity']}): {d['verdict']} at {d['confidence']}/100" for d in dropped] + [""]
+open_criteria = [c for c in criteria if c.get("status") != "met"]
+if open_criteria or criteria_missing:
+    detail += ["### Acceptance criteria not met", "", "| Criterion | Status | Evidence |", "|---|---|---|"]
+    detail += [f"| {cell(c['criterion'])} | {c['status']} | {cell(c['evidence'])} |" for c in open_criteria]
+    if criteria_missing:
+        detail.append(f"| {criteria_missing} criterion(s) the reviewer did not judge | missing | |")
+    detail.append("")
+if detail:
+    at = lines.index("<details><summary>Record</summary>")
+    lines = lines[:at] + detail + lines[at:]
+
 if untested:
     lines = ["> **WARNING - NOT VERIFIED BY TESTS:** the test suite could not run in this environment (the base branch failed its own tests before any change), and a person chose to continue. Run the tests yourself before merging.", ""] + lines
 if static:
@@ -155,7 +212,7 @@ if static:
              + (f" The new or changed test files were also run and {targeted['result']}." if targeted else " No test was run.")
              + cov + " Run the tests before merging.", ""] + lines
 if flagged and not ((untested or static) and approved):
-    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, findings the verifier could not settle, or acceptance criteria that are not met.", ""] + lines
+    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, findings the verifier could not settle, acceptance criteria that are not met, or a build that ran out of steps.", ""] + lines
 
 title = change["pr_title"]
 if untested and "[untested]" not in title:
@@ -167,6 +224,9 @@ elif flagged and "[needs-human-attention]" not in title:
 
 out = {
     "ship": ship,
+    "blocked": bool(blockers),
+    "blockers": blockers,
+    "blockers_text": "; ".join(blockers),
     "needs_human_attention": flagged,
     "untested": untested,
     "verification": verification,
@@ -188,6 +248,7 @@ out = {
     "evidence": record,
     "criteria": criteria,
     "criteria_counts": crit_counts,
+    "criteria_missing": criteria_missing,
     "targeted_tests": targeted,
     "closes_removed": closes_removed,
     "evidence_markdown": "\n".join(lines),

@@ -22,9 +22,11 @@ refused, retry the same file with the relative path instead of giving up.
 
 You cannot run anything, so check your own work by reading it:
 
-1. **One test per acceptance criterion.** For each criterion in the requirements, name the test that fails
-   if the feature is removed. If a criterion has none, write it. Say in `tests_added` which criterion each
-   test covers.
+1. **One test per acceptance criterion.** For each criterion in the requirements (number them from 1),
+   name the test that fails if the feature is removed. If a criterion has none, write it. Say in
+   `tests_added`, as `<file>::<name> - covers AC<n>`, which criterion each test covers. This holds even
+   when `environment.tests_unavailable` is true: write the tests anyway, in the project's own test
+   framework and language.
 2. **Every way in.** A rule you add (a filter, a permission, a limit) must hold on every path that can
    reach the behaviour: each control in the UI, each API route, each default and cached value. List the
    entry points you found with grep and check each one. A rule enforced on one path and bypassed on another
@@ -37,6 +39,10 @@ You cannot run anything, so check your own work by reading it:
    exists already, do not add one.
 6. **Stay in the plan.** Edit only the files the plan names, plus what the typecheck forces; list the rest in
    `deviations`.
+7. **Do all of the plan.** Compare the files you changed with the design's `files`. Anything planned and not
+   changed goes in `deviations` as `NOT DONE: <file> - <why>`. Do not submit a half-done change as complete.
+8. **It compiles when read.** Check every call you wrote against the definition you grep for, every import,
+   and every value that may be unset.
 
 ## When the message has `feedback`
 

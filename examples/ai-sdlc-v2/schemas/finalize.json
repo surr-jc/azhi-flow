@@ -4,6 +4,18 @@
     "ship": {
       "type": "boolean"
     },
+    "blocked": {
+      "type": "boolean"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockers_text": {
+      "type": "string"
+    },
     "needs_human_attention": {
       "type": "boolean"
     },
@@ -163,6 +175,9 @@
     },
     "criteria_counts": {
       "type": "object"
+    },
+    "criteria_missing": {
+      "type": "integer"
     },
     "targeted_tests": {
       "type": [

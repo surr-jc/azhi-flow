@@ -227,7 +227,7 @@
         "write": "release",
         "path": [
           "plan",
-          "open_pr",
+          "finalize",
           "release"
         ],
         "gate": "guard"
@@ -237,7 +237,6 @@
         "write": "send_back",
         "path": [
           "plan",
-          "weight_proposal",
           "finalize",
           "send_back"
         ],
@@ -1025,6 +1024,7 @@
         "lite_verify_1",
         "lite_verify_2",
         "mode",
+        "plan",
         "test_strategist",
         "weight_proposal"
       ],
@@ -1037,6 +1037,7 @@
         "lite_verify_1",
         "lite_verify_2",
         "mode",
+        "plan",
         "test_strategist",
         "weight_proposal"
       ]

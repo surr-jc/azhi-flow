@@ -308,6 +308,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     // Past the model-call limit the turn is interrupted and the agent is asked, in a user message, to submit.
     let allowed = stepsFor(input.maxToolCalls);
     let limitHit = false;
+    let stepLimitReached = false;
     for (;;) {
       if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled');
       const watch = setInterval(() => {
@@ -365,7 +366,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
             continue;
           }
         }
-        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' } });
+        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' }, stepLimitReached });
         sink.put({ id: 'workspace-change', kind: 'note', text: `Change: ${change.stats.files} file(s), +${change.stats.additions} -${change.stats.deletions}${change.files.length ? `\n${change.files.map((f) => `${f.status} ${f.path}`).join('\n')}` : ''}`, at: Date.now() });
         return await finish({ output: { ...(state.output as Record<string, unknown>), workspace: change } }, state);
       }
@@ -379,6 +380,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
           return await finish({ error: { class: ErrorClass.contractViolation, message: `the agent used its ${allowed} model calls and did not call ${SUBMIT_TOOL}` } }, state);
         }
         limitHit = false;
+        stepLimitReached = true;
         allowed = transcript.calls + WRAP_UP_CALLS;
         text = `You have reached the maximum number of steps for this task. Do not start new work. Call ${MCP_NAME}_${SUBMIT_TOOL} now with your result so far, noting what is unfinished.`;
         continue;

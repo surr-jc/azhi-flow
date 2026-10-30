@@ -99,6 +99,7 @@ export const WORKSPACE_CHANGE_SCHEMA: JsonSchema = {
     },
     diff: { type: 'string' },
     diff_truncated: { type: 'boolean' },
+    step_limit_reached: { type: 'boolean' },
     stats: { type: 'object', properties: { files: { type: 'integer' }, additions: { type: 'integer' }, deletions: { type: 'integer' } } },
     tests: {
       type: 'object',

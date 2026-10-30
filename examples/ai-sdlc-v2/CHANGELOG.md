@@ -1,5 +1,17 @@
 # Changelog
 
+## Findings and unmet criteria block the pull request
+
+- Findings and unmet criteria now block, not only flag. `finalize` sets `ship: false` and lists `blockers` (also as
+  `blockers_text`) for a confirmed critical finding, an unmet acceptance criterion, acceptance criteria the reviewer did
+  not judge (it compares the count with `requirements.acceptance_criteria`; `criteria` is now required in
+  `verdict.json`), or a build that ran out of steps (`workspace.step_limit_reached`). The run goes to `send_back` with
+  the reasons. Major findings and partial criteria still open a flagged draft.
+- `finalize` keeps the last reviewed round's findings when the fix round is not reviewed again, and the pull request
+  body now lists the findings (id, severity, `path:line`, message, confidence), the unverified and dropped ones, and
+  the criteria that are not met.
+- Build and fix steps allow 40 model calls instead of 10 (the limit counts model calls, not gateway calls).
+
 ## Shared contexts for repeated inputs
 
 | Gap | Change |

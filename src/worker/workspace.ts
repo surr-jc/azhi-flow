@@ -154,6 +154,8 @@ export interface WorkspaceChange {
   diff_truncated: boolean;
   stats: { files: number; additions: number; deletions: number };
   tests: { status: 'passed' | 'failed' | 'not_run'; command: string; exit_code: number | null; attempts: number; output: string };
+  /** True when the agent hit its step limit and was asked to wrap up, so the change may be unfinished. */
+  step_limit_reached?: boolean;
 }
 
 /**
@@ -194,7 +196,7 @@ export async function restoreTree(c: Checkout, home: string, tree: string, timeo
 }
 
 /** The change from the checked-out commit to `tree`, with each changed file's new content. */
-export async function collectChange(c: Checkout, home: string, tree: string, meta: { repo: string; ref: string; tests: WorkspaceChange['tests'] }, timeoutMs = 120_000): Promise<WorkspaceChange> {
+export async function collectChange(c: Checkout, home: string, tree: string, meta: { repo: string; ref: string; tests: WorkspaceChange['tests']; stepLimitReached?: boolean }, timeoutMs = 120_000): Promise<WorkspaceChange> {
   const git = workGit(c, home, timeoutMs);
   // --raw gives modes and status; -z keeps unusual path names intact.
   const raw = (await git(['diff-tree', '-r', '--no-renames', '--raw', '-z', c.head, tree])).toString('utf8').split('\0');
@@ -238,6 +240,7 @@ export async function collectChange(c: Checkout, home: string, tree: string, met
     diff_truncated: truncated,
     stats: { files: files.length, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) },
     tests: meta.tests,
+    ...(meta.stepLimitReached ? { step_limit_reached: true } : {}),
   };
 }
 

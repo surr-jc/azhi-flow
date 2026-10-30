@@ -83,7 +83,8 @@
     "approved",
     "summary",
     "findings",
-    "prompt_injection_detected"
+    "prompt_injection_detected",
+    "criteria"
   ],
   "additionalProperties": false
 }

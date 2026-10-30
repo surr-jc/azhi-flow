@@ -435,7 +435,10 @@ nodes:
         string(size(nodes.plan.output.design.files)) + ' file(s)). Answer the '
         + string(size(nodes.plan.output.requirements.open_questions) +
         size(nodes.plan.output.design.open_questions)) + ' open question(s)
-        first.'"
+        first.' + (nodes.plan.output.requirements.criteria_source == 'ticket'
+        ? '' : ' The ticket did not state all its acceptance criteria; the '
+        + nodes.plan.output.requirements.criteria_source + ' ones are the
+        reading of the request by the planner, so check them.')"
     payload:
       map: "{'open_questions': nodes.plan.output.requirements.open_questions +
         nodes.plan.output.design.open_questions, 'requirements':
@@ -521,7 +524,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: build_untested
     type: agent
     description: "Implement the approved plan when the tests cannot run here (a
@@ -549,7 +552,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: build_static
     type: agent
     description: "Implement the approved plan when only typecheck and build can run
@@ -585,7 +588,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: change_1
     type: script
     description: The build that ran (with or without tests).
@@ -729,7 +732,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: lite_fix_untested
     type: agent
     description: "Fix the confirmed findings when the tests cannot run here: the
@@ -763,7 +766,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: lite_fix_static
     type: agent
     description: Fix the confirmed findings when only typecheck and build can run
@@ -804,7 +807,7 @@ nodes:
     output_schema: schemas/change.json
     timeout: 60m
     budget:
-      max_tool_calls: 10
+      max_tool_calls: 40
   - id: change_2
     type: script
     description: The fix that ran (with or without tests).
@@ -904,7 +907,8 @@ nodes:
       map: "{'verification': nodes.mode.output.mode == 'tested' ? 'full' :
         (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy':
         has(nodes.test_strategist) ? nodes.test_strategist.output : null,
-        'min_confidence': config.min_confidence, 'ticket': inputs.ticket,
+        'requirements':
+        nodes.plan.output.requirements, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket,
         'repo': inputs.repo, 'weight': {'proposed':
         nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by':
         null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite':
@@ -921,8 +925,7 @@ nodes:
       time: 2m
   - id: ship_gate
     type: condition
-    description: Ship to approval only when the tests passed and there is a change.
-      Open findings do not block; they flag the pull request for a person.
+    description: Ship to approval only when the tests passed and there is a change. A confirmed critical finding, an unmet acceptance criterion, criteria the reviewer did not judge, or a build that ran out of steps sends it back instead (see blockers in finalize). Major findings and below flag the pull request for a person.
     expression: "nodes.finalize.output.ship ? 'ship' : 'fix'"
     routes:
       ship:
@@ -1027,15 +1030,12 @@ nodes:
     guard: args.channel == config.channel
   - id: send_back
     type: notify
-    description: Send the change back with the reasons (tests failed, or nothing changed).
+    description: Send the change back with the reasons (tests failed, nothing changed, or a blocker such as a critical finding or an unmet criterion).
     channel: slack
     destination:
       ref: config.channel
     message:
-      cel: nodes.intake.output.key + ' needs more work (tests ' +
-        nodes.finalize.output.change.tests.status + ', ' +
-        string(nodes.finalize.output.change.stats.files) + ' file(s) changed
-        after ' + string(nodes.finalize.output.round) + ' fix round(s)).'
+      cel: "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).' + (nodes.finalize.output.blocked ? ' Blocked: ' + nodes.finalize.output.blockers_text + '.' : '')"
     guard: args.channel == config.channel
   - id: retro
     type: report

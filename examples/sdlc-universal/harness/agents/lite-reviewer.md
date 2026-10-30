@@ -11,3 +11,11 @@ Look for the defects that earlier reviews of this kind kept finding:
 - A test that cannot pass: check that its fixture really sets up the state its assertions rely on, and that it would fail if the feature were removed.
 - Missing boundary tests for anything with roles, workspaces or tenants: a forbidden role, a second workspace, an unknown or invalid value.
 - Edits to files the plan did not name: a minor finding unless the typecheck needs them.
+- A plan that was only partly done: compare the diff's files with the design's `files` and the `NOT DONE` lines in the deviations. A planned file with no change, or a criterion with no test, is `major` at least (`critical` when it leaves a criterion unmet).
+- Data lost or reshaped: where the change moves or maps fields (before and after), check every field is still carried.
+- A branch on a setting that may be unset or empty (a base URL, a flag, an env value): trace what happens when it is absent.
+- Sibling producers of the same event or value (a second service, a legacy path, another caller of the same table): the change must cover them, or the criterion is `partial`.
+- Unknown or unmapped input that falls through to success. Unknown must fail or be reported, never default to "ok".
+- Does it compile, in this language? Every name called is defined with that signature, imports resolve, captured variables and types are legal. A compile error is `critical`.
+- Criteria written by the planner, not the ticket (`requirements.criteria_source` is `derived` or `mixed`): judge them as written, and add a finding if the change meets the request but a derived criterion is plainly wrong or untestable.
+- Tests that were written but not run (see the test result): say in `evidence` that the criterion rests on intent, not on a run.
