@@ -204,10 +204,10 @@ describe.skipIf(!up)('mission control', () => {
     const page = await open('/ui/secrets');
     await page.getByLabel('Name').fill('ui-test-key');
     await page.getByLabel('Value').fill('sk-super-secret-value');
-    await page.getByRole('button', { name: 'Save new version' }).click();
+    await page.getByRole('button', { name: 'Save secret' }).click();
     await page.getByText('ui-test-key is now version 1.').waitFor();
     await page.reload();
-    await page.getByRole('cell', { name: 'ui-test-key' }).waitFor();
+    await page.locator('.sc-name', { hasText: 'ui-test-key' }).waitFor();
     expect(await page.content()).not.toContain('sk-super-secret-value');
     expect(JSON.stringify(await h.api.get('/v1/secrets'))).not.toContain('sk-super-secret-value');
     const audit = await h.api.get<any[]>('/v1/audit');
@@ -236,7 +236,7 @@ describe.skipIf(!up)('mission control', () => {
     await page.getByRole('heading', { name: 'Spend limits' }).waitFor();
     await page.getByLabel('Limit in USD').fill('25');
     await page.getByRole('button', { name: 'Set limit' }).click();
-    await page.getByRole('cell', { name: 'Whole workspace' }).waitFor();
+    await page.locator('.gv-limit', { hasText: 'Whole workspace' }).waitFor();
     expect(await h.api.get<any[]>('/v1/budgets')).toEqual([expect.objectContaining({ workflow: null, period: 'month', limit: 25, exceeded: false })]);
 
     await page.getByRole('link', { name: 'Runs', exact: true }).click();
