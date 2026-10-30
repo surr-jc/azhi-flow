@@ -35,8 +35,8 @@ export function Workflows() {
         <div className="empty"><p className="empty-title">No workflows yet.</p><p className="muted">Run <code>azhi init</code>, then <code>azhi publish</code>, or build one with chat.</p></div>
       ) : (
         <>
-          {q.data.length > 6 ? <input type="search" className="wf-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
-          <div className="wf-grid">
+          {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+          <div className="wfl-grid">
             {shown.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} />)}
           </div>
           {!shown.length ? <p className="muted">No workflows match “{search}”.</p> : null}
@@ -50,16 +50,16 @@ function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) 
   const href = `/ui/workflows/${encodeURIComponent(w.slug)}`;
   const name = w.latest?.name ?? w.slug;
   return (
-    <article className="wf-card">
-      <header className="wf-head">
-        <div className="wf-title">
+    <article className="wfl-card">
+      <header className="wfl-head">
+        <div className="wfl-title">
           <h2><Link to={href}>{name}</Link></h2>
           <span className="muted small mono">{w.slug}</span>
         </div>
         {w.last_run ? <StateBadge state={w.last_run.state} /> : <Badge tone="idle">never run</Badge>}
       </header>
-      <p className={`wf-desc ${w.latest?.description ? 'muted' : 'faint'}`}>{w.latest?.description ?? 'No description.'}</p>
-      <dl className="wf-facts">
+      <p className={`wfl-desc ${w.latest?.description ? 'muted' : 'faint'}`}>{w.latest?.description ?? 'No description.'}</p>
+      <dl className="wfl-facts">
         <div>
           <dt>Published</dt>
           <dd>{w.published ? <>v{w.published.version} {w.published.signed ? <Badge tone="s ok">signed</Badge> : <Badge tone="s warn">unsigned</Badge>}</> : <span className="muted">Not published</span>}</dd>
@@ -74,7 +74,7 @@ function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) 
             {w.schedule ? (
               <>
                 <span className="mono">{w.schedule.cron}</span>{w.schedule.enabled ? null : <> <Badge tone="idle">off</Badge></>}
-                <span className="muted small wf-sub">{w.schedule.timezone}{w.schedule.enabled && w.schedule.next_occurrence_at ? ` · next ${when(w.schedule.next_occurrence_at)}` : ''}</span>
+                <span className="muted small wfl-sub">{w.schedule.timezone}{w.schedule.enabled && w.schedule.next_occurrence_at ? ` · next ${when(w.schedule.next_occurrence_at)}` : ''}</span>
               </>
             ) : <span className="muted">Manual</span>}
           </dd>
@@ -84,7 +84,7 @@ function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) 
           <dd>{w.last_run ? <><span title={when(w.last_run.created_at)}>{ago(w.last_run.created_at)}</span> <Link to={`/ui/runs/${encodeURIComponent(w.last_run.id)}`} className="small">View</Link></> : <span className="muted">Never</span>}</dd>
         </div>
       </dl>
-      <footer className="wf-foot">
+      <footer className="wfl-foot">
         <Link to={href} className="button">Open</Link>
         {isAdmin ? <DeleteAction slug={w.slug} compact /> : null}
       </footer>
