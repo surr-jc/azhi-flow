@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
@@ -47,9 +47,9 @@ describe('SDLC universal: definition', () => {
     for (const word of ['vitest', 'AZHI_TEST_DATABASE_URL', 'build:web', 'C0C6LTYB0MQ']) expect(text).not.toContain(word);
   });
 
-  it('keeps each test command within the 1000 character limit', () => {
+  it('keeps each test command within the 8000 character limit (cmd.exe stops at 8191)', () => {
     const out = JSON.parse(execFileSync('node', [`${PKG}/scripts/build_gate_commands.mjs`], { encoding: 'utf8' }));
-    for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(1000);
+    for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(8000);
     const used = readFileSync(`${PKG}/workflow.yaml`, 'utf8').replace(/\s*\n\s*/g, ' ');
     for (const c of Object.values(out) as string[]) expect(used).toContain(c);
   });
@@ -104,6 +104,87 @@ describe('SDLC universal: gate', () => {
     const r = run(d, 'static');
     expect(r.code).toBe(1);
     expect(r.out).toContain('no static command');
+  });
+
+  /** What the gate would run, without running it. */
+  const plan = (cwd: string, mode: 'full' | 'static' = 'full') => {
+    const out = execSync(`${full[mode]} plan`, { cwd, encoding: 'utf8', stdio: 'pipe' });
+    return (JSON.parse(out) as { projects: Array<{ dir: string; stack: string; commands: string[] }> }).projects;
+  };
+  const dirs = (cwd: string, mode: 'full' | 'static' = 'full') => plan(cwd, mode).map((p) => `${p.dir.replace(/\\/g, '/')}:${p.stack}`).sort();
+
+  it('finds every project of a repository with several stacks in subfolders, as the failing recovery-link repository was', () => {
+    const d = dir({
+      'backend/pom.xml': '<project/>',
+      'backend/src/test/java/AppTest.java': '',
+      'frontend/package.json': JSON.stringify({ scripts: { test: 'vitest run', build: 'vite build' } }),
+      'frontend-react/package.json': JSON.stringify({ scripts: { test: 'vitest run', build: 'vite build' } }),
+      'frontend-react/pnpm-lock.yaml': '',
+      'mcp-server/pyproject.toml': '[project]\nname = "x"\n',
+      'mcp-server/tests/test_a.py': '',
+      'README.md': 'x',
+    });
+    expect(dirs(d)).toEqual(['backend:java/maven', 'frontend-react:node/pnpm', 'frontend:node/npm', 'mcp-server:python']);
+    const maven = plan(d).find((p) => p.stack === 'java/maven')!;
+    expect(maven.commands).toContain('mvn -B test');
+    expect(plan(d, 'static').find((p) => p.stack === 'java/maven')!.commands).toEqual(['mvn -B -q compile', 'mvn -B -q -DskipTests package']);
+  });
+
+  it('detects the other build systems at the root', () => {
+    const cases: Array<[Record<string, string>, string, string]> = [
+      [{ 'build.gradle.kts': '' }, 'jvm/gradle', 'gradle test'],
+      [{ 'App.csproj': '' }, 'dotnet', 'dotnet test --no-restore'],
+      [{ 'go.mod': 'module x' }, 'go', 'go test ./...'],
+      [{ 'Cargo.toml': '' }, 'rust', 'cargo test'],
+      [{ Gemfile: '', Rakefile: '' }, 'ruby', 'bundle exec rake test'],
+      [{ 'composer.json': JSON.stringify({ scripts: { test: 'phpunit' } }) }, 'php', 'composer test'],
+      [{ 'mix.exs': '' }, 'elixir', 'mix test'],
+      [{ Makefile: 'test:\n\techo ok\n' }, 'make', 'make test'],
+      [{ 'pyproject.toml': '', 'uv.lock': '', tests: '' }, 'python', 'uv run pytest -q'],
+    ];
+    for (const [files, stack, test] of cases) {
+      const p = plan(dir(files))[0];
+      expect(p?.stack, stack).toBe(stack);
+      expect(p?.commands, stack).toContain(test);
+    }
+  });
+
+  it('uses the wrapper script of a Maven or Gradle project when it has one, and ignores the npm placeholder test', () => {
+    const wrapped = plan(dir({ 'pom.xml': '', mvnw: '' }))[0]!;
+    expect(wrapped.commands.some((c) => /mvnw/.test(c))).toBe(true);
+    const placeholder = dir({ 'package.json': JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }) });
+    expect(run(placeholder, 'full').out).toContain('no full command');
+  });
+
+  it('does not descend into build output, dependencies or hidden folders', () => {
+    const d = dir({ 'node_modules/x/package.json': JSON.stringify({ scripts: { test: 'x' } }), '.cache/go.mod': '', 'target/pom.xml': '', 'svc/go.mod': 'module x' });
+    expect(plan(d).map((p) => p.stack)).toEqual(['go']);
+  });
+
+  it('keeps going to a nested project when the root only has tooling', () => {
+    const d = dir({ 'package.json': JSON.stringify({ scripts: { prepare: 'husky' } }), 'api/go.mod': 'module x' });
+    expect(plan(d).map((p) => p.stack)).toEqual(['go']);
+  });
+
+  it('runs each project from its own folder and fails when any project fails, after running the rest', () => {
+    const ok = `node -e "require('fs').writeFileSync('ran.txt','1')"`;
+    const bad = `node -e "process.exit(3)"`;
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'a', test: ok }, { dir: 'b', test: bad }, { dir: 'c', test: ok }] }), 'a/x': '', 'b/x': '', 'c/x': '' });
+    const r = run(d, 'full');
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('AZHI_GATE full failed: b test');
+    expect(existsSync(join(d, 'a', 'ran.txt'))).toBe(true);
+    expect(existsSync(join(d, 'c', 'ran.txt'))).toBe(true);
+    expect(existsSync(join(d, 'ran.txt'))).toBe(false);
+    const good = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'a', test: ok }] }), 'a/x': '' });
+    const g = run(good, 'full');
+    expect(g.code).toBe(0);
+    expect(g.out).toContain('AZHI_GATE full passed (1 project(s))');
+  });
+
+  it('refuses a configured folder outside the checkout', () => {
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: '..', test: 'node -e 0' }, { dir: '/tmp', test: 'node -e 0' }] }) });
+    expect(run(d, 'full').out).toContain('no full command');
   });
 });
 

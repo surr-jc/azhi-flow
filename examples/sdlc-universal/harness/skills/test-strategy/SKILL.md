@@ -38,7 +38,9 @@ signals, none of them exhaustive:
 | `CMakeLists.txt`, `Makefile`, `meson.build`, `BUILD`/`WORKSPACE` | C, C++, Bazel and other build-system repositories |
 | `*.tf`, `Chart.yaml`, `Dockerfile` only | infrastructure, with little to unit test |
 
-Then find how the project itself says to build and test, in this order of trust: the CI workflow
+The workflow's own gate already detects many of these, in the root and in subfolders, and runs every project
+it finds. When it still found nothing, the usual cause is a stack or layout it does not know, so say which
+file or folder it should have used. Then find how the project itself says to build and test, in this order of trust: the CI workflow
 (`.github/workflows`, `.gitlab-ci.yml`, `Jenkinsfile`, `azure-pipelines.yml`, `.circleci`), a
 `Makefile` or task runner (`justfile`, `Taskfile`, `package.json` scripts, `tox`, `noxfile`), then the
 README and CONTRIBUTING. Also look for `.azhi/commands.json` (the approved command list the workflow

@@ -177,7 +177,8 @@ export const workflowSchema = {
             test: {
               type: 'object',
               properties: {
-                command: { type: 'string', minLength: 1, maxLength: 1000 },
+                // 8000: Windows' cmd.exe runs nothing longer than 8191 characters.
+                command: { type: 'string', minLength: 1, maxLength: 8000 },
                 timeout: duration,
                 attempts: { type: 'integer', minimum: 1, maximum: 5 },
               },

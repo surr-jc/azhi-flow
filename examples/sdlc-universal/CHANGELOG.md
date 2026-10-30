@@ -4,8 +4,13 @@
 
 - Test strategy no longer assumes a stack. The skill identifies the ecosystem from manifests and CI (JVM, .NET, Go,
   Rust, Python, Ruby, PHP and others), has new failure classes (`toolchain_missing`, `timeout`, `no_tests`), and
-  `test_strategy.json` requires `ecosystem`. The gate script still detects npm, Cargo, Go and Python only (it is at
-  984 of 1000 characters); other stacks state their commands in `.azhi/commands.json`.
+  `test_strategy.json` requires `ecosystem`.
+- The test gate is stack- and layout-neutral. It detects node (npm, pnpm, yarn, bun), Maven, Gradle, .NET, Go, Rust,
+  Python (pip, uv, poetry), Ruby, PHP, Elixir, Swift and make, at the root and up to two folders below it, runs every
+  project from its own folder and fails if any fails. `.azhi/commands.json` can also list `projects`. To make room,
+  `workspace.test.command` may now be 8000 characters (was 1000), and `build_gate_commands.mjs --write` regenerates
+  the six commands in `workflow.yaml`. This fixes repositories such as a Java backend with two front ends and a
+  Python service, which failed with `no full command` because nothing sat at the root.
 - Acceptance criteria are always present. When the ticket states none, the planner derives them from the request and
   sets `requirements.criteria_source` (`ticket`, `derived` or `mixed`); the design review asks a person to confirm
   derived ones, and the definition-of-ready no longer fails a ticket only for lacking them.

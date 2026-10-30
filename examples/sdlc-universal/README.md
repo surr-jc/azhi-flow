@@ -106,11 +106,17 @@ server default (see [docs/model-defaults.md](../../docs/model-defaults.md)).
 
 ## The test gate
 
-A workspace test command is a string of at most 1000 characters, so `scripts/gate.js` is carried
-compressed in `workflow.yaml` (`node scripts/build_gate_commands.mjs` prints both commands). `full` runs
+A workspace test command is a string of at most 8000 characters (cmd.exe stops at 8191), so
+`scripts/gate.js` is carried compressed in `workflow.yaml`. After editing `gate.js`, run
+`node examples/sdlc-universal/scripts/build_gate_commands.mjs --write` to put the new commands into
+`workflow.yaml`; a test checks they match. `full` runs
 install, type-check and tests. `static` runs install, type-check and build, and is used only when the full
 tests cannot run on the base branch; the pull request is then tagged `[static-checks-only]` and is a draft.
 Unlike v2, static mode does not run the changed test files, because that depends on the test framework.
+
+The gate works for any language and any repository layout. It checks every project it finds, each from its
+own folder, and fails if any of them fails. `node -e <command> full plan` prints what it would run without
+running it.
 
 The commands come from `.azhi/commands.json` in the repository if present:
 
@@ -118,8 +124,20 @@ The commands come from `.azhi/commands.json` in the repository if present:
 { "install": "mvn -q dependency:resolve", "typecheck": "", "test": "mvn -q test", "build": "mvn -q -DskipTests package" }
 ```
 
-otherwise from detection: `package.json` scripts (`typecheck`, `test`, `build`; pnpm or yarn by lockfile),
-`Cargo.toml`, `go.mod`, Python (`pytest`). With no usable command the gate exits 1 and says so.
+and, for a repository with several projects in subfolders (a backend, two front ends, a service), a list:
+
+```json
+{ "projects": [
+  { "dir": "backend", "test": "mvn -B test", "build": "mvn -B -DskipTests package" },
+  { "dir": "frontend", "install": "npm ci", "typecheck": "npx tsc --noEmit", "test": "npm test" }
+] }
+```
+
+Otherwise it detects, at the root and up to two folders below it (not hidden folders, `node_modules`, `vendor`,
+`target` or build output): node (npm, pnpm, yarn or bun by lockfile; `typecheck`, `test` and `build` scripts),
+Maven, Gradle (their wrapper scripts when present), .NET, Go, Rust, Python (pip, uv or poetry; `pytest`, and a
+byte-compile check as the type check), Ruby, PHP, Elixir, Swift, and a `Makefile` with a `test` target. With no
+usable command the gate exits 1 and says so.
 
 ## Other harnesses
 
