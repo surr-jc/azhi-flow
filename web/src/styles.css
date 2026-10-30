@@ -183,6 +183,35 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .signin { max-width: 480px; margin: 12vh auto; padding: 16px; }
 .signin .row input { flex: 1; min-width: 220px; }
 
+/* sign-ins page: one card per integration, needs-attention first */
+.si-summary { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.si-summary .muted { grid-column: 2; }
+.si-summary strong { font-size: var(--t-head); grid-column: 2; grid-row: 1; }
+.si-meter { grid-column: 1; grid-row: 1 / span 2; width: 96px; height: 6px; border-radius: 999px; background: var(--idle-bg); overflow: hidden; }
+.si-meter span { display: block; height: 100%; border-radius: 999px; background: var(--ok); }
+.si-summary.warn .si-meter span { background: var(--attention); }
+.si-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+.si-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; min-width: 0; }
+.si-card.needs { border-color: color-mix(in srgb, var(--attention) 55%, var(--line)); }
+.si-head { display: flex; gap: 12px; align-items: flex-start; padding: 16px 16px 12px; }
+.si-title { flex: 1; min-width: 0; }
+.si-title h2 { font-size: var(--t-head); }
+.si-title p { margin: 2px 0 0; }
+.si-mark { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 600; font-size: var(--t-head); background: var(--ok-bg); color: var(--ok); }
+.si-mark.warn { background: var(--warn-bg); color: var(--warn); }
+.si-mark.bad { background: var(--bad-bg); color: var(--bad); }
+.si-secrets { list-style: none; margin: 0; padding: 0 16px; }
+.si-secrets li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.si-secret-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.si-name { overflow-wrap: anywhere; }
+.si-foot { padding: 12px 16px 16px; }
+.si-action { border-top: 1px solid var(--line); padding: 16px; background: color-mix(in srgb, var(--bg) 60%, var(--panel)); border-radius: 0 0 var(--r-lg) var(--r-lg); animation: si-in var(--dur-200) var(--ease-out); }
+.si-other { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 16px; }
+.si-other summary { font-weight: 500; }
+.si-other .si-secrets { padding: 8px 0 0; }
+@keyframes si-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .si-action { animation: none; } }
+
 /* graph */
 .graph { overflow-x: auto; }
 svg .node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
