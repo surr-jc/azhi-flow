@@ -203,7 +203,7 @@ const nodeTypes = { card: Card };
 const STATES = ['succeeded', 'failed', 'skipped', 'running', 'waiting', 'pending'] as const;
 const STATE_LABEL: Record<string, string> = { succeeded: 'succeeded', failed: 'failed', skipped: 'skipped', running: 'running', waiting: 'waiting', pending: 'not started' };
 
-export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, head, foot, aside, chips, settings, details, title, tag }: {
+export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, edit, select, states: override, head, foot, aside, chips, settings, details, title, tag, stepActivity }: {
   /** Named in the fullscreen run header, where the page's own rails give way to the canvas's. */
   title?: string;
   /** A short label beside the title there, such as the version. */
@@ -232,6 +232,8 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
   settings?: (node: PlanNode) => CardSetting[];
   /** The panel shown under the canvas for the selected step, in place of the built-in one. */
   details?: (node: PlanNode, close: () => void) => ReactNode;
+  /** More for the fullscreen step column, such as a run step's input, output, events and agent messages. */
+  stepActivity?: (node: PlanNode, run?: NodeRunState) => ReactNode;
 }) {
   const [ownSelected, setOwnSelected] = useState<string | null>(null);
   const owner = edit ?? select;
@@ -575,7 +577,7 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
           </ReactFlow>
         </div>
-        {full ? (sel ? <StepSide node={sel} run={states[sel.id]} live={live} onStep={stepBy} onClose={() => setSelected(() => null)} /> : null) : aside}
+        {full ? (sel ? <StepSide node={sel} run={states[sel.id]} live={live} activity={stepActivity?.(sel, states[sel.id])} onStep={stepBy} onClose={() => setSelected(() => null)} /> : null) : aside}
       </div>
       <div className="wf-rail wf-foot">
         {full ? (
@@ -622,14 +624,14 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
 }
 
 /** The selected step in fullscreen, in a column beside the canvas: what it is, how it ran, and its key settings. */
-function StepSide({ node, run, live, onStep, onClose }: { node: PlanNode; run?: NodeRunState; live: boolean; onStep: (d: number) => void; onClose: () => void }) {
+function StepSide({ node, run, live, activity, onStep, onClose }: { node: PlanNode; run?: NodeRunState; live: boolean; activity?: ReactNode; onStep: (d: number) => void; onClose: () => void }) {
   const t = TYPE[node.type] ?? { glyph: '•', icon: 'step', label: node.type };
   const def = node.def ?? {};
   const rows = keySettings({ type: node.type, ...def }, []);
   const route = routeTaken(run);
   const error = run?.error ? String((run.error as { message?: unknown }).message ?? JSON.stringify(run.error)) : null;
   return (
-    <aside className="wf-side wf-step" aria-label={`Step ${node.id}`}>
+    <aside className={`wf-side wf-step${activity ? ' has-activity' : ''}`} aria-label={`Step ${node.id}`}>
       <header>
         <span className={`wf-tile t-${node.type}`} aria-hidden="true"><Icon name={t.icon} size={20} /></span>
         <div className="wf-step-name">
@@ -653,6 +655,7 @@ function StepSide({ node, run, live, onStep, onClose }: { node: PlanNode; run?: 
         {node.route ? <div><dt>Only on route</dt><dd>{node.route.route} of {node.route.condition}</dd></div> : null}
         {rows.map((r) => <div key={r.label}><dt>{r.label}</dt><dd className={r.tone ? `tone-${r.tone}` : undefined} title={r.value}>{r.value}</dd></div>)}
       </dl>
+      {activity}
       <footer>
         <button type="button" className="small" onClick={() => onStep(-1)}>← Previous step</button>
         <button type="button" className="small" onClick={() => onStep(1)}>Next step →</button>

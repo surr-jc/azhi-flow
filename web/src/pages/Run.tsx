@@ -5,10 +5,10 @@ import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, useConfirm, when } from '../ui';
-import { Formatted, plainText } from '../components/Rich';
+import { Formatted, Markdown, plainText } from '../components/Rich';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
-import { AgentActivityPanel } from './AgentActivity';
+import { AgentActivityPanel, useTranscript, type TranscriptEntry } from './AgentActivity';
 import { Feed, FeedEmpty, FeedItem, offsetOf, type FeedTone } from '../components/ActivityFeed';
 import { Icon } from '../icons';
 import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
@@ -120,6 +120,7 @@ export function RunPage({ id }: { id: string }) {
             plan={d.plan}
             height="clamp(400px, 66vh, 760px)"
             states={replayStates}
+            stepActivity={(n, st) => <StepActivity key={n.id} node={n} run={st} detail={d} events={events} runId={id} open={open} />}
             head={drawerOpen ? null : (
               <button type="button" className="atlas-reopen" onClick={() => pickDrawer(true)} title="Show steps, ledger, policy, context and cost">
                 <Icon name="runs" size={16} />Run details
@@ -230,6 +231,118 @@ function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; 
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type ActTab = 'input' | 'output' | 'events' | 'agent';
+const ACT_INPUT_KEYS = ['input', 'arguments', 'query', 'for_each', 'payload', 'message', 'destination'];
+const clock = (ms?: number | string) => (ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+const line = (t: string, n = 90) => { const s = t.replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+
+/** The selected step in fullscreen: what went into it, what came out, its events, and its agent's messages. */
+function StepActivity({ node, run, detail: d, events, runId, open }: { node: PlanNode; run?: NodeRunState; detail: any; events: RunEvent[]; runId: string; open: boolean }) {
+  const isAgent = node.type === 'agent';
+  const [tab, setTab] = useState<ActTab>(isAgent ? 'agent' : run?.error || run?.output !== undefined ? 'output' : 'input');
+  const states = nodeStates(d);
+  const mine = events.filter((e) => e.node_id === node.id);
+  const tabs: Array<[ActTab, string, number?]> = [['input', 'Input'], ['output', 'Output'], ['events', 'Events', mine.length], ...(isAgent ? [['agent', 'Agent'] as [ActTab, string]] : [])];
+  return (
+    <section className="sa" aria-label={`Activity of ${node.id}`}>
+      <div className="sa-tabs" role="tablist">
+        {tabs.map(([k, label, n]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{n ? <span className="sa-n">{n}</span> : null}</button>)}
+      </div>
+      <div className="sa-body" role="tabpanel">
+        {tab === 'input' ? <StepInput node={node} states={states} inputs={d.run.inputs} /> : null}
+        {tab === 'output' ? <StepOutput run={run} /> : null}
+        {tab === 'events' ? <StepEvents events={mine} /> : null}
+        {tab === 'agent' ? <StepAgent node={node.id} runId={runId} open={open} /> : null}
+      </div>
+    </section>
+  );
+}
+
+const Fold = ({ title, hint, open, children }: { title: ReactNode; hint?: ReactNode; open?: boolean; children: ReactNode }) => (
+  <details className="sa-fold" open={open}><summary><b>{title}</b>{hint ? <span className="muted small">{hint}</span> : null}</summary><div className="sa-fold-body">{children}</div></details>
+);
+
+/** What the step is given: its own mapping, then what each step it runs after returned. */
+function StepInput({ node, states, inputs }: { node: PlanNode; states: Record<string, NodeRunState>; inputs: unknown }) {
+  const def = node.def ?? {};
+  const mapped = Object.fromEntries(ACT_INPUT_KEYS.filter((k) => def[k] !== undefined).map((k) => [k, def[k]]));
+  const from = node.deps.filter((id) => states[id]?.output !== undefined && states[id]?.output !== null);
+  return (
+    <>
+      {Object.keys(mapped).length ? <Fold title="Mapped input" hint="from the workflow" open><Formatted value={mapped} plain /></Fold> : null}
+      {!node.deps.length && inputs && Object.keys(inputs as object).length ? <Fold title="Run inputs" open><Formatted value={inputs} /></Fold> : null}
+      {from.map((id, i) => <Fold key={id} title={id} hint="output" open={i === 0 && !Object.keys(mapped).length}><Formatted value={states[id]!.output} /></Fold>)}
+      {!Object.keys(mapped).length && !from.length && !(!node.deps.length && inputs && Object.keys(inputs as object).length) ? <p className="muted small">Nothing was passed in from other steps.</p> : null}
+    </>
+  );
+}
+
+function StepOutput({ run }: { run?: NodeRunState }) {
+  if (!run || run.state === 'pending') return <p className="muted small">This step has not started.</p>;
+  if (run.error) return <Formatted value={run.error} plain />;
+  if (run.output === undefined || run.output === null) return <p className="muted small">{run.state === 'running' ? 'Running. Its output appears here when it finishes.' : run.state === 'skipped' ? 'Skipped, so it returned nothing.' : 'No output.'}</p>;
+  return <Formatted value={run.output} />;
+}
+
+function StepEvents({ events }: { events: RunEvent[] }) {
+  if (!events.length) return <p className="muted small">No events for this step yet.</p>;
+  return (
+    <ol className="sa-events">
+      {events.map((e) => {
+        const dsc = describe(e);
+        const more = summarise(e);
+        return (
+          <li key={e.seq} className={dsc.tone}>
+            <span className="mono muted">{clock(e.at)}</span>
+            <span>{dsc.text}{more && ['node.running', 'node.succeeded', 'node.skipped'].includes(e.kind) === false ? <details><summary className="muted small">Details</summary><pre className="code">{e.kind} #{e.seq}{'\n'}{more}</pre></details> : null}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** An agent step's conversation, compact: messages in full, tool calls and reasoning one line each. */
+function StepAgent({ node, runId, open }: { node: string; runId: string; open: boolean }) {
+  const { entries, enabled, loaded } = useTranscript(runId, open);
+  const list = entries.filter((e) => e.node_id === node && e.kind !== 'system' && e.kind !== 'step' && e.kind !== 'note');
+  const attempt = Math.max(0, ...list.map((e) => e.attempt));
+  const shown = list.filter((e) => e.attempt === attempt);
+  if (!enabled) return <p className="muted small">Agent transcripts are turned off on this server.</p>;
+  if (!shown.length) return <p className="muted small">{loaded ? 'No agent messages yet.' : 'Loading…'}</p>;
+  return (
+    <div className="sa-chat">
+      {attempt > 1 ? <p className="muted small">Attempt {attempt}</p> : null}
+      {shown.map((e) => <ChatLine key={`${e.attempt}/${e.id}`} e={e} />)}
+    </div>
+  );
+}
+
+function ChatLine({ e }: { e: TranscriptEntry }) {
+  const when = clock(e.at);
+  if (e.kind === 'tool') {
+    const tone = e.status === 'completed' ? 'ok' : e.status === 'error' ? 'bad' : 'run';
+    return (
+      <details className={`sa-tool ${tone}`}>
+        <summary><i aria-hidden="true" /><b className="mono">{e.tool ?? 'tool'}</b><span className="muted">{line(typeof e.input === 'string' ? e.input : JSON.stringify(e.input ?? ''), 60)}</span></summary>
+        <div className="sa-tool-io">
+          <div className="sa-label">Input</div><Formatted value={e.input ?? {}} plain />
+          {e.status === 'error' ? <><div className="sa-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="sa-label">Result</div><Formatted value={e.output} plain /></> : <p className="muted small">Running…</p>}
+        </div>
+      </details>
+    );
+  }
+  if (e.kind === 'reasoning') return <details className="sa-tool think"><summary><i aria-hidden="true" /><b>Reasoning</b><span className="muted">{line(e.text ?? '', 70)}</span></summary><div className="sa-tool-io"><Markdown text={e.text ?? ''} /></div></details>;
+  const who = e.kind === 'user' ? 'Prompt' : e.kind === 'assistant' ? 'Assistant' : 'Error';
+  const long = (e.text ?? '').length > 600;
+  return (
+    <div className={`sa-msg ${e.kind}`}>
+      <div className="sa-msg-head"><b>{who}</b><span className="muted small">{when}</span></div>
+      {long ? <details><summary className="muted small">{line(e.text ?? '', 120)}</summary><Markdown text={e.text ?? ''} /></details> : <Markdown text={e.text ?? ''} />}
     </div>
   );
 }
