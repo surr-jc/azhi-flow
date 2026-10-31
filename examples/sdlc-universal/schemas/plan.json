@@ -96,6 +96,11 @@
               "why": {
                 "type": "string",
                 "description": "The concrete cost of getting it wrong"
+              },
+              "criterion": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The acceptance criterion this question decides, numbered from 1 (0 when it decides none)"
               }
             },
             "required": [
@@ -295,6 +300,11 @@
               "why": {
                 "type": "string",
                 "description": "The concrete cost of getting it wrong"
+              },
+              "criterion": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The acceptance criterion this question decides, numbered from 1 (0 when it decides none)"
               }
             },
             "required": [

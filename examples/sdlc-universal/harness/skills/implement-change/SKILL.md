@@ -60,6 +60,11 @@ acceptance criterion, the error paths, and the edge cases the plan lists. Follow
 `ac_verification`, which says per criterion what to add. Tests must be deterministic: no network, no
 real time or random values without control.
 
+Where a criterion lists outcomes, write one test per outcome. Each test drives a real input through the code that
+production uses (the sender, handler or endpoint), not a hand-built result, and asserts the outcome that input
+must produce. Add one test for an unknown or empty input, which must give a neutral result, never success. A test
+that only checks that a label renders, or a string or its length, does not cover an outcome and does not count.
+
 Number the criteria in the order of the requirements (1 is the first). In `tests_added`, write each
 entry as `<test file>::<test name> - covers AC<n>[, AC<m>]`. Every criterion must appear in at least
 one entry, or in `deviations` as `AC<n>: no automated test, <reason>`. A criterion rated `manual` in
@@ -80,6 +85,9 @@ signature (grep for its definition), every import or using or include resolves, 
 agree at each call, a captured variable is allowed to be captured, and no branch assumes a setting is
 present when it may be unset. Then submit:
 
+- Open questions: where a person's answer at the design review did not settle a question (it said to use the
+  defaults, or the question was left out), list it under `## Open questions` in `pr_body` with the default you
+  used, so the reviewer sees what was assumed.
 - `summary`: one sentence on what the change does.
 - `commit_message`: a conventional commit, `type(scope): subject` (at most 72 characters), a blank
   line, then what changed and why.

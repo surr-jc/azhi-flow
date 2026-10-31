@@ -15,6 +15,11 @@ Look for the defects that earlier reviews of this kind kept finding:
 - Data lost or reshaped: where the change moves or maps fields (before and after), check every field is still carried.
 - A branch on a setting that may be unset or empty (a base URL, a flag, an env value): trace what happens when it is absent.
 - Sibling producers of the same event or value (a second service, a legacy path, another caller of the same table): the change must cover them, or the criterion is `partial`.
+- Edge values: null, unknown, empty and zero inputs. A null count must not render as success or as green, and an unmapped status must not fall through to a normal state.
+- Every emitter of the same event, value or message: list them all (grep for the event, the field or the class) and check the change covers each and that a field added on one path (an id, a run id) exists on the others.
+- A helper, extractor or parser the change adds that nothing calls, or whose pattern the real input never matches: it is dead code and the criterion that depends on it is not met.
+- Timing between sender and state: a value read before the thing that sets it has run.
+- User-visible wording the ticket or the criteria name (a label, a message): it matches the ticket's terms.
 - Unknown or unmapped input that falls through to success. Unknown must fail or be reported, never default to "ok".
 - Does it compile, in this language? Every name called is defined with that signature, imports resolve, captured variables and types are legal. A compile error is `critical`.
 - Criteria written by the planner, not the ticket (`requirements.criteria_source` is `derived` or `mixed`): judge them as written, and add a finding if the change meets the request but a derived criterion is plainly wrong or untestable.

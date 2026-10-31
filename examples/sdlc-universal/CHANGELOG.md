@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Where a criterion lists outcomes (Started, Not Started, Blocked), the plan, the engineer and the test reviewer now
+  require one test per outcome that drives a real input through production code; a test that only checks that a label
+  renders or a string's length does not count. The reviewer and the code-review skill check edge values (null or
+  unknown never shown as success), every emitter of the same event with fields such as ids on all of them, helpers
+  nothing calls, timing between sender and state, and the ticket's wording.
+- Rules the ticket does not give (how a state is decided, thresholds, unknown input, wording) are raised as open
+  questions at the design review; `open_questions[].criterion` ties each to a criterion, and the engineer lists
+  anything the answers did not settle under `## Open questions` in the pull request.
 - New step `lite_audit_1` and `lite_audit_2` (profile `criteria-auditor@1`, skill `criteria-audit`, a different model
   from the reviewer): for every criterion the reviewer rated `met`, the auditor lists the outcomes it names, finds an
   input that produces each and traces it through the code, or reports a counterexample. `finalize` keeps a "met" only

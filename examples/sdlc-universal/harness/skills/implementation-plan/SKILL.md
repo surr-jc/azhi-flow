@@ -57,14 +57,20 @@ needs a reason.
   catch a violation, or `manual` with what a person must look at and why it cannot be automated. Use
   `manual` only when the criterion truly cannot be exercised in code (a layout on a real device, a
   third-party dashboard); a criterion with no entry is a plan defect. Prefer `automated_test` and
-  name a test that fails if the feature is removed.
+  name a test that fails if the feature is removed. When a criterion lists outcomes (Started, Not Started,
+  Blocked; green, orange), `where` names one test per outcome, each driven by a real input through the code
+  that production uses (the sender, handler or endpoint), and a test of the rule that decides between them
+  with an input for each outcome and for an unknown or empty input. A test that only checks that a label
+  renders, or a length or a substring, does not count.
 - `risks`: what could go wrong (edge cases, compatibility, security, data) and the mitigation.
 
 Stay out of the non-goals.
 
 ## 5. Open questions, each with a recommended default
 
-Anything you would otherwise guess goes in `open_questions` with `recommended_default` and `why`: a
+Anything you would otherwise guess goes in `open_questions`, including every rule the ticket does not give (how a
+state is decided from its inputs, a threshold, the treatment of unknown input, user-visible wording; set
+`criterion` to the criterion it decides) with `recommended_default` and `why`: a
 pattern fork (two existing patterns fit, name both with file:line), a contract shape, failure
 behaviour, a preference with no precedent. A person answers them at the design review before any
 code is written. Never guess silently. Write each in the `decision-rubric` format (load that skill).

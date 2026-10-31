@@ -51,6 +51,9 @@ own words, and set `criteria_source` accordingly:
   path and the "must not change" case). Keep the stated ones first and unchanged, then add the missing
   ones.
 
+Keep a criterion that lists outcomes as one criterion and name every outcome in its text, so that none is
+forgotten later: the plan gives each outcome its own test and the audit looks for an input that produces each one.
+
 A request with no stated criteria is not a reason to stop or to return an empty list: the list is
 required, and every later step (the plan, the tests, the review and the release decision) is measured
 against it. If the request is too thin to derive even one checkable outcome, say so in an open question.
@@ -79,9 +82,16 @@ counter-argument. The ticket has already passed the definition-of-ready check, s
 real decisions, not missing basics.
 
 
-Only what the ticket and the code genuinely leave open, at most six, from these kinds: scope
+Only what the ticket and the code genuinely leave open, at most six, from these kinds: **a rule the
+ticket does not give** (how a state, label, status or outcome is decided from its inputs, a threshold, how
+unknown or empty input is treated, what user-visible wording to use), scope
 boundary, contract shape (an API, payload or data change the ticket implies but never states),
 failure behaviour, preference with no precedent in the code, and a missing or uncheckable criterion.
+Look for rule questions deliberately: for every criterion that names states or outcomes ("shows Started, Not
+Started or Blocked", "green or orange"), ask yourself what input decides each one, and whether the ticket says.
+If it does not, that is a question, not something to settle quietly in the code. Set `criterion` to the number of
+the criterion a question decides (0 if none), so the answer is tied to it.
+
 Each question carries `recommended_default` (what you would do, so answering is cheap) and `why`. A
 person answers them at the design review; never answer them yourself and never hide one. If nothing
 is open, return an empty list: silence is not the same as clearance, so check twice.

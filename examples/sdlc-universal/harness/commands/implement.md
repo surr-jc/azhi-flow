@@ -31,17 +31,24 @@ You cannot run anything, so check your own work by reading it:
    reach the behaviour: each control in the UI, each API route, each default and cached value. List the
    entry points you found with grep and check each one. A rule enforced on one path and bypassed on another
    is the most common reason a change is sent back.
-3. **Boundary tests** for anything with roles, workspaces or tenants: a role that must be refused, a second
+3. **One test per outcome.** Where a criterion lists outcomes (Started, Not Started, Blocked), each outcome has
+   a test that drives a real input through the code production uses and asserts that outcome. A test that only
+   checks a label, a string or its length does not count.
+4. **Boundary tests** for anything with roles, workspaces or tenants: a role that must be refused, a second
    workspace that must not see the data, an invalid or unknown value.
-4. **Tests that can pass.** Read each test's setup and confirm it creates the state its assertions rely on
+5. **Tests that can pass.** Read each test's setup and confirm it creates the state its assertions rely on
    (a credential, a row, a registered provider). Do not assert on something the fixture never establishes.
-5. **No empty changes.** Before you add a migration, search `migrations/` for the table or column: if it
+6. **No empty changes.** Before you add a migration, search `migrations/` for the table or column: if it
    exists already, do not add one.
-6. **Stay in the plan.** Edit only the files the plan names, plus what the typecheck forces; list the rest in
+7. **Stay in the plan.** Edit only the files the plan names, plus what the typecheck forces; list the rest in
    `deviations`.
-7. **Do all of the plan.** Compare the files you changed with the design's `files`. Anything planned and not
+8. **Edge values and sibling paths.** List every place that emits or handles the same event or value (grep for
+   the event, the field or the class) and check the change covers each; a field you add on one path (an id, a
+   run id) exists on the others. An unknown, null or empty value is shown neutrally, never as success or as
+   zero. A helper you add has a caller (grep for it). Check what happens when two components disagree in time.
+9. **Do all of the plan.** Compare the files you changed with the design's `files`. Anything planned and not
    changed goes in `deviations` as `NOT DONE: <file> - <why>`. Do not submit a half-done change as complete.
-8. **It compiles when read.** Check every call you wrote against the definition you grep for, every import,
+10. **It compiles when read.** Check every call you wrote against the definition you grep for, every import,
    and every value that may be unset.
 
 ## When the message has `feedback`
