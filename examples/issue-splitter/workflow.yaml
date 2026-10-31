@@ -71,7 +71,7 @@ nodes:
     depends_on: [text_pass]
     input: {map: "{'repo': inputs.repo, 'text': has(inputs.text) ? inputs.text : '', 'issue': has(nodes.github_issue) ? nodes.github_issue.output : null}"}
     output_schema: schemas/ticket.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: analyze
     type: agent
@@ -137,7 +137,7 @@ nodes:
     entrypoint: scripts/final_plan.py
     input: {map: "{'weight': nodes.weight.output.route, 'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output, 'drop': has(nodes.plan_review.output.data.drop) ? nodes.plan_review.output.data.drop : '', 'ready_label': config.ready_label, 'split_label': config.split_label}"}
     output_schema: schemas/final_plan.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: mode
     type: condition
@@ -206,7 +206,7 @@ nodes:
     depends_on: [parent_existing]
     input: {map: "{'issue': has(inputs.issue) ? inputs.issue : '', 'created': has(nodes.parent_create) ? nodes.parent_create.output : null, 'repo': inputs.repo}"}
     output_schema: schemas/parent.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: issue_1
     type: tool
@@ -331,7 +331,7 @@ nodes:
     merge: any
     input: {map: "{'mode': nodes.final_plan.output.mode, 'label': nodes.final_plan.output.label, 'dropped': nodes.final_plan.output.dropped, 'parent': has(nodes.parent) ? nodes.parent.output : null, 'created': [has(nodes.issue_1) ? nodes.issue_1.output : null, has(nodes.issue_2) ? nodes.issue_2.output : null, has(nodes.issue_3) ? nodes.issue_3.output : null, has(nodes.issue_4) ? nodes.issue_4.output : null, has(nodes.issue_5) ? nodes.issue_5.output : null, has(nodes.issue_6) ? nodes.issue_6.output : null], 'single': has(nodes.single_create) ? nodes.single_create.output : null, 'labelled': has(nodes.single_label) ? nodes.single_label.output : null, 'commented': has(nodes.single_comment) ? nodes.single_comment.output : null}"}
     output_schema: schemas/outcome.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: comment_gate
     type: condition

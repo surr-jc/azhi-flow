@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "issue-splitter-jira",
-    "definitionHash": "sha256:e167b2a99256f81218b191aa2c040022cff78dbff526764bd5061f823f3c084a",
+    "definitionHash": "sha256:88148bd6842154b8e7db2be07a668fbfd928122a03a781df11581a9051ca1ed3",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -240,8 +240,7 @@
           },
           "output_schema": "schemas/ticket.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -542,8 +541,7 @@
           },
           "output_schema": "schemas/final_plan.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -804,8 +802,7 @@
           },
           "output_schema": "schemas/parent.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -1302,8 +1299,7 @@
           },
           "output_schema": "schemas/outcome.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
