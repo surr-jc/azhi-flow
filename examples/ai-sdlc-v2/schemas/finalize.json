@@ -199,6 +199,9 @@
       "items": {
         "type": "string"
       }
+    },
+    "criteria_audit": {
+      "type": "object"
     }
   },
   "required": [

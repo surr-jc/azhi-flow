@@ -50,3 +50,9 @@ It holds the findings of the last review. Treat each finding as a class of bug, 
 line, then grep for the same pattern in the sibling code (the other controls, routes and defaults) and fix
 those too. Add the missing test for each finding. Do not change anything the findings do not touch.
 
+`feedback.audit` may list counterexamples: an auditor traced a criterion the reviewer had rated met and found an
+outcome that no input can produce, or an input that breaks it (`criterion` is its number, `counterexample` the
+failing case). Treat each as an unmet criterion: change the code so that outcome can happen or that input is
+handled, add a test that drives that real input through the code (not one that only checks a label or a string),
+and look for the same gap in the sibling paths.
+

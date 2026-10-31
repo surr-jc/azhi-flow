@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New step `lite_audit_1` and `lite_audit_2` (profile `criteria-auditor@1`, skill `criteria-audit`, a different model
+  from the reviewer): for every criterion the reviewer rated `met`, the auditor lists the outcomes it names, finds an
+  input that produces each and traces it through the code, or reports a counterexample. `finalize` keeps a "met" only
+  when the audit holds with a traced outcome at `min_confidence`; a confirmed counterexample makes it `unmet` (blocks)
+  and also sends the change to the fix round, whose engineer receives it in `feedback.audit`; anything unconfirmed is
+  capped at `partial`. This is the check for a criterion that reads as met but whose outcome can never occur.
 - A criterion is `met` only on evidence that ran. The reviewer sets `evidence_kind` (`test_passed`,
   `test_written_not_run`, `code_read`, `manual_unchecked`) and `finalize` caps anything but a test that really ran and
   passed at `partial`; an untested run can no longer show a bare "met". The pull request table shows the kind.

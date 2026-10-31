@@ -95,7 +95,7 @@ Each profile has a `# tier:` line, and `models.json` maps tiers to model names p
 | strong | planner (requirements and design in one pass) | the one expensive decision; a good plan makes the build cheap |
 | balanced | engineer, reviewer | bounded work from the plan |
 | light | readiness check, preflight, test strategist | read and run only |
-| alt | finding verifier | a different model from the reviewer, so they do not share a blind spot |
+| alt | finding verifier, criteria auditor | a different model from the reviewer, so they do not share a blind spot |
 
 Names in `models.json` are the ones this repository already uses; edit them to what your account offers.
 Token savings come from the structure, not only the tiers: one planning pass instead of two, one reviewer

@@ -656,17 +656,46 @@ nodes:
     timeout: 20m
     budget:
       max_tool_calls: 10
+  - id: lite_audit_1
+    type: agent
+    description: Audit every criterion that lite review 1 rated met. For each outcome the
+      criterion names, find an input that produces it and trace it through the code, or
+      report a counterexample (criteria-audit skill, a different model).
+    executor: opencode
+    profile: criteria-auditor@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' +
+          inputs.base_branch : 'HEAD'"
+      credential: github-read-token
+      depth: 1
+    input:
+      map: "{'requirements': nodes.plan.output.requirements, 'design':
+        nodes.plan.output.design, 'change': {'summary':
+        nodes.change_1.output.summary, 'deviations':
+        nodes.change_1.output.deviations, 'tests_added':
+        nodes.change_1.output.tests_added, 'stats':
+        nodes.change_1.output.workspace.stats, 'diff':
+        nodes.change_1.output.workspace.diff, 'diff_truncated':
+        nodes.change_1.output.workspace.diff_truncated, 'tests':
+        nodes.change_1.output.workspace.tests}, 'criteria':
+        nodes.lite_review_1.output.criteria}"
+    output_schema: schemas/audit.json
+    timeout: 20m
+    budget:
+      max_tool_calls: 30
   - id: lite_gate_1
     type: condition
     description: Approved when no reviewer reported a prompt injection and no
-      critical or major finding was confirmed by the verifier with enough
-      confidence; otherwise a fix round.
+      critical or major finding was confirmed by the verifier with enough confidence and the criteria auditor found no confirmed counterexample to a criterion rated met; otherwise a fix round.
     expression: "[nodes.lite_review_1.output].all(v, !v.prompt_injection_detected &&
       (v.approved || v.findings.exists(f, (f.severity == 'critical' ||
       f.severity == 'major'))) && !v.findings.exists(f, (f.severity ==
       'critical' || f.severity == 'major') &&
       nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict ==
-      'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'"
+      'confirmed' && c.confidence >= config.min_confidence))) && !nodes.lite_audit_1.output.checks.exists(c, c.verdict == 'counterexample' && c.confidence >= config.min_confidence) ? 'ok' : 'fix'"
     routes:
       ok: []
       fix:
@@ -718,7 +747,7 @@ nodes:
         'findings': v.findings.filter(f, !(f.severity == 'critical' ||
         f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c,
         c.id == f.id && c.verdict == 'confirmed' && c.confidence >=
-        config.min_confidence))})}}"
+        config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -752,7 +781,7 @@ nodes:
         'findings': v.findings.filter(f, !(f.severity == 'critical' ||
         f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c,
         c.id == f.id && c.verdict == 'confirmed' && c.confidence >=
-        config.min_confidence))})}}"
+        config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -791,7 +820,7 @@ nodes:
         'findings': v.findings.filter(f, !(f.severity == 'critical' ||
         f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c,
         c.id == f.id && c.verdict == 'confirmed' && c.confidence >=
-        config.min_confidence))})}}"
+        config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -883,6 +912,36 @@ nodes:
     timeout: 20m
     budget:
       max_tool_calls: 10
+  - id: lite_audit_2
+    type: agent
+    description: Audit every criterion that lite review 2 rated met. For each outcome the
+      criterion names, find an input that produces it and trace it through the code, or
+      report a counterexample (criteria-audit skill, a different model).
+    executor: opencode
+    profile: criteria-auditor@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' +
+          inputs.base_branch : 'HEAD'"
+      credential: github-read-token
+      depth: 1
+    input:
+      map: "{'requirements': nodes.plan.output.requirements, 'design':
+        nodes.plan.output.design, 'change': {'summary':
+        nodes.change_2.output.summary, 'deviations':
+        nodes.change_2.output.deviations, 'tests_added':
+        nodes.change_2.output.tests_added, 'stats':
+        nodes.change_2.output.workspace.stats, 'diff':
+        nodes.change_2.output.workspace.diff, 'diff_truncated':
+        nodes.change_2.output.workspace.diff_truncated, 'tests':
+        nodes.change_2.output.workspace.tests}, 'criteria':
+        nodes.lite_review_2.output.criteria}"
+    output_schema: schemas/audit.json
+    timeout: 20m
+    budget:
+      max_tool_calls: 30
   - id: finalize
     type: script
     description: Pick the last build that ran, aggregate its verdicts (approved only
@@ -903,10 +962,10 @@ nodes:
         [{'change': has(nodes.change_1) ? nodes.change_1.output : null,
         'verdicts': {'lite': has(nodes.lite_review_1) ?
         nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ?
-        nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.change_2)
+        nodes.lite_verify_1.output.checks : [], 'audit': has(nodes.lite_audit_1) ? nodes.lite_audit_1.output.checks : []}, {'change': has(nodes.change_2)
         ? nodes.change_2.output : null, 'verdicts': {'lite':
         has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks':
-        has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}],
+        has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : [], 'audit': has(nodes.lite_audit_2) ? nodes.lite_audit_2.output.checks : []}],
         'full': []}"
     output_schema: schemas/finalize.json
     limits:

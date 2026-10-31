@@ -15,6 +15,11 @@ that did not judge every acceptance criterion of the requirements, a build that 
 workflow passes the plan) a planned file that was not changed and not explained, or an acceptance criterion that
 needs an automated test and has none.
 
+When the workflow runs the criteria audit (an `audit` list per round: for each criterion the reviewer rated met, whether
+an independent auditor could trace an input to every outcome it names), a "met" survives only if the audit says
+`holds` with at least one traced outcome at the minimum confidence. A confirmed counterexample makes the criterion
+unmet, which blocks; anything the audit could not confirm is capped at partial.
+
 A criterion is `met` only on evidence that ran: the reviewer names its `evidence_kind` (test_passed,
 test_written_not_run, code_read or manual_unchecked) and anything but a test that really ran and passed is
 capped at `partial`. A reviewer's "met" that rests on reading the code alone is therefore never a bare pass. A
@@ -104,8 +109,24 @@ _plan = data.get("plan")
 _how = {int(v["criterion"]): v["how"] for v in ((_plan or {}).get("ac_verification") or [])}
 capped = []
 _checked = []
+audit_on = "audit" in review
+audits = {}
+for _a in review.get("audit") or []:
+    audits.setdefault(_a["criterion"], _a)
+audit_refuted, audit_unconfirmed = [], []
 for _i, _c in enumerate(criteria, 1):
     _c = dict(_c)
+    if audit_on and _c.get("status") == "met":
+        _a = audits.get(_i)
+        _traced = [o for o in ((_a or {}).get("outcomes") or []) if o.get("input")]
+        if _a and _a["verdict"] == "counterexample" and _a["confidence"] >= minimum:
+            _c["status"] = "unmet"
+            _c["evidence"] = "audit counterexample: " + (_a.get("counterexample") or _a["evidence"])
+            audit_refuted.append(_i)
+        elif not _a or _a["verdict"] != "holds" or not _traced or _a["confidence"] < minimum:
+            _c["status"] = "partial"
+            _c["evidence"] = (_c.get("evidence") or "") + " [capped to partial: the criteria audit did not confirm it" + (": " + _a["evidence"] if _a else ", no audit result was returned") + "]"
+            audit_unconfirmed.append(_i)
     kind = _c.get("evidence_kind") or ("test_passed" if ran_tests else "code_read")
     if kind == "test_passed" and not ran_tests:
         kind = "test_written_not_run"
@@ -160,12 +181,14 @@ if criteria_missing:
     blockers.append(f"the reviewer judged {len(criteria)} of {len(expected)} acceptance criteria")
 if step_limit:
     blockers.append("the build ran out of steps and may be unfinished")
+if audit_refuted:
+    blockers.append("the criteria audit found an outcome that cannot happen, or an input that breaks it, for " + ", ".join(f"AC{i}" for i in audit_refuted))
 if plan_unexplained:
     blockers.append(f"{len(plan_unexplained)} planned file(s) not changed and not explained in the deviations: " + ", ".join(plan_unexplained[:5]) + (" ..." if len(plan_unexplained) > 5 else ""))
 if untested_acs:
     blockers.append("no test covers " + ", ".join(f"AC{i}" for i in untested_acs) + " (no `covers AC<n>` entry in tests_added and no waiver in the deviations)")
 ship = (tests_passed or untested) and len(files) > 0 and not blockers
-flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped)
+flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped) or bool(audit_unconfirmed)
 strategy = data.get("strategy") or {}
 
 # A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
@@ -193,6 +216,7 @@ record = {
     "plan_files_missing": plan_missing,
     "criteria_without_test": untested_acs,
     "criteria_capped": capped,
+    "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
     "coverage": strategy or None,
@@ -302,6 +326,7 @@ out = {
     "criteria_counts": crit_counts,
     "criteria_missing": criteria_missing,
     "criteria_capped": capped,
+    "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
     "plan_files_missing": plan_missing,
     "targeted_tests": targeted,
     "closes_removed": closes_removed,

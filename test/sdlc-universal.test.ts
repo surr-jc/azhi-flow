@@ -54,6 +54,17 @@ describe('SDLC universal: definition', () => {
     for (const id of ['push_branch', 'open_pr']) expect(nodes[id].guard, id).toContain('nodes.finalize.output.ship');
   });
 
+  it('audits every criterion rated met, in a fix-round-triggering way, and feeds finalize the audit of each round', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    for (const n of [1, 2]) {
+      expect(nodes[`lite_audit_${n}`].profile).toBe('criteria-auditor@1');
+      expect(nodes[`lite_audit_${n}`].output_schema).toBe('schemas/audit.json');
+    }
+    expect(nodes.lite_gate_1.expression).toContain("nodes.lite_audit_1.output.checks.exists(c, c.verdict == 'counterexample'");
+    expect(JSON.stringify(nodes.finalize.input)).toContain('lite_audit_2.output.checks');
+    for (const id of ['lite_fix', 'lite_fix_untested', 'lite_fix_static']) expect(JSON.stringify(nodes[id].input), id).toContain("'audit': nodes.lite_audit_1");
+  });
+
   it('keeps each test command within the 8000 character limit (cmd.exe stops at 8191)', () => {
     const out = JSON.parse(execFileSync('node', [`${PKG}/scripts/build_gate_commands.mjs`], { encoding: 'utf8' }));
     for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(8000);

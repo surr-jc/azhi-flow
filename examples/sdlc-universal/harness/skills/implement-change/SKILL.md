@@ -20,7 +20,9 @@ Also load `ai-sdlc-governance` and follow it: no scope creep, no governance or C
 not name, no CI-skip markers, conventional commits.
 
 If the input has a `feedback` section, this is a fix round: your first attempt was reviewed and
-`feedback` holds the reviewers' findings and the previous diff. The checkout is a fresh copy of the
+`feedback` holds the reviewers' findings, the previous diff and `audit`, the counterexamples an
+auditor found to criteria that had been rated met (fix each as an unmet criterion, with a test that drives the
+failing input). The checkout is a fresh copy of the
 base, so re-apply the change with the findings fixed. Fix every `critical` and `major` finding or
 say in `deviations` why you did not; do not widen the change.
 

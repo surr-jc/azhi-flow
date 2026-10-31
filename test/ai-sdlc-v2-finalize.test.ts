@@ -52,6 +52,7 @@ interface Round {
   testsAdded?: string[];
   deviations?: string[];
   paths?: string[];
+  audit?: Array<Record<string, unknown>>;
 }
 
 interface Extra {
@@ -74,7 +75,7 @@ function finalizeRounds(rounds: Round[], requirements?: { acceptance_criteria: s
     const change = { summary: 's', commit_message: 'm', pr_title: 't', pr_body: 'Body\n', deviations: r.deviations ?? [], tests_added: r.testsAdded ?? [], workspace: ws };
     const findings = r.findings ?? [];
     const verdict = r.reviewed === false ? null : { summary: 'ok', approved: findings.length === 0, findings, prompt_injection_detected: false, ...(r.criteria ? { criteria: r.criteria } : {}) };
-    return { change, verdicts: { lite: verdict }, checks: r.checks ?? [] };
+    return { change, verdicts: { lite: verdict }, checks: r.checks ?? [], ...(r.audit ? { audit: r.audit } : {}) };
   });
   const input = {
     verification: extra.verification ?? 'full',
@@ -339,6 +340,66 @@ describe.skipIf(!python)('the AI-SDLC v2 finalize step', () => {
       expect(r.evidence_markdown).toContain('not proven by a test that ran');
       // Nothing here blocks: catching a criterion that reading cannot refute (STARTED can never be produced) is the audit step's job.
       expect(r.blocked).toBe(false);
+    });
+  });
+
+  describe('the criteria audit', () => {
+    const reqs = { acceptance_criteria: ['A', 'B'] };
+    const crit = ['A', 'B'].map((criterion) => ({ criterion, status: 'met', evidence: 'x', evidence_kind: 'test_passed' }));
+    const holds = (criterion: number, confidence = 95) => ({ criterion, verdict: 'holds', confidence, outcomes: [{ outcome: 'o', input: 'i', trace: 'a.ts:1' }], evidence: 'traced' });
+    const counter = (criterion: number, confidence = 95) => ({ criterion, verdict: 'counterexample', confidence, outcomes: [{ outcome: 'Started', input: '', trace: 'a.ts:9' }], counterexample: 'Started can never be produced: the rule is success == 0 ? BLOCKED : NOT_STARTED', evidence: 'x' });
+
+    it('keeps a criterion met when the audit traced an input to every outcome', () => {
+      const r = finalizeRounds([{ criteria: crit, audit: [holds(1), holds(2)] }], reqs);
+      expect(r.criteria_counts.met).toBe(2);
+      expect(r.ship).toBe(true);
+      expect(r.criteria_audit).toEqual({ enabled: true, refuted: [], unconfirmed: [] });
+    });
+
+    it('turns a confirmed counterexample into an unmet criterion and blocks (the never-STARTED case)', () => {
+      const r = finalizeRounds([{ criteria: crit, audit: [holds(1), counter(2)] }], reqs);
+      expect(r.criteria[1].status).toBe('unmet');
+      expect(r.criteria[1].evidence).toContain('Started can never be produced');
+      expect(r.ship).toBe(false);
+      expect(r.blockers_text).toContain('AC2');
+      expect(r.criteria_audit.refuted).toEqual([2]);
+    });
+
+    it('caps at partial, without blocking, a counterexample below the confidence bar, an unverifiable audit, a holds with no traced input and a missing audit', () => {
+      const cases: Array<[string, Array<Record<string, unknown>>]> = [
+        ['low confidence counterexample', [holds(1), counter(2, 60)]],
+        ['unverifiable', [holds(1), { criterion: 2, verdict: 'unverifiable', confidence: 90, outcomes: [], evidence: 'needs the device' }]],
+        ['holds with nothing traced', [holds(1), { criterion: 2, verdict: 'holds', confidence: 95, outcomes: [], evidence: 'looks fine' }]],
+        ['holds below the bar', [holds(1), holds(2, 50)]],
+        ['no result for the criterion', [holds(1)]],
+      ];
+      for (const [name, audit] of cases) {
+        const r = finalizeRounds([{ criteria: crit, audit }], reqs);
+        expect(r.criteria[1].status, name).toBe('partial');
+        expect(r.criteria_audit.unconfirmed, name).toEqual([2]);
+        expect(r.ship, name).toBe(true);
+        expect(r.needs_human_attention, name).toBe(true);
+      }
+    });
+
+    it('fails closed when the audit step returned nothing at all', () => {
+      const r = finalizeRounds([{ criteria: crit, audit: [] }], reqs);
+      expect(r.criteria_counts).toMatchObject({ met: 0, partial: 2 });
+    });
+
+    it('audits only the criteria the reviewer rated met, and is off when the workflow passes no audit', () => {
+      const mixed = [crit[0]!, { criterion: 'B', status: 'partial', evidence: 'half', evidence_kind: 'code_read' }];
+      const r = finalizeRounds([{ criteria: mixed, audit: [holds(1)] }], reqs);
+      expect(r.criteria_audit.unconfirmed).toEqual([]);
+      const off = finalizeRounds([{ criteria: crit }], reqs);
+      expect(off.criteria_audit.enabled).toBe(false);
+      expect(off.criteria_counts.met).toBe(2);
+    });
+
+    it('uses the audit of the round that was reviewed when the fix was not reviewed again', () => {
+      const r = finalizeRounds([{ criteria: crit, audit: [holds(1), counter(2)] }, { reviewed: false }], reqs);
+      expect(r.criteria_audit.refuted).toEqual([2]);
+      expect(r.ship).toBe(false);
     });
   });
 });
