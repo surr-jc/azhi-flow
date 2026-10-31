@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
+import { signVersion } from '../signing';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Markdown } from '../components/Rich';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
@@ -661,7 +662,12 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
   // Which steps take keys from a shared context, from what the compiler recorded for each.
   const shared = p.nodes.flatMap((n) => (n.inputParts ?? []).filter((x) => x.source.startsWith('context:')).map((x) => ({ node: n.id, bundle: x.source.slice('context:'.length), key: x.key })));
   const save = useMutation({
-    mutationFn: () => api<{ ok: boolean; errors?: string[]; version?: { id: string; workflow: string; version: number } }>('/v1/builder/save', { method: 'POST', body: { files: p.files, new_version_of: p.new_version_of } }),
+    mutationFn: async () => {
+      const r = await api<{ ok: boolean; errors?: string[]; version?: { id: string; workflow: string; version: number } }>('/v1/builder/save', { method: 'POST', body: { files: p.files, new_version_of: p.new_version_of } });
+      // Workers run signed packages only; the workflow page offers signing again if this fails.
+      if (r.ok && r.version) await signVersion(r.version.id).catch(() => undefined);
+      return r;
+    },
     onSuccess: (r) => {
       if (!r.ok || !r.version) return;
       void qc.invalidateQueries({ queryKey: ['workflows'] });
