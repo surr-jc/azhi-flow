@@ -73,7 +73,7 @@ export function startOutboxDispatcher(ctx: AppContext, client: Client, log: (m: 
   };
 }
 
-async function deliver(ctx: AppContext, client: Client, c: pg.PoolClient, workspaceId: string, kind: string, payload: { run_id: string }): Promise<'done' | 'held'> {
+async function deliver(ctx: AppContext, client: Client, c: pg.PoolClient, workspaceId: string, kind: string, payload: { run_id: string; by?: string }): Promise<'done' | 'held'> {
   if (kind === 'run.start') {
     const run = (
       await c.query(`SELECT r.id, r.state, r.inputs, r.snapshot, r.test, v.plan FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id WHERE r.id=$1 AND r.workspace_id=$2`, [
@@ -109,13 +109,39 @@ async function deliver(ctx: AppContext, client: Client, c: pg.PoolClient, worksp
     return 'done';
   }
   if (kind === 'run.cancel') {
-    try {
-      await client.workflow.getHandle(payload.run_id).cancel();
-    } catch (err) {
-      if (!(err instanceof WorkflowNotFoundError)) throw err;
-      // Never started: cancel the queued run directly.
-      await ctx.pool.query(`UPDATE runs SET state='cancelled', ended_at=now() WHERE id=$1 AND state='queued'`, [payload.run_id]);
+    // Cancel is a forced stop: the run and every child run end now, even if a step is hung and
+    // would never acknowledge a graceful cancel.
+    const tree = (
+      await c.query(
+        `WITH RECURSIVE tree AS (SELECT id FROM runs WHERE id=$1 UNION SELECT r.id FROM runs r JOIN tree t ON r.parent_run_id = t.id) SELECT id FROM tree`,
+        [payload.run_id],
+      )
+    ).rows.map((r) => r.id as string);
+    for (const id of tree) {
+      const handle = client.workflow.getHandle(id);
+      // Ask politely first so running activities abort their sessions, then terminate regardless.
+      await handle.cancel().catch(() => {});
+      try {
+        await handle.terminate(`cancelled by ${payload.by ?? 'user'}`);
+      } catch (err) {
+        // Never started, or already closed: the database below is the source of truth.
+        if (!(err instanceof WorkflowNotFoundError) && !/already completed|not found/i.test((err as Error).message)) throw err;
+      }
     }
+    // A terminated workflow cannot record its own end, so settle the rows here.
+    await c.query(`UPDATE node_attempts SET state='cancelled', ended_at=now() WHERE run_id = ANY($1) AND ended_at IS NULL`, [tree]);
+    await c.query(
+      `UPDATE runs SET state='cancelled', ended_at=COALESCE(ended_at, now()) WHERE id = ANY($1) AND state IN ('queued','running','waiting','cancelling')`,
+      [tree],
+    );
+    for (const id of tree) {
+      await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.cancelled',$3)`, [
+        workspaceId,
+        id,
+        JSON.stringify({ state: 'cancelled', forced: true, by: payload.by ?? null }),
+      ]);
+    }
+    await c.query(`NOTIFY azhi_outbox`);
     return 'done';
   }
   throw new Error(`unknown outbox kind ${kind}`);
