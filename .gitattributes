@@ -1,0 +1,4 @@
+# A workflow package is hashed and signed by its bytes, and its scripts run on whatever OS the worker has. Keep the
+# AI SDLC Factory packages (and their baselines) byte-identical on Windows, Linux and macOS checkouts.
+examples/ai-sdlc-factory*/** text eol=lf
+test/golden/context-regression/examples__ai-sdlc-factory*.json text eol=lf

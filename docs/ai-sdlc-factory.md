@@ -88,6 +88,23 @@ azhi schedule ai-sdlc-factory --cron "0 */2 * * *" --timezone Asia/Kolkata --inp
 Start with one lap you watch, and a long interval. A lap waits for the delivery's approvals, so laps overlap; the claim
 label keeps two of them off the same ticket.
 
+## Windows, Linux and macOS
+
+The three workflows run the same on all three. Nothing in them depends on the operating system:
+
+- **Scripts** (`pick`, `outcome`, `score`, `brief`, `epics`, `gate`) use only Python's standard library, no file paths,
+  no processes and no platform checks (a test enforces this). The worker finds Python itself: `uv`, then `python3`
+  (Linux, macOS), `python` or the `py` launcher (Windows), and runs scripts with UTF-8 forced, so ticket text with
+  accents, dashes or emoji arrives intact on Windows too (also tested).
+- **GitHub paths** are API paths, always `/`. Branch names (`azhi/...`) and labels contain nothing a file system cares about.
+- **Line endings.** A package is hashed and signed by its bytes, so a Windows checkout that turned LF into CRLF would
+  sign differently from a Linux one. `.gitattributes` pins these packages to LF.
+- **Commands** in this page and in each `azhi.config.yaml` are one line each and quote the same in bash, PowerShell and cmd.
+- **Jira** is the one piece with a prerequisite: its tools start `uvx mcp-atlassian`, so the worker needs
+  [uv](https://docs.astral.sh/uv/) installed, on any of the three systems. GitHub-only installs do not need it.
+- The delivery these workflows start (`sdlc-universal`) runs the repository's own test command on the worker; write that
+  command so it works where the worker runs.
+
 ## What this does not do (yet)
 
 - **No merge, no close.** A person merges each pull request into staging, batch-validates there, and sends what is

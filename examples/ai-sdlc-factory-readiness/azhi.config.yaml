@@ -3,8 +3,8 @@
 # GitHub-only installs leave the Jira settings out; add jira_url, jira_username and jira_ci_jql to file the fix
 # ticket in Jira. Try it on a throwaway repository first: an approved run creates one issue.
 #
-# Run it daily with:  azhi schedule ai-sdlc-factory-readiness --cron "0 7 * * *" --timezone Asia/Kolkata \
-#                       --input source=github --input repo=OWNER/REPO --input base_branch=dev
+# Run it daily (one line; the same in bash, PowerShell and cmd):
+#   azhi schedule ai-sdlc-factory-readiness --cron "0 7 * * *" --timezone Asia/Kolkata --input source=github --input repo=OWNER/REPO --input base_branch=dev
 #
 # Secrets (values never go in a package or run state):
 #   github-read-token   fine-grained, read-only "Contents", "Actions", "Issues" and "Pull requests"

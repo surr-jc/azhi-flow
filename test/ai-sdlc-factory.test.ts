@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
@@ -14,8 +14,24 @@ import { staticCatalog } from '../src/gateway/types.js';
  * picks, the readiness level, the epics a splitter receives) behave the same for GitHub and Jira, failing closed
  * on anything they cannot read.
  */
-const PY = process.platform === 'win32' ? 'python' : 'python3';
-const run = (pkg: string, script: string, input: unknown) => JSON.parse(execFileSync(PY, [join('examples', pkg, 'scripts', script)], { input: JSON.stringify(input), stdio: ['pipe', 'pipe', 'pipe'] }).toString());
+// The interpreter a worker would find: python3 (Linux, macOS), python or the py launcher (Windows). On Windows,
+// python3 can be a Microsoft Store stub that prints an error and exits, so each candidate must really answer.
+const PY: string[] = (() => {
+  for (const cmd of [['python3'], ['python'], ['py', '-3']]) {
+    const r = spawnSync(cmd[0]!, [...cmd.slice(1), '-c', 'import sys;print(sys.version_info[0])'], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim() === '3') return cmd;
+  }
+  throw new Error('no Python 3 found (tried python3, python, py -3)');
+})();
+// The worker runs scripts with UTF-8 forced: Python on Windows would otherwise read piped input in the legacy code page.
+const run = (pkg: string, script: string, input: unknown) =>
+  JSON.parse(
+    execFileSync(PY[0]!, [...PY.slice(1), join('examples', pkg, 'scripts', script)], {
+      input: JSON.stringify(input),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+    }).toString(),
+  );
 
 const PACKAGES = ['ai-sdlc-factory-plan', 'ai-sdlc-factory', 'ai-sdlc-factory-readiness'];
 
@@ -57,6 +73,34 @@ describe('AI SDLC Factory packages', () => {
       const tools = parse(readFileSync(`examples/${name}/azhi.config.yaml`, 'utf8')).tools.map((t: any) => t.id);
       expect(tools.filter((id: string) => /merge|close|force/.test(id)), name).toEqual([]);
     }
+  });
+});
+
+describe('the same on Windows, Linux and macOS', () => {
+  const scripts = PACKAGES.flatMap((p) => readdirSync(join('examples', p, 'scripts')).map((f) => join('examples', p, 'scripts', f)));
+
+  it('scripts use the standard library only, with no paths, processes or platform checks', () => {
+    expect(scripts.length).toBeGreaterThanOrEqual(6);
+    for (const file of scripts) {
+      const src = readFileSync(file, 'utf8');
+      const imports = [...src.matchAll(/^(?:import|from)\s+(\w+)/gm)].map((m) => m[1]);
+      expect(imports.filter((i) => !['json', 're', 'sys'].includes(i!)), file).toEqual([]);
+      expect(src, file).not.toMatch(/\b(os|subprocess|pathlib|platform|shutil|tempfile)\b|open\(|\/tmp|\\\\/);
+    }
+  });
+
+  it('keeps non-ASCII ticket text intact, as the worker runs it', () => {
+    const title = 'Café – 日本語 ✓ 🚀';
+    const b = run('ai-sdlc-factory-plan', 'brief.py', { ticket: { source: 'github', key: '#1', title, description: 'naïve' }, goal: '' });
+    expect(b.title).toBe(title);
+    expect(b.text).toBe(`#1 ${title}\n\nnaïve`);
+    const pick = run('ai-sdlc-factory', 'pick.py', { source: 'github', repo: 'a/b', config: {}, github: { queues: [{ items: [{ number: 1, title, labels: [], depends: [], created_at: '' }] }] } });
+    expect(pick.ticket.title).toBe(title);
+  });
+
+  it('writes the same bytes everywhere: the packages are pinned to LF', () => {
+    const attrs = readFileSync('.gitattributes', 'utf8');
+    expect(attrs).toContain('examples/ai-sdlc-factory*/** text eol=lf');
   });
 });
 

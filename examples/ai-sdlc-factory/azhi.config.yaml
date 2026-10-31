@@ -3,9 +3,8 @@
 # Needs the delivery workflow published first: install and publish sdlc-universal with the same --repo (it does
 # the work of a ticket; this workflow only picks, claims and reports). Try it on a throwaway repository first.
 #
-# Run a lap every two hours:
-#   azhi schedule ai-sdlc-factory --cron "0 */2 * * *" --timezone Asia/Kolkata \
-#     --input source=github --input repo=OWNER/REPO --input staging_branch=dev
+# Run a lap every two hours (one line; the same in bash, PowerShell and cmd):
+#   azhi schedule ai-sdlc-factory --cron "0 */2 * * *" --timezone Asia/Kolkata --input source=github --input repo=OWNER/REPO --input staging_branch=dev
 # Each run takes one ticket and waits for the delivery workflow's approvals, so laps overlap: the claim label keeps
 # two laps off the same ticket. Start with a long interval and one lap you watch.
 #
