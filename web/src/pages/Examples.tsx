@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
 import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
@@ -382,7 +382,8 @@ function ExampleDetail({ example: e }: { example: Example }) {
   const c = changes(e);
   const steps = stepCount(e);
   const [reviewing, setReviewing] = useState(false);
-  const reads = e.tools.filter((t) => t.effect === 'read');
+  const installNow = useRef<(() => void) | null>(null);
+  const reads =e.tools.filter((t) => t.effect === 'read');
   const writes = e.tools.filter((t) => t.effect !== 'read');
   const admin = atLeast(me.data?.role, 'admin');
   return (
@@ -402,7 +403,7 @@ function ExampleDetail({ example: e }: { example: Example }) {
           </div>
         </div>
         <div className="tpl-hero-cta">
-          {e.workflow && e.update ? <Link to={`/ui/workflows/${encodeURIComponent(e.workflow)}`} className="button primary cta">Open workflow</Link> : <button type="button" className="primary cta" onClick={() => toInstall()}><Icon name="down" size={16} /> Install workflow</button>}
+          {e.workflow && e.update ? <Link to={`/ui/workflows/${encodeURIComponent(e.workflow)}`} className="button primary cta">Open workflow</Link> : <button type="button" className="primary cta" onClick={() => installNow.current?.()}><Icon name="down" size={16} /> Install workflow</button>}
           {e.update ? <button type="button" className="cta" onClick={() => toInstall(true)}>Reinstall…</button> : null}
         </div>
       </header>
@@ -432,18 +433,18 @@ function ExampleDetail({ example: e }: { example: Example }) {
           </section>
         </div>
         <aside className="tpl-detail-side" id="install" aria-label="Install">
-          <ExampleCard example={e} />
+          <ExampleCard example={e} installRef={installNow} />
         </aside>
       </div>
       <div className="tpl-sticky-cta">
-        <button type="button" className="primary cta" onClick={() => toInstall()}>{e.update ? 'Reinstall or set up' : 'Install workflow'}</button>
+        <button type="button" className="primary cta" onClick={() => (e.update ? toInstall() : installNow.current?.())}>{e.update ? 'Reinstall or set up' : 'Install workflow'}</button>
       </div>
       {reviewing ? <UpdateReview example={e} onClose={() => setReviewing(false)} /> : null}
     </div>
   );
 }
 
-function ExampleCard({ example: e }: { example: Example }) {
+function ExampleCard({ example: e, installRef }: { example: Example; installRef?: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const [repos, setRepos] = useState('');
   const [apiUrl, setApiUrl] = useState('');
@@ -480,6 +481,13 @@ function ExampleCard({ example: e }: { example: Example }) {
   const secrets = r?.secrets ?? e.secrets;
   // Required settings with no value yet (typed here, filled by an earlier install, or a default).
   const lacking = (e.requirements?.settings ?? []).filter((s) => s.required && !s.ready && !filled[s.name]);
+  const blocked = lacking.length > 0 || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)));
+  // The header button installs straight away with the same checks as the form; when something is
+  // still missing it shows the panel instead, so the missing field can be filled in.
+  if (installRef) installRef.current = () => {
+    toInstall();
+    if (!blocked && !install.isPending) install.mutate();
+  };
   // Once installed, repositories are managed below with their token checked; installing again is a reset.
   const isInstalled = e.repos.length > 0 || Boolean(e.update);
   const enterprise = (
@@ -535,7 +543,7 @@ function ExampleCard({ example: e }: { example: Example }) {
             </details>
           ) : (
             <div className="row">
-              <button type="submit" className="primary cta block" disabled={install.isPending || lacking.length > 0 || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)))}>
+              <button type="submit" className="primary cta block" disabled={install.isPending || blocked}>
                 {install.isPending ? 'Installing…' : r?.ok ? 'Install again' : 'Install'}
               </button>
             </div>
