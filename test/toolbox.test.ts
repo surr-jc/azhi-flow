@@ -47,7 +47,7 @@ describe('toolbox', () => {
     expect(github.used_by).toBe(1);
     expect(github.details.tools[0]).toHaveProperty('ref');
     expect(items.find((i) => i.name === 'Release notes')).toMatchObject({ group: 'skills', status: 'draft', used_by: 0 });
-    expect(items.find((i) => i.name === 'Repo facts')).toMatchObject({ group: 'apps', kind: 'mcp', runs_code: true, needs: ['REPO_KEY'] });
+    expect(items.find((i) => i.name === 'Repo facts')).toMatchObject({ group: 'mcp', kind: 'mcp', runs_code: true, needs: ['REPO_KEY'], harnesses: ['Azhi Flow', 'OpenCode', 'Claude Code', 'OpenAI Codex'] });
     expect(items.find((i) => i.id === 'dataset:quality-guidelines')).toMatchObject({ group: 'knowledge', status: 'draft', used_by: 1 });
   });
 

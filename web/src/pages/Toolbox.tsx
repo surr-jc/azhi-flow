@@ -12,16 +12,17 @@ import { Badge, ErrorNote, Loading, PageHead } from '../ui';
  * Cards say what an item is for and whether it is ready; ids, versions and commands sit under Details.
  * The pages it grew from (Library, Connections, Datasets, Tools) stay reachable from each card.
  */
-type Group = 'apps' | 'skills' | 'roles' | 'knowledge';
+type Group = 'apps' | 'mcp' | 'skills' | 'roles' | 'knowledge';
 type Status = 'ready' | 'needs_setup' | 'draft' | 'unknown';
 interface Item {
   id: string; group: Group; kind: string; name: string; summary: string; status: Status; status_note: string | null;
-  changes_things: boolean | null; runs_code: boolean; needs: string[]; used_by: number; href: string; details: Record<string, any>;
+  changes_things: boolean | null; runs_code: boolean; needs: string[]; used_by: number; harnesses?: string[]; href: string; details: Record<string, any>;
 }
 
 const GROUPS: Array<{ key: Group | 'all'; label: string; icon: string; blurb: string }> = [
   { key: 'all', label: 'Everything', icon: 'flow', blurb: 'Everything your agents can use, in one place.' },
   { key: 'apps', label: 'Apps', icon: 'tool', blurb: 'Systems an agent can reach: GitHub, Jira, Slack, a database, your docs.' },
+  { key: 'mcp', label: 'MCP', icon: 'tool', blurb: 'MCP servers set up in Azhi Flow, with the config to use each one in OpenCode, Claude Code and OpenAI Codex.' },
   { key: 'skills', label: 'Skills', icon: 'retrieve', blurb: 'Instructions an agent loads only when a task matches.' },
   { key: 'roles', label: 'Roles and commands', icon: 'agent', blurb: 'Specialist prompts and saved first tasks.' },
   { key: 'knowledge', label: 'Knowledge', icon: 'report', blurb: 'Documents an agent can search and cite: guidelines, runbooks, decisions.' },
@@ -101,6 +102,7 @@ function Card({ item, onOpen }: { item: Item; onOpen: () => void }) {
       <h3>{item.name}</h3>
       <p className="tb-sum">{item.summary || <span className="muted">No description.</span>}</p>
       {item.status_note ? <p className="small tb-note">{item.status_note}</p> : null}
+      {item.harnesses?.length ? <p className="small tb-flags"><span className="muted">Works in</span>{item.harnesses.map((h) => <Badge key={h}>{h}</Badge>)}</p> : null}
       <p className="small tb-flags">
         {item.changes_things ? <Badge tone="warn">can change things</Badge> : null}
         {item.runs_code ? <Badge tone="warn">runs code on a worker</Badge> : null}
@@ -127,7 +129,8 @@ function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean;
     onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['toolbox'] }); onClose(); },
   });
   const tools = (item.details.tools ?? []) as Array<{ ref: string; description: string; effect: string }>;
-  const facts = Object.entries(item.details).filter(([k, v]) => k !== 'tools' && v !== null && v !== '');
+  const configs = (item.details.configs ?? []) as Array<{ harness: string; file: string; text: string }>;
+  const facts = Object.entries(item.details).filter(([k, v]) => k !== 'tools' && k !== 'configs' && v !== null && v !== '');
   return (
     <Popup title={item.name} sub={KIND_NAME[item.kind] ?? item.kind} size="wide" onClose={onClose} footer={<div className="row"><Link to={item.href} className="button primary">Manage</Link><button type="button" onClick={onClose}>Close</button>{assetId && canEdit ? <button type="button" className="danger" onClick={() => setConfirming(true)} disabled={remove.isPending}>Delete</button> : null}</div>}>
       <div className="tb-details">
@@ -156,6 +159,18 @@ function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean;
             <ul className="tb-tools">
               {tools.map((t) => <li key={t.ref}><span className="mono">{t.ref}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect === 'read' ? 'read' : 'writes'}</Badge><span className="muted small">{t.description}</span></li>)}
             </ul>
+          </>
+        ) : null}
+        {item.harnesses?.length ? <p className="small"><b>Works in:</b> {item.harnesses.join(', ')}</p> : null}
+        {configs.length ? (
+          <>
+            <h4 className="tb-h">Use it in other tools</h4>
+            {configs.map((c) => (
+              <div key={c.harness}>
+                <p className="small"><b>{c.harness}</b> <span className="muted">add to</span> <span className="mono">{c.file}</span></p>
+                <pre className="mono small">{c.text}</pre>
+              </div>
+            ))}
           </>
         ) : null}
         {facts.length ? (

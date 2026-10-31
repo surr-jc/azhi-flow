@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { listDatasets } from '../knowledge/datasets.js';
-import { listAssets, type AssetKind } from '../server/assets.js';
+import { listAssets, renderClaudeCode, renderOpenCode, type AssetKind } from '../server/assets.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { listMcpConnections } from '../server/mcp.js';
@@ -15,7 +15,7 @@ import { connectionUsage, type Use } from './connections.js';
  * read this instead of three separate pages. Nothing here is a secret: values are never read,
  * only whether a named secret exists (admins only; for anyone else the status is `unknown`).
  */
-export type ToolboxGroup = 'apps' | 'skills' | 'roles' | 'knowledge';
+export type ToolboxGroup = 'apps' | 'mcp' | 'skills' | 'roles' | 'knowledge';
 /** `unknown` means this person cannot see whether the credential is set; it is never guessed. */
 export type ToolboxStatus = 'ready' | 'needs_setup' | 'draft' | 'unknown';
 
@@ -33,6 +33,8 @@ export interface ToolboxItem {
   /** Names of the secrets or environment values the item needs before it works. */
   needs: string[];
   used_by: number;
+  /** MCP items only: where the server is configured or can be used. */
+  harnesses?: string[];
   href: string;
   details: Record<string, unknown>;
 }
@@ -40,8 +42,17 @@ export interface ToolboxItem {
 const SYSTEM_NAMES: Record<string, string> = { github: 'GitHub', slack: 'Slack', jira: 'Jira', ci: 'CI', ticket: 'Tickets' };
 const titleCase = (s: string) => SYSTEM_NAMES[s] ?? s.charAt(0).toUpperCase() + s.slice(1);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const workflowsOf = (uses: Use[][]) => new Set(uses.flat().map((u) => u.workflow)).size;
-const groupOfAsset = (k: AssetKind): ToolboxGroup => (k === 'mcp' ? 'apps' : k === 'skill' ? 'skills' : 'roles');
+const tomlStr = (v: unknown) => JSON.stringify(String(v));
+/** The `config.toml` entry OpenAI's Codex CLI reads for one MCP server. `{env:X}` references stay as written; values are never read. */
+function renderCodex(slug: string, d: any): string {
+  const key = /^[A-Za-z0-9_-]+$/.test(slug) ? slug : tomlStr(slug);
+  if (d.transport !== 'local') return `[mcp_servers.${key}]\nurl = ${tomlStr(d.url)}\n`;
+  const [command, ...args] = d.command as string[];
+  const env = Object.entries((d.environment ?? {}) as Record<string, string>);
+  return [`[mcp_servers.${key}]`, `command = ${tomlStr(command)}`, `args = [${args.map(tomlStr).join(', ')}]`, ...(env.length ? ['', `[mcp_servers.${key}.env]`, ...env.map(([k, v]) => `${k} = ${tomlStr(v)}`)] : [])].join('\n') + '\n';
+}
+const workflowsOf =(uses: Use[][]) => new Set(uses.flat().map((u) => u.workflow)).size;
+const groupOfAsset = (k: AssetKind): ToolboxGroup => (k === 'mcp' ? 'mcp' : k === 'skill' ? 'skills' : 'roles');
 
 export async function toolbox(ctx: AppContext, workspaceId: string, canSeeSecrets: boolean): Promise<ToolboxItem[]> {
   const [catalog, usage, assets, datasets, connections, secrets, attached] = await Promise.all([
@@ -89,11 +100,11 @@ export async function toolbox(ctx: AppContext, workspaceId: string, canSeeSecret
     let host = c.url;
     try { host = new URL(c.url).host; } catch { /* keep the stored text */ }
     items.push({
-      id: `connection:${c.name}`, group: 'apps', kind: 'connection', name: c.name,
+      id: `connection:${c.name}`, group: 'mcp', kind: 'connection', name: c.name,
       summary: list.length ? `Hosted at ${host}, ${plural(list.length, 'action')} added` : `Hosted at ${host}, no actions added yet`,
       status: ready ? 'ready' : 'needs_setup',
       status_note: ready ? null : c.last_error ?? (c.auth_kind === 'oauth' ? 'Sign in to finish connecting' : `Status: ${c.status}`),
-      changes_things: list.length ? writes > 0 : null, runs_code: false, needs: [], used_by: usedBy(list),
+      changes_things: list.length ? writes > 0 : null, runs_code: false, needs: [], used_by: usedBy(list), harnesses: ['Azhi Flow'],
       href: '/ui/connections', details: { url: c.url, auth: c.auth_kind, connection_status: c.status, tools: toolRows(list) },
     });
   }
@@ -110,7 +121,17 @@ export async function toolbox(ctx: AppContext, workspaceId: string, canSeeSecret
       status_note: published ? null : 'Review and publish it before a workflow can use it',
       changes_things: null, runs_code: a.kind === 'mcp' && def.transport === 'local', needs,
       used_by: attachedCount.get(a.id) ?? 0, href: '/ui/assets',
-      details: { slug: a.slug, version: a.current_version, scope: a.scope ?? 'global', workflow: a.project_workflow ?? null, source: def.provenance?.url ?? null },
+      ...(a.kind === 'mcp' ? { harnesses: ['Azhi Flow', 'OpenCode', 'Claude Code', 'OpenAI Codex'] } : {}),
+      details: {
+        slug: a.slug, version: a.current_version, scope: a.scope ?? 'global', workflow: a.project_workflow ?? null, source: def.provenance?.url ?? null,
+        ...(a.kind === 'mcp' ? {
+          configs: [
+            { harness: 'OpenCode', file: 'opencode.jsonc', text: renderOpenCode([{ kind: 'mcp', slug: a.slug, definition: def }])['opencode.jsonc'] },
+            { harness: 'Claude Code', file: '.mcp.json', text: renderClaudeCode([{ kind: 'mcp', slug: a.slug, definition: def }])['.mcp.json'] },
+            { harness: 'OpenAI Codex', file: '~/.codex/config.toml', text: renderCodex(a.slug, def) },
+          ],
+        } : {}),
+      },
     });
   }
 
