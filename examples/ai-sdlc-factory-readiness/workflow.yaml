@@ -1,0 +1,164 @@
+# ai-sdlc-factory-readiness: is this repository ready to run as a factory, and did that change?
+#   files      which of README, CODEOWNERS, a PR template and the CI workflows exist on the base branch
+#   ci         the CI runs of the last 7 days
+#   open_*     is a ticket already open for a failing CI (GitHub, or Jira by a JQL set at install)
+#   score      RULES, not a model: bronze = owner + README; silver = + PR template + CI workflow;
+#              gold = + CI green on the base branch. A check that could not be read is "unavailable" and
+#              never counts as a pass (no CI runs is not a green CI).
+#   scorecard  the result, posted to Slack
+#   then       CI red and nothing open for it: a person approves, then ONE fix ticket is created with the
+#              ready and priority labels, so the next lap of ai-sdlc-factory picks it up first
+# Nothing is merged, closed or edited. The only write is the ticket, after the approval, pinned to the
+# repository (or Jira project) the run was given. CI job names are data in the ticket body, never commands.
+schema_version: "2.0"
+id: ai-sdlc-factory-readiness
+name: AI SDLC Factory - readiness scorecard
+description: Grade a repository bronze, silver or gold for running as a software factory (owner, README, PR template, CI workflow, CI green) and, when CI is red, propose a fix ticket for a person to approve.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source:
+      type: string
+      title: Tracker
+      enum: [github, jira]
+      description: Where the fix ticket is created when CI is red. The code and CI are always on GitHub.
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository to grade, owner/name"}
+    base_branch: {type: string, title: Base branch, minLength: 1, maxLength: 200, description: "The branch the factory delivers to (for example dev); CI is judged on it"}
+    project: {type: string, title: Jira project, maxLength: 40, pattern: "^([A-Z][A-Z0-9_]+)?$", description: "The Jira project key the fix ticket goes in. Needed when the tracker is Jira."}
+  required: [source, repo, base_branch]
+  anyOf:
+    - {properties: {source: {enum: [github]}}}
+    - {required: [project], properties: {source: {enum: [jira]}, project: {minLength: 1}}}
+config:
+  # Filled in by the example install (settings slack_channel, jira_ci_jql).
+  channel: "{{slack_channel}}"
+  jira_ci_jql: "{{jira_ci_jql}}"
+  ci_label: ci-failing
+  ready_label: ready
+  priority_label: priority
+  fix_issue_type: Bug
+nodes:
+  - id: files
+    type: tool
+    description: Which of the standard repository files exist on the base branch.
+    tool: github.repo-files@1
+    arguments:
+      repo: {ref: inputs.repo}
+      ref: {ref: inputs.base_branch}
+      paths:
+        - README.md
+        - README
+        - .github/CODEOWNERS
+        - CODEOWNERS
+        - docs/CODEOWNERS
+        - .github/PULL_REQUEST_TEMPLATE.md
+        - .github/pull_request_template.md
+        - PULL_REQUEST_TEMPLATE.md
+        - pull_request_template.md
+        - docs/PULL_REQUEST_TEMPLATE.md
+        - .github/workflows
+
+  - id: ci
+    type: tool
+    description: Completed CI runs of the last 7 days, oldest first.
+    tool: github.ci-runs@1
+    arguments: {since: {cel: "string(now - duration('168h'))"}}
+    project: [id, status, branch, started_at, failed_tests]
+
+  - id: open_source
+    type: condition
+    description: Look for an existing CI ticket in the tracker the fix would go to.
+    expression: inputs.source
+    routes: {github: [open_github], jira: [open_jira]}
+    default: github
+
+  - id: open_github
+    type: tool
+    description: Open issues already labelled for a failing CI.
+    tool: github.factory-queue@1
+    arguments: {repo: {ref: inputs.repo}, label: {ref: config.ci_label}, max_items: 10}
+    project: [items]
+
+  - id: open_jira
+    type: tool
+    description: Open Jira issues matching the configured JQL for a failing CI (read-only).
+    tool: jira.search@1
+    arguments: {jql: {ref: config.jira_ci_jql}, fields: "summary,status,labels", limit: 10}
+
+  - id: score
+    type: script
+    description: The checks and the level, by rules. An existing-ticket lookup that returned nothing readable stops a fix from being proposed.
+    runtime: python
+    entrypoint: scripts/score.py
+    merge: any
+    depends_on: [open_source, files, ci]
+    input:
+      map: >-
+        {'repo': inputs.repo, 'base_branch': inputs.base_branch,
+        'files': nodes.files.output, 'runs': nodes.ci.output,
+        'open_tickets': inputs.source == 'jira' ? (has(nodes.open_jira) && has(nodes.open_jira.output.issues) ? nodes.open_jira.output.issues : null) : (has(nodes.open_github) ? nodes.open_github.output.items : null),
+        'labels': [config.ci_label, config.ready_label, config.priority_label]}
+    output_schema: schemas/score.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: scorecard
+    type: report
+    description: The scorecard as Markdown.
+    template: templates/scorecard.md
+    input: {map: "{'s': nodes.score.output}"}
+
+  - id: scorecard_post
+    type: notify
+    description: Post the scorecard to the channel.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.scorecard.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: needs_fix
+    type: condition
+    description: CI is red and nobody has filed it - ask a person. Otherwise nothing is written.
+    expression: "nodes.score.output.propose_fix ? 'ask' : 'none'"
+    routes: {ask: [fix_approval], none: []}
+    default: none
+
+  - id: fix_approval
+    type: approval
+    description: A person approves the fix ticket before it is created. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: operator
+    message: {cel: "'CI is failing on ' + inputs.base_branch + ' in ' + inputs.repo + '. Create a fix ticket in ' + (inputs.source == 'jira' ? 'Jira project ' + inputs.project : 'GitHub') + '? The factory will pick it up first.'"}
+    payload: {map: "{'level': nodes.score.output.level, 'failed_jobs': nodes.score.output.failed_jobs, 'ticket': nodes.score.output.ticket}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: fix_tracker
+    type: condition
+    description: Create the ticket in the chosen tracker.
+    expression: inputs.source
+    routes: {github: [create_fix_github], jira: [create_fix_jira]}
+    default: github
+
+  - id: create_fix_github
+    type: tool
+    description: Create the fix issue, labelled so the next lap picks it up first.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {ref: nodes.score.output.ticket.title}
+      body: {ref: nodes.score.output.ticket.body}
+      labels: {ref: nodes.score.output.ticket.labels}
+    guard: "args.repo == inputs.repo"
+
+  - id: create_fix_jira
+    type: tool
+    description: Create the fix issue in the Jira project, with the same labels.
+    tool: jira.create-issue@1
+    arguments:
+      project_key: {ref: inputs.project}
+      summary: {ref: nodes.score.output.ticket.title}
+      issue_type: {ref: config.fix_issue_type}
+      description: {ref: nodes.score.output.ticket.body}
+      additional_fields: {ref: nodes.score.output.ticket.additional_fields}
+    guard: "args.project_key == inputs.project"

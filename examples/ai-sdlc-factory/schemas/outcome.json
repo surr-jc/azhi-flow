@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {"enum": ["shipped", "sent_back"]},
+    "pr_url": {"type": "string"},
+    "pr_number": {"type": "integer"},
+    "draft": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "tests": {"type": "string"},
+    "needs_attention": {"type": "boolean"},
+    "run_id": {"type": "string"}
+  },
+  "required": ["status", "pr_url", "summary", "tests"]
+}

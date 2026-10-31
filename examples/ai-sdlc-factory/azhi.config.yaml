@@ -1,0 +1,145 @@
+# Admin configuration for one lap of the AI SDLC Factory:
+#   azhi example install ai-sdlc-factory --repo OWNER/REPO --set slack_channel=C0123ABCD
+# Needs the delivery workflow published first: install and publish sdlc-universal with the same --repo (it does
+# the work of a ticket; this workflow only picks, claims and reports). Try it on a throwaway repository first.
+#
+# Run a lap every two hours:
+#   azhi schedule ai-sdlc-factory --cron "0 */2 * * *" --timezone Asia/Kolkata \
+#     --input source=github --input repo=OWNER/REPO --input staging_branch=dev
+# Each run takes one ticket and waits for the delivery workflow's approvals, so laps overlap: the claim label keeps
+# two laps off the same ticket. Start with a long interval and one lap you watch.
+#
+# GitHub-only installs leave the Jira settings out. For Jira, set jira_jql to a query that returns the ready tickets
+# AND recently done ones (their status is how a dependency is known to be finished), for example:
+#   project = PAY AND labels in (ready, azhi-split) AND (statusCategory != Done OR resolved >= -30d) ORDER BY created ASC
+# The delivery workflow reads a Jira ticket through the workspace tool jira-ccp_get_issue; it must exist (see
+# sdlc-universal).
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token   fine-grained, read-only "Contents", "Issues" and "Pull requests": reads the queue
+#   github-write-token  fine-grained, "Issues: read and write": adds the claim and owner labels
+#   jira-api-token      Atlassian API token, read access (only when the tracker is Jira)
+#   jira-write-token    Atlassian API token that may edit labels (only when the tracker is Jira)
+#   slack-bot-token     posts the lap
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID each lap is posted to (the bot must be in it).
+    placeholder: C0123ABCD
+    required: true
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address. Leave empty when the tracker is GitHub.
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the API tokens belong to. Leave empty when the tracker is GitHub.
+    placeholder: you@example.com
+  - name: jira_jql
+    title: Jira query for the factory queue
+    description: JQL for the ready tickets and recently done ones. Fixed here, never built from ticket text. Leave empty when the tracker is GitHub.
+    placeholder: project = PAY AND labels in (ready, azhi-split) AND (statusCategory != Done OR resolved >= -30d) ORDER BY created ASC
+tools:
+  - id: github.factory-queue
+    version: 1
+    description: Open issues with a label, with their slice order, blockers and whether a lap already has them (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.factory-queue, config: {repos: [OWNER/REPO], branch_prefix: azhi/}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        label: {type: string, maxLength: 50}
+        claim_label: {type: string, maxLength: 50}
+        max_items: {type: integer, minimum: 1, maximum: 100}
+      required: [repo, label]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        label: {type: string}
+        truncated: {type: boolean}
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              number: {type: integer}
+              title: {type: string}
+              url: {type: string}
+              created_at: {type: string}
+              labels: {type: array, items: {type: string}}
+              slice: {type: integer}
+              of: {type: integer}
+              parent: {type: integer}
+              depends: {type: array, items: {type: integer}}
+              blocked: {type: boolean}
+              reason: {type: string}
+              in_flight: {type: boolean}
+  - id: github.label-issue
+    version: 1
+    description: Add labels to an issue (GitHub); adding a label twice changes nothing
+    effect: write-idempotent
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.label-issue, config: {repos: [OWNER/REPO]}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        labels: {type: array, minItems: 1, maxItems: 10, items: {type: string, maxLength: 50}}
+      required: [repo, number, labels]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        labels: {type: array, items: {type: string}}
+  - id: jira.search
+    version: 1
+    description: Search Jira with JQL, read through a Jira MCP server (mcp-atlassian, read-only)
+    effect: read
+    source: jira
+    credential: jira-api-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_search
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_search}
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        jql: {type: string, maxLength: 2000}
+        fields: {type: string, maxLength: 500}
+        limit: {type: integer, minimum: 1, maximum: 50}
+      required: [jql]
+      additionalProperties: false
+    output_schema: {type: object}
+  - id: jira.update-labels
+    version: 1
+    description: Set the labels of a Jira issue (Jira MCP server, mcp-atlassian); the same labels twice change nothing
+    effect: write-idempotent
+    source: jira
+    credential: jira-write-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_update_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "false", ENABLED_TOOLS: jira_update_issue}
+    timeout: 120s
+    input_schema: {type: object, properties: {issue_key: {type: string, pattern: "^[A-Z][A-Z0-9_]*-[0-9]+$"}, fields: {type: string, maxLength: 5000}, return_fields: {type: string}}, required: [issue_key, fields], additionalProperties: false}
+    output_schema: {type: object}
+secrets:
+  - slack-bot-token
+  - github-read-token
+  - github-write-token
+  - jira-api-token
+  - jira-write-token

@@ -1,0 +1,192 @@
+# Admin configuration for the AI SDLC Factory readiness scorecard:
+#   azhi example install ai-sdlc-factory-readiness --repo OWNER/REPO --set slack_channel=C0123ABCD
+# GitHub-only installs leave the Jira settings out; add jira_url, jira_username and jira_ci_jql to file the fix
+# ticket in Jira. Try it on a throwaway repository first: an approved run creates one issue.
+#
+# Run it daily with:  azhi schedule ai-sdlc-factory-readiness --cron "0 7 * * *" --timezone Asia/Kolkata \
+#                       --input source=github --input repo=OWNER/REPO --input base_branch=dev
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token   fine-grained, read-only "Contents", "Actions", "Issues" and "Pull requests"
+#   github-write-token  fine-grained, "Issues: read and write": creates the one fix issue after the approval
+#   jira-api-token      Atlassian API token, read access (only when the tracker is Jira)
+#   jira-write-token    Atlassian API token that may create issues (only when the tracker is Jira)
+#   slack-bot-token     posts the scorecard
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the scorecard is posted to (the bot must be in it).
+    placeholder: C0123ABCD
+    required: true
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address. Leave empty when the tracker is GitHub.
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the API tokens belong to. Leave empty when the tracker is GitHub.
+    placeholder: you@example.com
+  - name: jira_ci_jql
+    title: Jira query for an open CI ticket
+    description: JQL that finds a ticket already open for a failing CI, so none is filed twice. Leave empty when the tracker is GitHub.
+    placeholder: project = PAY AND labels = ci-failing AND statusCategory != Done
+tools:
+  - id: github.repo-files
+    version: 1
+    description: Which of the named paths exist on a branch of a repository (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.repo-files, config: {repos: [OWNER/REPO]}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        ref: {type: string, maxLength: 200}
+        paths: {type: array, minItems: 1, maxItems: 20, items: {type: string, maxLength: 300}}
+      required: [repo, paths]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        ref: {type: string}
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              path: {type: string}
+              exists: {type: boolean}
+              kind: {type: string}
+              entries: {type: array, items: {type: string}}
+  - id: github.ci-runs
+    version: 1
+    description: Completed CI runs on the repository, oldest first, with the names of failed jobs (GitHub Actions)
+    effect: read
+    source: github-actions
+    credential: github-read-token
+    transport: {kind: builtin, name: github.ci-runs, config: {repos: [OWNER/REPO], failed_run_details: 20}}
+    input_schema: {type: object, properties: {since: {type: string}}, additionalProperties: false}
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: {type: string}
+          status: {type: string}
+          branch: {type: string}
+          started_at: {type: string}
+          finished_at: {type: string}
+          failed_tests: {type: array, items: {type: string}}
+  - id: github.factory-queue
+    version: 1
+    description: Open issues with a label, with their slice order, blockers and whether a lap already has them (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.factory-queue, config: {repos: [OWNER/REPO], branch_prefix: azhi/}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        label: {type: string, maxLength: 50}
+        claim_label: {type: string, maxLength: 50}
+        max_items: {type: integer, minimum: 1, maximum: 100}
+      required: [repo, label]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        label: {type: string}
+        truncated: {type: boolean}
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              number: {type: integer}
+              title: {type: string}
+              url: {type: string}
+              labels: {type: array, items: {type: string}}
+              blocked: {type: boolean}
+              in_flight: {type: boolean}
+  - id: github.create-issue
+    version: 1
+    description: Create an issue (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.create-issue, config: {repos: [OWNER/REPO]}}
+    timeout: 60s
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        title: {type: string, maxLength: 250}
+        body: {type: string, maxLength: 60000}
+        labels: {type: array, maxItems: 10, items: {type: string, maxLength: 50}}
+        parent: {type: integer}
+      required: [repo, title, body]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        url: {type: string}
+        created: {type: boolean}
+      required: [repo, number, url]
+  - id: jira.search
+    version: 1
+    description: Search Jira with JQL, read through a Jira MCP server (mcp-atlassian, read-only)
+    effect: read
+    source: jira
+    credential: jira-api-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_search
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_search}
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        jql: {type: string, maxLength: 2000}
+        fields: {type: string, maxLength: 500}
+        limit: {type: integer, minimum: 1, maximum: 50}
+      required: [jql]
+      additionalProperties: false
+    output_schema: {type: object}
+  - id: jira.create-issue
+    version: 1
+    description: Create a Jira issue (Jira MCP server, mcp-atlassian)
+    effect: write-dedupable
+    source: jira
+    credential: jira-write-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_create_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "false", ENABLED_TOOLS: jira_create_issue}
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        project_key: {type: string, pattern: "^[A-Z][A-Z0-9_]+$"}
+        summary: {type: string, maxLength: 255}
+        issue_type: {type: string, maxLength: 60}
+        description: {type: string, maxLength: 60000}
+        additional_fields: {type: string, maxLength: 5000}
+      required: [project_key, summary, issue_type]
+      additionalProperties: false
+    output_schema: {type: object}
+secrets:
+  - slack-bot-token
+  - github-read-token
+  - github-write-token
+  - jira-api-token
+  - jira-write-token
