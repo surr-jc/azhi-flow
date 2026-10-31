@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, mergePullRequest, pullRequest, pushBranch, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, factoryQueue, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, mergePullRequest, pullRequest, pushBranch, repoFiles, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
@@ -103,6 +103,17 @@ const builtin: Record<string, ToolExecutor> = {
   'github.issue-blockers': {
     async call(spec, args, ctx) {
       return { value: await issueBlockers(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  /** The AI SDLC factory: the queue of ready issues for a lap, and the files the readiness scorecard looks for. */
+  'github.factory-queue': {
+    async call(spec, args, ctx) {
+      return { value: await factoryQueue(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.repo-files': {
+    async call(spec, args, ctx) {
+      return { value: await repoFiles(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
     },
   },
   /** The issue splitter example: create an issue (as a sub-issue of a parent), and add labels to one. */

@@ -55,7 +55,7 @@ export const BOT_LOGIN = 'azhi-bot';
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }> } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }>; files?: Record<string, string[]> } = {}) {
   const requests: string[] = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
@@ -89,6 +89,16 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const slice = <T>(xs: T[]) => xs.slice((page - 1) * per, page * per);
     // Every token is the same account here; comments it writes are by that login.
     if (url.pathname === '/user') return send(200, { login: BOT_LOGIN, type: 'User' });
+    // Repository contents (`opts.files`: repo to the file paths it has): a file, or the entries of a directory.
+    const content = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/(.+)$/);
+    if (content) {
+      const path = decodeURIComponent(content[2]!).replace(/\/$/, '');
+      const have = opts.files?.[content[1]!] ?? [];
+      if (have.includes(path)) return send(200, { type: 'file', path, name: path.split('/').pop(), size: 1 });
+      const kids = have.filter((f) => f.startsWith(`${path}/`)).map((f) => f.slice(path.length + 1).split('/')[0]!);
+      if (kids.length) return send(200, [...new Set(kids)].map((name) => ({ type: 'file', name, path: `${path}/${name}` })));
+      return send(404, { message: 'Not Found' });
+    }
     let m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/);
     if (m && req.method === 'PATCH') {
       const c = comments.find((x) => x.repo === m![1] && x.id === Number(m![2]));
@@ -118,7 +128,8 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     }
     if (m) {
       const label = url.searchParams.get('labels');
-      const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]));
+      const state = url.searchParams.get('state');
+      const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]) && (!state || state === 'all' || (i.state ?? 'open') === state));
       return send(200, slice(found).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, state: i.state ?? 'open', comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${m![1]}/issues/${i.number}`, ...(i.pull_request ? { pull_request: {} } : {}) })));
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/sub_issues$/);
