@@ -11,6 +11,11 @@ Azhi Flow is a self-hosted, open-source (Apache-2.0) AI agent workflow orchestra
 Temporal. It runs code, AI agents, MCP tools, knowledge retrieval and human approvals as nodes of one durable
 workflow, with an audit ledger, cost tracking and a taint rule that blocks unsafe writes.
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+[![Docs](https://img.shields.io/badge/docs-surr--jc.github.io%2Fazhi--flow-informational.svg)](https://surr-jc.github.io/azhi-flow/)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
+
 **Documentation: [surr-jc.github.io/azhi-flow](https://surr-jc.github.io/azhi-flow/)**
 
 Every run shows what the agent saw, what it was allowed to do, what it actually did, and what it cost,
@@ -19,6 +24,39 @@ Plan for the design.
 
 What Azhi is, the problems it solves, cost and token optimization, and how it compares with
 OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/positioning.md).
+
+## Contents
+
+[Why Azhi Flow](#why-azhi-flow) · [Quick look](#quick-look) · [Status](#status) · [What works today](#what-works-today) ·
+[Install](#install) · [Quick start (local development)](#quick-start-local-development) · [CLI](#cli) ·
+[Tests](#tests) · [Repository layout](#repository-layout) · [Contributing](#contributing) · [License](#license)
+
+## Why Azhi Flow
+
+- **Durable.** Runs execute on Temporal, so a crash mid-run resumes instead of repeating work. Killing the
+  process mid-Slack-post produces exactly one message.
+- **Governed.** A run plan marks every requirement native, bridged, unsupported or unverified before anything
+  executes, and runs with blockers are refused. Uploads are signed, and an ungated write after an agent that
+  read untrusted data fails to compile (the taint rule).
+- **Honest.** Usage, cost and coverage are `null` when unknown, never guessed. Each run records what the agent
+  saw, what it was allowed to do, what it did and what it cost.
+- **Mixed nodes.** Code, agents, MCP tools, knowledge retrieval and human approvals are all nodes of one
+  workflow, with a model agent or OpenCode as the executor.
+
+## Quick look
+
+Local mode needs only Git and Node.js 22+ (experimental, one machine; the full install is [below](#install)):
+
+```bash
+git clone https://github.com/surr-jc/azhi-flow
+cd azhi-flow
+npm ci
+npx azhi up        # prints the web UI link; Ctrl+C or `npx azhi down` to stop
+```
+
+Then open the printed link for Mission Control, or try an example such as the AI-SDLC v2 delivery workflow
+(a GitHub issue to a pull request, with human approvals): `npx azhi example install ai-sdlc-v2 --repo OWNER/REPO`.
+Every command is listed in the [CLI](#cli) section and in the [docs](https://surr-jc.github.io/azhi-flow/).
 
 ## Status
 
@@ -341,6 +379,13 @@ src/
   worker/     Execution worker and script runtimes
 test/         Unit and end-to-end tests
 ```
+
+## Contributing
+
+Work on `dev`; pull requests target `dev`. Use conventional commits (`feat:`, `fix:`, `docs:`) and run
+`npm run typecheck` and `npm run test:local` (vitest on PGlite, no Docker needed) before opening one.
+Ticket, issue and PR text is treated as untrusted data and is never turned into a command. The development
+workflow and token rules are in [docs/dev-workflow.md](docs/dev-workflow.md).
 
 ## License
 

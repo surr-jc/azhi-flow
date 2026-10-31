@@ -2,7 +2,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { stringify } from 'yaml';
 import { z } from 'zod';
 import type { Diagnostic } from '../definition/load.js';
-import { parseProfile } from '../agents/profile.js';
+import { MODEL_PROVIDERS, parseProfile } from '../agents/profile.js';
+import { builderProviders } from '../builder/builder.js';
+import { adaptWorkflow } from '../plan/adapt.js';
+import { BUILDER_ID } from './model-options.js';
 import { EXECUTORS } from '../executors/capabilities.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { buildRunPlan } from '../plan/run-plan.js';
@@ -140,6 +143,26 @@ export function registerEditorRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!r.ok) return { ok: false, diagnostics: r.diagnostics };
     const v = r.version;
     return { ok: true, diagnostics: r.diagnostics, version: { id: v.id, workflow: v.slug, version: v.version, package_hash: v.package_hash, draft: v.draft, signed: Boolean(v.signature) } };
+  });
+
+  // Fits the workflow to the sign-ins this workspace has (and, optionally, a chosen provider, model or harness).
+  // Without `save` it only reports; with `save` the changed definition becomes a new unsigned draft to run.
+  app.post('/v1/versions/:ref/adapt', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().trim().min(1).optional(), executor: z.string().optional(), save: z.boolean().optional() }).parse(req.body ?? {});
+    if (b.model && !b.provider) throw new AzhiError(ErrorClass.invalidInput, 'model needs provider');
+    if (b.executor && !EXECUTORS[b.executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${b.executor}`);
+    const base = await version(ctx, p.workspaceId, (req.params as { ref: string }).ref);
+    const known = await builderProviders(ctx, p.workspaceId);
+    const ready = MODEL_PROVIDERS.filter((id) => known.providers.find((x) => x.id === BUILDER_ID[id])?.ready);
+    const result = await adaptWorkflow(ctx, p.workspaceId, base, ready, { provider: b.provider, model: b.model, executor: b.executor });
+    if (!b.save || !result.definition) return { ...result, definition: undefined, saved: null };
+    const { files } = await edited(ctx, p.workspaceId, base, result.definition);
+    const r = await uploadPackage(ctx, p.workspaceId, { workflow: base.manifest.workflow, files: Object.fromEntries([...files].map(([k, f]) => [k, f.toString('base64')])) }, p.userId);
+    if (!r.ok) return { ...result, definition: undefined, saved: null, diagnostics: r.diagnostics };
+    const v = r.version;
+    return { ...result, definition: undefined, saved: { id: v.id, workflow: v.slug, version: v.version, draft: v.draft } };
   });
 }
 

@@ -10,6 +10,7 @@ import { RunTable } from './Overview';
 import { workflowCategory } from './Examples';
 import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
+import { FitToSignins } from '../components/FitToSignins';
 import { Popup } from '../components/Popup';
 import { StepPanel } from '../components/StepDrawer';
 import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
@@ -290,7 +291,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
       ) : null}
       {starting ? (
         <Popup title="Start a run" sub={`${def?.name ?? slug} · v${current.version}`} size="narrow" onClose={() => setStarting(false)}>
-          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
+          <StartRun versionId={current.id} slug={slug} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
         </Popup>
       ) : null}
       {plan.error ? <ErrorNote error={plan.error} /> : null}
@@ -312,7 +313,7 @@ function loadChoice(): ModelValue {
   }
 }
 
-function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
+function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; slug: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
   const { navigate } = useRoute();
   // The provider and model for this run's default-model steps; empty keeps the workflow's own default.
   const [choice, setChoice] = useState<ModelValue>(loadChoice);
@@ -386,6 +387,10 @@ function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefaul
           <ModelSteps plan={plan} />
         </details>
       </section>
+      <details className="small">
+        <summary>Fit this workflow to my sign-ins, harness or model</summary>
+        <FitToSignins versionId={versionId} slug={slug} />
+      </details>
       <section className="preflight" aria-label="Checks before the run" aria-live="polite">
         <h3>Before it starts</h3>
         {pre.isFetching && !pre.data ? <p className="muted small">Checking tools, tokens and repositories…</p> : null}
