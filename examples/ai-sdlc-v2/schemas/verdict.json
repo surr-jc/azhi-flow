@@ -68,6 +68,15 @@
           "evidence": {
             "type": "string",
             "description": "file:line of the code and the test that proves it; for partial or unmet, what is missing"
+          },
+          "evidence_kind": {
+            "enum": [
+              "test_passed",
+              "test_written_not_run",
+              "code_read",
+              "manual_unchecked"
+            ],
+            "description": "What the status rests on. test_passed: a test you traced, that the change run reports as passed, and that would fail without the feature. test_written_not_run: such a test exists but no run is reported (see the test result). code_read: you traced the code only. manual_unchecked: only a person looking at it could show this. Only test_passed can be met."
           }
         },
         "required": [

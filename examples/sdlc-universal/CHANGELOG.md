@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A criterion is `met` only on evidence that ran. The reviewer sets `evidence_kind` (`test_passed`,
+  `test_written_not_run`, `code_read`, `manual_unchecked`) and `finalize` caps anything but a test that really ran and
+  passed at `partial`; an untested run can no longer show a bare "met". The pull request table shows the kind.
+- `finalize` reads the plan: a planned file that was not changed and is not in the deviations, or an acceptance
+  criterion the plan verifies by an automated test that has no `covers AC<n>` test and no `AC<n>:` waiver, blocks the
+  change.
+- Release approval needs a typed acknowledgement (it was recorded with no data), and `push_branch` and `open_pr` are
+  guarded on `finalize.ship`.
+
 - Test strategy no longer assumes a stack. The skill identifies the ecosystem from manifests and CI (JVM, .NET, Go,
   Rust, Python, Ruby, PHP and others), has new failure classes (`toolchain_missing`, `timeout`, `no_tests`), and
   `test_strategy.json` requires `ecosystem`.

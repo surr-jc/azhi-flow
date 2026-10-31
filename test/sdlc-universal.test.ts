@@ -47,6 +47,13 @@ describe('SDLC universal: definition', () => {
     for (const word of ['vitest', 'AZHI_TEST_DATABASE_URL', 'build:web', 'C0C6LTYB0MQ']) expect(text).not.toContain(word);
   });
 
+  it('asks for a typed acknowledgement at release, and pushes or opens nothing unless finalize said ship', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    expect(nodes.release_approval.decision_schema.required).toEqual(['acknowledged']);
+    expect(nodes.release_approval.on_expiry).toBe('reject');
+    for (const id of ['push_branch', 'open_pr']) expect(nodes[id].guard, id).toContain('nodes.finalize.output.ship');
+  });
+
   it('keeps each test command within the 8000 character limit (cmd.exe stops at 8191)', () => {
     const out = JSON.parse(execFileSync('node', [`${PKG}/scripts/build_gate_commands.mjs`], { encoding: 'utf8' }));
     for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(8000);

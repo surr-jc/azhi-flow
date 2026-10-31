@@ -11,7 +11,13 @@ finding was confirmed, none is left unverified, and no reviewer saw a prompt inj
 after the last allowed round, the change is flagged needs_human_attention, never silently shipped.
 
 Some problems block instead of flag: a confirmed critical finding, an unmet acceptance criterion, a reviewer
-that did not judge every acceptance criterion of the requirements, and a build that ran out of steps. A
+that did not judge every acceptance criterion of the requirements, a build that ran out of steps, and (when the
+workflow passes the plan) a planned file that was not changed and not explained, or an acceptance criterion that
+needs an automated test and has none.
+
+A criterion is `met` only on evidence that ran: the reviewer names its `evidence_kind` (test_passed,
+test_written_not_run, code_read or manual_unchecked) and anything but a test that really ran and passed is
+capped at `partial`. A reviewer's "met" that rests on reading the code alone is therefore never a bare pass. A
 blocked change has ship=false and `blockers` says why; the workflow sends it back instead of asking for release.
 
 The evidence record is a plain digest of what was reviewed and tested. It is not a signature.
@@ -89,6 +95,29 @@ for _v in (review.get("verdicts") or {}).values():
     if _v and _v.get("criteria"):
         criteria = _v["criteria"]
         break
+
+# Whether any test really ran and passed: the whole suite, or (static mode) the new and changed test files.
+_m0 = re.search(r"AZHI_TARGETED_TESTS (passed|failed) (\d+) file", tests.get("output") or "")
+_verification = data.get("verification") or ("none" if data.get("untested") else "full")
+ran_tests = (_verification == "full" and tests_passed) or bool(_m0 and _m0.group(1) == "passed")
+_plan = data.get("plan")
+_how = {int(v["criterion"]): v["how"] for v in ((_plan or {}).get("ac_verification") or [])}
+capped = []
+_checked = []
+for _i, _c in enumerate(criteria, 1):
+    _c = dict(_c)
+    kind = _c.get("evidence_kind") or ("test_passed" if ran_tests else "code_read")
+    if kind == "test_passed" and not ran_tests:
+        kind = "test_written_not_run"
+    # A criterion the plan verifies by a compile or type check is proven by that check passing.
+    proven = kind == "test_passed" or (_how.get(_i) == "static_check" and kind == "code_read" and _verification != "none" and tests_passed)
+    if _c.get("status") == "met" and not proven:
+        _c["status"] = "partial"
+        _c["evidence"] = (_c.get("evidence") or "") + f" [capped to partial: the evidence is {kind}, not a test that ran and passed]"
+        capped.append(_i)
+    _c["evidence_kind"] = kind
+    _checked.append(_c)
+criteria = _checked
 crit_counts = {k: sum(1 for c in criteria if c.get("status") == k) for k in ("met", "partial", "unmet", "unverifiable")}
 all_met = bool(criteria) and crit_counts["met"] == len(criteria)
 # The reviewer must judge every acceptance criterion of the requirements; a short or missing list is not a pass.
@@ -107,6 +136,20 @@ targeted = {"result": _m.group(1), "files": int(_m.group(2))} if _m else None
 verification = data.get("verification") or ("none" if data.get("untested") else "full")
 untested = verification == "none" and not tests_passed
 static = verification == "static"
+# The plan against the diff, when the workflow passes the plan: every planned file changed (or explained), and every
+# criterion that needs an automated test has one. The engineer writes `covers AC<n>` in tests_added and
+# `AC<n>: <reason>` in deviations for a criterion with no test.
+plan_missing, plan_unexplained, untested_acs = [], [], []
+if _plan:
+    deviations_text = "\n".join(change.get("deviations") or [])
+    changed = {f["path"] for f in files}
+    plan_missing = [f["path"] for f in _plan.get("files") or [] if f.get("action") != "delete" and f["path"] not in changed]
+    plan_unexplained = [x for x in plan_missing if x not in deviations_text]
+    covered = {int(n) for t in (change.get("tests_added") or []) for n in re.findall(r"\bAC\s*(\d+)", t)}
+    waived = {int(n) for d in (change.get("deviations") or []) for n in re.findall(r"^\s*AC\s*(\d+)\s*:", d, re.I)}
+    total = len(expected) or len(criteria)
+    untested_acs = [i for i in range(1, total + 1) if _how.get(i, "automated_test") == "automated_test" and i not in covered and i not in waived]
+
 # Blockers keep the change from release approval altogether; everything else only flags the pull request.
 blockers = []
 if counts["critical"]:
@@ -117,8 +160,12 @@ if criteria_missing:
     blockers.append(f"the reviewer judged {len(criteria)} of {len(expected)} acceptance criteria")
 if step_limit:
     blockers.append("the build ran out of steps and may be unfinished")
+if plan_unexplained:
+    blockers.append(f"{len(plan_unexplained)} planned file(s) not changed and not explained in the deviations: " + ", ".join(plan_unexplained[:5]) + (" ..." if len(plan_unexplained) > 5 else ""))
+if untested_acs:
+    blockers.append("no test covers " + ", ".join(f"AC{i}" for i in untested_acs) + " (no `covers AC<n>` entry in tests_added and no waiver in the deviations)")
 ship = (tests_passed or untested) and len(files) > 0 and not blockers
-flagged = (not approved) or untested or static or incomplete or step_limit
+flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped)
 strategy = data.get("strategy") or {}
 
 # A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
@@ -143,6 +190,9 @@ record = {
     "reviewed_round": reviewed_index,
     "blockers": blockers,
     "step_limit_reached": step_limit,
+    "plan_files_missing": plan_missing,
+    "criteria_without_test": untested_acs,
+    "criteria_capped": capped,
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
     "coverage": strategy or None,
@@ -191,11 +241,13 @@ if dropped:
     detail += ["### Findings dropped by the verifier", ""] + [f"- {d['id']} ({d['severity']}): {d['verdict']} at {d['confidence']}/100" for d in dropped] + [""]
 open_criteria = [c for c in criteria if c.get("status") != "met"]
 if open_criteria or criteria_missing:
-    detail += ["### Acceptance criteria not met", "", "| Criterion | Status | Evidence |", "|---|---|---|"]
-    detail += [f"| {cell(c['criterion'])} | {c['status']} | {cell(c['evidence'])} |" for c in open_criteria]
+    detail += ["### Acceptance criteria not met or not proven by a test that ran", "", "| Criterion | Status | Evidence kind | Evidence |", "|---|---|---|---|"]
+    detail += [f"| {cell(c['criterion'])} | {c['status']} | {c.get('evidence_kind', '-')} | {cell(c['evidence'])} |" for c in open_criteria]
     if criteria_missing:
-        detail.append(f"| {criteria_missing} criterion(s) the reviewer did not judge | missing | |")
+        detail.append(f"| {criteria_missing} criterion(s) the reviewer did not judge | missing | | |")
     detail.append("")
+if plan_missing:
+    detail += ["### Planned files that were not changed", ""] + [f"- `{x}`" + ("" if x in plan_unexplained else " (explained in the deviations)") for x in plan_missing] + [""]
 if detail:
     at = lines.index("<details><summary>Record</summary>")
     lines = lines[:at] + detail + lines[at:]
@@ -249,6 +301,8 @@ out = {
     "criteria": criteria,
     "criteria_counts": crit_counts,
     "criteria_missing": criteria_missing,
+    "criteria_capped": capped,
+    "plan_files_missing": plan_missing,
     "targeted_tests": targeted,
     "closes_removed": closes_removed,
     "evidence_markdown": "\n".join(lines),

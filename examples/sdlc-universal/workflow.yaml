@@ -895,7 +895,7 @@ nodes:
       map: "{'verification': nodes.mode.output.mode == 'tested' ? 'full' :
         (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy':
         has(nodes.test_strategist) ? nodes.test_strategist.output : null,
-        'requirements':
+        'plan': {'files': nodes.plan.output.design.files.map(f, {'path': f.path, 'action': f.action}), 'ac_verification': nodes.plan.output.design.ac_verification}, 'requirements':
         nodes.plan.output.requirements, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket,
         'repo': inputs.repo, 'weight': {'proposed':
         nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by':
@@ -953,7 +953,23 @@ nodes:
         nodes.finalize.output.round, 'needs_human_attention':
         nodes.finalize.output.needs_human_attention, 'verdict':
         nodes.finalize.output.verdict, 'evidence':
-        nodes.finalize.output.evidence}"
+        nodes.finalize.output.evidence, 'criteria_capped':
+        nodes.finalize.output.criteria_capped, 'plan_files_missing':
+        nodes.finalize.output.plan_files_missing}"
+    decision_schema:
+      type: object
+      properties:
+        acknowledged:
+          enum:
+            - I have read the review findings, the criteria that no test proved and the planned files that were not changed
+          title: Acknowledgement
+          description: Pick this to release the change as shown (a draft when it needs attention); reject to stop the run.
+        notes:
+          type: string
+          title: Notes
+      required:
+        - acknowledged
+      additionalProperties: false
     expires_in: 24h
     on_expiry: reject
   - id: push_branch
@@ -976,7 +992,7 @@ nodes:
       files:
         ref: nodes.finalize.output.change.files
     guard: args.repo == inputs.repo && args.branch == 'azhi/' +
-      nodes.intake.output.key
+      nodes.intake.output.key && nodes.finalize.output.ship
   - id: open_pr
     type: tool
     description: Open a pull request for the branch (draft when reviewers still have
@@ -1003,7 +1019,8 @@ nodes:
           nodes.finalize.output.verification != 'full' ||
           nodes.plan.output.design.touches_sensitive ||
           nodes.plan.output.design.has_migration
-    guard: args.repo == inputs.repo && args.head == nodes.push_branch.output.branch
+    guard: args.repo == inputs.repo && args.head == nodes.push_branch.output.branch &&
+      nodes.finalize.output.ship
   - id: release
     type: notify
     description: Announce the pull request.

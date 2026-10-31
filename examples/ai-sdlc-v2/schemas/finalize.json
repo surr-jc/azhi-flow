@@ -187,6 +187,18 @@
     },
     "closes_removed": {
       "type": "boolean"
+    },
+    "criteria_capped": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "plan_files_missing": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

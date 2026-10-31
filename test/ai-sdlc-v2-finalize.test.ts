@@ -47,35 +47,44 @@ interface Round {
   stepLimit?: boolean;
   findings?: Array<Record<string, unknown>>;
   checks?: Array<Record<string, unknown>>;
-  criteria?: Array<{ criterion: string; status: string; evidence: string }>;
+  criteria?: Array<{ criterion: string; status: string; evidence: string; evidence_kind?: string }>;
   reviewed?: boolean;
+  testsAdded?: string[];
+  deviations?: string[];
+  paths?: string[];
+}
+
+interface Extra {
+  verification?: 'full' | 'static' | 'none';
+  plan?: { files: Array<{ path: string; action: string }>; ac_verification: Array<{ criterion: number; how: string; where: string }> };
 }
 
 /** Runs finalize over several rounds; `requirements` is what the workflow passes from the plan. */
-function finalizeRounds(rounds: Round[], requirements?: { acceptance_criteria: string[] }) {
+function finalizeRounds(rounds: Round[], requirements?: { acceptance_criteria: string[] }, extra: Extra = {}) {
   const lite = rounds.map((r) => {
     if (r.built === false) return { change: null, verdicts: { lite: null }, checks: [] };
     const ws = {
       base_sha: 'abc',
       diff: '+x\n',
-      files: [{ path: 'a.ts', status: 'added', mode: '100644', content: 'x', additions: 1, deletions: 0 }],
-      stats: { files: 1, additions: 1, deletions: 0 },
-      tests: { status: 'passed', command: 'check', exit_code: 0, attempts: 1, output: '' },
+      files: (r.paths ?? ['a.ts']).map((path) => ({ path, status: 'added', mode: '100644', content: 'x', additions: 1, deletions: 0 })),
+      stats: { files: (r.paths ?? ['a.ts']).length, additions: 1, deletions: 0 },
+      tests: { status: extra.verification === 'none' ? 'not_run' : 'passed', command: 'check', exit_code: 0, attempts: 1, output: '' },
       ...(r.stepLimit ? { step_limit_reached: true } : {}),
     };
-    const change = { summary: 's', commit_message: 'm', pr_title: 't', pr_body: 'Body\n', deviations: [], tests_added: [], workspace: ws };
+    const change = { summary: 's', commit_message: 'm', pr_title: 't', pr_body: 'Body\n', deviations: r.deviations ?? [], tests_added: r.testsAdded ?? [], workspace: ws };
     const findings = r.findings ?? [];
     const verdict = r.reviewed === false ? null : { summary: 'ok', approved: findings.length === 0, findings, prompt_injection_detected: false, ...(r.criteria ? { criteria: r.criteria } : {}) };
     return { change, verdicts: { lite: verdict }, checks: r.checks ?? [] };
   });
   const input = {
-    verification: 'full',
+    verification: extra.verification ?? 'full',
     min_confidence: 80,
     ticket: { title: 'T' },
     repo: 'acme/app',
     weight: { proposed: 'lite', final: 'lite', overridden_by: null },
     design_review: { by: 'u' },
     ...(requirements ? { requirements } : {}),
+    ...(extra.plan ? { plan: extra.plan } : {}),
     lite,
     full: [],
   };
@@ -223,8 +232,113 @@ describe.skipIf(!python)('the AI-SDLC v2 finalize step', () => {
       expect(md).toContain('L2 (major, b.ts): swallows errors - no check was returned');
       expect(md).toContain('### Findings dropped by the verifier');
       expect(md).toContain('L3 (major): refuted at 90/100');
-      expect(md).toContain('| B | partial | no mobile check |');
+      expect(md).toContain('| B | partial | test_passed | no mobile check |');
       expect(md.indexOf('### Review findings')).toBeLessThan(md.indexOf('<details>'));
+    });
+  });
+
+  describe('evidence that ran, and the plan against the diff', () => {
+    const reqs = { acceptance_criteria: ['A', 'B'] };
+    const plan = (how: string[] = ['automated_test', 'automated_test'], files = ['src/a.ts', 'test/a.test.ts']) => ({
+      files: files.map((path) => ({ path, action: 'create' })),
+      ac_verification: how.map((h, i) => ({ criterion: i + 1, how: h, where: 'x' })),
+    });
+    const both = (kind?: string) => [met, { ...met, criterion: 'B' }].map((c) => ({ ...c, ...(kind ? { evidence_kind: kind } : {}) }));
+
+    it('caps a "met" that rests on reading the code in an untested run at partial', () => {
+      const r = finalizeRounds([{ criteria: both('code_read'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t::a - covers AC1', 't::b - covers AC2'] }], reqs, { verification: 'none', plan: plan() });
+      expect(r.criteria_counts).toMatchObject({ met: 0, partial: 2 });
+      expect(r.criteria_capped).toEqual([1, 2]);
+      expect(r.needs_human_attention).toBe(true);
+      expect(r.criteria[0].evidence).toContain('capped to partial');
+      expect(r.evidence_markdown).toContain('| A | partial | code_read |');
+    });
+
+    it('does not let a reviewer claim test_passed when no test ran', () => {
+      const r = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t::a - covers AC1, AC2'] }], reqs, { verification: 'none', plan: plan() });
+      expect(r.criteria_counts.met).toBe(0);
+      expect(r.criteria[0].evidence_kind).toBe('test_written_not_run');
+    });
+
+    it('keeps "met" when the tests ran and passed, and when no kind is given in a full run', () => {
+      const withKind = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t::a - covers AC1, AC2'] }], reqs, { plan: plan() });
+      expect(withKind.criteria_counts.met).toBe(2);
+      expect(withKind.ship).toBe(true);
+      expect(withKind.needs_human_attention).toBe(false);
+      const noKind = finalizeRounds([{ criteria: both() }], reqs);
+      expect(noKind.criteria_counts.met).toBe(2);
+    });
+
+    it('caps a full-run "met" that rests on reading the code, unless the plan verifies it by a compile check', () => {
+      const read = finalizeRounds([{ criteria: both('code_read'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t - covers AC1, AC2'] }], reqs, { plan: plan() });
+      expect(read.criteria_counts).toMatchObject({ met: 0, partial: 2 });
+      const compiled = finalizeRounds([{ criteria: both('code_read'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t - covers AC2'] }], reqs, { plan: plan(['static_check', 'automated_test']) });
+      expect(compiled.criteria_counts).toMatchObject({ met: 1, partial: 1 });
+    });
+
+    it('blocks a planned file that was not changed and not explained, and only flags an explained one', () => {
+      const missing = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts'], testsAdded: ['t - covers AC1, AC2'] }], reqs, { plan: plan() });
+      expect(missing.ship).toBe(false);
+      expect(missing.blockers_text).toContain('1 planned file(s) not changed and not explained in the deviations: test/a.test.ts');
+      expect(missing.evidence_markdown).toContain('### Planned files that were not changed');
+      const explained = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts'], testsAdded: ['t - covers AC1, AC2'], deviations: ['NOT DONE: test/a.test.ts - covered by an existing suite'] }], reqs, { plan: plan() });
+      expect(explained.ship).toBe(true);
+      expect(explained.needs_human_attention).toBe(true);
+      expect(explained.plan_files_missing).toEqual(['test/a.test.ts']);
+    });
+
+    it('blocks a criterion that needs an automated test and has none, unless it is waived or not automatable', () => {
+      const none = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t - covers AC1'] }], reqs, { plan: plan() });
+      expect(none.ship).toBe(false);
+      expect(none.blockers_text).toContain('no test covers AC2');
+      const waived = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t - covers AC1'], deviations: ['AC2: no automated test, a rendering check'] }], reqs, { plan: plan() });
+      expect(waived.ship).toBe(true);
+      const manual = finalizeRounds([{ criteria: both('test_passed'), paths: ['src/a.ts', 'test/a.test.ts'], testsAdded: ['t - covers AC1'] }], reqs, { plan: plan(['automated_test', 'manual']) });
+      expect(manual.ship).toBe(true);
+    });
+
+    it('does nothing about the plan when the workflow does not pass one', () => {
+      const r = finalizeRounds([{ criteria: both('test_passed') }], reqs);
+      expect(r.ship).toBe(true);
+      expect(r.plan_files_missing).toEqual([]);
+    });
+  });
+
+  // Reconstructed from the description of the two DCURE-2182 runs (the real attempt outputs are not on this server).
+  describe('the two DCURE-2182 runs, as reconstructed', () => {
+    const six = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+    const reqs = { acceptance_criteria: six };
+    const plan6 = {
+      files: ['src/s.java', 'src/n.java', 'src/m.java', 'src/t.java', 'src/u.java', 'src/v.java'].map((path) => ({ path, action: 'update' })),
+      ac_verification: six.map((_, i) => ({ criterion: i + 1, how: 'automated_test', where: 'x' })),
+    };
+
+    it('run 1 (ran out of steps, 2 of 6 planned files, confirmed criticals, an unmet criterion) is sent back', () => {
+      const status = ['met', 'met', 'met', 'met', 'met', 'partial', 'partial', 'partial', 'unmet', 'unverifiable'];
+      const criteria = six.map((c, i) => ({ criterion: c, status: status[i]!, evidence: 'x', evidence_kind: 'code_read' }));
+      const findings = [{ ...critical, id: 'L1' }, { ...critical, id: 'L2', message: 'no tests' }, { ...critical, id: 'L3', message: 'compile error' }];
+      const r = finalizeRounds(
+        [{ stepLimit: true, paths: ['src/s.java', 'src/n.java'], findings, checks: findings.map((f) => confirm(f.id)), criteria }],
+        reqs,
+        { verification: 'none', plan: plan6 },
+      );
+      expect(r.ship).toBe(false);
+      expect(r.blocked).toBe(true);
+      for (const part of ['3 confirmed critical', '1 acceptance criterion(s) unmet', 'ran out of steps', '4 planned file(s) not changed', 'no test covers AC1']) expect(r.blockers_text).toContain(part);
+    });
+
+    it('run 2 (no findings, every criterion "met" from reading the code, nothing run) can no longer show a bare "met"', () => {
+      const criteria = six.map((c) => ({ criterion: c, status: 'met', evidence: 'enum is set in the three senders', evidence_kind: 'test_written_not_run' }));
+      const r = finalizeRounds(
+        [{ paths: plan6.files.map((f) => f.path), criteria, testsAdded: six.map((_, i) => `T::t${i} - covers AC${i + 1}`), findings: [{ id: 'L1', severity: 'minor', message: 'wording' }] }],
+        reqs,
+        { verification: 'none', plan: plan6 },
+      );
+      expect(r.criteria_counts).toMatchObject({ met: 0, partial: 10 });
+      expect(r.needs_human_attention).toBe(true);
+      expect(r.evidence_markdown).toContain('not proven by a test that ran');
+      // Nothing here blocks: catching a criterion that reading cannot refute (STARTED can never be produced) is the audit step's job.
+      expect(r.blocked).toBe(false);
     });
   });
 });
