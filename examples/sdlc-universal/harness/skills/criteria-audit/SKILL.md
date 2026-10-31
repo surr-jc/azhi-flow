@@ -39,6 +39,12 @@ code and tests, never assumptions about a stack.
    - `unverifiable`: the answer depends on something you cannot see in the checkout (runtime data, a remote
      service, a screen). Never use it to avoid the work.
 
+## Scope
+
+The input may carry `scope`: the projects this environment could verify and those it could not. Where the code
+behind a criterion sits in a blocked project, no test has run for it, so give the criterion extra scrutiny: a trace
+that rests on a test nobody ran is not a trace.
+
 ## Confidence, 0 to 100
 
 How sure you are of your verdict. 90 to 100: you traced every outcome end to end and quote the lines. 80 to 89: one

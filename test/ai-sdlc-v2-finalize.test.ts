@@ -57,6 +57,7 @@ interface Round {
 
 interface Extra {
   verification?: 'full' | 'static' | 'none';
+  scope?: unknown;
   plan?: { files: Array<{ path: string; action: string }>; ac_verification: Array<{ criterion: number; how: string; where: string }> };
 }
 
@@ -86,6 +87,7 @@ function finalizeRounds(rounds: Round[], requirements?: { acceptance_criteria: s
     design_review: { by: 'u' },
     ...(requirements ? { requirements } : {}),
     ...(extra.plan ? { plan: extra.plan } : {}),
+    ...(extra.scope ? { scope: extra.scope } : {}),
     lite,
     full: [],
   };
@@ -400,6 +402,35 @@ describe.skipIf(!python)('the AI-SDLC v2 finalize step', () => {
       const r = finalizeRounds([{ criteria: crit, audit: [holds(1), counter(2)] }, { reviewed: false }], reqs);
       expect(r.criteria_audit.refuted).toEqual([2]);
       expect(r.ship).toBe(false);
+    });
+  });
+
+  describe('the verification scope', () => {
+    const scope = { known: true, verified: [{ dir: 'frontend', stack: 'node/npm', by: 'tests' }], blocked: [{ dir: 'backend', stack: 'java/maven', step: 'test', failed_in: 'compile' }] };
+
+    it('lists changed files in a project nothing could verify, flags the change, and records the scope', () => {
+      const r = finalizeRounds([{ criteria: [met], paths: ['frontend/a.ts', 'backend/src/B.java'] }], { acceptance_criteria: ['A'] }, { scope });
+      expect(r.files_in_unverified_projects).toEqual(['backend/src/B.java']);
+      expect(r.needs_human_attention).toBe(true);
+      expect(r.ship).toBe(true);
+      expect(r.evidence_markdown).toContain('Verification scope: verified frontend (tests); could not run backend (failed at test)');
+      expect(r.evidence_markdown).toContain('### Changed files in projects that could not be verified here');
+      expect(r.evidence.verification_scope).toEqual(scope);
+    });
+
+    it('does not flag a change that only touches verified projects, or when the scope is unknown or absent', () => {
+      const only = finalizeRounds([{ criteria: [met], paths: ['frontend/a.ts'] }], { acceptance_criteria: ['A'] }, { scope });
+      expect(only.files_in_unverified_projects).toEqual([]);
+      expect(only.needs_human_attention).toBe(false);
+      const unknown = finalizeRounds([{ criteria: [met], paths: ['backend/B.java'] }], { acceptance_criteria: ['A'] }, { scope: { known: false, verified: [], blocked: [] } });
+      expect(unknown.files_in_unverified_projects).toEqual([]);
+      expect(finalizeRounds([{ criteria: [met] }], { acceptance_criteria: ['A'] }).files_in_unverified_projects).toEqual([]);
+    });
+
+    it('treats a blocked project at the repository root as covering every file', () => {
+      const root = { known: true, verified: [], blocked: [{ dir: '.', stack: 'x', step: 'test', failed_in: 'tests' }] };
+      const r = finalizeRounds([{ criteria: [met], paths: ['a.ts', 'src/b.ts'] }], { acceptance_criteria: ['A'] }, { scope: root });
+      expect(r.files_in_unverified_projects).toEqual(['a.ts', 'src/b.ts']);
     });
   });
 });

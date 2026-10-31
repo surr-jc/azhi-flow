@@ -202,6 +202,12 @@
     },
     "criteria_audit": {
       "type": "object"
+    },
+    "files_in_unverified_projects": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [

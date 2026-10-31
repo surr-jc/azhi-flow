@@ -12,7 +12,8 @@
 //     two web front ends and a Python service gets all four checked. Detected stacks: node (npm, pnpm, yarn, bun),
 //     Maven, Gradle, .NET, Go, Rust, Python (pip, uv, poetry), Ruby, PHP, Elixir, Swift, and make (a `test` target).
 // Nothing is guessed beyond that: with no usable command the gate exits 1 and says why. Every project is run and
-// reported, and the gate fails if any of them fails.
+// reported, and the gate fails if any of them fails. The last line, AZHI_GATE_RESULT, is JSON with one entry per
+// project (dir, stack, status, the step that failed), which the workflow reads to say what could and could not be verified.
 const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -138,8 +139,11 @@ if (!plan.some((p) => need.some((k) => p[k]))) {
   process.exit(1);
 }
 const failed = [];
+const results = [];
 for (const p of runnable) {
   console.log('== ' + p.dir + ' (' + p.stack + ') ==');
+  const r = { dir: p.dir, stack: p.stack, status: 'passed', step: '' };
+  results.push(r);
   for (const k of steps) {
     if (!p[k]) continue;
     console.log('$ ' + p[k]);
@@ -147,9 +151,12 @@ for (const p of runnable) {
       cp.execSync(p[k], { stdio: 'inherit', cwd: p.dir });
     } catch {
       failed.push(p.dir + ' ' + k);
+      r.status = 'failed';
+      r.step = k;
       break;
     }
   }
 }
+console.log('AZHI_GATE_RESULT ' + JSON.stringify({ mode, projects: results }));
 console.log('AZHI_GATE ' + mode + ' ' + (failed.length ? 'failed: ' + failed.join(', ') : 'passed') + ' (' + runnable.length + ' project(s))');
 process.exit(failed.length ? 1 : 0);

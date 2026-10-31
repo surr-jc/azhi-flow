@@ -11,6 +11,7 @@ Look for the defects that earlier reviews of this kind kept finding:
 - A test that cannot pass: check that its fixture really sets up the state its assertions rely on, and that it would fail if the feature were removed.
 - Missing boundary tests for anything with roles, workspaces or tenants: a forbidden role, a second workspace, an unknown or invalid value.
 - Edits to files the plan did not name: a minor finding unless the typecheck needs them.
+- Verification scope: when the input has `scope`, it lists the projects the environment could verify (`verified`, by tests or only by compiling) and those it could not (`blocked`). A criterion whose code and tests sit in a blocked project cannot rest on a passing test: use `test_written_not_run` or `code_read` for it, and say in `evidence` which project it is in.
 - A plan that was only partly done: compare the diff's files with the design's `files` and the `NOT DONE` lines in the deviations. A planned file with no change, or a criterion with no test, is `major` at least (`critical` when it leaves a criterion unmet).
 - Data lost or reshaped: where the change moves or maps fields (before and after), check every field is still carried.
 - A branch on a setting that may be unset or empty (a base URL, a flag, an env value): trace what happens when it is absent.

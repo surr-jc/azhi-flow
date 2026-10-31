@@ -69,6 +69,11 @@ Read the test output from the end. Put the first real cause into one class, and 
 
 ## Step 3: find what still works
 
+The gate prints a section per project (`== backend (java/maven) ==`) and ends with an `AZHI_GATE_RESULT` line:
+JSON with each project's `dir`, `stack`, `status` and the `step` that failed. Read it first. It tells you which
+projects passed and which did not, so you do not have to guess. A repository where some projects pass and others
+are blocked is the usual case, and the answer is then "verify what can be verified", not "nothing can be".
+
 Note which test files or modules need the blocked thing (grep for the service, the native library,
 the browser, the credential) and which are plain unit tests. Count both: the numbers are what the
 reader needs. Identify which parts of the change area have any tests at all.
@@ -98,6 +103,11 @@ will still write a test for every acceptance criterion; the reviewer will then k
 written but not run is evidence of intent, not of behaviour.
 
 ## Step 6: say what a person can do to get real tests
+
+When some projects passed and others are blocked, make the remediation a ready-to-paste `.azhi/commands.json`
+that lists only the projects that passed (`{"projects":[{"dir":"frontend","install":...,"test":...}]}`, using the
+commands from the gate output or the CI file), and say that the blocked projects are left out until their toolchain
+or services are available. A change in a left-out project then stays unverified and is marked so.
 
 One concrete remediation the owner could do, specific to what you saw and to this stack (for example
 "run the worker in the repository's Dockerfile", "start Postgres and set the URL the tests read",

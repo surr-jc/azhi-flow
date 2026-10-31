@@ -54,6 +54,14 @@ describe('SDLC universal: definition', () => {
     for (const id of ['push_branch', 'open_pr']) expect(nodes[id].guard, id).toContain('nodes.finalize.output.ship');
   });
 
+  it('gives the approver, the builds, the reviewers, the auditors and finalize the per-project scope', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    expect(nodes.gate_scope.depends_on).toEqual(['preflight_b']);
+    for (const id of ['build', 'build_static', 'build_untested', 'lite_fix', 'lite_fix_static', 'lite_fix_untested', 'lite_review_1', 'lite_review_2', 'lite_audit_1', 'lite_audit_2', 'finalize'])
+      expect(JSON.stringify(nodes[id].input), id).toContain('nodes.gate_scope.output');
+    expect(JSON.stringify(nodes.preflight_decision.payload)).toContain("'scope': nodes.gate_scope.output");
+  });
+
   it('audits every criterion rated met, in a fix-round-triggering way, and feeds finalize the audit of each round', () => {
     const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
     for (const n of [1, 2]) {
@@ -200,9 +208,43 @@ describe('SDLC universal: gate', () => {
     expect(g.out).toContain('AZHI_GATE full passed (1 project(s))');
   });
 
+  it('ends with one machine-readable result per project, so a partial pass can be told from a total failure', () => {
+    const ok = `node -e "0"`;
+    const bad = `node -e "process.exit(2)"`;
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'fe', test: ok }, { dir: 'be', install: bad, test: ok }] }), 'fe/x': '', 'be/x': '' });
+    const r = run(d, 'full');
+    expect(r.code).toBe(1);
+    const line = r.out.split('\n').find((l) => l.startsWith('AZHI_GATE_RESULT '))!;
+    expect(JSON.parse(line.slice('AZHI_GATE_RESULT '.length))).toEqual({
+      mode: 'full',
+      projects: [{ dir: 'fe', stack: 'configured', status: 'passed', step: '' }, { dir: 'be', stack: 'configured', status: 'failed', step: 'install' }],
+    });
+  });
+
   it('refuses a configured folder outside the checkout', () => {
     const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: '..', test: 'node -e 0' }, { dir: '/tmp', test: 'node -e 0' }] }) });
     expect(run(d, 'full').out).toContain('no full command');
+  });
+});
+
+describe('SDLC universal: gate_scope.py', () => {
+  const scope = (input: unknown) => JSON.parse(execFileSync(python, [`${PKG}/scripts/gate_scope.py`], { input: JSON.stringify(input), encoding: 'utf8' }));
+  const result = (mode: string, projects: unknown[]) => `== x ==\nnoise\nAZHI_GATE_RESULT ${JSON.stringify({ mode, projects })}\nAZHI_GATE ${mode} failed\n`;
+  const p = (dir: string, status: string, step = '') => ({ dir, stack: 's', status, step });
+
+  it('names each project verified (by tests, or only by compiling) or blocked, with the failing step', () => {
+    const out = scope({
+      full_output: result('full', [p('./frontend', 'passed'), p('./backend', 'failed', 'test'), p('./mcp-server', 'failed', 'install')]),
+      static_output: result('static', [p('./frontend', 'passed'), p('./backend', 'passed'), p('./mcp-server', 'failed', 'install')]),
+    });
+    expect(out.known).toBe(true);
+    expect(out.verified).toEqual([{ dir: 'backend', stack: 's', by: 'compile' }, { dir: 'frontend', stack: 's', by: 'tests' }]);
+    expect(out.blocked).toEqual([{ dir: 'mcp-server', stack: 's', step: 'install', failed_in: 'compile' }]);
+  });
+
+  it('says it does not know, rather than guessing, when no run printed a result', () => {
+    expect(scope({ full_output: 'no full command; see .azhi/commands.json', static_output: '' })).toEqual({ known: false, verified: [], blocked: [] });
+    expect(scope({ full_output: 'AZHI_GATE_RESULT {not json', static_output: null })).toEqual({ known: false, verified: [], blocked: [] });
   });
 });
 

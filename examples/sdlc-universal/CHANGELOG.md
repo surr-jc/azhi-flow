@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The gate ends with an `AZHI_GATE_RESULT` line (one entry per project: status and the failing step), and a new step
+  `gate_scope` turns the two preflight runs into a verification scope: which projects were verified (by tests, or only
+  by compiling) and which could not run. The scope is shown at the untested approval, passed to the build, fix, review
+  and audit steps, and recorded in the evidence; `finalize` lists changed files that sit in a blocked project and
+  flags them. The test strategist now reads the per-project result and suggests a ready-to-paste
+  `.azhi/commands.json` limited to the projects that passed. Limit: the build still runs the gate as a whole, so a
+  blocked project is not skipped during the build; listing only the runnable projects in `.azhi/commands.json` does that.
 - Where a criterion lists outcomes (Started, Not Started, Blocked), the plan, the engineer and the test reviewer now
   require one test per outcome that drives a real input through production code; a test that only checks that a label
   renders or a string's length does not count. The reviewer and the code-review skill check edge values (null or

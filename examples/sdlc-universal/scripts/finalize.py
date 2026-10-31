@@ -20,6 +20,9 @@ an independent auditor could trace an input to every outcome it names), a "met" 
 `holds` with at least one traced outcome at the minimum confidence. A confirmed counterexample makes the criterion
 unmet, which blocks; anything the audit could not confirm is capped at partial.
 
+When the workflow passes the verification scope (which projects the preflight could and could not verify), the files
+the change touches in a project that could not be verified are listed and flag the change: no check backs them.
+
 A criterion is `met` only on evidence that ran: the reviewer names its `evidence_kind` (test_passed,
 test_written_not_run, code_read or manual_unchecked) and anything but a test that really ran and passed is
 capped at `partial`. A reviewer's "met" that rests on reading the code alone is therefore never a bare pass. A
@@ -171,6 +174,16 @@ if _plan:
     total = len(expected) or len(criteria)
     untested_acs = [i for i in range(1, total + 1) if _how.get(i, "automated_test") == "automated_test" and i not in covered and i not in waived]
 
+# Which projects could be verified here. A changed file inside a project nothing could run is not backed by any check.
+scope = data.get("scope") if isinstance(data.get("scope"), dict) and data["scope"].get("known") else None
+unverified_files = []
+if scope:
+    def _under(path, d):
+        d = (d or ".").strip("/")
+        return d in ("", ".") or path == d or path.startswith(d + "/")
+    _blocked = [b.get("dir", ".") for b in scope.get("blocked") or []]
+    unverified_files = [f["path"] for f in files if any(_under(f["path"], d) for d in _blocked)]
+
 # Blockers keep the change from release approval altogether; everything else only flags the pull request.
 blockers = []
 if counts["critical"]:
@@ -188,7 +201,7 @@ if plan_unexplained:
 if untested_acs:
     blockers.append("no test covers " + ", ".join(f"AC{i}" for i in untested_acs) + " (no `covers AC<n>` entry in tests_added and no waiver in the deviations)")
 ship = (tests_passed or untested) and len(files) > 0 and not blockers
-flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped) or bool(audit_unconfirmed)
+flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped) or bool(audit_unconfirmed) or bool(unverified_files)
 strategy = data.get("strategy") or {}
 
 # A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
@@ -216,6 +229,8 @@ record = {
     "plan_files_missing": plan_missing,
     "criteria_without_test": untested_acs,
     "criteria_capped": capped,
+    "verification_scope": scope,
+    "files_in_unverified_projects": unverified_files,
     "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
@@ -239,6 +254,7 @@ lines = ["## Evidence record", "",
          *([f"- Acceptance criteria: {crit_counts['met']} of {len(criteria)} met" + "".join(f", {crit_counts[k]} {k}" for k in ("partial", "unmet", "unverifiable") if crit_counts[k])] if criteria else []),
          *(["- Closing keyword replaced by `Refs`: this change does not finish the ticket, so merging it will not close it"] if closes_removed else []),
          "- Reviewers: " + ("; ".join(f"{r['reviewer']} {'approved' if r['approved'] else 'requested changes'} ({r['critical']} critical, {r['major']} major)" for r in reviewers) or "none"),
+         *([ "- Verification scope: " + ("verified " + (", ".join(f"{v['dir']} ({v['by']})" for v in scope.get("verified") or []) or "nothing") + "; could not run " + (", ".join(f"{b['dir']} (failed at {b['step'] or 'a step'})" for b in scope.get("blocked") or []) or "nothing")) ] if scope else []),
          f"- Verifier: {len(dropped)} critical or major finding(s) refuted or below {minimum}/100 and dropped, {len(unverified)} could not be verified",
          f"- Diff SHA-256: `{record['diff_sha256']}`",
          f"- Record SHA-256: `{record['record_sha256']}`",
@@ -270,6 +286,8 @@ if open_criteria or criteria_missing:
     if criteria_missing:
         detail.append(f"| {criteria_missing} criterion(s) the reviewer did not judge | missing | | |")
     detail.append("")
+if unverified_files:
+    detail += ["### Changed files in projects that could not be verified here", "", "No test or build backed these; read them with that in mind.", ""] + [f"- `{x}`" for x in unverified_files[:30]] + (["- ..."] if len(unverified_files) > 30 else []) + [""]
 if plan_missing:
     detail += ["### Planned files that were not changed", ""] + [f"- `{x}`" + ("" if x in plan_unexplained else " (explained in the deviations)") for x in plan_missing] + [""]
 if detail:
@@ -326,6 +344,7 @@ out = {
     "criteria_counts": crit_counts,
     "criteria_missing": criteria_missing,
     "criteria_capped": capped,
+    "files_in_unverified_projects": unverified_files,
     "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
     "plan_files_missing": plan_missing,
     "targeted_tests": targeted,
