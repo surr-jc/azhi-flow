@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { api, atLeast } from '../api';
 import { useMe } from '../App';
@@ -83,7 +83,7 @@ export function Toolbox() {
           <p className="muted small tb-adv">Looking for the raw lists? <Link to="/ui/connections">Connections</Link> · <Link to="/ui/tools">Tools</Link> · <Link to="/ui/assets">Library</Link> · <Link to="/ui/datasets">Datasets</Link></p>
         </div>
       </div>
-      {opened ? <ItemDetails item={opened} onClose={() => setOpen(null)} /> : null}
+      {opened ? <ItemDetails item={opened} canEdit={canEdit} onClose={() => setOpen(null)} /> : null}
     </>
   );
 }
@@ -116,13 +116,31 @@ function Card({ item, onOpen }: { item: Item; onOpen: () => void }) {
 }
 
 /** What an item is, in a dialog over the page: its needs, its actions and the technical facts. */
-function ItemDetails({ item, onClose }: { item: Item; onClose: () => void }) {
+function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean; onClose: () => void }) {
   const s = STATUS[item.status];
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  // Only library items can be removed; built-in apps, hosted connections and datasets are managed on their own pages.
+  const assetId = item.id.startsWith('asset:') ? item.id.slice('asset:'.length) : null;
+  const remove = useMutation({
+    mutationFn: () => api(`/v1/assets/${encodeURIComponent(assetId!)}/archive`, { method: 'POST', body: {} }),
+    onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['toolbox'] }); onClose(); },
+  });
   const tools = (item.details.tools ?? []) as Array<{ ref: string; description: string; effect: string }>;
   const facts = Object.entries(item.details).filter(([k, v]) => k !== 'tools' && v !== null && v !== '');
   return (
-    <Popup title={item.name} sub={KIND_NAME[item.kind] ?? item.kind} size="wide" onClose={onClose} footer={<div className="row"><Link to={item.href} className="button primary">Manage</Link><button type="button" onClick={onClose}>Close</button></div>}>
+    <Popup title={item.name} sub={KIND_NAME[item.kind] ?? item.kind} size="wide" onClose={onClose} footer={<div className="row"><Link to={item.href} className="button primary">Manage</Link><button type="button" onClick={onClose}>Close</button>{assetId && canEdit ? <button type="button" className="danger" onClick={() => setConfirming(true)} disabled={remove.isPending}>Delete</button> : null}</div>}>
       <div className="tb-details">
+        {confirming ? (
+          <div className="update-note" role="alert">
+            <span><b>Delete {item.name}?</b> Workflows that use it will stop finding it.{item.used_by ? ` It is used by ${item.used_by} workflow${item.used_by === 1 ? '' : 's'}.` : ''}</span>
+            <span className="row">
+              <button type="button" className="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? 'Deleting…' : 'Yes, delete'}</button>
+              <button type="button" onClick={() => setConfirming(false)} disabled={remove.isPending}>Cancel</button>
+            </span>
+          </div>
+        ) : null}
+        <ErrorNote error={remove.error} />
         <p className="small tb-flags">
           <Badge tone={s.tone}>{s.label}</Badge>
           {item.changes_things ? <Badge tone="warn">can change things</Badge> : null}
