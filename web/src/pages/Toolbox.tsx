@@ -1,8 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Popup } from '../components/Popup';
+import { ManagePanel } from '../components/ToolboxManage';
 import { Icon } from '../icons';
 import { Link } from '../router';
 import { Badge, ErrorNote, Loading, PageHead } from '../ui';
@@ -53,8 +54,8 @@ export function Toolbox() {
     <>
       <PageHead
         title="Toolbox"
-        sub="Everything your agents can use. Turn items on for a step from its editor; add new ones here."
-        actions={canEdit ? <Link to="/ui/assets" className="button primary">Add to toolbox</Link> : undefined}
+        sub="Everything your agents can use. Open an item to view, edit, attach or delete it. Install new ones from the Library."
+        actions={canEdit ? <Link to="/ui/library" className="button primary">Find in the Library</Link> : undefined}
       />
       <ErrorNote error={q.error} />
       {attention ? <div className="update-note tb-alert" role="status"><span><b>{attention} item{attention === 1 ? ' needs' : 's need'} setup</b> before workflows can use {attention === 1 ? 'it' : 'them'}.</span></div> : null}
@@ -75,16 +76,15 @@ export function Toolbox() {
           {q.data && !shown.length ? (
             <div className="empty">
               <p className="empty-title">{items.length ? `Nothing matches${text ? ` “${text}”` : ''}.` : 'The toolbox is empty.'}</p>
-              {!items.length && canEdit ? <p className="muted">Find an app or skill in the marketplace, or write your own. <Link to="/ui/assets">Add to toolbox</Link></p> : null}
+              {!items.length && canEdit ? <p className="muted">Install an MCP server, skill or role from the marketplace, or write your own. <Link to="/ui/library">Open the Library</Link></p> : null}
             </div>
           ) : null}
           <div className="tb-grid">
             {shown.map((i) => <Card key={i.id} item={i} onOpen={() => setOpen(i.id)} />)}
           </div>
-          <p className="muted small tb-adv">Looking for the raw lists? <Link to="/ui/connections">Connections</Link> · <Link to="/ui/tools">Tools</Link> · <Link to="/ui/assets">Library</Link> · <Link to="/ui/datasets">Datasets</Link></p>
         </div>
       </div>
-      {opened ? <ItemDetails item={opened} canEdit={canEdit} onClose={() => setOpen(null)} /> : null}
+      {opened ? <ItemDetails item={opened} canEdit={canEdit} admin={atLeast(me.data?.role, 'admin')} onClose={() => setOpen(null)} /> : null}
     </>
   );
 }
@@ -110,41 +110,23 @@ function Card({ item, onOpen }: { item: Item; onOpen: () => void }) {
         <span className="muted">{usedBy(item.used_by)}</span>
       </p>
       <div className="row">
-        <button type="button" onClick={onOpen} aria-haspopup="dialog">Details</button>
-        <Link to={item.href} className="small">Manage</Link>
+        <button type="button" onClick={onOpen} aria-haspopup="dialog">Open</button>
         {item.group === 'mcp' && item.status === 'ready' ? <Link to={`/ui/workflows/new?prompt=${encodeURIComponent(`Add the ${item.name} MCP server to a workflow`)}`} className="small">Use in chat</Link> : null}
       </div>
     </article>
   );
 }
 
-/** What an item is, in a dialog over the page: its needs, its actions and the technical facts. */
-function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean; onClose: () => void }) {
+/** One item in a dialog over the page: what it is, and everything you can do to it, without leaving the Toolbox. */
+function ItemDetails({ item, canEdit, admin, onClose }: { item: Item; canEdit: boolean; admin: boolean; onClose: () => void }) {
   const s = STATUS[item.status];
-  const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  // Only library items can be removed; built-in apps, hosted connections and datasets are managed on their own pages.
-  const assetId = item.id.startsWith('asset:') ? item.id.slice('asset:'.length) : null;
-  const remove = useMutation({
-    mutationFn: () => api(`/v1/assets/${encodeURIComponent(assetId!)}/archive`, { method: 'POST', body: {} }),
-    onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['toolbox'] }); onClose(); },
-  });
+  const embedded = item.kind === 'app' || item.kind === 'dataset';
   const tools = (item.details.tools ?? []) as Array<{ ref: string; description: string; effect: string }>;
   const configs = (item.details.configs ?? []) as Array<{ harness: string; file: string; text: string }>;
-  const facts = Object.entries(item.details).filter(([k, v]) => k !== 'tools' && k !== 'configs' && v !== null && v !== '');
+  const facts = embedded ? [] : Object.entries(item.details).filter(([k, v]) => k !== 'tools' && k !== 'configs' && v !== null && v !== '');
   return (
-    <Popup title={item.name} sub={KIND_NAME[item.kind] ?? item.kind} size="wide" onClose={onClose} footer={<div className="row"><Link to={item.href} className="button primary">Manage</Link><button type="button" onClick={onClose}>Close</button>{assetId && canEdit ? <button type="button" className="danger" onClick={() => setConfirming(true)} disabled={remove.isPending}>Delete</button> : null}</div>}>
+    <Popup title={item.name} sub={KIND_NAME[item.kind] ?? item.kind} size="wide" onClose={onClose} footer={<button type="button" onClick={onClose}>Close</button>}>
       <div className="tb-details">
-        {confirming ? (
-          <div className="update-note" role="alert">
-            <span><b>Delete {item.name}?</b> Workflows that use it will stop finding it.{item.used_by ? ` It is used by ${item.used_by} workflow${item.used_by === 1 ? '' : 's'}.` : ''}</span>
-            <span className="row">
-              <button type="button" className="danger" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? 'Deleting…' : 'Yes, delete'}</button>
-              <button type="button" onClick={() => setConfirming(false)} disabled={remove.isPending}>Cancel</button>
-            </span>
-          </div>
-        ) : null}
-        <ErrorNote error={remove.error} />
         <p className="small tb-flags">
           <Badge tone={s.tone}>{s.label}</Badge>
           {item.changes_things ? <Badge tone="warn">can change things</Badge> : null}
@@ -154,7 +136,7 @@ function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean;
         {item.summary ? <p>{item.summary}</p> : null}
         {item.status_note ? <p className="small tb-note">{item.status_note}</p> : null}
         {item.needs.length ? <p className="small"><b>Needs:</b> <span className="mono">{item.needs.join(', ')}</span></p> : null}
-        {tools.length ? (
+        {tools.length && item.kind !== 'app' ? (
           <>
             <h4 className="tb-h">Actions</h4>
             <ul className="tb-tools">
@@ -179,6 +161,7 @@ function ItemDetails({ item, canEdit, onClose }: { item: Item; canEdit: boolean;
             {facts.map(([k, v]) => <div key={k}><dt>{k.replaceAll('_', ' ')}</dt><dd className="mono">{String(v)}</dd></div>)}
           </dl>
         ) : null}
+        <ManagePanel item={item} canEdit={canEdit} admin={admin} onGone={onClose} />
       </div>
     </Popup>
   );

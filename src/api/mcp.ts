@@ -29,6 +29,17 @@ export function registerMcpRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/mcp/connections/:id', async (req) => {
     const p = user(req); requireRole(p, 'admin'); return publicConnection(await getMcpConnection(ctx, p.workspaceId, (req.params as { id: string }).id));
   });
+  // A connection whose actions are registered stays: registered tools are pinned by runs and cannot be removed.
+  app.delete('/v1/mcp/connections/:id', async (req) => {
+    const p = user(req); requireRole(p, 'admin');
+    const id = (req.params as { id: string }).id;
+    const row = await getMcpConnection(ctx, p.workspaceId, id);
+    const used = (await ctx.pool.query(`SELECT count(DISTINCT tool_id)::int AS n FROM tools WHERE workspace_id=$1 AND spec->'transport'->>'connection' IN ($2,$3)`, [p.workspaceId, id, row.name])).rows[0]?.n ?? 0;
+    if (used) throw new AzhiError(ErrorClass.invalidInput, `${used} registered action${used === 1 ? ' uses' : 's use'} this connection; runs may have pinned ${used === 1 ? 'it' : 'them'}, so it cannot be removed`);
+    await ctx.pool.query(`DELETE FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [p.workspaceId, id]);
+    await audit(ctx, p.workspaceId, p.userId, 'mcp.connection_deleted', { connection: id, name: row.name });
+    return { ok: true };
+  });
   app.post('/v1/mcp/connections/:id/oauth/start', async (req) => {
     const p = user(req); requireRole(p, 'admin'); return beginMcpOAuth(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId);
   });

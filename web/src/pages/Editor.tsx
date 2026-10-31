@@ -1089,7 +1089,7 @@ const asMarkdown = (data: Record<string, string | undefined>, body: string) => `
 
 /** "Add from Library…": published items of one kind that are not in the package yet. */
 function LibrarySelect({ label, items, onPick, disabled }: { label: string; items: LibraryAsset[]; onPick: (a: LibraryAsset) => void; disabled?: (a: LibraryAsset) => string | undefined }) {
-  if (!items.length) return <span className="muted small">No published {label} in the <a href="/ui/assets">Library</a> yet.</span>;
+  if (!items.length) return <span className="muted small">No published {label} in the <a href="/ui/library">Library</a> yet.</span>;
   return (
     <select aria-label={`Add a ${label} from the Library`} value="" onChange={(e) => { const a = items.find((x) => x.id === e.target.value); if (a) onPick(a); }}>
       <option value="">Add a {label} from the Library…</option>

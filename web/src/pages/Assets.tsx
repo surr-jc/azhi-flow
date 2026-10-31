@@ -1,10 +1,11 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, atLeast, type WorkflowSummary } from '../api';
+import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Icon } from '../icons';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { DefinitionSummary, HarnessGuides, NeedList, type Guide, type Need } from '../components/LibraryParts';
+import { useRoute } from '../router';
 import { McpWizard } from './McpWizard';
 
 export type Kind = 'mcp' | 'agent' | 'skill' | 'command';
@@ -30,37 +31,33 @@ function useDebounced<T>(value: T, ms = 350): T {
 
 export function Assets() {
   const me = useMe();
+  const { navigate } = useRoute();
   const [kind, setKind] = useState<Kind>('skill');
-  const [view, setView] = useState<'discover' | 'mine'>('discover');
   const [adding, setAdding] = useState(false);
   const canEdit = atLeast(me.data?.role, 'author');
   const assets = useQuery({ queryKey: ['portable-assets'], queryFn: () => api<Asset[]>('/v1/assets') });
   const counts = useMemo(() => Object.fromEntries((['mcp', 'agent', 'skill', 'command'] as Kind[]).map((k) => [k, assets.data?.filter((a) => a.kind === k && a.status !== 'archived').length ?? 0])) as Record<Kind, number>, [assets.data]);
   const k = KINDS[kind];
+  // Installed items are managed in the Toolbox; the Library only finds and installs them.
+  const toToolbox = () => navigate('/ui/toolbox');
   return (
     <>
-      <PageHead title="Library" sub="Reusable parts for harness agents (OpenCode, Claude Code): MCP servers, agents, skills and commands. Find them in live marketplaces or write your own, review and publish, then attach them to a workflow." />
+      <PageHead title="Library" sub="Find MCP servers, agents, skills and commands in live marketplaces and install them. Installed items appear in the Toolbox, where you review, edit, publish and attach them to workflows." />
       <div className="lib-kinds" role="tablist" aria-label="Kind">
         {(Object.keys(KINDS) as Kind[]).map((key) => (
           <button key={key} type="button" role="tab" aria-selected={kind === key} className={`lib-kind${kind === key ? ' on' : ''}`} onClick={() => { setKind(key); setAdding(false); }}>
             <span className="lib-kind-ico"><Icon name={KINDS[key].icon} size={20} /></span>
-            <span><b>{KINDS[key].label}</b><span className="muted small">{counts[key]} in your library</span></span>
+            <span><b>{KINDS[key].label}</b><span className="muted small">{counts[key]} installed</span></span>
           </button>
         ))}
       </div>
       <div className="lib-purpose">
         <p><b>What is this for?</b> {k.purpose} <span className="muted">{k.example}</span></p>
-        <p className="muted small">{HARNESS_NOTE} Tool steps and model agents use <a href="/ui/tools">gateway tools</a> instead.</p>
+        <p className="muted small">{HARNESS_NOTE}</p>
       </div>
-      <div className="lib-bar">
-        <div className="seg" role="group" aria-label="Show">
-          <button type="button" aria-pressed={view === 'discover'} onClick={() => setView('discover')}>Discover</button>
-          <button type="button" aria-pressed={view === 'mine'} onClick={() => setView('mine')}>My library ({counts[kind]})</button>
-        </div>
-        {canEdit ? <button type="button" className="primary" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : kind === 'mcp' ? 'Add an MCP server' : `Write a ${k.one}`}</button> : null}
-      </div>
-      {adding ? (kind === 'mcp' ? <McpWizard onDone={() => { setAdding(false); setView('mine'); }} onBrowse={() => { setAdding(false); setView('discover'); }} /> : <WriteForm kind={kind} onDone={() => { setAdding(false); setView('mine'); }} />)
-        : view === 'discover' ? <Discover kind={kind} canEdit={canEdit} onImported={() => setView('mine')} /> : <Mine kind={kind} assets={assets.data} error={assets.error} canEdit={canEdit} />}
+      {canEdit ? <div className="lib-bar"><button type="button" className="primary" onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : kind === 'mcp' ? 'Add an MCP server' : `Write a ${k.one}`}</button></div> : null}
+      {adding ? (kind === 'mcp' ? <McpWizard onDone={toToolbox} onBrowse={() => setAdding(false)} /> : <WriteForm kind={kind} onDone={toToolbox} />)
+        : <Discover kind={kind} canEdit={canEdit} onImported={toToolbox} />}
     </>
   );
 }
@@ -132,69 +129,12 @@ function Preview({ id, canEdit, onImported }: { id: string; canEdit: boolean; on
       {r.warnings.length ? <ul className="lib-warn">{r.warnings.map((w) => <li key={w}>{w}</li>)}</ul> : null}
       <p className="muted small">Source: <a href={r.provenance.url} target="_blank" rel="noreferrer noopener">{r.provenance.url}</a>. Content hash <span className="mono">{r.provenance.sha256.slice(0, 12)}</span> is recorded on import.</p>
       <HarnessGuides guides={r.guides} />
-      {done ? <p className="ok-note" role="status">Imported as a draft. Review it in <b>My library</b>, set anything it needs, then publish it. <button type="button" className="linkish" onClick={onImported}>Open My library</button></p> : canEdit ? (
-        <div className="row"><button type="button" className="primary" disabled={imp.isPending} onClick={() => imp.mutate()}>{imp.isPending ? 'Importing…' : 'Import as draft'}</button><span className="muted small">Imported content is untrusted until an author publishes it.</span></div>
-      ) : <p className="muted small">An author can import this.</p>}
+      {done ? <p className="ok-note" role="status">Installed as a draft. Open it in the <b>Toolbox</b> to review it, set anything it needs, then publish it. <button type="button" className="linkish" onClick={onImported}>Open the Toolbox</button></p> : canEdit ? (
+        <div className="row"><button type="button" className="primary" disabled={imp.isPending} onClick={() => imp.mutate()}>{imp.isPending ? 'Installing…' : 'Install as draft'}</button><span className="muted small">Installed content is untrusted until an author publishes it.</span></div>
+      ) : <p className="muted small">An author can install this.</p>}
       <ErrorNote error={imp.error} />
     </div>
   );
-}
-
-// ---- My library -----------------------------------------------------------------------------------------------------
-function Mine({ kind, assets, error, canEdit }: { kind: Kind; assets?: Asset[]; error: unknown; canEdit: boolean }) {
-  const qc = useQueryClient();
-  const [setup, setSetup] = useState<string | null>(null);
-  const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
-  const refresh = () => qc.invalidateQueries({ queryKey: ['portable-assets'] });
-  const publish = useMutation({ mutationFn: (id: string) => api(`/v1/assets/${id}/publish`, { method: 'POST' }), onSuccess: refresh });
-  const archive = useMutation({ mutationFn: (id: string) => api(`/v1/assets/${id}/archive`, { method: 'POST' }), onSuccess: refresh });
-  const [attachedMsg, setAttachedMsg] = useState<string | null>(null);
-  const attach = useMutation({
-    mutationFn: ({ slug, id }: { slug: string; id: string; name: string }) => api(`/v1/workflows/${encodeURIComponent(slug)}/assets`, { method: 'POST', body: { asset_id: id } }),
-    onMutate: () => setAttachedMsg(null),
-    onSuccess: (_r, v) => { setAttachedMsg(`Attached ${v.name} to ${v.slug}. See it under Library items in that workflow's settings.`); void qc.invalidateQueries({ queryKey: ['workflow-assets', v.slug] }); },
-  });
-  const shown = assets?.filter((a) => a.kind === kind && a.status !== 'archived') ?? [];
-  return (
-    <>
-      <ErrorNote error={error ?? publish.error ?? archive.error ?? attach.error} />
-      {attachedMsg ? <p className="ok-note" role="status">{attachedMsg}</p> : null}
-      {!assets ? <Loading /> : !shown.length ? <p className="muted lib-empty">Nothing in your {KINDS[kind].label.toLowerCase()} library yet. Use <b>Discover</b> to import one, or write your own.</p> : null}
-      <div className="lib-list">
-        {shown.map((a) => {
-          const prov = a.definition?.provenance as { source: string; url: string; sha256: string } | undefined;
-          const needs = (a.definition?.needs ?? []) as Need[];
-          return (
-            <article key={a.id} className="lib-row">
-              <div className="lib-row-main">
-                <h3>{a.name} <span className="muted small mono">{a.slug} · v{a.current_version}</span></h3>
-                {a.description ? <p className="lib-desc">{a.description}</p> : null}
-                <p className="small">
-                  <Badge tone={a.status === 'published' ? 'ok' : 'warn'}>{a.status === 'published' ? 'published' : 'draft: review, then publish'}</Badge>{' '}
-                  <Badge tone="ok">{a.project_workflow ? `project · ${a.project_workflow}` : 'global'}</Badge>{' '}
-                  {a.definition?.transport === 'local' ? <Badge tone="warn">runs on a worker</Badge> : null}{' '}
-                  {prov ? <span className="muted">Imported from <a href={prov.url} target="_blank" rel="noreferrer noopener">{prov.source.split('::')[0]}</a>, hash <span className="mono">{prov.sha256.slice(0, 8)}</span></span> : null}
-                </p>
-                {needs.length ? <details><summary className="small">Needs {needs.length} value{needs.length === 1 ? '' : 's'} before it works</summary><NeedList needs={needs} /></details> : null}
-              </div>
-              <div className="lib-row-actions">
-                <button type="button" onClick={() => setSetup(setup === a.id ? null : a.id)} aria-expanded={setup === a.id}>Use in a harness</button>
-                {canEdit && a.status !== 'published' ? <button type="button" className="primary" onClick={() => publish.mutate(a.id)}>Publish</button> : null}
-                {a.status === 'published' && workflows.data?.length ? <select aria-label={`Attach ${a.name}`} defaultValue="" onChange={(e) => { if (e.target.value) attach.mutate({ slug: e.target.value, id: a.id, name: a.name }); e.currentTarget.value = ''; }}><option value="">Attach to workflow…</option>{workflows.data.map((w) => <option value={w.slug} key={w.slug}>{w.slug}</option>)}</select> : null}
-                {canEdit ? <button type="button" onClick={() => archive.mutate(a.id)}>Archive</button> : null}
-              </div>
-              {setup === a.id ? <AssetGuides id={a.id} /> : null}
-            </article>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-function AssetGuides({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ['harness-guides', id], queryFn: () => api<Guide[]>(`/v1/assets/${id}/harness-guides`) });
-  if (q.error) return <ErrorNote error={q.error} />;
-  return q.data ? <div className="lib-row-wide"><HarnessGuides guides={q.data} /></div> : <Loading />;
 }
 
 // ---- write your own agent, skill or command ---------------------------------------------------------------------------

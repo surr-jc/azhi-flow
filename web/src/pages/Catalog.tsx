@@ -49,7 +49,7 @@ export function Tools() {
     <>
       <PageHead
         title="Tools"
-        sub={<>Gateway tools: what tool steps and model agents call. Every call goes through the gateway, and writes are recorded in each run's action ledger. Add a hosted MCP server with just its URL: Azhi signs in for you. Harness agents (OpenCode, Claude Code) get their own MCP servers from the <Link to="/ui/assets">Library</Link> instead.</>}
+        sub={<>Gateway tools: what tool steps and model agents call. Every call goes through the gateway, and writes are recorded in each run's action ledger. Add a hosted MCP server with just its URL: Azhi signs in for you. Harness agents (OpenCode, Claude Code) get their own MCP servers from the <Link to="/ui/library">Library</Link> instead.</>}
         actions={admin ? <div className="row"><button type="button" onClick={() => setEditing({ key: `mcp-${Date.now()}`, mode: 'mcp' })}>Add MCP server by URL</button><button type="button" onClick={() => setEditing({ key: `new-${Date.now()}`, mode: 'tool' })}>Register a tool</button></div> : undefined}
       />
       <ErrorNote error={q.error} />

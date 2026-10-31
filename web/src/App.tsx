@@ -96,7 +96,7 @@ type Section = { label: string; to: string; icon: string; items: NavItem[]; coun
 const SECTIONS: Section[] = [
   { label: 'Today', icon: 'home', to: '/ui', count: 'approvals', items: [] },
   { label: 'Runs', icon: 'runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
-  { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/toolbox', label: 'Toolbox', also: ['/ui/assets', '/ui/datasets', '/ui/tools', '/ui/connections'] }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }] },
+  { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/toolbox', label: 'Toolbox', also: ['/ui/datasets', '/ui/tools', '/ui/connections'] }, { to: '/ui/library', label: 'Library', also: ['/ui/assets'] }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }] },
   { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/signins', label: 'Sign-ins', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
   { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
@@ -183,7 +183,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
   if (path === '/ui/toolbox') return <Toolbox />;
-  if (path === '/ui/assets') return <Assets />;
+  if (path === '/ui/library' || path === '/ui/assets') return <Assets />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;

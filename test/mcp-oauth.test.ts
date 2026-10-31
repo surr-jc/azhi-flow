@@ -204,4 +204,17 @@ describe('remote MCP OAuth by discovery', () => {
     expect(made.status).toBe(200);
     await expect(checkMcpConnectionProposal(ctx, WS, { name: 'taken', url: 'https://mcp.example.com/mcp' })).rejects.toThrow(/already exists/);
   });
+
+  it('deletes a connection with no registered actions and refuses one that has some', async () => {
+    fx = await startMcpOAuthServer();
+    const empty = await create({ auth_kind: 'none', name: 'to-remove' });
+    expect((await app.inject({ method: 'DELETE', url: `/v1/mcp/connections/${empty.body.id}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/v1/mcp/connections/${empty.body.id}` })).statusCode).toBe(400);
+    const used = await create({ auth_kind: 'none', name: 'in-use' });
+    const spec = { id: 'wiki.search', version: 1, transport: { kind: 'mcp-streamable-http', connection: used.body.id, tool: 'search' } };
+    await ctx.pool.query(`INSERT INTO tools(workspace_id, tool_id, version, revision, spec, spec_hash, created_by) VALUES ($1,'wiki.search',1,1,$2,'h','usr_admin')`, [WS, JSON.stringify(spec)]);
+    const res = await app.inject({ method: 'DELETE', url: `/v1/mcp/connections/${used.body.id}` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/registered action/);
+  });
 });

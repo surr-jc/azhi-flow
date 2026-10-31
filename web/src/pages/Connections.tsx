@@ -94,7 +94,19 @@ const use = (u: Use) => (
   <Link key={`${u.workflow}/${u.node}`} to={`/ui/workflows/${encodeURIComponent(u.workflow)}`} className="chip-link" title={`${u.workflow} v${u.version}${u.draft ? ' (draft)' : ''}`}>{u.workflow} › {u.node}</Link>
 );
 
-function SystemView({ system, tools, usage, set, known, admin }: { system: string; tools: Tool[]; usage?: Usage; set: Set<string>; known: boolean; admin: boolean }) {
+/** One system on its own, for the Toolbox dialog: the same view, with its own data and no links to the old pages. */
+export function SystemPanel({ system }: { system: string }) {
+  const me = useMe();
+  const admin = atLeast(me.data?.role, 'admin');
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const usage = useQuery({ queryKey: ['connection-usage'], queryFn: () => api<Usage>('/v1/connections/usage') });
+  const secrets = useQuery({ queryKey: ['secrets'], queryFn: () => api<Array<{ name: string }>>('/v1/secrets'), enabled: admin });
+  const list = (tools.data ?? []).filter((t) => t.id.split('.')[0] === system);
+  if (!tools.data) return tools.error ? <ErrorNote error={tools.error} /> : <Loading />;
+  return <SystemView system={system} tools={list} usage={usage.data} set={new Set((secrets.data ?? []).map((s) => s.name))} known={admin && secrets.data !== undefined} admin={admin} embedded />;
+}
+
+function SystemView({ system, tools, usage, set, known, admin, embedded }: { system: string; tools: Tool[]; usage?: Usage; set: Set<string>; known: boolean; admin: boolean; embedded?: boolean }) {
   const qc = useQueryClient();
   const creds = [...new Set(tools.map((t) => t.credential).filter((c): c is string => Boolean(c)))].sort();
   const gh = tools.filter((t) => Array.isArray(t.transport?.config?.repos));
@@ -150,7 +162,7 @@ function SystemView({ system, tools, usage, set, known, admin }: { system: strin
             );
           })}
         </Table>
-        <p className="muted small">Writes are recorded in each run's action ledger. <Link to="/ui/tools">Register or change tools</Link></p>
+        <p className="muted small">Writes are recorded in each run's action ledger.{embedded ? null : <> <Link to="/ui/tools">Register or change tools</Link></>}</p>
       </div>
     </>
   );

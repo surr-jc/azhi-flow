@@ -354,7 +354,7 @@ export function PortableAssets({ slug, assets }: { slug: string; assets?: Portab
           <div className="asset-attached">{assets.map((a) => <span className="badge" key={a.id}>{a.kind}: {a.name} <span className="mono">v{a.version}</span></span>)}</div>
           <p><button type="button" onClick={download}>Download OpenCode bundle</button></p>
         </>
-      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/assets">Library</Link>.</p>}
+      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/library">Library</Link>.</p>}
       {error ? <div className="error">{error}</div> : null}
     </>
   );
