@@ -71,6 +71,13 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   label; something that is not code stops. Run it before the delivery workflow.
   `azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=...`. See
   [docs/issue-splitter.md](docs/issue-splitter.md).
+- AI SDLC Factory (`examples/ai-sdlc-factory-plan`, `ai-sdlc-factory`, `ai-sdlc-factory-readiness`): a software
+  factory from Jira or GitHub tickets. The plan workflow turns a goal or ticket into a release plan a person
+  approves and splits it into ordered tickets; a scheduled lap picks the next unblocked ticket by rules (priority,
+  then what it unblocks, then age), claims it and delivers it through `sdlc-universal` into a pull request on the
+  staging branch; the readiness workflow grades the repository bronze, silver or gold and, when CI is red, proposes
+  a fix ticket behind an approval. Nothing merges or closes. `azhi example install ai-sdlc-factory --repo OWNER/REPO
+  --set slack_channel=...`. See [docs/ai-sdlc-factory.md](docs/ai-sdlc-factory.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from
