@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -648,29 +648,58 @@ tool
     console.log(`${green('allowed')} ${r.repos.join(', ')} ${dim(`(${ref} revision ${r.revision})`)}`);
   });
 
-const mcp = program.command('mcp').description('Manage shared remote Streamable HTTP MCP connections (admin)');
+const mcp = program.command('mcp').description('MCP servers: `server` for the library (harness agents), the rest for gateway connections (admin)');
+/** Best effort: the URL is always printed too, so a headless machine can open it elsewhere. */
+function openBrowser(url: string) {
+  const [cmd, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try { const child = spawn(cmd!, args as string[], { stdio: 'ignore', detached: true }); child.on('error', () => {}); child.unref(); } catch { /* printed above */ }
+}
+interface McpStatus { id: string; name: string; status: string; last_error?: string }
 mcp
   .command('add')
-  .description('Add a remote MCP endpoint; use --auth oauth with the OAuth client settings when required')
+  .description('Add a remote MCP endpoint. With --auth oauth only the URL is needed: Azhi finds the OAuth endpoints, registers itself and opens sign-in')
   .requiredOption('--name <name>', 'connection name')
   .requiredOption('--url <url>', 'Streamable HTTP MCP URL')
   .option('--auth <none|oauth>', 'authentication mode', 'none')
-  .option('--authorization-url <url>', 'OAuth authorization endpoint')
-  .option('--token-url <url>', 'OAuth token endpoint')
-  .option('--client-id <id>', 'OAuth client ID')
-  .option('--client-secret <secret>', 'OAuth client secret')
-  .option('--scopes <scopes>', 'OAuth scopes')
+  .option('--no-wait', 'with --auth oauth, print the sign-in URL and return instead of waiting for sign-in')
+  .option('--authorization-url <url>', 'advanced, bring your own OAuth client: authorization endpoint')
+  .option('--token-url <url>', 'advanced, bring your own OAuth client: token endpoint')
+  .option('--client-id <id>', 'advanced, bring your own OAuth client: client ID')
+  .option('--client-secret <secret>', 'advanced, bring your own OAuth client: client secret')
+  .option('--scopes <scopes>', 'advanced, bring your own OAuth client: scopes')
   .action(async (opts) => {
-    const oauth = opts.auth === 'oauth' ? { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes } : undefined;
-    const r = await client().post<{ id: string; status: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
+    const given = { authorization_url: opts.authorizationUrl, token_url: opts.tokenUrl, client_id: opts.clientId, client_secret: opts.clientSecret, scopes: opts.scopes };
+    const oauth = opts.auth === 'oauth' ? Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined)) : undefined;
+    const api = client();
+    const r = await api.post<McpStatus & { authorization_url?: string }>('/v1/mcp/connections', { name: opts.name, url: opts.url, auth_kind: opts.auth, ...(oauth ? { oauth } : {}) });
     console.log(`${green('added')} ${opts.name} (${r.id}), ${r.status}`);
-    if (opts.auth === 'oauth') console.log(`authorize it with: azhi mcp login ${r.id}`);
+    if (!r.authorization_url) return;
+    console.log(`sign in at:
+${r.authorization_url}`);
+    openBrowser(r.authorization_url);
+    if (opts.wait === false) return console.log(dim(`when you have approved it, run: azhi mcp discover ${r.id}`));
+    console.log(dim('waiting for you to approve it in the browser (up to 5 minutes)...'));
+    const deadline = Date.now() + 5 * 60_000;
+    let now: McpStatus = r;
+    while (now.status === 'authorizing' && Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 2000));
+      now = await api.get<McpStatus>(`/v1/mcp/connections/${encodeURIComponent(r.id)}`);
+    }
+    if (now.status !== 'ready') {
+      console.log(`${red('not connected')}: ${now.last_error ?? 'timed out waiting for sign-in'}`);
+      console.log(dim(`try again with: azhi mcp login ${r.id}`));
+      process.exitCode = 1;
+      return;
+    }
+    const tools = await api.get<unknown[]>(`/v1/mcp/connections/${encodeURIComponent(r.id)}/tools`).catch(() => undefined);
+    console.log(`${green('connected')}${tools ? `, ${tools.length} tool${tools.length === 1 ? '' : 's'} available` : ''}`);
+    console.log(dim(`list them with: azhi mcp discover ${r.id}`));
   });
 mcp.command('list').action(async () => {
   const rows = await client().get<Array<{ id: string; name: string; url: string; auth_kind: string; status: string }>>('/v1/mcp/connections');
   table([['ID', 'Name', 'Auth', 'Status', 'URL'], ...rows.map((r) => [r.id, r.name, r.auth_kind, r.status, r.url])]);
 });
-mcp.command('login').argument('<connection>').description('Print the browser URL that authorizes a shared OAuth MCP connection').action(async (id: string) => {
+mcp.command('login').argument('<connection>').description('Print the browser URL that signs a shared OAuth MCP connection in again').action(async (id: string) => {
   const r = await client().post<{ authorization_url: string }>(`/v1/mcp/connections/${encodeURIComponent(id)}/oauth/start`, {});
   console.log(r.authorization_url);
 });
@@ -682,15 +711,93 @@ mcp
   .command('register-tool')
   .argument('<connection>')
   .argument('<remote-tool>')
-  .requiredOption('--id <id>', 'Azhi tool id')
+  .option('--id <id>', 'Azhi tool id (default: the remote tool name)')
   .option('--version <number>', 'tool version', '1')
-  .requiredOption('--description <text>', 'tool description')
+  .option('--description <text>', 'tool description (default: the server description)')
   .option('--effect <effect>', 'read, write-idempotent, write-dedupable, or write-unsafe', 'read')
-  .option('--input-schema <json>', 'JSON Schema for tool arguments', '{"type":"object"}')
+  .option('--input-schema <json>', 'JSON Schema for tool arguments (default: the server schema)')
   .option('--output-schema <json>', 'JSON Schema for tool output', '{"type":"object"}')
   .action(async (connection: string, remoteTool: string, opts) => {
-    const r = await client().post<{ ref: string; revision: number }>(`/v1/mcp/connections/${encodeURIComponent(connection)}/tools`, { id: opts.id, version: Number(opts.version), name: remoteTool, description: opts.description, effect: opts.effect, input_schema: JSON.parse(opts.inputSchema), output_schema: JSON.parse(opts.outputSchema) });
+    const api = client();
+    const base = `/v1/mcp/connections/${encodeURIComponent(connection)}`;
+    let description: string | undefined = opts.description;
+    if (!description) {
+      const found = (await api.get<Array<{ name: string; description: string }>>(`${base}/tools`)).find((t) => t.name === remoteTool);
+      if (!found) throw new Error(`the server does not list a tool named '${remoteTool}'; see: azhi mcp discover ${connection}`);
+      description = found.description || remoteTool;
+    }
+    const id = opts.id ?? remoteTool.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[^a-z0-9]+/, '');
+    const r = await api.post<{ ref: string; revision: number }>(`${base}/tools`, { id, version: Number(opts.version), name: remoteTool, description, effect: opts.effect, ...(opts.inputSchema ? { input_schema: JSON.parse(opts.inputSchema) } : {}), output_schema: JSON.parse(opts.outputSchema) });
     console.log(`${green('registered')} ${r.ref} revision ${r.revision}`);
+  });
+
+// MCP servers for harness agents (OpenCode, Claude Code), like `opencode mcp add`: global = every workflow, project = one workflow.
+const mcpServer = mcp.command('server').description('Add MCP servers to the library: global (all workflows) or project (one workflow)');
+const pairs = (items: string[] | undefined, what: string) => Object.fromEntries((items ?? []).map((kv) => {
+  const i = kv.indexOf('=');
+  if (i < 1) throw new Error(`${what} must look like NAME=value (use {env:NAME} for secrets): ${kv}`);
+  return [kv.slice(0, i), kv.slice(i + 1)];
+}));
+const libraryServer = async (name: string) => {
+  const rows = await client().get<Array<{ id: string; slug: string }>>('/v1/assets?kind=mcp');
+  const a = rows.find((r) => r.slug === name);
+  if (!a) throw new Error(`no MCP server '${name}' in the library; see: azhi mcp server list`);
+  return a;
+};
+mcpServer
+  .command('add')
+  .description('Add an MCP server: --remote <https url>, or --local followed by -- and the start command')
+  .argument('<name>', 'short name, lower-case letters, digits and dashes')
+  .argument('[command...]', 'with --local: the command that starts it, after --')
+  .option('--remote <url>', 'a hosted Streamable HTTP server')
+  .option('--local', 'a package run on a worker, for example: --local -- npx -y @acme/mcp')
+  .option('--header <NAME=value>', 'remote header; repeatable. Use {env:NAME} for secrets', collect)
+  .option('--env <NAME=value>', 'local environment variable; repeatable. Use {env:NAME} for secrets', collect)
+  .option('--scope <global|project>', 'global: every workflow; project: one workflow (needs --workflow)', 'global')
+  .option('--workflow <slug>', 'the workflow a project server belongs to')
+  .option('--description <text>', 'what it is for')
+  .option('--draft', 'save as a draft to review and publish later')
+  .action(async (name: string, command: string[], opts) => {
+    if (Boolean(opts.remote) === Boolean(opts.local)) throw new Error('choose exactly one of --remote <url> or --local -- <command>');
+    if (opts.local && !command.length) throw new Error('--local needs the start command after --, for example: azhi mcp server add files --local -- npx -y @modelcontextprotocol/server-filesystem /workspace');
+    if (!['global', 'project'].includes(opts.scope)) throw new Error('--scope must be global or project');
+    const headers = pairs(opts.header, '--header');
+    const environment = pairs(opts.env, '--env');
+    const needs = [...new Set(Object.values({ ...headers, ...environment }).flatMap((v) => [...v.matchAll(/\{env:([A-Za-z0-9_]+)\}/g)].map((m) => m[1]!)))].map((n) => ({ name: n, secret: true, required: true }));
+    const definition = opts.remote
+      ? { transport: 'remote', url: opts.remote, ...(Object.keys(headers).length ? { headers } : {}), enabled: true, ...(needs.length ? { needs } : {}) }
+      : { transport: 'local', command, ...(Object.keys(environment).length ? { environment } : {}), enabled: true, ...(needs.length ? { needs } : {}) };
+    const r = await client().post<{ slug: string; status: string; scope: string; project_workflow: string | null }>('/v1/mcp-servers', { slug: name, name, description: opts.description ?? '', definition, scope: opts.scope, ...(opts.workflow ? { workflow: opts.workflow } : {}), ...(opts.draft ? { draft: true } : {}) });
+    console.log(`${green('added')} ${r.slug} ${dim(`(${r.scope}${r.project_workflow ? ` · ${r.project_workflow}` : ''}, ${r.status})`)}`);
+    if (needs.length) console.log(`set ${needs.map((n) => n.name).join(', ')} where the harness runs; values are never stored in Azhi`);
+    if (r.scope === 'global') console.log(`use it in a workflow: azhi mcp server attach ${name} <workflow>`);
+  });
+mcpServer
+  .command('list')
+  .description('MCP servers in the library; with --workflow, the ones that workflow can use')
+  .option('--workflow <slug>')
+  .action(async (opts: { workflow?: string }) => {
+    const rows = await client().get<Array<{ slug: string; scope: string; project_workflow: string | null; status: string; definition: { transport: string; url?: string; command?: string[] }; attached?: boolean }>>(`/v1/mcp-servers${opts.workflow ? `?workflow=${encodeURIComponent(opts.workflow)}` : ''}`);
+    table([['Name', 'Scope', 'Status', 'Runs', 'Attached'], ...rows.map((r) => [r.slug, r.project_workflow ? `project · ${r.project_workflow}` : r.scope, r.status, r.definition.transport === 'remote' ? (r.definition.url ?? '') : (r.definition.command ?? []).join(' '), r.attached ? 'yes' : ''])]);
+  });
+mcpServer
+  .command('attach')
+  .description('Use a published MCP server in a workflow (the workflow records that exact version)')
+  .argument('<name>')
+  .argument('<workflow>')
+  .action(async (name: string, workflow: string) => {
+    const a = await libraryServer(name);
+    await client().post(`/v1/workflows/${encodeURIComponent(workflow)}/assets`, { asset_id: a.id });
+    console.log(`${green('attached')} ${name} to ${workflow}`);
+  });
+mcpServer
+  .command('remove')
+  .description('Archive an MCP server (workflows that already use a version keep it)')
+  .argument('<name>')
+  .action(async (name: string) => {
+    const a = await libraryServer(name);
+    await client().post(`/v1/assets/${a.id}/archive`, {});
+    console.log(`${green('archived')} ${name}`);
   });
 
 const dataset = program.command('dataset').description('Manage knowledge datasets (Markdown and plain text)');

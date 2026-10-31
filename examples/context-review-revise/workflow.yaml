@@ -1,0 +1,72 @@
+# Research, draft, critique, revise: a small writing workflow that shows how steps share context.
+# The three agents all need the topic and the facts, so those are written once as the `brief` context.
+# Runs on the scripted provider in its profiles (no model, no secrets); change the profiles' `model`
+# to run it for real.
+schema_version: "2.0"
+id: context-review-revise
+name: Draft, critique and revise
+description: Gathers facts for a topic, drafts a short text, has it critiqued, and revises it. Shows a shared context, a cap on what a critic is sent, and a notes field that carries a hint from one step to the next.
+inputs:
+  type: object
+  properties:
+    topic: {type: string, title: Topic}
+  required: [topic]
+
+# Written once. A step that lists `context: [brief]` gets these keys in its input. Both values come from
+# `gather`, a step that always runs, so no step is skipped because of them.
+contexts:
+  brief:
+    topic: {ref: inputs.topic}
+    facts: {ref: nodes.gather.output.facts}
+
+nodes:
+  - id: gather
+    type: script
+    description: Collect the facts the writers will use (fixture data in this example).
+    runtime: python
+    entrypoint: scripts/gather.py
+    input: {map: "{'topic': inputs.topic}"}
+    output_schema: schemas/facts.json
+    limits:
+      time: 1m
+
+  - id: draft
+    type: agent
+    description: Write a first version from the brief.
+    profile: writer@1
+    context: [brief]
+    output_schema: schemas/draft.json
+    budget:
+      max_output_tokens: 1500
+      max_tool_calls: 0
+
+  - id: critique
+    type: agent
+    description: Find what is wrong with the draft. It is sent the brief and the draft, and a draft over 4 KB is kept back and recorded rather than sent.
+    profile: critic@1
+    context: [brief]
+    input:
+      draft: {ref: nodes.draft.output.text}
+    output_schema: schemas/critique.json
+    # `withhold` is safe here only because the critic can still judge the facts and its own notes; a critic
+    # that never saw the draft would say "no issues". The run records which field was kept back.
+    context_budget:
+      max_item_bytes: 4096
+      on_exceed: withhold
+    budget:
+      max_output_tokens: 1000
+      max_tool_calls: 0
+
+  - id: revise
+    type: agent
+    description: Revise the draft to answer the critique. The writer's notes arrive as an ordinary field.
+    profile: writer@1
+    context: [brief]
+    input:
+      draft: {ref: nodes.draft.output.text}
+      notes: {ref: nodes.draft.output.notes}
+      issues: {ref: nodes.critique.output.issues}
+    output_schema: schemas/final.json
+    budget:
+      max_output_tokens: 1500
+      max_tool_calls: 0

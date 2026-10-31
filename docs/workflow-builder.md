@@ -21,6 +21,13 @@ workflow package by conversation. Authors and above can use it.
    proposal for an existing workflow id is saved as a new draft version only when you asked to
    change that workflow.
 
+Above the conversation, the session meter shows the tokens the provider reported so far (input,
+output, cached), the last turn's size and duration, the provider and model in use, and how full the
+conversation is against the size the server accepts. Each reply also carries its own tokens and
+time. Input counts every lookup round of a turn, so it grows faster than the text you see. A value
+the provider does not report shows "—", and cost shows "unavailable": the builder has no price
+list, so nothing is estimated. The totals live in the browser tab with the conversation.
+
 The conversation stays in your browser tab; the server keeps no transcript. Each turn is in the
 audit log (`builder.turn`, with provider, model and token counts) and each save as
 `builder.saved`. Builder calls are not part of any run, so run budgets do not apply to them.
@@ -104,15 +111,55 @@ spec (and refuses anything that looks like a secret value). The chat shows a car
 admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
 for a token: it names the credential and you set its value on the Secrets page. Local stdio MCP servers and
 admin-managed remote Streamable HTTP MCP connections run today. Add a remote connection on Tools (or with
-`azhi mcp`), authorize it once for the workspace when required, discover its tools, and register the selected
-ones. After registering, ask the builder to draft the workflow that uses it.
+`azhi mcp add`) with just its name and URL, approve access once for the workspace when it asks for sign-in, discover
+its tools, and register the selected ones. After registering, ask the builder to draft the workflow that uses it.
+
+The builder can propose the connection itself with `propose_mcp_connection` (name, https URL, OAuth by default). The
+chat shows a card; an admin clicks **Connect and sign in**, approves access in the pop-up and the card shows the
+status. It never asks for a client ID, secret or token. Tools are then discovered on the Tools page, and the builder
+proposes each one with `propose_tool`.
+
+## Suggesting what is available, and adding MCP servers
+
+`workspace_overview` also lists the library's MCP servers, skills, agents and commands, the gateway's MCP
+connections and OpenCode's built-in read-only tools. The skill tells the builder to match the requirement
+against all of it and say what it would use. When nothing fits, `find_integrations` searches the MCP Registry and
+the plugin marketplaces (it reports a search that failed or a turned-off marketplace as a note).
+
+`propose_mcp_server` works like `opencode mcp add`. The chat shows a card with **Add MCP server**; confirming
+publishes it, then the card offers **Use in this workflow**. Scope is `global` (every workflow, like OpenCode's
+user config) or `project` (one existing workflow, attached when published, like its project config). A server
+picked from a search is sent by marketplace id and fetched again on the server, so its source and hash are
+recorded. A hosted server needs the author role; one that runs a program on a worker needs an admin.
+
+In a workflow, a local server with no secret goes in the agent profile as `harness.opencode.mcp`. A hosted server
+or one that needs a secret cannot (a package never holds secrets); its tools are registered through a gateway
+connection with `propose_tool` instead.
+
+## Shared contexts, input caps and continuing a change
+
+The skill teaches three opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
+
+- **Shared contexts** (`contexts:` and `context: [name]` on agent, script and report steps) for the same
+  input values written once. The skill says when to use one, that the step's input must then be an object,
+  to keep contexts small, never to put a conditional branch's value in one, and not to use one on a
+  `merge: any` step. When it patches an existing workflow it keeps `contexts:` and each step's `context:`.
+- **`context_budget`** on an agent step, to cap the bytes of input that reach the model.
+- **`workspace.from`** on an OpenCode step, to start its checkout from an earlier step's change.
+
+A draft's notes to the model include the compiler's warnings (`context_may_skip`, `context_taints`,
+`unused_context`) and one line per step that takes keys from a context. The draft panel lists those steps
+and the context each key came from. A patch that drops `contexts:` while a step still lists the name fails
+with `unknown_context`, so it is caught before the person sees it.
 
 ## API
+
+- `POST /v1/builder/register-mcp` `{server}`: re-checks and adds a proposed MCP server.
 
 - `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
 - `GET /v1/builder/models?provider=anthropic|openai|opencode`: the model list, the recommended model and why.
 - `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
-  and an event (`questions`, `proposal`, `tool_proposal` or `text`).
+  and an event (`questions`, `proposal`, `tool_proposal`, `mcp_proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.
 - `POST /v1/builder/register-tool` `{tool}` (admin): re-checks and registers a proposed tool.

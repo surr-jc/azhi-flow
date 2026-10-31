@@ -168,7 +168,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
       });
     },
 
-    async checkWorkers(workspaceId, packageHash, runtime) {
+    async checkWorkers(workspaceId, packageHash, runtime, needs = []) {
       const sig = (await ctx.pool.query(`SELECT signature FROM workflow_versions WHERE workspace_id=$1 AND package_hash=$2 AND signature IS NOT NULL LIMIT 1`, [workspaceId, packageHash])).rows[0]
         ?.signature;
       const trust = await evaluateWorkerTrust(ctx, workspaceId, sig ?? null, packageHash);
@@ -176,12 +176,14 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         await ctx.pool.query(`SELECT id, task_queue, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds' ORDER BY id`, [
           workspaceId,
         ])
-      ).rows as Array<{ id: string; task_queue: string; capabilities: { runtimes?: Record<string, unknown> } }>;
+      ).rows as Array<{ id: string; task_queue: string; capabilities: { runtimes?: Record<string, unknown>; features?: string[] } }>;
       const accepted: Array<{ id: string; queue: string }> = [];
       const refused: Array<{ id: string; reason: string }> = [];
       for (const w of rows) {
         const t = trust.workers.find((x) => x.worker === w.id);
+        const missing = needs.find((f) => !w.capabilities.features?.includes(f));
         if (!w.capabilities.runtimes?.[runtime]) refused.push({ id: w.id, reason: `no ${runtime} runtime` });
+        else if (missing) refused.push({ id: w.id, reason: `worker build does not support ${missing.replaceAll('_', ' ')}; upgrade it` });
         else if (!t?.accepted) refused.push({ id: w.id, reason: t?.reason ?? 'trust policy refused the package' });
         else accepted.push({ id: w.id, queue: w.task_queue });
       }
@@ -385,10 +387,22 @@ function textOf(v: unknown): string {
   return '';
 }
 
+/**
+ * What the retrieval query is built from. A step that takes keys from a context bundle asks the dataset with
+ * the keys it wrote itself, so adding a bundle does not change what it retrieves; a step with only bundle keys
+ * has nothing else to ask with and uses them all.
+ */
+export function queryInput(input: Pick<AgentBeginInput, 'input' | 'inputParts'>): unknown {
+  const own = input.inputParts?.filter((p) => p.source === 'input');
+  const value = input.input;
+  if (!own?.length || !value || typeof value !== 'object' || Array.isArray(value)) return value;
+  return Object.fromEntries(own.map((p) => [p.key, (value as Record<string, unknown>)[p.key]]));
+}
+
 /** The context builder retrieves with the node input as the query (spec section 11). */
 async function withChunksFor(ctx: AppContext, input: AgentBeginInput): Promise<AgentBeginInput> {
   if (!input.datasets?.length) return input;
-  const found = await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(input.input), principal: input.principal });
+  const found = await retrieve(ctx, input.workspaceId, { pinned: input.datasets, query: textOf(queryInput(input)), principal: input.principal });
   return { ...input, chunks: found.map((c) => ({ id: c.citation_id, dataset: c.dataset, revision: c.revision, heading: c.heading, text: c.text })) };
 }
 

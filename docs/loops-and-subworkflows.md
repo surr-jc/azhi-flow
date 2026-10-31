@@ -48,6 +48,10 @@ Runs a published workflow as a child run.
 
 - The child is a run of its own: its own plan, ledger, run page and context manifests, started as a
   Temporal child workflow of the parent run. Cancelling the parent cancels the child.
+- The parent's run page shows the child under its step: state, a link, and an expander with the child's
+  steps (nested further for its own subworkflows). The Runs list hides subworkflow runs by default;
+  "Show subworkflow runs" lists them as rows with a link back to the parent. `GET /v1/runs?top_level=true`
+  does the same, and `GET /v1/runs/:id` returns `children`.
 - It resolves to the latest published version when the node starts (the run plan shows which), runs
   as the parent run's principal, and is created once per parent node, so a retry reuses it.
 - Output: `{run_id, workflow, version, state, nodes}` where `nodes` maps each succeeded child node

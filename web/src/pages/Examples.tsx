@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
 import { api, atLeast } from '../api';
 import { useMe } from '../App';
 import { Link, useRoute } from '../router';
@@ -13,6 +13,7 @@ import { StepPanel } from '../components/StepDrawer';
 import { WorkflowCanvas } from '../components/WorkflowCanvas';
 import { graphOf } from '../graph';
 import type { ToolInfo } from '../stepHelp';
+import { Icon } from '../icons';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 
 /**
@@ -81,6 +82,9 @@ const META: Record<string, { category: string; steps: number; works_with: string
   'ai-sdlc-v2': { category: 'Delivery', steps: 46, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter-jira': { category: 'Delivery', steps: 34, works_with: ['Jira', 'GitHub', 'Slack', 'OpenCode'] },
+  'ai-sdlc-factory-plan': { category: 'Delivery', steps: 24, works_with: ['GitHub', 'Jira', 'OpenCode'] },
+  'ai-sdlc-factory': { category: 'Delivery', steps: 18, works_with: ['GitHub', 'Jira', 'Slack'] },
+  'ai-sdlc-factory-readiness': { category: 'Delivery', steps: 13, works_with: ['GitHub', 'Jira', 'Slack'] },
   'issue-investigation': { category: 'Investigation', steps: 6, works_with: ['GitHub', 'OpenCode'] },
   'ci-digest': { category: 'Reports', steps: 4, works_with: [] },
   doubler: { category: 'Learn Azhi', steps: 1, works_with: [] },
@@ -88,6 +92,9 @@ const META: Record<string, { category: string; steps: number; works_with: string
   'loop-demo': { category: 'Learn Azhi', steps: 1, works_with: [] },
 };
 const metaOf = (e: Example) => META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
+
+/** The marketplace category of an installed workflow; the delivery variants not listed above are found by name. */
+export const workflowCategory = (slug: string): string => META[slug]?.category ?? (/sdlc|^issue-/.test(slug) ? 'Delivery' : 'Other');
 
 /** What an install lets the workflow change, read from its tools' effects. */
 function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
@@ -99,6 +106,16 @@ function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
 const stepCount = (e: Example) => e.nodes?.length || metaOf(e).steps;
 
 const installed = (e: Example) => e.installed;
+
+/** Look of each category: an icon and the step-type tint it borrows from the canvas palette. */
+const LOOK: Record<string, { icon: string; tint: string }> = {
+  Reports: { icon: 'report', tint: 'report' },
+  'Code review': { icon: 'approval', tint: 'approval' },
+  Delivery: { icon: 'flow', tint: 'flow' },
+  Investigation: { icon: 'retrieve', tint: 'tool' },
+  'Learn Azhi': { icon: 'think', tint: 'agent' },
+};
+const lookOf = (category: string) => LOOK[category] ?? { icon: 'flow', tint: 'script' };
 
 export function Examples() {
   const { path } = useRoute();
@@ -122,50 +139,91 @@ export function Examples() {
   const term = search.trim().toLowerCase();
   const shown = all.filter((e) => (!category || metaOf(e).category === category) && (!term || `${e.name} ${e.description} ${e.id}`.toLowerCase().includes(term)));
   const featured = !term && !category ? shown.find((e) => metaOf(e).featured) : undefined;
+  const lookAt = look ? all.find((x) => x.id === look) : undefined;
+  const countIn = (c: string) => all.filter((e) => !c || metaOf(e).category === c).length;
   return (
     <>
       <PageHead title="Workflow templates" sub="Ready-made workflows bundled with Azhi. Installing one registers its tools, saves it as a signed draft and lists the secrets it needs. You can open any of them in the editor and change it." />
       <ErrorNote error={q.error} />
       {!q.data ? <Loading /> : all.length === 0 ? <p className="muted">This server has no bundled workflows.</p> : (
         <>
-          <div className="filters">
-            <label className="lbl"><span>Search workflows</span><input type="search" placeholder="Name or topic" value={search} onChange={(x) => setSearch(x.target.value)} /></label>
-            <div className="row wrap" role="group" aria-label="Category">
+          <div className="tpl-bar">
+            <label className="tpl-search">
+              <span className="sr-only">Search workflows</span>
+              <Icon name="search" size={16} />
+              <input type="search" placeholder="Search by name or topic" value={search} onChange={(x) => setSearch(x.target.value)} />
+            </label>
+            <div className="tpl-cats" role="group" aria-label="Category">
               {['', ...categories].map((c) => (
-                <button key={c || 'all'} type="button" className={`small${category === c ? ' primary' : ''}`} aria-pressed={category === c} onClick={() => setCategory(c)}>{c || 'All'}</button>
+                <button key={c || 'all'} type="button" className={`tpl-cat${category === c ? ' on' : ''}`} aria-pressed={category === c} onClick={() => setCategory(c)}>
+                  {c || 'All'} <span className="tpl-count">{countIn(c)}</span>
+                </button>
               ))}
             </div>
           </div>
+          <p className="sr-only" role="status">{shown.length} workflow{shown.length === 1 ? '' : 's'} shown</p>
           {featured ? <MarketCard example={featured} featured onLook={() => setLook(featured.id)} /> : null}
           <div className="market-grid">
             {shown.filter((e) => e !== featured).map((e) => <MarketCard key={e.id} example={e} onLook={() => setLook(e.id)} />)}
           </div>
-          {shown.length === 0 ? <p className="muted">No workflow matches. <Link to="/ui/workflows/new">Describe it to Build with chat</Link> instead.</p> : null}
-          {look && all.find((x) => x.id === look) ? <QuickLook example={all.find((x) => x.id === look)!} onClose={() => setLook(undefined)} /> : null}
+          {shown.length === 0 ? (
+            <div className="tpl-empty">
+              <Icon name="search" size={22} />
+              <p><b>No workflow matches{term ? ` “${search.trim()}”` : ''}.</b></p>
+              <p className="muted small">Try another word{category ? ' or clear the category' : ''}, or describe what you need.</p>
+              <div className="row">
+                {term || category ? <button type="button" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button> : null}
+                <Link to="/ui/workflows/new" className="button primary">Describe it to Build with chat</Link>
+              </div>
+            </div>
+          ) : null}
+          {lookAt ? <QuickLook example={lookAt} onClose={() => setLook(undefined)} /> : null}
         </>
       )}
     </>
   );
 }
 
+/** The workflow's shape at a glance: one dot per step, capped so a long workflow stays a strip. */
+function FlowStrip({ steps }: { steps: number }) {
+  if (!steps) return null;
+  const dots = Math.min(steps, 12);
+  return (
+    <div className="tpl-strip" role="img" aria-label={`${steps} step${steps === 1 ? '' : 's'}`}>
+      {Array.from({ length: dots }, (_, i) => <span key={i} className="tpl-dot" />)}
+      {steps > dots ? <span className="tpl-more">+{steps - dots}</span> : null}
+    </div>
+  );
+}
+
 function MarketCard({ example: e, featured, onLook }: { example: Example; featured?: boolean; onLook?: () => void }) {
   const m = metaOf(e);
   const c = changes(e);
+  const look = lookOf(m.category);
+  const steps = stepCount(e);
+  const open = `/ui/examples/${encodeURIComponent(e.id)}`;
+  const missing = !installed(e) && e.requirements && !e.requirements.ready ? e.requirements.settings.filter((s) => s.required && !s.ready).length + (e.requirements.repos.needed && !e.requirements.repos.ready ? 1 : 0) : 0;
   return (
-    <article className={`market-card${featured ? ' featured' : ''}`}>
-      <div className="small muted">{featured ? 'Start here · ' : ''}{m.category}{installed(e) ? <> · <span className="ok-text">Installed</span></> : null}</div>
-      <h3><Link to={`/ui/examples/${encodeURIComponent(e.id)}`}>{e.name}</Link></h3>
-      <p className="small muted">{e.description}</p>
-      <div className="row wrap">
-        {stepCount(e) ? <span className="chip-effect">{stepCount(e)} step{stepCount(e) === 1 ? '' : 's'}</span> : null}
-        {m.works_with.length ? <span className="chip-effect">{m.works_with.join(' · ')}</span> : null}
-        <span className={`chip-effect ${c.tone}`}>{c.label}</span>
-        {e.secrets.length === 0 ? <span className="chip-effect ok">no secrets needed</span> : null}
-        {!installed(e) && e.requirements && !e.requirements.ready ? <span className="chip-effect warn">needs {e.requirements.settings.filter((s) => s.required && !s.ready).length + (e.requirements.repos.needed && !e.requirements.repos.ready ? 1 : 0)} things before install</span> : null}
+    <article className={`market-card${featured ? ' featured' : ''}`} style={{ ['--ink-t' as string]: `var(--ink-${look.tint})`, ['--tint-t' as string]: `var(--tint-${look.tint})` }}>
+      <div className="tpl-top">
+        <span className="tpl-icon"><Icon name={look.icon} size={20} /></span>
+        <span className="tpl-cat-label">{featured ? 'Start here · ' : ''}{m.category}</span>
+        {installed(e) ? <span className="tpl-state"><Icon name="check" size={12} /> Installed</span> : null}
       </div>
-      <div className="row">
-        <Link to={`/ui/examples/${encodeURIComponent(e.id)}`} className="button primary small">{installed(e) ? 'Open' : 'Install'}</Link>
-        {e.nodes?.length && onLook ? <button type="button" className="small" onClick={onLook}>Quick look</button> : null}
+      <h3><Link to={open} className="tpl-link">{e.name}</Link></h3>
+      <p className="tpl-desc">{e.description}</p>
+      <FlowStrip steps={steps} />
+      <dl className="tpl-facts">
+        {steps ? <div><dt>Steps</dt><dd>{steps}</dd></div> : null}
+        {m.works_with.length ? <div><dt>Works with</dt><dd>{m.works_with.join(' · ')}</dd></div> : null}
+        <div><dt>Access</dt><dd className={c.tone === 'warn' ? 'warn-text' : 'ok-text'}>{c.label}</dd></div>
+        <div><dt>Secrets</dt><dd>{e.secrets.length ? e.secrets.length : 'none needed'}</dd></div>
+      </dl>
+      {missing ? <p className="tpl-need"><Icon name="alert" size={14} /> {missing} thing{missing === 1 ? '' : 's'} to have ready before install</p> : null}
+      <div className="tpl-actions">
+        <Link to={open} className="button primary cta">{installed(e) ? 'Open' : <><Icon name="down" size={16} /> Install</>}</Link>
+        {installed(e) ? <Link to={open} className="button" aria-label={`Reinstall ${e.name}`}>Reinstall</Link> : null}
+        {e.nodes?.length && onLook ? <button type="button" className="tpl-look" onClick={onLook} aria-label={`Quick look at ${e.name}`}>Quick look</button> : null}
       </div>
     </article>
   );
@@ -175,7 +233,7 @@ function MarketCard({ example: e, featured, onLook }: { example: Example; featur
  * A bundled workflow's real steps on the canvas, each explained in the same panel the workflow
  * page uses, with what it changes and what must be set up first beside it.
  */
-function ExampleSteps({ example: e, height = 380 }: { example: Example; height?: number }) {
+function ExampleSteps({ example: e, height = 380, bare }: { example: Example; height?: number; bare?: boolean }) {
   const { navigate } = useRoute();
   const nodes = useMemo(() => graphOf({ nodes: e.nodes ?? [] }), [e]);
   const tools: ToolInfo[] = e.tools.map((t) => ({ id: t.ref.split('@')[0]!, version: Number(t.ref.split('@')[1]), effect: t.effect, description: t.description }));
@@ -188,11 +246,11 @@ function ExampleSteps({ example: e, height = 380 }: { example: Example; height?:
     ...e.secrets.map((s) => ({ label: `${s.name} (needed to run)`, ok: s.set, optional: true })),
   ];
   return (
-    <div className="quicklook">
+    <div className={`quicklook${bare && !step ? ' bare' : ''}`}>
       <div>
         <WorkflowCanvas nodes={nodes} height={height} select={{ selected, onSelect: setSelected }} />
       </div>
-      {step ? (
+      {bare && !step ? <p className="muted small">Select a step to read what it does and every setting.</p> : step ? (
         <StepPanel node={step} nodes={nodes} tools={tools} onPick={setSelected} onClose={() => setSelected(null)} />
       ) : (
         <aside className="quicklook-side">
@@ -307,28 +365,48 @@ function UpdateReview({ example: e, onClose }: { example: Example; onClose: () =
   );
 }
 
-/** One bundled workflow: how it works, what it reads and changes, and setting it up. */
+/** One bundled workflow: what it is and does on the left, a sticky install panel on the right. */
+/** Scrolls to the install panel (opening the reinstall section when asked) and focuses its first control. */
+function toInstall(reinstall = false) {
+  const panel = document.getElementById('install');
+  if (!panel) return;
+  if (reinstall) (document.getElementById('reinstall') as HTMLDetailsElement | null)?.setAttribute('open', '');
+  panel.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  panel.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
+}
+
 function ExampleDetail({ example: e }: { example: Example }) {
   const me = useMe();
   const m = metaOf(e);
+  const look = lookOf(m.category);
+  const c = changes(e);
+  const steps = stepCount(e);
   const [reviewing, setReviewing] = useState(false);
-  const reads = e.tools.filter((t) => t.effect === 'read');
+  const installNow = useRef<(() => void) | null>(null);
+  const reads =e.tools.filter((t) => t.effect === 'read');
   const writes = e.tools.filter((t) => t.effect !== 'read');
   const admin = atLeast(me.data?.role, 'admin');
   return (
-    <>
-      <PageHead
-        title={e.name}
-        sub={`${m.category} · bundled with Azhi${stepCount(e) ? ` · ${stepCount(e)} steps` : ''}`}
-        actions={e.update ? (
-          <div className="row">
-            <Badge tone="ok">installed, v{e.update.version}{e.update.draft ? ' draft' : ''}</Badge>
-            {e.update.available ? <Badge tone="warn">update available</Badge> : <Badge tone="idle">up to date</Badge>}
-            {e.workflow ? <Link to={`/ui/workflows/${encodeURIComponent(e.workflow)}`} className="button">Open workflow</Link> : null}
+    <div style={{ ['--ink-t' as string]: `var(--ink-${look.tint})`, ['--tint-t' as string]: `var(--tint-${look.tint})` }}>
+      <header className="tpl-hero">
+        <span className="tpl-icon big"><Icon name={look.icon} size={28} /></span>
+        <div className="tpl-hero-main">
+          <div className="tpl-cat-label">{m.category} · bundled with Azhi</div>
+          <h1>{e.name}</h1>
+          {e.description ? <p className="tpl-lede">{e.description}</p> : null}
+          <div className="row wrap">
+            {steps ? <span className="chip-effect">{steps} step{steps === 1 ? '' : 's'}</span> : null}
+            {m.works_with.length ? <span className="chip-effect">{m.works_with.join(' · ')}</span> : null}
+            <span className={`chip-effect ${c.tone}`}>{c.label}</span>
+            {e.update ? <Badge tone="ok">installed, v{e.update.version}{e.update.draft ? ' draft' : ''}</Badge> : <Badge tone="idle">not installed</Badge>}
+            {e.update ? (e.update.available ? <Badge tone="warn">update available</Badge> : <Badge tone="idle">up to date</Badge>) : null}
           </div>
-        ) : <Badge tone="idle">not installed</Badge>}
-      />
-      {e.description ? <p>{e.description}</p> : null}
+        </div>
+        <div className="tpl-hero-cta">
+          {e.workflow && e.update ? <Link to={`/ui/workflows/${encodeURIComponent(e.workflow)}`} className="button primary cta">Open workflow</Link> : <button type="button" className="primary cta" onClick={() => installNow.current?.()}><Icon name="down" size={16} /> Install workflow</button>}
+          {e.update ? <button type="button" className="cta" onClick={() => toInstall(true)}>Reinstall…</button> : null}
+        </div>
+      </header>
       {e.update?.available ? (
         <div className="update-note" role="status">
           <b>The marketplace has changed this workflow since you {e.update.tracked ? 'installed or last updated it' : 'installed it'}.</b>{' '}
@@ -336,28 +414,37 @@ function ExampleDetail({ example: e }: { example: Example }) {
           {admin ? <button type="button" className="primary small" onClick={() => setReviewing(true)}>Review the update</button> : <span className="muted">An admin can apply it.</span>}
         </div>
       ) : null}
-      {e.nodes?.length ? (
-        <div className="example-steps">
-          <h2 className="section">How it works</h2>
-          <ExampleSteps example={e} />
+      <div className="tpl-detail">
+        <div className="tpl-detail-main">
+          {e.nodes?.length ? (
+            <section aria-labelledby="tpl-how">
+              <h2 className="section" id="tpl-how">How it works</h2>
+              <ExampleSteps example={e} height={420} bare />
+            </section>
+          ) : null}
+          <section className="market-facts" aria-label="What it touches">
+            <div className="tpl-fact"><span className="tpl-fact-ic ok"><Icon name="retrieve" size={16} /></span><div><span className="label">It reads</span><p className="small">{reads.length ? reads.map((t) => t.description).join('; ') : 'Only what you give it as input.'}</p></div></div>
+            <div className="tpl-fact"><span className={`tpl-fact-ic ${writes.length ? 'warn' : 'ok'}`}><Icon name="edit" size={16} /></span><div><span className="label">It changes</span><p className="small">{writes.length ? writes.map((t) => t.description).join('; ') : 'Nothing outside Azhi.'}</p></div></div>
+            <div className="tpl-fact"><span className="tpl-fact-ic"><Icon name="lock" size={16} /></span><div><span className="label">Secrets</span><p className="small">{e.secrets.length ? e.secrets.map((s) => s.name).join(', ') : 'None needed.'}</p></div></div>
+          </section>
+          <section id="inside" aria-labelledby="tpl-inside">
+            <h2 className="section" id="tpl-inside">What’s inside</h2>
+            <BundleContents inventory={e.inventory} tools={e.tools} />
+          </section>
         </div>
-      ) : null}
-      <div id="inside">
-        <h2 className="section">What’s inside</h2>
-        <BundleContents inventory={e.inventory} tools={e.tools} />
+        <aside className="tpl-detail-side" id="install" aria-label="Install">
+          <ExampleCard example={e} installRef={installNow} />
+        </aside>
       </div>
-      <div className="market-facts">
-        <div className="panel"><span className="label">It reads</span><p className="small">{reads.length ? reads.map((t) => t.description).join('; ') : 'Only what you give it as input.'}</p></div>
-        <div className="panel"><span className="label">It changes</span><p className="small">{writes.length ? writes.map((t) => t.description).join('; ') : 'Nothing outside Azhi.'}</p></div>
-        <div className="panel"><span className="label">Secrets</span><p className="small">{e.secrets.length ? e.secrets.map((s) => s.name).join(', ') : 'None needed.'}</p></div>
+      <div className="tpl-sticky-cta">
+        <button type="button" className="primary cta" onClick={() => (e.update ? toInstall() : installNow.current?.())}>{e.update ? 'Reinstall or set up' : 'Install workflow'}</button>
       </div>
-      <ExampleCard example={e} />
       {reviewing ? <UpdateReview example={e} onClose={() => setReviewing(false)} /> : null}
-    </>
+    </div>
   );
 }
 
-function ExampleCard({ example: e }: { example: Example }) {
+function ExampleCard({ example: e, installRef }: { example: Example; installRef?: MutableRefObject<(() => void) | null> }) {
   const qc = useQueryClient();
   const [repos, setRepos] = useState('');
   const [apiUrl, setApiUrl] = useState('');
@@ -394,6 +481,13 @@ function ExampleCard({ example: e }: { example: Example }) {
   const secrets = r?.secrets ?? e.secrets;
   // Required settings with no value yet (typed here, filled by an earlier install, or a default).
   const lacking = (e.requirements?.settings ?? []).filter((s) => s.required && !s.ready && !filled[s.name]);
+  const blocked = lacking.length > 0 || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)));
+  // The header button installs straight away with the same checks as the form; when something is
+  // still missing it shows the panel instead, so the missing field can be filled in.
+  if (installRef) installRef.current = () => {
+    toInstall();
+    if (!blocked && !install.isPending) install.mutate();
+  };
   // Once installed, repositories are managed below with their token checked; installing again is a reset.
   const isInstalled = e.repos.length > 0 || Boolean(e.update);
   const enterprise = (
@@ -414,13 +508,12 @@ function ExampleCard({ example: e }: { example: Example }) {
   return (
     <Panel title={<>{isInstalled ? 'Set up' : 'Install'} <span className="muted small mono">{e.id}</span></>}>
       <div className="example-card">
-        {e.description ? <p>{e.description}</p> : null}
-        <div>
-          <span className="label">Tools it registers</span>
+        <details>
+          <summary className="small">{e.tools.length} tool{e.tools.length === 1 ? '' : 's'} it registers</summary>
           <ul className="small">
             {e.tools.map((t) => <li key={t.ref}><span className="mono">{t.ref}</span> <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect}</Badge> <span className="muted">{t.description}</span></li>)}
           </ul>
-        </div>
+        </details>
         {!isInstalled && e.requirements ? <BeforeInstall needs={e.requirements} given={filled} haveRepos={list.length > 0} /> : null}
         {e.needs_repos && e.repos.length ? <AllowedRepos example={e} /> : null}
         <form onSubmit={submit} className="fields">
@@ -442,15 +535,15 @@ function ExampleCard({ example: e }: { example: Example }) {
             </div>
           ))}
           {isInstalled && !install.isPending && !r ? (
-            <details className="reinstall">
-              <summary className="small">Start over from the marketplace version</summary>
+            <details className="reinstall" id="reinstall">
+              <summary>Start over from the marketplace version</summary>
               {e.needs_repos ? enterprise : null}
               <p className="warn-note">This saves the marketplace's version as a new draft and leaves the workflow's own changes behind in the earlier versions. To bring in what the marketplace changed and keep your edits, use Review the update at the top of this page.</p>
-              <button type="submit" disabled={install.isPending}>Reinstall</button>
+              <button type="submit" className="cta" disabled={install.isPending}>{install.isPending ? 'Reinstalling…' : 'Reinstall'}</button>
             </details>
           ) : (
             <div className="row">
-              <button type="submit" className="primary" disabled={install.isPending || lacking.length > 0 || (e.needs_repos && !e.repos.length && (!list.length || Boolean(badRepo)))}>
+              <button type="submit" className="primary cta block" disabled={install.isPending || blocked}>
                 {install.isPending ? 'Installing…' : r?.ok ? 'Install again' : 'Install'}
               </button>
             </div>
@@ -470,10 +563,7 @@ function ExampleCard({ example: e }: { example: Example }) {
             {r.signError ? <div className="warn-text small">Not signed: {r.signError}</div> : null}
           </div>
         ) : null}
-        <div>
-          <span className="label">Secrets it needs</span>
-          {secrets.length === 0 ? <p className="muted small">None.</p> : secrets.map((s) => <SecretRow key={s.name} secret={s} />)}
-        </div>
+        <SecretsSection secrets={secrets} />
       </div>
     </Panel>
   );
@@ -536,16 +626,47 @@ function AllowedRepos({ example: e }: { example: Example }) {
   );
 }
 
+/**
+ * The secrets a workflow needs to run (not to install): how many are set, the missing ones first with a
+ * field to fill in, and the ones already set quiet, each replaceable. Values are write-only.
+ */
+function SecretsSection({ secrets }: { secrets: Secret[] }) {
+  const missing = secrets.filter((x) => !x.set);
+  const have = secrets.filter((x) => x.set);
+  return (
+    <section className="secrets" aria-label="Secrets">
+      <div className="secrets-head">
+        <span className="label">Secrets</span>
+        {secrets.length ? <span className={`secrets-count${missing.length ? '' : ' done'}`}>{have.length} of {secrets.length} set</span> : null}
+      </div>
+      {secrets.length === 0 ? <p className="muted small">None needed.</p> : (
+        <>
+          <div className="secrets-bar" role="presentation"><span style={{ width: `${(have.length / secrets.length) * 100}%` }} /></div>
+          <p className="muted small secrets-note">Needed to run the workflow, not to install it. Values are stored encrypted and never shown again.</p>
+          <ul className="secret-list">
+            {missing.map((x) => <SecretRow key={x.name} secret={x} />)}
+            {have.map((x) => <SecretRow key={x.name} secret={x} />)}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Sets one secret in place; the value is sent once and never shown again. */
 function SecretRow({ secret }: { secret: Secret }) {
   const qc = useQueryClient();
   const [value, setValue] = useState('');
   const [done, setDone] = useState(false);
+  const [shown, setShown] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const save = useMutation({
     mutationFn: () => api(`/v1/secrets/${encodeURIComponent(secret.name)}`, { method: 'PUT', body: { value } }),
     onSuccess: () => {
       setValue('');
       setDone(true);
+      setReplacing(false);
+      setShown(false);
       void qc.invalidateQueries({ queryKey: ['secrets'] });
       void qc.invalidateQueries({ queryKey: ['examples'] });
     },
@@ -561,36 +682,55 @@ function SecretRow({ secret }: { secret: Secret }) {
       void qc.invalidateQueries({ queryKey: ['examples'] });
     },
   });
-  const odd = /[\s​-‍﻿]/.test(value);
+  const odd = /[\s\u200b-\u200d\ufeff]/.test(value);
+  const head = (
+    <div className="secret-name">
+      <span className={`secret-dot${isSet ? ' on' : ''}`} aria-hidden="true">{isSet ? <Icon name="check" size={12} /> : null}</span>
+      <span className="mono">{secret.name}</span>
+      {isSet ? <Badge tone="ok">set</Badge> : <Badge tone="warn">missing</Badge>}
+    </div>
+  );
   if (secret.name === 'github-copilot-token') {
     return (
-      <div className="secret-row" aria-label={`Secret ${secret.name}`}>
-        <div className="secret-name"><span className="mono">{secret.name}</span> {isSet ? <Badge tone="ok">set</Badge> : <Badge tone="warn">missing</Badge>}</div>
+      <li className="secret-row" aria-label={`Secret ${secret.name}`}>
+        {head}
         <div className="secret-ctl">
           <CopilotLogin secret={secret.name} onDone={() => setDone(true)} />
           <span className="hint">Your GitHub Copilot subscription runs the models; no other model key is needed.</span>
         </div>
-      </div>
+      </li>
     );
   }
+  const editing = !isSet || replacing;
   return (
-    <form className="secret-row" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
-      <div className="secret-name"><span className="mono">{secret.name}</span> {isSet ? <Badge tone="ok">set</Badge> : <Badge tone="warn">missing</Badge>}</div>
-      <div className="secret-ctl">
-        <label className="lbl"><span>{isSet ? `New value for ${secret.name}` : `Value for ${secret.name}`}</span><input type="password" autoComplete="off" required value={value} onChange={(e) => setValue(e.target.value)} /></label>
-        <button type="submit" className="small" disabled={save.isPending}>Save secret</button>
-        {odd ? <span className="hint warn-text">Contains spaces or invisible characters; check what you pasted.</span> : null}
-        <ErrorNote error={save.error} />
-        {isGithubToken ? (
-          <div className="hint">
-            <span>Or skip the token: first run <code>gh auth login</code> on the computer the server runs on, then </span>
-            <button type="button" className="link small" disabled={cli.isPending} onClick={() => cli.mutate()}>use the GitHub CLI login</button>
-            {cli.data ? <span className="ok-note"> Using the login of {cli.data.login ?? 'unknown'} ({cli.data.scopes.join(', ') || 'no scopes listed'}).</span> : null}
-            {cli.data?.warning ? <span className="warn-text"> {cli.data.warning}</span> : null}
-            <ErrorNote error={cli.error} />
+    <li className="secret-row">
+      <form onSubmit={(ev) => { ev.preventDefault(); save.mutate(); }}>
+        {head}
+        {editing ? (
+          <div className="secret-ctl">
+            <div className="secret-input">
+              <label className="sr-only" htmlFor={`secret-${secret.name}`}>{isSet ? `New value for ${secret.name}` : `Value for ${secret.name}`}</label>
+              <input id={`secret-${secret.name}`} type={shown ? 'text' : 'password'} autoComplete="off" spellCheck={false} required value={value} placeholder={isSet ? 'New value' : 'Paste the value'} onChange={(ev) => setValue(ev.target.value)} />
+              <button type="button" className="secret-eye" aria-pressed={shown} aria-label={shown ? 'Hide value' : 'Show value'} onClick={() => setShown(!shown)}>{shown ? 'Hide' : 'Show'}</button>
+            </div>
+            <button type="submit" className="primary small" disabled={save.isPending || !value}>{save.isPending ? 'Saving…' : 'Save secret'}</button>
+            {replacing ? <button type="button" className="small" onClick={() => { setReplacing(false); setValue(''); }}>Cancel</button> : null}
+            {odd ? <span className="hint warn-text">Contains spaces or invisible characters; check what you pasted.</span> : null}
+            <ErrorNote error={save.error} />
+            {isGithubToken && !isSet ? (
+              <div className="hint">
+                <span>Or skip the token: run <code>gh auth login</code> on the computer the server runs on, then </span>
+                <button type="button" className="link small" disabled={cli.isPending} onClick={() => cli.mutate()}>use the GitHub CLI login</button>.
+                {cli.data ? <span className="ok-note"> Using the login of {cli.data.login ?? 'unknown'} ({cli.data.scopes.join(', ') || 'no scopes listed'}).</span> : null}
+                {cli.data?.warning ? <span className="warn-text"> {cli.data.warning}</span> : null}
+                <ErrorNote error={cli.error} />
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
-    </form>
+        ) : (
+          <button type="button" className="small secret-replace" onClick={() => setReplacing(true)} aria-label={`Replace ${secret.name}`} title="Stored; the value is not shown.">Replace</button>
+        )}
+      </form>
+    </li>
   );
 }

@@ -1,0 +1,831 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "pr-review",
+    "definitionHash": "sha256:4b70e3931d8918221ed5d0bce7f5b78cefafd0e55a7ff18ad8d2674242981107",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "description": "owner/name, for example acme/payments"
+        },
+        "pr": {
+          "type": "integer",
+          "title": "Pull request number"
+        },
+        "post": {
+          "type": "boolean",
+          "default": true,
+          "title": "Post the review and notify Slack (on by default; turn off for a dry run)"
+        },
+        "allow_closed": {
+          "type": "boolean",
+          "default": false,
+          "title": "Review a closed or merged pull request too (off by default; such a run is skipped)"
+        },
+        "offer_merge": {
+          "type": "boolean",
+          "default": false,
+          "title": "Offer to merge a clean approved pull request (asks for approval in Slack first; off by default)"
+        }
+      },
+      "required": [
+        "repo",
+        "pr"
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}",
+      "min_confidence": 80
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "pr",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "pr",
+          "type": "tool",
+          "description": "Read the pull request and its changed files from GitHub.",
+          "tool": "github.get-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_review",
+        "type": "condition",
+        "deps": [
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "should_review",
+          "type": "condition",
+          "description": "Review only open pull requests (unless allow_closed is set); a closed or merged one skips every later step, so nothing is spent, posted or sent.",
+          "expression": "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'",
+          "routes": {
+            "review": [
+              "correctness",
+              "security",
+              "tests",
+              "quality"
+            ],
+            "skip": []
+          },
+          "default": "skip"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "correctness",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "should_review"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "correctness",
+          "type": "agent",
+          "description": "Look for bugs the change introduces.",
+          "executor": "opencode",
+          "profile": "correctness-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "ref": "nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output}"
+          },
+          "output_schema": "schemas/findings.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_review",
+          "route": "review"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "security",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "should_review"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "security",
+          "type": "agent",
+          "description": "Look for security problems in the change.",
+          "executor": "opencode",
+          "profile": "security-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "ref": "nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output}"
+          },
+          "output_schema": "schemas/findings.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_review",
+          "route": "review"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "tests",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "should_review"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "tests",
+          "type": "agent",
+          "description": "Check the change's tests and style.",
+          "executor": "opencode",
+          "profile": "tests-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "ref": "nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output}"
+          },
+          "output_schema": "schemas/findings.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_review",
+          "route": "review"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "quality",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "should_review"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "quality",
+          "type": "agent",
+          "description": "Check the change's code quality and maintainability (thermo-nuclear-code-quality-review skill).",
+          "executor": "opencode",
+          "profile": "quality-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "ref": "nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output}"
+          },
+          "output_schema": "schemas/findings.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_review",
+          "route": "review"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "verify",
+        "type": "agent",
+        "deps": [
+          "correctness",
+          "pr",
+          "quality",
+          "security",
+          "tests"
+        ],
+        "dataDeps": [
+          "correctness",
+          "pr",
+          "quality",
+          "security",
+          "tests"
+        ],
+        "def": {
+          "id": "verify",
+          "type": "agent",
+          "description": "Try to refute every finding in a fresh checkout and score the confidence (finding-verification skill, a different model).",
+          "executor": "opencode",
+          "profile": "finding-verifier@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "ref": "nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"
+          },
+          "output_schema": "schemas/verification.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "triage",
+        "type": "script",
+        "deps": [
+          "correctness",
+          "quality",
+          "security",
+          "tests",
+          "verify"
+        ],
+        "dataDeps": [
+          "correctness",
+          "quality",
+          "security",
+          "tests",
+          "verify"
+        ],
+        "def": {
+          "id": "triage",
+          "type": "script",
+          "description": "Keep the confirmed findings at or above the confidence bar, set aside the unverifiable ones and drop the refuted ones (plain rules, no model).",
+          "runtime": "python",
+          "entrypoint": "scripts/triage.py",
+          "input": {
+            "map": "{'reviews': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output], 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"
+          },
+          "output_schema": "schemas/triage.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "summarize",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "triage"
+        ],
+        "dataDeps": [
+          "pr",
+          "triage"
+        ],
+        "def": {
+          "id": "summarize",
+          "type": "agent",
+          "description": "Merge the findings into one review with a verdict and a comment body.",
+          "executor": "opencode",
+          "profile": "review-summarizer@1",
+          "input": {
+            "map": "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title, 'mergeable_state': nodes.pr.output.mergeable_state}, 'reviews': nodes.triage.output.reviews, 'unverified': nodes.triage.output.unverified, 'stats': nodes.triage.output.stats}"
+          },
+          "output_schema": "schemas/review.json",
+          "timeout": "10m",
+          "budget": {
+            "max_tool_calls": 2
+          }
+        },
+        "timeoutMs": 600000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "report",
+        "type": "report",
+        "deps": [
+          "pr",
+          "summarize",
+          "triage"
+        ],
+        "dataDeps": [
+          "pr",
+          "summarize",
+          "triage"
+        ],
+        "def": {
+          "id": "report",
+          "type": "report",
+          "description": "The review as a run artifact.",
+          "template": "templates/review.md",
+          "input": {
+            "map": "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'verification': nodes.triage.output.stats, 'triage': {'fix_now': nodes.summarize.output.findings.filter(f, f.triage == 'fix_now'), 'follow_up': nodes.summarize.output.findings.filter(f, f.triage == 'follow_up'), 'check_by_hand': nodes.summarize.output.findings.filter(f, f.triage == 'check_by_hand')}, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty', 'behind': nodes.pr.output.mergeable_state == 'behind', 'blocked': nodes.pr.output.mergeable_state == 'blocked', 'unknown': nodes.pr.output.mergeable_state == 'unknown'}}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "slack_message",
+        "type": "report",
+        "deps": [
+          "pr",
+          "summarize"
+        ],
+        "dataDeps": [
+          "pr",
+          "summarize"
+        ],
+        "def": {
+          "id": "slack_message",
+          "type": "report",
+          "description": "The short Slack message: verdict, summary and the findings.",
+          "template": "templates/slack.md",
+          "input": {
+            "map": "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 'merge': {'conflicts': nodes.pr.output.mergeable_state == 'dirty'}}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_post",
+        "type": "condition",
+        "deps": [
+          "summarize"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "should_post",
+          "type": "condition",
+          "description": "Post the review unless this is a dry run (post set to false).",
+          "expression": "has(inputs.post) && !inputs.post ? 'skip' : 'post'",
+          "depends_on": [
+            "summarize"
+          ],
+          "routes": {
+            "post": [
+              "post"
+            ],
+            "skip": []
+          },
+          "default": "post"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_notify",
+        "type": "condition",
+        "deps": [
+          "summarize"
+        ],
+        "dataDeps": [
+          "summarize"
+        ],
+        "def": {
+          "id": "should_notify",
+          "type": "condition",
+          "description": "Tell Slack when the reviewers had comments, and only when posting.",
+          "expression": "has(inputs.post) && !inputs.post ? 'skip' : (size(nodes.summarize.output.findings) > 0 ? 'notify' : 'skip')",
+          "depends_on": [
+            "summarize"
+          ],
+          "routes": {
+            "notify": [
+              "notify"
+            ],
+            "skip": []
+          },
+          "default": "skip"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "post",
+        "type": "tool",
+        "deps": [
+          "should_post",
+          "summarize"
+        ],
+        "dataDeps": [
+          "summarize"
+        ],
+        "def": {
+          "id": "post",
+          "type": "tool",
+          "description": "Post the review as a comment on the pull request, or edit the review comment an earlier run posted there.",
+          "tool": "github.comment-on-pr@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            },
+            "body": {
+              "ref": "nodes.summarize.output.body"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == inputs.pr"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_post",
+          "route": "post"
+        }
+      },
+      {
+        "id": "notify",
+        "type": "notify",
+        "deps": [
+          "should_notify",
+          "slack_message"
+        ],
+        "dataDeps": [
+          "slack_message"
+        ],
+        "def": {
+          "id": "notify",
+          "type": "notify",
+          "description": "Slack message with the verdict and the reviewers' comments.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.slack_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_notify",
+          "route": "notify"
+        }
+      },
+      {
+        "id": "should_offer_merge",
+        "type": "condition",
+        "deps": [
+          "post",
+          "pr",
+          "summarize",
+          "triage"
+        ],
+        "dataDeps": [
+          "pr",
+          "summarize",
+          "triage"
+        ],
+        "def": {
+          "id": "should_offer_merge",
+          "type": "condition",
+          "description": "Offer the merge only when asked (offer_merge), the review was posted, and nothing needs a person first - verdict approve, no finding that must be fixed or checked by hand, and GitHub says the pull request is clean (no conflicts, checks passed, not a draft).",
+          "expression": "has(inputs.offer_merge) && inputs.offer_merge && !(has(inputs.post) && !inputs.post) && nodes.pr.output.state == 'open' && !nodes.pr.output.draft && nodes.pr.output.mergeable_state == 'clean' && nodes.summarize.output.verdict == 'approve' && nodes.summarize.output.findings.all(f, f.severity == 'minor' && f.triage == 'follow_up') && size(nodes.triage.output.unverified) == 0 ? 'offer' : 'skip'",
+          "depends_on": [
+            "post"
+          ],
+          "routes": {
+            "offer": [
+              "approve_merge"
+            ],
+            "skip": []
+          },
+          "default": "skip"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "approve_merge",
+        "type": "approval",
+        "deps": [
+          "pr",
+          "should_offer_merge",
+          "summarize"
+        ],
+        "dataDeps": [
+          "pr",
+          "summarize"
+        ],
+        "def": {
+          "id": "approve_merge",
+          "type": "approval",
+          "description": "A person approves the merge. The request goes to Slack with Approve and Reject buttons (the workspace approvals channel); a rejection or no answer in 24 hours leaves the pull request unmerged.",
+          "role": "admin",
+          "message": {
+            "cel": "'Merge ' + inputs.repo + '#' + string(inputs.pr) + ' \"' + nodes.pr.output.title + '\" into ' + nodes.pr.output.base_ref + '? The review approved it' + (size(nodes.summarize.output.findings) > 0 ? ' with ' + string(size(nodes.summarize.output.findings)) + ' minor follow-up(s)' : ' with no comments') + ' and GitHub reports it clean. Only the reviewed commit ' + nodes.pr.output.head_sha.substring(0, 8) + ' is merged.'"
+          },
+          "payload": {
+            "map": "{'pr': nodes.pr.output.url, 'verdict': nodes.summarize.output.verdict, 'summary': nodes.summarize.output.summary, 'head_sha': nodes.pr.output.head_sha, 'follow_ups': nodes.summarize.output.findings}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_offer_merge",
+          "route": "offer"
+        }
+      },
+      {
+        "id": "merge",
+        "type": "tool",
+        "deps": [
+          "approve_merge",
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "merge",
+          "type": "tool",
+          "description": "Merge the pull request at the commit that was reviewed, after the approval.",
+          "depends_on": [
+            "approve_merge"
+          ],
+          "tool": "github.merge-pr@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            },
+            "sha": {
+              "ref": "nodes.pr.output.head_sha"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == inputs.pr && args.sha == nodes.pr.output.head_sha"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "correctness": "output of tainted agent correctness",
+        "security": "output of tainted agent security",
+        "tests": "output of tainted agent tests",
+        "quality": "output of tainted agent quality",
+        "verify": "output of tainted agent verify",
+        "triage": "output of tainted agent correctness",
+        "summarize": "output of tainted agent summarize",
+        "report": "output of tainted agent summarize",
+        "slack_message": "output of tainted agent summarize",
+        "should_notify": "output of tainted agent summarize",
+        "post": "output of tainted agent summarize",
+        "notify": "output of tainted agent summarize",
+        "should_offer_merge": "output of tainted agent summarize"
+      },
+      "tainted": {
+        "correctness": "reads a cloned repository (its files are untrusted)",
+        "security": "reads a cloned repository (its files are untrusted)",
+        "tests": "reads a cloned repository (its files are untrusted)",
+        "quality": "reads a cloned repository (its files are untrusted)",
+        "verify": "reads a cloned repository (its files are untrusted)",
+        "summarize": "reads triage, whose output of tainted agent correctness"
+      },
+      "paths": [
+        {
+          "agent": "summarize",
+          "write": "notify",
+          "path": [
+            "summarize",
+            "slack_message",
+            "notify"
+          ],
+          "gate": "guard"
+        }
+      ]
+    }
+  }
+}

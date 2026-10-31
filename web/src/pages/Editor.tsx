@@ -7,7 +7,7 @@ import { ModelChoice, ModelSteps } from '../components/ModelChoice';
 import { EXECUTOR_BLURB, FactChips, HbSection, PickList } from '../components/HarnessParts';
 import { Icon } from '../icons';
 import { TYPE, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
-import { graphOf } from '../graph';
+import { graphOf, renameStep, reorder } from '../graph';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
@@ -35,6 +35,8 @@ const PROFILE_PROVIDER_MODELS: Record<string, string> = { anthropic: 'anthropic'
 const PROFILE_PROVIDER_CREDENTIALS: Record<string, string> = { anthropic: 'anthropic-api-key', openai: 'openai-api-key', 'github-copilot': 'github-copilot-token', 'openai-chatgpt': 'openai-chatgpt-auth' };
 
 type Field = { key: string; label: string; kind: 'text' | 'expr' | 'number' | 'list' | 'value' | 'select'; options?: string[]; suggest?: 'tools' | 'profiles' | 'schemas' | 'files'; hint?: string; help?: string };
+/** Agent, script and report steps can take keys from the workflow's shared contexts (Workflow settings). */
+const CONTEXT_FIELD: Field = { key: 'context', label: 'Shared context', kind: 'list', hint: 'Names of contexts defined in the workflow settings' };
 const COMMON: Field[] = [
   { key: 'timeout', label: 'Timeout', kind: 'text', hint: 'For example 10m' },
   { key: 'retry', label: 'Retry', kind: 'value', hint: 'For example max_attempts: 3' },
@@ -50,6 +52,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'profile', label: 'Profile', kind: 'text', suggest: 'profiles' },
     { key: 'executor', label: 'Executor', kind: 'text', hint: 'Empty for the built-in model agent' },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'output_schema', label: 'Output schema', kind: 'text', suggest: 'schemas' },
     { key: 'tools', label: 'Tools the agent may call', kind: 'list' },
     { key: 'datasets', label: 'Datasets', kind: 'list' },
@@ -59,6 +62,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'runtime', label: 'Runtime', kind: 'select', options: ['python', 'bun'] },
     { key: 'entrypoint', label: 'Entrypoint', kind: 'text', suggest: 'files' },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'output_schema', label: 'Output schema', kind: 'text', suggest: 'schemas' },
   ],
   retrieve: [
@@ -101,6 +105,7 @@ const FIELDS: Record<string, Field[]> = {
     { key: 'template', label: 'Template', kind: 'text', suggest: 'files' },
     { key: 'format', label: 'Format', kind: 'select', options: ['', 'markdown', 'html', 'csv'] },
     { key: 'input', label: 'Input', kind: 'value' },
+    CONTEXT_FIELD,
     { key: 'summary', label: 'Summary', kind: 'value' },
   ],
   notify: [
@@ -136,26 +141,6 @@ function upstream(nodes: PlanNode[], id: string): Set<string> {
   return out;
 }
 
-/** Renames a step and every reference to it: depends_on, routes, refs and CEL. */
-function renameStep(def: Definition, from: string, to: string): Definition {
-  const swap = (v: unknown): unknown => JSON.parse(JSON.stringify(v).replace(new RegExp(`nodes\\.${from}(?![A-Za-z0-9_])`, 'g'), `nodes.${to}`));
-  return {
-    ...def,
-    nodes: def.nodes.map((n) => {
-      const { id, type, depends_on, routes, ...rest } = n;
-      const out: Step = { id: id === from ? to : id, type, ...(swap(rest) as object) };
-      if (depends_on) out.depends_on = depends_on.map((d: string) => (d === from ? to : d));
-      if (routes) out.routes = Object.fromEntries(Object.entries(routes as Record<string, string[]>).map(([k, ms]) => [k, Array.isArray(ms) ? ms.map((m) => (m === from ? to : m)) : ms]));
-      return reorder(out);
-    }),
-  };
-}
-
-/** Keeps the usual key order (id, type, description, depends_on first) so the YAML reads well. */
-function reorder(n: Step): Step {
-  const { id, type, description, depends_on, ...rest } = n;
-  return { id, type, ...(description !== undefined ? { description } : {}), ...(depends_on?.length ? { depends_on } : {}), ...rest };
-}
 
 export function WorkflowEditor({ slug }: { slug: string }) {
   const me = useMe();
@@ -300,7 +285,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
   };
   const cardSettings = (n: PlanNode) => {
     const s = (n.def ?? { id: n.id, type: n.type }) as Step;
-    const changed = changedKeys(s);
+    // The card shows the step with its contexts merged in; "changed" is judged on what is actually written in the step.
+    const changed = changedKeys(def.nodes.find((x) => x.id === n.id) ?? s);
     return keySettings(s, tools.data ?? []).map((r) => ({ ...r, changed: r.keys.some((k) => changed.has(k)) }));
   };
 
@@ -321,6 +307,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
         files,
         fileText: (path) => (path in fileEdits ? (fileEdits[path] ?? undefined) : source.data?.files.find((f) => f.path === path)?.text),
         setFile: (path, t) => setFileEdits((p) => ({ ...p, [path]: t })),
+        changes: def.nodes.filter((n) => n.id !== step.id && n.type === 'agent' && n.workspace?.mode === 'write').map((n) => ({ id: n.id, ref: `nodes.${n.id}.output.workspace` })),
       }}
       diagnostics={diagnostics.filter((d) => d.node === step.id)}
       onChange={(s) => updateStep(step.id, () => s)}
@@ -339,7 +326,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
       <div className="ed-shell">
         <div className="ed-main">
         <div className="ed-stage">
-          <WorkflowCanvas title={def.name ?? slug} tag={dirty ? 'unsaved changes' : `v${base.data.version}${base.data.draft ? ' draft' : ''}`} nodes={graph} height="100%" controls="top-left" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}>
+          <WorkflowCanvas title={def.name ?? slug} tag={dirty ? 'unsaved changes' : `v${base.data.version}${base.data.draft ? ' draft' : ''}`} nodes={graph} height="100%" edit={{ selected, onSelect: setSelected, onConnect: connect, onDisconnect: disconnect, problems }} chips={(n) => effectsOf(n.def ?? { type: n.type }, tools.data ?? [])} settings={cardSettings}
+            head={<>
             <div className="ed-title">
               <h1>{def.name ?? slug}</h1>
               <span className="pill">v{base.data.version}{base.data.draft ? ' draft' : ''}{dirty ? ' · unsaved changes' : ''}</span>
@@ -350,6 +338,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
                 {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.diagnostics.map((d) => d.message).join('; ')}</div> : null}
               </div>
             ) : null}
+            </>}
+            foot={<>
             <div className="ed-check-float"><CheckSummary check={check.data} current={Boolean(current)} error={check.error} onPick={setSelected} /></div>
             <div className="ed-toolbar" role="toolbar" aria-label="Editor">
               <Link to={`/ui/workflows/${encodeURIComponent(slug)}`} className="tb-btn" data-tip="Close the editor" aria-label="Close the editor"><Icon name="close" /></Link>
@@ -358,7 +348,8 @@ export function WorkflowEditor({ slug }: { slug: string }) {
                 <Icon name="save" size={18} />{save.isPending ? 'Saving…' : 'Save draft'}
               </button>
             </div>
-          </WorkflowCanvas>
+            </>}
+          />
         </div>
         <PlanDock plan={check.data?.plan} yaml={check.data?.yaml} file={source.data?.workflow} selected={selected} note="This is the plan the edit would have now, as an unsigned draft, with the workers online now." />
         </div>
@@ -491,7 +482,9 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
   };
   const summary = keySettings(step, harness.tools);
   const changes = saved ? Object.keys({ ...saved, ...step }).filter((k) => JSON.stringify(saved[k]) !== JSON.stringify(step[k])).length : 0;
-  const typed = (FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key)));
+  // A step that joins branches (merge: any) cannot take a context: a bundle would make it run when no branch did.
+  const noContext = step.merge === 'any';
+  const typed = (FIELDS[step.type] ?? []).filter((f) => !(step.type === 'agent' && HARNESS_FIELDS.has(f.key)) && !(noContext && f.key === 'context'));
   const row = (f: Field) => <FieldInput key={f.key} row field={{ ...f, help: helpFor(step.type, f.key) }} value={step[f.key]} was={was(f.key)} onChange={(v) => set(f.key, v)} />;
   return (
     <section className="panel step-panel" aria-label={`Step ${step.id}`}>
@@ -558,6 +551,7 @@ function StepForm({ step, saved, all, stillLinked, suggestions, harness, diagnos
             <h3>{t?.label ?? step.type} settings</h3>
             {step.type !== 'agent' ? <p className="muted small">{TYPE_HELP[step.type]}</p> : null}
             {typed.map(row)}
+            {noContext && (FIELDS[step.type] ?? []).some((f) => f.key === 'context') ? <p className="muted small">Shared contexts are not available on a step that joins branches (merge: any): a value taken from a step that always runs would make it run when no branch did. Write its input out, with has() guards.</p> : null}
           </section>
         ) : null}
 
@@ -626,6 +620,8 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
       <input id={id} type="number" value={typeof value === 'number' ? value : ''} onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))} />
     ) : f.kind === 'expr' ? (
       <textarea id={id} className="mono" rows={2} value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+    ) : f.suggest === 'tools' ? (
+      <ToolSelect id={id} value={typeof value === 'string' ? value : ''} onChange={onChange} />
     ) : (
       <input id={id} value={typeof value === 'string' ? value : ''} list={list} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
     );
@@ -639,6 +635,25 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
+/** Every registered tool to pick from, grouped by system; a value that is not registered stays visible and is flagged. */
+function ToolSelect({ id, value, onChange }: { id?: string; value: string; onChange: (v: unknown) => void }) {
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const list = [...(tools.data ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  const refOf = (t: Tool) => `${t.id}@${t.version}`;
+  const systems = [...new Set(list.map((t) => t.id.split('.')[0]!))];
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      {!value ? <option value="">Choose a tool…</option> : null}
+      {value && !list.some((t) => refOf(t) === value) ? <option value={value}>{value} (not registered here)</option> : null}
+      {systems.map((s) => (
+        <optgroup key={s} label={s}>
+          {list.filter((t) => t.id.split('.')[0] === s).map((t) => <option key={refOf(t)} value={refOf(t)}>{refOf(t)} · {t.effect === 'read' ? 'read' : 'writes'}{t.description ? ` · ${t.description}` : ''}</option>)}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
 function ListInput({ field: f, value, onChange, row, was }: { field: Field; value: unknown; onChange: (v: unknown) => void; row?: boolean; was?: string }) {
   const [text, setText] = useState(Array.isArray(value) ? value.join(', ') : '');
   const input = (id?: string) => (
@@ -648,7 +663,9 @@ function ListInput({ field: f, value, onChange, row, was }: { field: Field; valu
       spellCheck={false}
       onChange={(e) => {
         setText(e.target.value);
-        onChange(e.target.value.split(',').map((x) => x.trim()).filter(Boolean));
+        const names = e.target.value.split(',').map((x) => x.trim()).filter(Boolean);
+        // A step's context list needs at least one name; emptying the field takes the key away.
+        onChange(names.length || f.key !== 'context' ? names : undefined);
       }}
     />
   );
@@ -702,6 +719,11 @@ function ValueInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
+/** Contexts defined in the workflow that no step lists. */
+function unusedContexts(def: Definition): string[] {
+  return Object.keys((def.contexts ?? {}) as Record<string, unknown>).filter((name) => !def.nodes.some((n) => Array.isArray(n.context) && n.context.includes(name)));
+}
+
 function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: Definition) => void; plan?: RunPlan }) {
   const set = (key: string, value: unknown) => {
     const next: Definition = { ...def };
@@ -723,6 +745,8 @@ function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: 
         </SettingRow>
         {plan ? <div className="set-row"><div className="set-label"><p>Model of each agent step, with this edit.</p></div><div className="set-control"><ModelSteps plan={plan} /></div></div> : null}
         <ValueInput row field={{ key: 'config', label: 'Config', kind: 'value', help: 'Fixed values such as the Slack channel. Steps read them as config.name.' }} value={def.config} onChange={(v) => set('config', v)} />
+        <ValueInput row field={{ key: 'contexts', label: 'Shared contexts', kind: 'value', help: 'Named sets of values several steps need, written once. A step that lists the name under Shared context takes the keys into its input. Every value becomes a dependency of every step that uses it, so keep it small and keep values from conditional branches out.', hint: 'name: {key: {ref: nodes.step.output.field}}' }} value={def.contexts} onChange={(v) => set('contexts', v)} />
+        {unusedContexts(def).length ? <p className="muted small">Not used by any step: {unusedContexts(def).join(', ')}.</p> : null}
       </div>
     </section>
   );
@@ -740,6 +764,8 @@ interface HarnessContext {
   files: string[];
   fileText: (path: string) => string | undefined;
   setFile: (path: string, text: string | null) => void;
+  /** Earlier steps that make a workspace change a later step can continue from. */
+  changes: Array<{ id: string; ref: string }>;
 }
 
 /** The profile as the builder edits it: the fields it knows, with everything else kept as written. */
@@ -808,6 +834,14 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
     if (v === undefined || Number.isNaN(v)) delete b[k];
     else b[k] = v;
     set('budget', Object.keys(b).length ? b : undefined);
+  };
+  const cap: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: string } = step.context_budget ?? {};
+  const setCap = (k: string, v: number | string | undefined) => {
+    const c: Record<string, unknown> = { ...cap };
+    if (v === undefined || (typeof v === 'number' && Number.isNaN(v))) delete c[k];
+    else c[k] = v;
+    // The block goes away with its last key (the schema wants at least one); a mode alone caps nothing.
+    set('context_budget', Object.keys(c).length ? c : undefined);
   };
   const provider = doc?.model?.provider;
   const modelProvider = PROFILE_PROVIDER_MODELS[provider ?? ''];
@@ -957,7 +991,7 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
 
       {step.executor === 'opencode' || step.workspace ? (
         <HbSection icon="subworkflow" title="Workspace" summary={step.workspace ? 'Clones a repository for this step' : 'None'}>
-          <WorkspaceFields value={step.workspace} onChange={(w) => set('workspace', w)} />
+          <WorkspaceFields value={step.workspace} changes={ctx.changes} onChange={(w) => set('workspace', w)} />
         </HbSection>
       ) : null}
 
@@ -974,6 +1008,24 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
         </label>
       </div>
       </HbSection>
+
+      <HbSection icon="gate" title="Input cap" summary={Object.keys(cap).length ? [cap.max_item_bytes !== undefined ? `${cap.max_item_bytes} bytes per field` : '', cap.max_input_bytes !== undefined ? `${cap.max_input_bytes} bytes in all` : '', cap.on_exceed === 'withhold' ? 'withhold' : 'fail'].filter(Boolean).join(' · ') : 'No cap set'}>
+        <div className="row wrap">
+          <label>Bytes per field
+            <input type="number" min="256" value={cap.max_item_bytes ?? ''} onChange={(e) => setCap('max_item_bytes', e.target.value === '' ? undefined : Number(e.target.value))} />
+          </label>
+          <label>Bytes in all
+            <input type="number" min="1024" value={cap.max_input_bytes ?? ''} onChange={(e) => setCap('max_input_bytes', e.target.value === '' ? undefined : Number(e.target.value))} />
+          </label>
+          <label>When over the cap
+            <select value={cap.on_exceed ?? 'fail'} onChange={(e) => setCap('on_exceed', e.target.value === 'fail' ? undefined : e.target.value)}>
+              <option value="fail">Stop the step</option>
+              <option value="withhold">Withhold the largest fields</option>
+            </select>
+          </label>
+        </div>
+        <p className="muted small">{cap.on_exceed === 'withhold' ? 'A withheld field is recorded on the run and shown to approvers. The agent is told it cannot read it, so only use this where the step can do without it.' : 'The step stops with budget_exceeded instead of sending more than the cap to the model.'}</p>
+      </HbSection>
     </div>
   );
 }
@@ -982,8 +1034,9 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
  * The repository an OpenCode step reviews or works in: cloned by the worker into a fresh folder for
  * the step (isolated git settings, the credential only in the fetch) and deleted afterwards.
  */
-function WorkspaceFields({ value, onChange }: { value: Record<string, any> | undefined; onChange: (w: Record<string, any> | undefined) => void }) {
+function WorkspaceFields({ value, changes, onChange }: { value: Record<string, any> | undefined; changes: Array<{ id: string; ref: string }>; onChange: (w: Record<string, any> | undefined) => void }) {
   const w = value ?? {};
+  const fromRef: string = typeof w.from?.ref === 'string' ? w.from.ref : '';
   const set = (k: string, v: unknown) => {
     const n = { ...w };
     if (v === undefined || v === '') delete n[k];
@@ -1001,7 +1054,17 @@ function WorkspaceFields({ value, onChange }: { value: Record<string, any> | und
         <>
           <ValueInput field={{ key: 'repo', label: 'Repository (owner/name)', kind: 'value', hint: 'For example {ref: inputs.repo} or acme/api' }} value={w.repo} onChange={(v) => set('repo', v)} />
           <ValueInput field={{ key: 'ref', label: 'Ref to check out', kind: 'value', hint: "A branch, tag or PR ref, for example {cel: \"'refs/pull/' + string(inputs.pr) + '/head'\"}" }} value={w.ref} onChange={(v) => set('ref', v)} />
-          <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Fetched too, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />
+          {changes.length || fromRef ? (
+            <label>Continue from an earlier change (optional)
+              <select value={fromRef} onChange={(e) => onChange(e.target.value ? (({ base_ref: _b, ...rest }) => ({ ...rest, from: { ref: e.target.value } }))(w) : (({ from: _f, ...rest }) => rest)(w))}>
+                <option value="">Start from the ref above</option>
+                {changes.map((c) => <option key={c.id} value={c.ref}>The change made by {c.id}</option>)}
+                {fromRef && !changes.some((c) => c.ref === fromRef) ? <option value={fromRef}>{fromRef}</option> : null}
+              </select>
+              <span className="muted small">{fromRef ? 'The worker starts from that change\'s own base commit and applies its files, so the ref above only labels the result. Not combined with a base ref.' : 'Starts the checkout with an earlier step\'s files already in place.'}</span>
+            </label>
+          ) : null}
+          {fromRef ? null : <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Fetched too, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />}
           <div className="row wrap">
             <label>Clone credential (secret)
               <input value={w.credential ?? ''} spellCheck={false} placeholder="github-read-token" onChange={(e) => set('credential', e.target.value)} />
@@ -1047,7 +1110,7 @@ const asMarkdown = (data: Record<string, string | undefined>, body: string) => `
 
 /** "Add from Library…": published items of one kind that are not in the package yet. */
 function LibrarySelect({ label, items, onPick, disabled }: { label: string; items: LibraryAsset[]; onPick: (a: LibraryAsset) => void; disabled?: (a: LibraryAsset) => string | undefined }) {
-  if (!items.length) return <span className="muted small">No published {label} in the <a href="/ui/assets">Library</a> yet.</span>;
+  if (!items.length) return <span className="muted small">No published {label} in the <a href="/ui/library">Library</a> yet.</span>;
   return (
     <select aria-label={`Add a ${label} from the Library`} value="" onChange={(e) => { const a = items.find((x) => x.id === e.target.value); if (a) onPick(a); }}>
       <option value="">Add a {label} from the Library…</option>

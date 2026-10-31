@@ -1,0 +1,1121 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "ai-sdlc-factory-plan",
+    "definitionHash": "sha256:672efb015303933cdb72f213639ee0734433a7429daa15c86683ba3df04efac2",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "title": "Tracker",
+          "enum": [
+            "github",
+            "jira"
+          ],
+          "description": "Where the tickets are read from and created. The code is always on GitHub."
+        },
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The GitHub repository the release changes, owner/name"
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "The branch the plan reads and the factory delivers to (for example dev)"
+        },
+        "ticket": {
+          "type": "string",
+          "title": "Ticket",
+          "maxLength": 300,
+          "description": "An existing ticket to plan: a Jira key such as PAY-142, or a GitHub issue such as acme/payments#42. Leave empty to describe a goal instead."
+        },
+        "goal": {
+          "type": "string",
+          "title": "Goal",
+          "maxLength": 12000,
+          "description": "What the release should achieve, in your words. Added to the ticket when both are given."
+        },
+        "project": {
+          "type": "string",
+          "title": "Jira project",
+          "maxLength": 40,
+          "pattern": "^([A-Z][A-Z0-9_]+)?$",
+          "description": "The Jira project key the sub-tasks are created in. Needed when the tracker is Jira."
+        }
+      },
+      "required": [
+        "source",
+        "repo",
+        "base_branch"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "ticket"
+          ],
+          "properties": {
+            "ticket": {
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "properties": {
+                "source": {
+                  "enum": [
+                    "github"
+                  ]
+                }
+              }
+            },
+            {
+              "required": [
+                "project"
+              ],
+              "properties": {
+                "source": {
+                  "enum": [
+                    "jira"
+                  ]
+                },
+                "project": {
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "config": {},
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source_gate",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source_gate",
+          "type": "condition",
+          "description": "Read the ticket from GitHub or from Jira, or plan from the goal alone.",
+          "expression": "has(inputs.ticket) && inputs.ticket != '' ? inputs.source : 'text'",
+          "routes": {
+            "github": [
+              "github_issue"
+            ],
+            "jira": [
+              "jira_issue"
+            ],
+            "text": [
+              "text_pass"
+            ]
+          },
+          "default": "text"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the GitHub issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source_gate",
+          "route": "github"
+        }
+      },
+      {
+        "id": "jira_issue",
+        "type": "tool",
+        "deps": [
+          "source_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "jira_issue",
+          "type": "tool",
+          "description": "Read the Jira issue through the Jira MCP server.",
+          "tool": "jira.get-issue@1",
+          "arguments": {
+            "issue_key": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source_gate",
+          "route": "jira"
+        }
+      },
+      {
+        "id": "text_pass",
+        "type": "condition",
+        "deps": [
+          "source_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "text_pass",
+          "type": "condition",
+          "description": "No ticket to read - the goal is the request. Marks that branch for the join below.",
+          "expression": "'go'",
+          "routes": {
+            "go": []
+          },
+          "default": "go"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source_gate",
+          "route": "text"
+        }
+      },
+      {
+        "id": "normalize",
+        "type": "tool",
+        "deps": [
+          "github_issue",
+          "jira_issue"
+        ],
+        "dataDeps": [
+          "github_issue",
+          "jira_issue"
+        ],
+        "def": {
+          "id": "normalize",
+          "type": "tool",
+          "description": "The ticket as one plain ticket (key, title, description).",
+          "tool": "ticket.normalize@1",
+          "merge": "any",
+          "depends_on": [
+            "github_issue",
+            "jira_issue"
+          ],
+          "arguments": {
+            "source": {
+              "cel": "has(nodes.jira_issue) ? 'jira' : 'github'"
+            },
+            "issue": {
+              "cel": "has(nodes.jira_issue) ? nodes.jira_issue.output : nodes.github_issue.output"
+            }
+          },
+          "project": [
+            "source",
+            "key",
+            "title",
+            "description"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "brief",
+        "type": "script",
+        "deps": [
+          "normalize",
+          "text_pass"
+        ],
+        "dataDeps": [
+          "normalize"
+        ],
+        "def": {
+          "id": "brief",
+          "type": "script",
+          "description": "The request as one brief - the ticket, then any direction typed as the goal.",
+          "runtime": "python",
+          "entrypoint": "scripts/brief.py",
+          "merge": "any",
+          "depends_on": [
+            "text_pass",
+            "normalize"
+          ],
+          "input": {
+            "map": "{'ticket': has(nodes.normalize) ? nodes.normalize.output : null, 'goal': has(inputs.goal) ? inputs.goal : ''}"
+          },
+          "output_schema": "schemas/brief.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "plan_release",
+        "type": "agent",
+        "deps": [
+          "brief"
+        ],
+        "dataDeps": [
+          "brief"
+        ],
+        "def": {
+          "id": "plan_release",
+          "type": "agent",
+          "description": "Read the repository and write the release plan - problem, scope, invariants, user journeys and up to three epics (release-prd skill).",
+          "executor": "opencode",
+          "profile": "release-planner@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + inputs.base_branch"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}}"
+          },
+          "output_schema": "schemas/prd.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 20
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "prd",
+        "type": "report",
+        "deps": [
+          "plan_release"
+        ],
+        "dataDeps": [
+          "plan_release"
+        ],
+        "def": {
+          "id": "prd",
+          "type": "report",
+          "description": "The release plan as Markdown, for the approver.",
+          "template": "templates/prd.md",
+          "input": {
+            "map": "{'prd': nodes.plan_release.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "prd_review",
+        "type": "approval",
+        "deps": [
+          "plan_release",
+          "prd"
+        ],
+        "dataDeps": [
+          "plan_release",
+          "prd"
+        ],
+        "def": {
+          "id": "prd_review",
+          "type": "approval",
+          "description": "A person approves the release plan before any ticket is created, and may leave epics out. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "'Approve the release plan \"' + nodes.plan_release.output.title + '\" and split its ' + string(size(nodes.plan_release.output.epics)) + ' epic(s) into tickets? Name the epics to leave out, if any.'"
+          },
+          "payload": {
+            "map": "{'markdown': nodes.prd.output.markdown, 'owner': nodes.plan_release.output.owner, 'epics': nodes.plan_release.output.epics.map(e, e.title), 'open_questions': nodes.plan_release.output.open_questions}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "drop": {
+                "type": "string",
+                "maxLength": 20,
+                "pattern": "^[0-9, ]*$",
+                "title": "Epics to leave out",
+                "description": "Epic numbers from the plan, for example 2,3. Leave empty to split them all."
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "epics",
+        "type": "script",
+        "deps": [
+          "plan_release",
+          "prd_review"
+        ],
+        "dataDeps": [
+          "plan_release",
+          "prd_review"
+        ],
+        "def": {
+          "id": "epics",
+          "type": "script",
+          "description": "The text of each epic the splitter receives, with the release context in front (epics the approver left out are removed).",
+          "runtime": "python",
+          "entrypoint": "scripts/epics.py",
+          "input": {
+            "map": "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"
+          },
+          "output_schema": "schemas/epics.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_1",
+        "type": "condition",
+        "deps": [
+          "epics"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "has_1",
+          "type": "condition",
+          "description": "Is there a first epic to split?",
+          "expression": "nodes.epics.output.count >= 1 ? 'yes' : 'no'",
+          "routes": {
+            "yes": [
+              "tracker_1"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "tracker_1",
+        "type": "condition",
+        "deps": [
+          "has_1"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "tracker_1",
+          "type": "condition",
+          "description": "Split epic 1 in the chosen tracker.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "split_1_github"
+            ],
+            "jira": [
+              "split_1_jira"
+            ]
+          },
+          "default": "github"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_1",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "split_1_github",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_1"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_1_github",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on epic 1 (analysis, its own approval, then the issues).",
+          "workflow": "issue-splitter",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[0].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_1",
+          "route": "github"
+        }
+      },
+      {
+        "id": "split_1_jira",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_1"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_1_jira",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter-jira on epic 1 (analysis, its own approval, then the sub-tasks).",
+          "workflow": "issue-splitter-jira",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[0].text"
+            },
+            "project": {
+              "ref": "inputs.project"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_1",
+          "route": "jira"
+        }
+      },
+      {
+        "id": "gate_2",
+        "type": "script",
+        "deps": [
+          "epics",
+          "split_1_github",
+          "split_1_jira"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "gate_2",
+          "type": "script",
+          "description": "Joins the GitHub and Jira branches of epic 1 (a condition cannot merge) and says whether epic 2 exists.",
+          "runtime": "python",
+          "entrypoint": "scripts/gate.py",
+          "merge": "any",
+          "depends_on": [
+            "split_1_github",
+            "split_1_jira"
+          ],
+          "input": {
+            "map": "{'count': nodes.epics.output.count, 'n': 2}"
+          },
+          "output_schema": "schemas/gate.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_2",
+        "type": "condition",
+        "deps": [
+          "gate_2"
+        ],
+        "dataDeps": [
+          "gate_2"
+        ],
+        "def": {
+          "id": "has_2",
+          "type": "condition",
+          "description": "Is there a second epic to split?",
+          "expression": "nodes.gate_2.output.proceed ? 'yes' : 'no'",
+          "routes": {
+            "yes": [
+              "tracker_2"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "tracker_2",
+        "type": "condition",
+        "deps": [
+          "has_2"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "tracker_2",
+          "type": "condition",
+          "description": "Split epic 2 in the chosen tracker.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "split_2_github"
+            ],
+            "jira": [
+              "split_2_jira"
+            ]
+          },
+          "default": "github"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_2",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "split_2_github",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_2"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_2_github",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on epic 2.",
+          "workflow": "issue-splitter",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[1].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_2",
+          "route": "github"
+        }
+      },
+      {
+        "id": "split_2_jira",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_2"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_2_jira",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter-jira on epic 2.",
+          "workflow": "issue-splitter-jira",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[1].text"
+            },
+            "project": {
+              "ref": "inputs.project"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_2",
+          "route": "jira"
+        }
+      },
+      {
+        "id": "gate_3",
+        "type": "script",
+        "deps": [
+          "epics",
+          "split_2_github",
+          "split_2_jira"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "gate_3",
+          "type": "script",
+          "description": "Joins the GitHub and Jira branches of epic 2 and says whether epic 3 exists.",
+          "runtime": "python",
+          "entrypoint": "scripts/gate.py",
+          "merge": "any",
+          "depends_on": [
+            "split_2_github",
+            "split_2_jira"
+          ],
+          "input": {
+            "map": "{'count': nodes.epics.output.count, 'n': 3}"
+          },
+          "output_schema": "schemas/gate.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_3",
+        "type": "condition",
+        "deps": [
+          "gate_3"
+        ],
+        "dataDeps": [
+          "gate_3"
+        ],
+        "def": {
+          "id": "has_3",
+          "type": "condition",
+          "description": "Is there a third epic to split?",
+          "expression": "nodes.gate_3.output.proceed ? 'yes' : 'no'",
+          "routes": {
+            "yes": [
+              "tracker_3"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "tracker_3",
+        "type": "condition",
+        "deps": [
+          "has_3"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "tracker_3",
+          "type": "condition",
+          "description": "Split epic 3 in the chosen tracker.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "split_3_github"
+            ],
+            "jira": [
+              "split_3_jira"
+            ]
+          },
+          "default": "github"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_3",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "split_3_github",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_3"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_3_github",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on epic 3.",
+          "workflow": "issue-splitter",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[2].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_3",
+          "route": "github"
+        }
+      },
+      {
+        "id": "split_3_jira",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "tracker_3"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_3_jira",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter-jira on epic 3.",
+          "workflow": "issue-splitter-jira",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[2].text"
+            },
+            "project": {
+              "ref": "inputs.project"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_3",
+          "route": "jira"
+        }
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "plan_release": "output of tainted agent plan_release",
+        "prd": "output of tainted agent plan_release",
+        "epics": "output of tainted agent plan_release",
+        "has_1": "output of tainted agent plan_release",
+        "split_1_github": "output of a subworkflow is not marked trusted",
+        "split_1_jira": "output of a subworkflow is not marked trusted",
+        "gate_2": "output of tainted agent plan_release",
+        "has_2": "output of tainted agent plan_release",
+        "split_2_github": "output of a subworkflow is not marked trusted",
+        "split_2_jira": "output of a subworkflow is not marked trusted",
+        "gate_3": "output of tainted agent plan_release",
+        "has_3": "output of tainted agent plan_release",
+        "split_3_github": "output of a subworkflow is not marked trusted",
+        "split_3_jira": "output of a subworkflow is not marked trusted"
+      },
+      "tainted": {
+        "plan_release": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": []
+    }
+  }
+}

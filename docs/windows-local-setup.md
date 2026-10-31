@@ -118,4 +118,6 @@ One item is still open: npm skipped the install scripts of 4 packages, which may
 | Port 7410 already in use | an earlier `azhi up` is still running | `npx azhi down`, then start again |
 | npm reports a new major version (12.x) | informational | leave npm as is unless you want to upgrade |
 
-Memory limits (`limits.memory_mb`) are Linux-only; workflows that set them are refused on Windows with a clear reason.
+Memory limits (`limits.memory_mb`) are enforced on Linux only. On Windows a workflow that sets them still installs and
+runs: the run plan shows "not enforced here" as a warning and the step runs with its time limit. To make the plan refuse
+such workflows instead, start the server with `AZHI_REQUIRE_MEMORY_LIMITS=1`.

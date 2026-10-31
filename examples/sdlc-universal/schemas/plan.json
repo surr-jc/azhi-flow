@@ -96,6 +96,11 @@
               "why": {
                 "type": "string",
                 "description": "The concrete cost of getting it wrong"
+              },
+              "criterion": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The acceptance criterion this question decides, numbered from 1 (0 when it decides none)"
               }
             },
             "required": [
@@ -104,6 +109,14 @@
             ],
             "additionalProperties": false
           }
+        },
+        "criteria_source": {
+          "enum": [
+            "ticket",
+            "derived",
+            "mixed"
+          ],
+          "description": "ticket: every criterion was stated in the ticket or its linked page. derived: the ticket stated none and you wrote them from the request. mixed: some stated, some added to cover what the request implies"
         }
       },
       "required": [
@@ -112,7 +125,8 @@
         "acceptance_criteria",
         "non_goals",
         "evidence",
-        "open_questions"
+        "open_questions",
+        "criteria_source"
       ],
       "additionalProperties": false
     },
@@ -286,6 +300,11 @@
               "why": {
                 "type": "string",
                 "description": "The concrete cost of getting it wrong"
+              },
+              "criterion": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The acceptance criterion this question decides, numbered from 1 (0 when it decides none)"
               }
             },
             "required": [
@@ -321,6 +340,38 @@
             "type": "string"
           },
           "description": "The files or behaviours behind the rating"
+        },
+        "ac_verification": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One entry per acceptance criterion, in order: how the change will be shown to meet it",
+          "items": {
+            "type": "object",
+            "properties": {
+              "criterion": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The criterion number, 1 for the first"
+              },
+              "how": {
+                "enum": [
+                  "automated_test",
+                  "static_check",
+                  "manual"
+                ]
+              },
+              "where": {
+                "type": "string",
+                "description": "automated_test: the test file and name to add or extend. static_check: the compile, type or lint step that would catch a violation. manual: what a person must look at, and why it cannot be automated"
+              }
+            },
+            "required": [
+              "criterion",
+              "how",
+              "where"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -336,7 +387,8 @@
         "touches_sensitive",
         "has_migration",
         "risk",
-        "risk_reasons"
+        "risk_reasons",
+        "ac_verification"
       ],
       "additionalProperties": false
     }

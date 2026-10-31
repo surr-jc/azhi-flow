@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "count": {"type": "integer"},
+    "epics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {"type": "integer"},
+          "title": {"type": "string"},
+          "text": {"type": "string"},
+          "truncated": {"type": "boolean"}
+        },
+        "required": ["n", "title", "text"]
+      }
+    },
+    "dropped": {"type": "array", "items": {"type": "integer"}}
+  },
+  "required": ["count", "epics", "dropped"]
+}

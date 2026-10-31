@@ -75,7 +75,7 @@ and `azhi <command> --help` are authoritative; this page is a map.
 | `azhi github login` | Use the GitHub CLI login (`gh auth login`) for the GitHub secrets |
 | `azhi chatgpt login` / `check` | Sign in with a ChatGPT plan; renew and verify |
 | `azhi copilot login` / `import` / `inspect` / `check` / `quota` | GitHub Copilot sign-in, validity, and your AI-credit allowance |
-| `azhi mcp add` / `list` / `login` / `discover` / `register-tool` | Manage shared remote Streamable HTTP MCP connections (admin) |
+| `azhi mcp add` / `list` / `login` / `discover` / `register-tool` | Manage shared remote Streamable HTTP MCP connections (admin). `add --auth oauth` needs only `--name` and `--url`: it finds the OAuth endpoints, registers a client and waits for sign-in (`--no-wait` to skip); `--client-id` and friends bring your own client |
 
 ## Knowledge
 

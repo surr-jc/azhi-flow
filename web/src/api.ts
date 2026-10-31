@@ -40,9 +40,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = any>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
+export async function api<T = any>(path: string, init: { method?: string; body?: unknown; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<T> {
   const res = await fetch(path, {
     method: init.method ?? 'GET',
+    signal: init.signal,
     headers: { authorization: `Bearer ${token()}`, ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}), ...init.headers },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
@@ -76,6 +77,7 @@ export interface RunRow {
   inputs?: Record<string, unknown>;
   created_at: string;
   ended_at: string | null;
+  parent_run_id?: string | null;
   workflow: string;
   version: number;
 }
@@ -88,7 +90,7 @@ export interface Approval {
   run_state: string;
   test: boolean;
   requested_at: string;
-  request: { message?: unknown; payload?: unknown; role?: string; expires_at?: string; on_expiry?: string };
+  request: { message?: unknown; payload?: unknown; role?: string; expires_at?: string; on_expiry?: string; context_withheld?: string[] };
   role: string;
   decision_schema: JsonSchema | null;
   expires_at: string | null;
@@ -196,9 +198,22 @@ export function getTheme(): Theme {
   }
 }
 
+/** Colours the browser's own chrome (address bar, installed-app title bar) like the top bar, so it follows the chosen theme. */
+export function syncChromeColor(): void {
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'theme-color';
+    document.head.appendChild(meta);
+  }
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  if (bg) meta.content = bg;
+}
+
 export function applyTheme(t: Theme): void {
   if (t === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = t;
+  syncChromeColor();
   try {
     if (t === 'system') localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, t);

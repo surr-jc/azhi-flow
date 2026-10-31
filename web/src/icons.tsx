@@ -11,6 +11,8 @@ const PATHS: Record<string, ReactNode> = {
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
   signout: <path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  minus: <path d="M5 12h14" />,
+  fit: <path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M9 9h6v6H9z" />,
   search: <><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></>,
   chev: <path d="M9 6l6 6-6 6" />,
   tool: <><path d="M14.5 6.5a4 4 0 005 5L21 13l-8 8-4-4 8-8zM3 21l5-5" /><path d="M14 4l6 6" /></>,

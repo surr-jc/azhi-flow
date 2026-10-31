@@ -8,6 +8,7 @@ export type AssetKind = (typeof ASSET_KINDS)[number];
 export type PortableDefinition = Record<string, unknown>;
 
 const slugPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const SECRET_LIKE = /(sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{16,}|xox[bp]-[A-Za-z0-9-]{10,}|Bearer\s+(?!\{env:)[A-Za-z0-9._~+\/-]{20,})/;
 
 export function validateAsset(kind: AssetKind, slug: string, definition: PortableDefinition): string[] {
   const errors: string[] = [];
@@ -16,6 +17,9 @@ export function validateAsset(kind: AssetKind, slug: string, definition: Portabl
     if (definition.transport !== 'local' && definition.transport !== 'remote') errors.push('MCP transport must be local or remote');
     if (definition.transport === 'local' && (!Array.isArray(definition.command) || !definition.command.length || !definition.command.every((v) => typeof v === 'string' && v))) errors.push('local MCP requires a non-empty command array');
     if (definition.transport === 'remote' && (typeof definition.url !== 'string' || !/^https:\/\//.test(definition.url))) errors.push('remote MCP requires an https URL');
+    // Values reach exported config files and the builder chat; a token belongs in {env:NAME}, never in the definition.
+    const { needs: _needs, ...rest } = definition;
+    if (SECRET_LIKE.test(JSON.stringify(rest))) errors.push('the definition contains something that looks like a secret; use {env:NAME} and set the value where the harness runs');
   }
   if (kind === 'agent' && typeof definition.prompt !== 'string') errors.push('agent requires a prompt');
   if (kind === 'skill') {
@@ -28,7 +32,7 @@ export function validateAsset(kind: AssetKind, slug: string, definition: Portabl
 
 export async function listAssets(ctx: AppContext, workspaceId: string, kind?: AssetKind) {
   const r = await ctx.pool.query(
-    `SELECT a.id, a.kind, a.slug, a.name, a.description, a.status, a.current_version, a.created_at, a.updated_at,
+    `SELECT a.id, a.kind, a.slug, a.name, a.description, a.status, a.current_version, a.scope, a.project_workflow, a.created_at, a.updated_at,
       v.id AS version_id, v.definition, v.published, v.created_at AS version_created_at
      FROM portable_assets a LEFT JOIN portable_asset_versions v ON v.asset_id=a.id AND v.version=a.current_version
      WHERE a.workspace_id=$1 AND ($2::text IS NULL OR a.kind=$2) ORDER BY a.kind, a.name`, [workspaceId, kind ?? null],
@@ -43,13 +47,21 @@ export async function getAsset(ctx: AppContext, workspaceId: string, id: string)
   return { ...a, versions };
 }
 
-export async function createAsset(ctx: AppContext, workspaceId: string, input: { kind: AssetKind; slug: string; name: string; description?: string; definition: PortableDefinition }, actor: string) {
+export type AssetScope = 'global' | 'project';
+
+export async function createAsset(ctx: AppContext, workspaceId: string, input: { kind: AssetKind; slug: string; name: string; description?: string; definition: PortableDefinition; scope?: AssetScope; workflow?: string }, actor: string) {
   const errors = validateAsset(input.kind, input.slug, input.definition);
   if (errors.length) throw new AzhiError(ErrorClass.invalidInput, errors.join('; '));
+  const scope = input.scope ?? 'global';
+  if (scope === 'project') {
+    if (!input.workflow) throw new AzhiError(ErrorClass.invalidInput, 'a project-scoped asset needs the workflow it belongs to');
+    if (!(await ctx.pool.query(`SELECT 1 FROM workflows WHERE workspace_id=$1 AND slug=$2`, [workspaceId, input.workflow])).rows[0]) throw new AzhiError(ErrorClass.invalidInput, `workflow '${input.workflow}' not found`);
+  } else if (input.workflow) throw new AzhiError(ErrorClass.invalidInput, 'a global asset is not tied to a workflow; use scope project');
+  if ((await ctx.pool.query(`SELECT 1 FROM portable_assets WHERE workspace_id=$1 AND kind=$2 AND slug=$3`, [workspaceId, input.kind, input.slug])).rows[0]) throw new AzhiError(ErrorClass.invalidInput, `a ${input.kind} named '${input.slug}' already exists in this workspace's library`);
   const id = newId('ast'); const versionId = newId('astv');
-  await ctx.pool.query(`INSERT INTO portable_assets(id, workspace_id, kind, slug, name, description, current_version, created_by) VALUES ($1,$2,$3,$4,$5,$6,1,$7)`, [id, workspaceId, input.kind, input.slug, input.name, input.description ?? '', actor]);
+  await ctx.pool.query(`INSERT INTO portable_assets(id, workspace_id, kind, slug, name, description, current_version, scope, project_workflow, created_by) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9)`, [id, workspaceId, input.kind, input.slug, input.name, input.description ?? '', scope, scope === 'project' ? input.workflow : null, actor]);
   await ctx.pool.query(`INSERT INTO portable_asset_versions(id, asset_id, version, definition, created_by) VALUES ($1,$2,1,$3,$4)`, [versionId, id, JSON.stringify(input.definition), actor]);
-  await audit(ctx, workspaceId, actor, 'portable_asset.created', { asset: id, kind: input.kind, slug: input.slug });
+  await audit(ctx, workspaceId, actor, 'portable_asset.created', { asset: id, kind: input.kind, slug: input.slug, scope });
   return getAsset(ctx, workspaceId, id);
 }
 
@@ -76,6 +88,8 @@ export async function publishAsset(ctx: AppContext, workspaceId: string, id: str
   await ctx.pool.query(`UPDATE portable_asset_versions SET published=true WHERE id=$1`, [current.id]);
   await ctx.pool.query(`UPDATE portable_assets SET status='published', updated_at=now() WHERE id=$1`, [id]);
   await audit(ctx, workspaceId, actor, 'portable_asset.published', { asset: id, version: asset.current_version });
+  // A project asset exists for one workflow, so publishing it is what makes the workflow use it.
+  if (asset.scope === 'project' && asset.project_workflow) await attachAsset(ctx, workspaceId, asset.project_workflow, id, undefined, actor);
   return getAsset(ctx, workspaceId, id);
 }
 
@@ -98,6 +112,24 @@ export async function attachAsset(ctx: AppContext, workspaceId: string, workflow
 
 export async function workflowAssets(ctx: AppContext, workspaceId: string, workflowSlug: string) {
   return (await ctx.pool.query(`SELECT a.id, a.kind, a.slug, a.name, v.version, v.definition, wpa.enabled FROM workflow_portable_assets wpa JOIN workflows w ON w.id=wpa.workflow_id JOIN portable_assets a ON a.id=wpa.asset_id JOIN portable_asset_versions v ON v.id=wpa.asset_version_id WHERE w.workspace_id=$1 AND w.slug=$2 ORDER BY a.kind,a.slug`, [workspaceId, workflowSlug])).rows;
+}
+
+/**
+ * Adds an MCP server the way `opencode mcp add` does: usable straight away. Global servers join the
+ * workspace library; project servers belong to one workflow and are attached to it. Published unless `draft`.
+ */
+export async function addMcpServer(ctx: AppContext, workspaceId: string, input: { slug: string; name: string; description?: string; definition: PortableDefinition; scope?: AssetScope; workflow?: string; draft?: boolean }, actor: string) {
+  const { draft, ...rest } = input;
+  const created = await createAsset(ctx, workspaceId, { kind: 'mcp', ...rest }, actor);
+  if (draft) return created;
+  return publishAsset(ctx, workspaceId, created!.id, actor);
+}
+
+/** MCP servers a workflow can use: every published global one plus its own project ones. Names are unique per workspace, so the two never collide. */
+export async function effectiveMcpServers(ctx: AppContext, workspaceId: string, workflowSlug?: string) {
+  const rows = (await listAssets(ctx, workspaceId, 'mcp')).filter((a: any) => a.status === 'published' && (a.scope === 'global' || (workflowSlug && a.project_workflow === workflowSlug)));
+  const attached = new Set(workflowSlug ? (await workflowAssets(ctx, workspaceId, workflowSlug)).map((a: any) => a.id as string) : []);
+  return rows.map((a: any) => ({ ...a, attached: attached.has(a.id) }));
 }
 
 function frontmatter(data: Record<string, unknown>, content: string) { return `---\n${Object.entries(data).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}\n---\n\n${content.trim()}\n`; }

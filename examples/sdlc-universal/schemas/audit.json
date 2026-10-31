@@ -1,0 +1,89 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "checks": {
+      "description": "One check per acceptance criterion the reviewer rated met; [] when there are none.",
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The criterion number, 1 for the first in the requirements"
+          },
+          "verdict": {
+            "enum": [
+              "holds",
+              "counterexample",
+              "unverifiable"
+            ]
+          },
+          "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "outcomes": {
+            "type": "array",
+            "maxItems": 12,
+            "description": "Every outcome the criterion names, each with an input that produces it and the trace through the code",
+            "items": {
+              "type": "object",
+              "properties": {
+                "outcome": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "input": {
+                  "type": "string",
+                  "maxLength": 300,
+                  "description": "A concrete input or state that produces the outcome; empty only when no input can"
+                },
+                "trace": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "description": "path:line of the deciding code and what it does"
+                }
+              },
+              "required": [
+                "outcome",
+                "input",
+                "trace"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "counterexample": {
+            "type": "string",
+            "maxLength": 600,
+            "description": "For a counterexample: the outcome that cannot happen or the input that breaks the criterion"
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 600
+          }
+        },
+        "required": [
+          "criterion",
+          "verdict",
+          "confidence",
+          "outcomes",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "summary",
+    "checks"
+  ],
+  "additionalProperties": false
+}

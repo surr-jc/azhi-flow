@@ -4,11 +4,11 @@ import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, useConfirm, when } from '../ui';
-import { Formatted, plainText } from '../components/Rich';
-import { ApprovalCard, approvalQuestion, needsForm, useDecide, whoCanDecide } from './Approvals';
+import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
+import { Formatted, Markdown, plainText } from '../components/Rich';
+import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
-import { AgentActivityPanel } from './AgentActivity';
+import { AgentActivityPanel, useTranscript, type TranscriptEntry } from './AgentActivity';
 import { Feed, FeedEmpty, FeedItem, offsetOf, type FeedTone } from '../components/ActivityFeed';
 import { Icon } from '../icons';
 import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
@@ -92,7 +92,7 @@ export function RunPage({ id }: { id: string }) {
     <>
       {dialog}
       <div className="crumbs">
-        <Link to="/ui/runs">Runs</Link> › <Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
+        <Link to="/ui/runs">Runs</Link> › {r.snapshot?.parent?.run_id ? <><Link to={`/ui/runs/${encodeURIComponent(r.snapshot.parent.run_id)}`}>Parent run</Link> › </> : null}<Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
         <span className="live">· {live}</span>
       </div>
       <PageHead
@@ -119,18 +119,16 @@ export function RunPage({ id }: { id: string }) {
             detail={d}
             plan={d.plan}
             height="clamp(400px, 66vh, 760px)"
-            controls="top-left"
-            inset={{ right: drawerOpen ? 334 : 0, bottom: 64 }}
             states={replayStates}
-            toolbar={waiting[0] && cursor === null ? { node: waiting[0].node_id, content: <DecisionPop a={waiting[0]} /> } : undefined}
-          >
-            {drawerOpen ? <Drawer className="atlas-drawer floating" nodes={version.data.plan.nodes} detail={d} show={show} onHide={() => pickDrawer(false)} /> : (
+            stepActivity={(n, st) => <StepActivity key={n.id} node={n} run={st} detail={d} events={events} runId={id} open={open} />}
+            head={drawerOpen ? null : (
               <button type="button" className="atlas-reopen" onClick={() => pickDrawer(true)} title="Show steps, ledger, policy, context and cost">
                 <Icon name="runs" size={16} />Run details
               </button>
             )}
-            <Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />
-          </WorkflowCanvas>
+            aside={drawerOpen ? <Drawer className="atlas-drawer wf-side" nodes={version.data.plan.nodes} detail={d} show={show} onHide={() => pickDrawer(false)} /> : null}
+            foot={<Replay events={events} cursor={cursor} playing={playing} onCursor={(c) => { setPlaying(false); setCursor(c); }} onPlay={() => { if (cursor === null) setCursor(0); setPlaying((x) => !x); }} />}
+          />
           <Drawer className="atlas-drawer stacked" nodes={version.data.plan.nodes} detail={d} show={show} />
         </div>
       ) : <Loading />}
@@ -196,7 +194,7 @@ function outputSummary(v: unknown): string {
 }
 
 /** Each step in plan order, with what it did, when, and what its model calls cost. */
-function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; onAgent?: (node: string) => void }) {
+function Steps({ nodes, detail: d, onAgent, depth = 0 }: { nodes: PlanNode[]; detail: any; onAgent?: (node: string) => void; depth?: number }) {
   const states = nodeStates(d);
   return (
     <div className="receipt">
@@ -228,6 +226,7 @@ function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; 
               <div className="name">{n.id} <span className="muted small">{TYPE[n.type]?.label ?? n.type}{st && st.attempts > 1 ? ` · ${st.attempts} attempts` : ''}</span></div>
               <div className={`what ${err ? 'bad' : ''}`}><span className="visually-hidden">{word}: </span>{what}</div>
               {n.type === 'agent' && onAgent && state !== 'pending' && state !== 'skipped' ? <button type="button" className="link small" onClick={() => onAgent(n.id)}>{state === 'running' ? 'Watch the agent live' : 'See what the agent did'}</button> : null}
+              {n.type === 'subworkflow' ? <SubRun childId={(d.children as any[] | undefined)?.find((c) => c.parent_node_id === n.id)?.id ?? (st?.output as any)?.run_id} depth={depth} /> : null}
             </div>
             <span className="when">{at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}{cost ? <><br />{money(cost)}</> : null}</span>
           </div>
@@ -237,35 +236,142 @@ function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; 
   );
 }
 
-/** The decision pinned under a waiting approval step: the question, a few facts and the buttons. */
-function DecisionPop({ a }: { a: Approval }) {
-  const decide = useDecide(a);
-  const payload = a.request.payload;
-  const facts = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? Object.entries(payload as Record<string, unknown>).slice(0, 3).map(([k, v]) => `${k.replace(/[_-]+/g, ' ')}: ${Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : v !== null && typeof v === 'object' ? 'details' : String(v)}`)
-    : [];
-  const details = () => document.getElementById('decision')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+/** A subworkflow step's child run, expandable in place so its steps read without leaving the parent. */
+function SubRun({ childId, depth }: { childId?: string; depth: number }) {
+  const [shown, setShown] = useState<boolean | null>(null);
+  const detail = useQuery({
+    queryKey: ['run', childId],
+    queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(childId!)}`),
+    enabled: Boolean(childId),
+    refetchInterval: (q) => (q.state.data && TERMINAL.includes(q.state.data.run.state) ? false : 3_000),
+  });
+  const versionId = detail.data?.run.workflow_version_id;
+  const version = useQuery({ queryKey: ['version', versionId], queryFn: () => api<any>(`/v1/versions/${encodeURIComponent(versionId)}`), enabled: Boolean(versionId), staleTime: Infinity });
+  if (!childId) return null;
+  const c = detail.data?.run;
+  // Open by default while the child runs or when it did not succeed, so trouble is visible without a click.
+  const open = shown ?? Boolean(c && c.state !== 'succeeded' && c.state !== 'skipped');
   return (
-    <div className="atlas-pop" role="group" aria-label={`Decision on ${a.node_id}`}>
-      <b>{plainText(approvalQuestion(a))}</b>
-      {facts.length ? <span className="muted small">{facts.join(' · ')}</span> : null}
-      <span className="muted small">{whoCanDecide(a.role)} can decide{a.expires_at ? ` · expires ${ago(a.expires_at)}` : ''}</span>
-      {decide.isSuccess ? (
-        <span className="ok-note" role="status">Decision recorded.</span>
-      ) : (
-        <div className="row">
-          {a.can_decide && !needsForm(a) ? (
-            <>
-              <button className="primary" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'approved' })}>Approve</button>
-              <button className="danger" disabled={decide.isPending} onClick={() => decide.mutate({ decision: 'rejected' })}>Reject</button>
-            </>
-          ) : a.can_decide ? (
-            <button className="primary" onClick={details}>Decide</button>
-          ) : null}
-          <button className="link" style={{ marginLeft: 'auto' }} onClick={details}>Details</button>
+    <details className="sa-fold" open={open} onToggle={(e) => setShown(e.currentTarget.open)}>
+      <summary>
+        <b>Subworkflow run</b> {c ? <StateBadge state={c.state} /> : null} <RunLink id={childId} />
+        {c ? <span className="muted small"> {c.workflow}@{c.workflow_version}</span> : null}
+      </summary>
+      <div className="sa-fold-body">
+        {!open ? null : detail.error ? <ErrorNote error={detail.error} /> : version.data?.plan?.nodes && detail.data ? <Steps nodes={version.data.plan.nodes} detail={detail.data} depth={depth + 1} /> : <Loading />}
+      </div>
+    </details>
+  );
+}
+
+type ActTab = 'input' | 'output' | 'events' | 'agent';
+const ACT_INPUT_KEYS = ['input', 'arguments', 'query', 'for_each', 'payload', 'message', 'destination'];
+const clock = (ms?: number | string) => (ms ? new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+const line = (t: string, n = 90) => { const s = t.replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+
+/** The selected step in fullscreen: what went into it, what came out, its events, and its agent's messages. */
+function StepActivity({ node, run, detail: d, events, runId, open }: { node: PlanNode; run?: NodeRunState; detail: any; events: RunEvent[]; runId: string; open: boolean }) {
+  const isAgent = node.type === 'agent';
+  const [tab, setTab] = useState<ActTab>(isAgent ? 'agent' : run?.error || run?.output !== undefined ? 'output' : 'input');
+  const states = nodeStates(d);
+  const mine = events.filter((e) => e.node_id === node.id);
+  const tabs: Array<[ActTab, string, number?]> = [['input', 'Input'], ['output', 'Output'], ['events', 'Events', mine.length], ...(isAgent ? [['agent', 'Agent'] as [ActTab, string]] : [])];
+  return (
+    <section className="sa" aria-label={`Activity of ${node.id}`}>
+      <div className="sa-tabs" role="tablist">
+        {tabs.map(([k, label, n]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{n ? <span className="sa-n">{n}</span> : null}</button>)}
+      </div>
+      <div className="sa-body" role="tabpanel">
+        {tab === 'input' ? <StepInput node={node} states={states} inputs={d.run.inputs} /> : null}
+        {tab === 'output' ? <StepOutput run={run} /> : null}
+        {tab === 'events' ? <StepEvents events={mine} /> : null}
+        {tab === 'agent' ? <StepAgent node={node.id} runId={runId} open={open} /> : null}
+      </div>
+    </section>
+  );
+}
+
+const Fold = ({ title, hint, open, children }: { title: ReactNode; hint?: ReactNode; open?: boolean; children: ReactNode }) => (
+  <details className="sa-fold" open={open}><summary><b>{title}</b>{hint ? <span className="muted small">{hint}</span> : null}</summary><div className="sa-fold-body">{children}</div></details>
+);
+
+/** What the step is given: its own mapping, then what each step it runs after returned. */
+function StepInput({ node, states, inputs }: { node: PlanNode; states: Record<string, NodeRunState>; inputs: unknown }) {
+  const def = node.def ?? {};
+  const mapped = Object.fromEntries(ACT_INPUT_KEYS.filter((k) => def[k] !== undefined).map((k) => [k, def[k]]));
+  const from = node.deps.filter((id) => states[id]?.output !== undefined && states[id]?.output !== null);
+  return (
+    <>
+      {Object.keys(mapped).length ? <Fold title="Mapped input" hint="from the workflow" open><Formatted value={mapped} plain /></Fold> : null}
+      {!node.deps.length && inputs && Object.keys(inputs as object).length ? <Fold title="Run inputs" open><Formatted value={inputs} /></Fold> : null}
+      {from.map((id, i) => <Fold key={id} title={id} hint="output" open={i === 0 && !Object.keys(mapped).length}><Formatted value={states[id]!.output} /></Fold>)}
+      {!Object.keys(mapped).length && !from.length && !(!node.deps.length && inputs && Object.keys(inputs as object).length) ? <p className="muted small">Nothing was passed in from other steps.</p> : null}
+    </>
+  );
+}
+
+function StepOutput({ run }: { run?: NodeRunState }) {
+  if (!run || run.state === 'pending') return <p className="muted small">This step has not started.</p>;
+  if (run.error) return <Formatted value={run.error} plain />;
+  if (run.output === undefined || run.output === null) return <p className="muted small">{run.state === 'running' ? 'Running. Its output appears here when it finishes.' : run.state === 'skipped' ? 'Skipped, so it returned nothing.' : 'No output.'}</p>;
+  return <Formatted value={run.output} />;
+}
+
+function StepEvents({ events }: { events: RunEvent[] }) {
+  if (!events.length) return <p className="muted small">No events for this step yet.</p>;
+  return (
+    <ol className="sa-events">
+      {events.map((e) => {
+        const dsc = describe(e);
+        const more = summarise(e);
+        return (
+          <li key={e.seq} className={dsc.tone}>
+            <span className="mono muted">{clock(e.at)}</span>
+            <span>{dsc.text}{more && ['node.running', 'node.succeeded', 'node.skipped'].includes(e.kind) === false ? <details><summary className="muted small">Details</summary><pre className="code">{e.kind} #{e.seq}{'\n'}{more}</pre></details> : null}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** An agent step's conversation, compact: messages in full, tool calls and reasoning one line each. */
+function StepAgent({ node, runId, open }: { node: string; runId: string; open: boolean }) {
+  const { entries, enabled, loaded } = useTranscript(runId, open);
+  const list = entries.filter((e) => e.node_id === node && e.kind !== 'system' && e.kind !== 'step' && e.kind !== 'note');
+  const attempt = Math.max(0, ...list.map((e) => e.attempt));
+  const shown = list.filter((e) => e.attempt === attempt);
+  if (!enabled) return <p className="muted small">Agent transcripts are turned off on this server.</p>;
+  if (!shown.length) return <p className="muted small">{loaded ? 'No agent messages yet.' : 'Loading…'}</p>;
+  return (
+    <div className="sa-chat">
+      {attempt > 1 ? <p className="muted small">Attempt {attempt}</p> : null}
+      {shown.map((e) => <ChatLine key={`${e.attempt}/${e.id}`} e={e} />)}
+    </div>
+  );
+}
+
+function ChatLine({ e }: { e: TranscriptEntry }) {
+  const when = clock(e.at);
+  if (e.kind === 'tool') {
+    const tone = e.status === 'completed' ? 'ok' : e.status === 'error' ? 'bad' : 'run';
+    return (
+      <details className={`sa-tool ${tone}`}>
+        <summary><i aria-hidden="true" /><b className="mono">{e.tool ?? 'tool'}</b><span className="muted">{line(typeof e.input === 'string' ? e.input : JSON.stringify(e.input ?? ''), 60)}</span></summary>
+        <div className="sa-tool-io">
+          <div className="sa-label">Input</div><Formatted value={e.input ?? {}} plain />
+          {e.status === 'error' ? <><div className="sa-label">Error</div><pre className="json bad">{e.error}</pre></> : e.output !== undefined ? <><div className="sa-label">Result</div><Formatted value={e.output} plain /></> : <p className="muted small">Running…</p>}
         </div>
-      )}
-      <ErrorNote error={decide.error} />
+      </details>
+    );
+  }
+  if (e.kind === 'reasoning') return <details className="sa-tool think"><summary><i aria-hidden="true" /><b>Reasoning</b><span className="muted">{line(e.text ?? '', 70)}</span></summary><div className="sa-tool-io"><Markdown text={e.text ?? ''} /></div></details>;
+  const who = e.kind === 'user' ? 'Prompt' : e.kind === 'assistant' ? 'Assistant' : 'Error';
+  const long = (e.text ?? '').length > 600;
+  return (
+    <div className={`sa-msg ${e.kind}`}>
+      <div className="sa-msg-head"><b>{who}</b><span className="muted small">{when}</span></div>
+      {long ? <details><summary className="muted small">{line(e.text ?? '', 120)}</summary><Markdown text={e.text ?? ''} /></details> : <Markdown text={e.text ?? ''} />}
     </div>
   );
 }
@@ -603,31 +709,45 @@ function Context({ detail: d }: { detail: any }) {
 function CopilotUsage({ c }: { c: any }) {
   const pool = c.pool;
   return (
-    <p>
-      GitHub Copilot: {num(c.credits)} AI credits{c.models.length ? ` (${c.models.map((m: any) => `${m.model} ${num(m.credits)}`).join('; ')})` : ''}, worth {c.currency} {c.cost.toFixed(4)} at {c.currency} {c.credit_usd} per credit.{' '}
-      {c.unpriced_models.length ? `No Copilot rate is set for ${c.unpriced_models.join(', ')}, so those steps have no cost. Add it before starting Azhi, for example AZHI_COPILOT_RATES="${c.unpriced_models[0]}=INPUT/CACHED/OUTPUT" in USD per million tokens from GitHub's Models and pricing page, then start a new run. ` : ''}
-      {pool
-        ? pool.past_pool > 0
-          ? `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run, so ${num(pool.past_pool)} credits (${c.currency} ${pool.past_pool_cost.toFixed(4)}) fell past the pool and are charged as additional usage, or blocked if your organization does not allow it. `
-          : `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run and ${num(pool.left_after)} are left, so this run is covered by the pool (no extra charge). `
-        : 'Set AZHI_COPILOT_CREDIT_POOL to your monthly credit pool to see what is left and what is charged as additional usage. '}
-      <span className="muted">Estimated from the tokens OpenCode reports. Azhi counts only its own runs, not IDE or chat use drawing on the same pool.</span>
-      <CopilotQuotaLine />
-    </p>
+    <section className="us-note" aria-label="GitHub Copilot usage">
+      <div className="us-note-head">
+        <b>GitHub Copilot</b>
+        <span>{num(c.credits)} AI credits · worth {c.currency} {c.cost.toFixed(4)} at {c.currency} {c.credit_usd} each</span>
+      </div>
+      {c.models.length ? <div className="us-chips">{c.models.map((m: any) => <span key={m.model} className="us-chip mono">{m.model}<b>{num(m.credits)}</b></span>)}</div> : null}
+      {c.unpriced_models.length ? <p className="warn-note">No Copilot rate is set for {c.unpriced_models.join(', ')}, so those steps have no cost. Add it before starting Azhi, for example <code>AZHI_COPILOT_RATES="{c.unpriced_models[0]}=INPUT/CACHED/OUTPUT"</code> in USD per million tokens from GitHub's Models and pricing page, then start a new run.</p> : null}
+      <p>
+        {pool
+          ? pool.past_pool > 0
+            ? `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run, so ${num(pool.past_pool)} credits (${c.currency} ${pool.past_pool_cost.toFixed(4)}) fell past the pool and are charged as additional usage, or blocked if your organization does not allow it.`
+            : `Monthly pool ${num(pool.monthly)} credits: Azhi had used ${num(pool.used_before)} this month before this run and ${num(pool.left_after)} are left, so this run is covered by the pool (no extra charge).`
+          : <>Set <code>AZHI_COPILOT_CREDIT_POOL</code> to your monthly credit pool to see what is left and what is charged as additional usage.</>}
+      </p>
+      <CopilotQuota />
+      <p className="muted small">Estimated from the tokens OpenCode reports. Azhi counts only its own runs, not IDE or chat use drawing on the same pool.</p>
+    </section>
   );
 }
 
 /** The signed-in user's own Copilot allowance now (what VS Code shows), from GitHub. */
-function CopilotQuotaLine() {
+function CopilotQuota() {
   const { data: q } = useQuery({ queryKey: ['copilot-quota'], queryFn: () => api<any>('/v1/copilot/quota'), retry: false, staleTime: 60_000 });
   const metered = (q?.quotas ?? []).filter((x: any) => !x.unlimited);
   if (!q?.ok || !metered.length) return null;
   return (
-    <>
-      <br />
-      Your Copilot allowance now (from GitHub): {metered.map((x: any) => `${x.name.replace(/_/g, ' ')} ${num(x.used)} used of ${num(x.entitlement)}${x.percent_remaining !== null ? `, ${Math.round(x.percent_remaining)}% left` : ''}`).join('; ')}
-      {q.reset_date ? `, resets ${String(q.reset_date).slice(0, 10)}` : ''}.
-    </>
+    <div className="us-quota">
+      <span className="us-kicker">Your Copilot allowance now (from GitHub){q.reset_date ? ` · resets ${String(q.reset_date).slice(0, 10)}` : ''}</span>
+      {metered.map((x: any) => {
+        const pct = x.entitlement ? Math.min(100, Math.round((100 * x.used) / x.entitlement)) : 0;
+        return (
+          <div key={x.name} className="us-meter">
+            <span>{x.name.replace(/_/g, ' ')}</span>
+            <span className="us-track" role="img" aria-label={`${pct}% used`}><i style={{ width: `${pct}%` }} /></span>
+            <span className="us-num">{num(x.used)} / {num(x.entitlement)}{x.percent_remaining !== null ? ` · ${Math.round(x.percent_remaining)}% left` : ''}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -639,27 +759,52 @@ function cacheShare(x: any): string {
 
 function UsageTab({ usage: u }: { usage: any }) {
   if (!u.turns) return <p className="muted">No model usage in this run.</p>;
+  const rows = u.records as any[];
+  const total = (x: any) => (x.input_tokens ?? 0) + (x.cache_read_tokens ?? 0) + (x.output_tokens ?? 0);
+  const widest = Math.max(1, ...rows.map(total));
+  const w = (n: number | null | undefined) => `${Math.max(n ? 1.5 : 0, ((n ?? 0) / widest) * 100)}%`;
+  const cached = rows.reduce((t, x) => t + (x.cache_read_tokens ?? 0), 0);
+  const cur = u.cost.currency;
   return (
-    <>
-      <p>
-        {u.turns} turn(s). Usage is known for {u.completeness_pct}% of them. Tokens: {num(u.input_tokens)} in, {num(u.output_tokens)} out.{u.credits !== null && u.credits !== undefined ? ` Copilot AI credits used: ${num(u.credits)}.` : ''}{' '}
-        {u.cost.amount === null
-          ? 'Cost is unavailable: at least one turn has no declared pricing or no token counts.'
-          : u.copilot
-            ? `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (${num(u.copilot.credits)} credits at ${u.cost.currency} ${u.copilot.credit_usd} each).`
-            : `Estimated cost ${u.cost.currency} ${u.cost.amount.toFixed(4)} (pricing ${u.cost.pricing_revision}).`}
-      </p>
+    <div className="us">
+      <div className="us-tiles">
+        <div className="us-tile main">
+          <span className="us-kicker">Estimated cost</span>
+          <b>{u.cost.amount === null ? 'Unavailable' : `${cur} ${u.cost.amount.toFixed(4)}`}</b>
+          <span className="muted small">
+            {u.cost.amount === null ? 'A turn has no declared pricing or no token counts.' : u.copilot ? `${num(u.copilot.credits)} credits at ${cur} ${u.copilot.credit_usd} each` : `pricing ${u.cost.pricing_revision}`}
+          </span>
+        </div>
+        <div className="us-tile"><span className="us-kicker">Model calls</span><b>{num(u.turns)}</b><span className="muted small">usage known for {u.completeness_pct}%</span></div>
+        <div className="us-tile"><span className="us-kicker">Tokens in / out</span><b>{num(u.input_tokens)} <span className="muted">/</span> {num(u.output_tokens)}</b><span className="muted small">{num(cached)} read from cache</span></div>
+        {u.credits !== null && u.credits !== undefined ? <div className="us-tile"><span className="us-kicker">Copilot credits</span><b>{num(u.credits)}</b><span className="muted small">AI credits used</span></div> : null}
+      </div>
       {u.copilot ? <CopilotUsage c={u.copilot} /> : null}
-      <Panel>
-        <Table head={['Node', 'Turn', 'Executor', 'Model', 'In', 'Out', 'Cache read', 'Cache share', 'Reasoning', 'Cost']}>
-          {u.records.map((x: any, i: number) => (
-            <tr key={i}>
-              <td>{x.node_id}</td><td>{x.attempt}.{x.turn}</td><td>{x.executor}</td><td>{x.model ?? '—'}</td><td>{num(x.input_tokens)}</td><td>{num(x.output_tokens)}</td><td>{num(x.cache_read_tokens)}</td><td>{cacheShare(x)}</td><td>{num(x.reasoning_tokens)}</td>
-              <td>{x.cost_label === 'unavailable' ? 'unavailable' : `${x.cost?.toFixed?.(4) ?? x.cost} (${x.cost_label}${x.credits !== null && x.credits !== undefined ? `, ${num(x.credits)} credits` : ''})`}</td>
-            </tr>
-          ))}
-        </Table>
-      </Panel>
-    </>
+      <div className="us-legend" aria-hidden="true"><span><i className="in" />New input</span><span><i className="cache" />From cache</span><span><i className="out" />Output</span></div>
+      <div className="table-wrap">
+        <table className="us-table">
+          <thead><tr><th>Step</th><th>Model</th><th>Tokens</th><th className="r">Cache</th><th className="r">Cost</th></tr></thead>
+          <tbody>
+            {rows.map((x, i) => (
+              <tr key={i}>
+                <td><b className="mono">{x.node_id}</b><span className="muted small"> turn {x.attempt}.{x.turn}</span></td>
+                <td><span className="mono">{x.model ?? '—'}</span><br /><span className="muted small">{x.executor}</span></td>
+                <td>
+                  <span className="us-bar" role="img" aria-label={`${num(x.input_tokens)} new input, ${num(x.cache_read_tokens)} cached, ${num(x.output_tokens)} output`}>
+                    <i className="in" style={{ width: w(x.input_tokens) }} /><i className="cache" style={{ width: w(x.cache_read_tokens) }} /><i className="out" style={{ width: w(x.output_tokens) }} />
+                  </span>
+                  <span className="muted small us-num">{num(x.input_tokens)} in · {num(x.cache_read_tokens)} cached · {num(x.output_tokens)} out{x.reasoning_tokens ? ` · ${num(x.reasoning_tokens)} reasoning` : ''}</span>
+                </td>
+                <td className="r us-num">{cacheShare(x)}</td>
+                <td className="r us-num">
+                  {x.cost_label === 'unavailable' ? 'unavailable' : <b>{x.cost?.toFixed?.(4) ?? x.cost}</b>}
+                  {x.cost_label !== 'unavailable' ? <><br /><span className="muted small">{x.cost_label}{x.credits !== null && x.credits !== undefined ? ` · ${num(x.credits)} credits` : ''}</span></> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

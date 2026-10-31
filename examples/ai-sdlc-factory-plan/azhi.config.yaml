@@ -1,0 +1,83 @@
+# Admin configuration for the AI SDLC Factory release plan:
+#   azhi example install ai-sdlc-factory-plan --repo OWNER/REPO
+# Needs the splitters published first: install and publish issue-splitter (GitHub tickets) and/or
+# issue-splitter-jira (Jira tickets) with the same --repo. They create the tickets, after their own approval; this
+# workflow only plans the release and hands each epic to them. Try it on a throwaway repository first.
+#
+# GitHub-only installs leave the Jira settings out.
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained, read-only "Contents" and "Issues": reads the ticket and clones the
+#                         repository on the worker for the plan
+#   github-copilot-token  your GitHub Copilot sign-in; the planner runs on a Copilot model through OpenCode
+#                         (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+#   jira-api-token        Atlassian API token, read access (only when the tracker is Jira)
+settings:
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address. Leave empty when the tracker is GitHub.
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the API token belongs to. Leave empty when the tracker is GitHub.
+    placeholder: you@example.com
+tools:
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: jira.get-issue
+    version: 1
+    description: One Jira issue, read through a Jira MCP server (mcp-atlassian, read-only)
+    effect: read
+    source: jira
+    credential: jira-api-token
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_get_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_get_issue}
+    timeout: 120s
+    input_schema: {type: object, properties: {issue_key: {type: string, pattern: "^[A-Z][A-Z0-9_]*-[0-9]+$"}}, required: [issue_key], additionalProperties: false}
+    output_schema: {type: object}
+  - id: ticket.normalize
+    version: 1
+    description: A Jira or GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport: {kind: builtin, name: ticket.normalize}
+    input_schema: {type: object, properties: {source: {type: string, enum: [jira, github]}, issue: {type: object}}, required: [source, issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        source: {type: string}
+        key: {type: string}
+        title: {type: string}
+        description: {type: string}
+        priority: {type: string}
+        reporter: {type: string}
+        status: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+      required: [source, key, title, description]
+secrets:
+  - github-read-token
+  - github-copilot-token
+  - jira-api-token

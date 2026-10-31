@@ -16,6 +16,8 @@ import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
+import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
+import { workflowAssets } from '../server/assets.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
 /**
@@ -77,6 +79,8 @@ export interface BuilderToolProposal {
 
 export type BuilderEvent =
   | { kind: 'text' }
+  | { kind: 'mcp_proposal'; proposal: BuilderMcpProposal }
+  | { kind: 'mcp_connection_proposal'; proposal: BuilderMcpConnectionProposal }
   | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
@@ -85,9 +89,13 @@ const SKILL = readFileSync(new URL('./skill.md', import.meta.url), 'utf8');
 /** Model calls per person message: lookups plus a few compile-and-repair rounds. */
 const MAX_CALLS = 16;
 const MAX_OUTPUT_TOKENS = 16_000;
-const RESULT_CHARS = 24_000;
+const RESULT_CHARS = 200_000;
 /** Paths a proposed package may hold. */
-const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html))$/;
+const PACKAGE_PATH = /^(?:workflow\.yaml|(?:profiles|schemas|templates|scripts|harness)\/(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\/)*(?:[A-Za-z0-9_-][A-Za-z0-9._@-]*\.(?:ya?ml|json|md|txt|py|ts|js|mjs|toml|lock|csv|html)|LICENSE|NOTICE))$/;
+/** Largest file the builder reads or writes. */
+const FILE_BYTES = 64 * 1024;
+/** Characters of file contents `read_workflow` loads at once; the rest is listed and read with `read_workflow_file`. */
+const LOAD_CHARS = 170_000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
 const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)', chatgpt: 'OpenCode (ChatGPT plan)' } as const;
@@ -203,8 +211,13 @@ const TOOLS: ModelTool[] = [
   },
   {
     name: 'read_workflow',
-    description: "An existing workflow's latest version, as package files. Use when the person wants to change or extend one, or to call it as a subworkflow.",
-    input_schema: { type: 'object', properties: { slug: { type: 'string' } }, required: ['slug'], additionalProperties: false },
+    description: "An existing workflow's latest version (or the one numbered `version`, when the person chose it): an index of every package file, then the contents of as many as fit (workflow.yaml, profiles, harness agents, commands and skills, schemas, templates, scripts), then the registered tools it names. Use when the person wants to change or extend one, or to call it as a subworkflow.",
+    input_schema: { type: 'object', properties: { slug: { type: 'string' }, version: { type: 'integer', description: 'Version number to read; leave out for the latest.' } }, required: ['slug'], additionalProperties: false },
+  },
+  {
+    name: 'read_workflow_file',
+    description: 'One file of an existing workflow, by the path read_workflow listed. Use for files read_workflow marked not loaded.',
+    input_schema: { type: 'object', properties: { slug: { type: 'string' }, path: { type: 'string' }, version: { type: 'integer', description: 'The same version read_workflow was given; leave out for the latest.' } }, required: ['slug', 'path'], additionalProperties: false },
   },
   {
     name: 'ask_user',
@@ -250,15 +263,65 @@ const TOOLS: ModelTool[] = [
     },
   },
   {
+    name: 'find_integrations',
+    description:
+      'Search the live marketplaces (the official MCP Registry, and plugin marketplaces for skills, agents and commands) for what a requirement needs, for example "jira", "postgres" or "release notes". Use after workspace_overview when the library has nothing that fits. Returns ids you can pass to propose_mcp_server.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'A short keyword or product name.' },
+        kinds: { type: 'array', items: { type: 'string', enum: ['mcp', 'skill', 'agent', 'command'] }, description: 'Default: mcp and skill.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'propose_mcp_server',
+    description:
+      'Propose adding an MCP server to the library, like `opencode mcp add`: scope global (every workflow in the workspace) or project (one existing workflow). Give either a marketplace_id from find_integrations (the server fetches and records the definition) or a definition: {transport: "remote", url, headers?} or {transport: "local", command: [...], environment?}. Use {env:NAME} for secrets and list each in definition.needs; never a secret value. Nothing is stored until the person confirms.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What it gives agents, what the person must set up, and how the workflow would use it.' },
+        slug: { type: 'string', description: 'Lower-case letters, digits and dashes.' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        scope: { type: 'string', enum: ['global', 'project'] },
+        workflow: { type: 'string', description: 'With scope project: the slug of an existing workflow.' },
+        marketplace_id: { type: 'string' },
+        definition: { type: 'object' },
+      },
+      required: ['summary', 'slug', 'scope'],
+    },
+  },
+  {
+    name: 'propose_mcp_connection',
+    description:
+      'Propose connecting a hosted (https) MCP server to the Azhi gateway so tool steps and model agents can call it, with every write in the run ledger. Only a name and URL are needed: with auth_kind oauth (the default) Azhi finds the sign-in details of the server and registers itself, and an admin approves access in a pop-up. Different from propose_mcp_server, which adds a server to the library for harness agents. Nothing is created until an admin confirms; never ask for or write a client secret or token.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        summary: { type: 'string', description: 'What it gives workflows and what the admin will be asked to approve.' },
+        name: { type: 'string', description: 'Lower-case letters, digits, dots, dashes or underscores, for example confluence.' },
+        url: { type: 'string', description: 'The Streamable HTTP MCP URL, starting with https://.' },
+        auth_kind: { type: 'string', enum: ['oauth', 'none'], description: 'oauth when the server asks for sign-in (default); none when it needs no sign-in.' },
+      },
+      required: ['summary', 'name', 'url'],
+    },
+  },
+  {
     name: 'propose_workflow',
     description:
-      'Propose the whole workflow package. The server compiles it against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
+      'Propose a workflow package. For a new workflow send every file. With new_version_of, send only the files you add or change in `files` and the paths to delete in `remove`; every other file of the current version is kept as it is. The server compiles the result against this workspace; errors come back for you to fix. When it compiles, the person sees the draft with a button to save it as an unsigned draft and open the editor.',
     input_schema: {
       type: 'object',
       properties: {
         summary: { type: 'string', description: 'Plain-language summary: what it does, assumptions, what the person must set up.' },
-        files: { type: 'object', additionalProperties: { type: 'string' }, description: 'Package path to file text. Must include workflow.yaml.' },
+        files: { type: 'object', additionalProperties: { type: 'string' }, description: 'Package path to file text. A new workflow must include workflow.yaml; a change (new_version_of) lists only added or changed files.' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'With new_version_of: paths of the current version to delete.' },
         new_version_of: { type: 'string', description: 'Set to the workflow id only when the person asked to change that existing workflow.' },
+        base_version: { type: 'integer', description: 'With new_version_of: the version number the change starts from, when the person chose one; leave out for the latest.' },
       },
       required: ['summary', 'files'],
     },
@@ -300,6 +363,7 @@ export async function checkToolProposal(ctx: AppContext, workspaceId: string, ra
 }
 
 /** Registers a confirmed tool proposal (a new revision when its spec changed). */
+export { addProposedMcp };
 export async function registerProposedTool(ctx: AppContext, workspaceId: string, raw: unknown, actor: string) {
   let c;
   try {
@@ -342,17 +406,18 @@ function readExample(id: string): string {
       if (name.startsWith('.') || ['fixtures', 'knowledge', 'node_modules', '.venv'].includes(name)) continue;
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else if (/\.(ya?ml|json|md|py|ts|mjs|js)$/.test(name) && statSync(p).size <= 32 * 1024) out.push(`=== ${relative(root, p)} ===\n${readFileSync(p, 'utf8')}`);
+      else if (/\.(ya?ml|json|md|py|ts|mjs|js)$/.test(name) && statSync(p).size <= FILE_BYTES) out.push(`=== ${relative(root, p)} ===\n${readFileSync(p, 'utf8')}`);
     }
   };
   walk(root);
   return out.join('\n\n');
 }
 
-async function latestVersion(ctx: AppContext, workspaceId: string, slug: string): Promise<VersionRow | undefined> {
+/** The latest version of a workflow, or the numbered one when `version` is given. */
+async function latestVersion(ctx: AppContext, workspaceId: string, slug: string, version?: number): Promise<VersionRow | undefined> {
   const r = await ctx.pool.query(
-    `SELECT v.id FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE v.workspace_id=$1 AND w.slug=$2 ORDER BY v.version DESC LIMIT 1`,
-    [workspaceId, slug],
+    `SELECT v.id FROM workflow_versions v JOIN workflows w ON w.id=v.workflow_id WHERE v.workspace_id=$1 AND w.slug=$2 AND ($3::int IS NULL OR v.version=$3) ORDER BY v.version DESC LIMIT 1`,
+    [workspaceId, slug, version ?? null],
   );
   return r.rows[0] ? getVersion(ctx, workspaceId, r.rows[0].id) : undefined;
 }
@@ -393,6 +458,7 @@ async function overview(ctx: AppContext, workspaceId: string, provider: BuilderP
     executors: Object.values(EXECUTORS).map((e) => ({ id: e.id, providers: e.providers, notes: e.notes })),
     secrets_set: await secretStatus(ctx, workspaceId, tools),
     note: 'Secret values are never shown. A missing secret is set by an admin under Governance › Secrets.',
+    ...(await integrationsOverview(ctx, workspaceId)),
   };
 }
 
@@ -403,18 +469,119 @@ async function getTool(ctx: AppContext, workspaceId: string, ref: string) {
   return { ...rest, ref: toolRef(t), transport: transport.kind };
 }
 
-async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string): Promise<string> {
-  const v = await latestVersion(ctx, workspaceId, slug);
-  if (!v) throw new Error(`no workflow '${slug}'`);
-  const out: string[] = [`(version ${v.version}${v.draft ? ', draft' : ''})`];
-  for (const f of v.manifest.files) {
-    if (!PACKAGE_PATH.test(f.path) || f.size > 32 * 1024) continue;
-    out.push(`=== ${f.path} ===\n${(await packageFile(ctx, workspaceId, v.package_hash, f.path)).toString('utf8')}`);
+/** Reading order: the definition, then profiles, the harness (agents, commands, skills), schemas, templates, scripts. */
+function readRank(path: string): number {
+  if (path === 'workflow.yaml') return 0;
+  if (path.startsWith('profiles/')) return 1;
+  if (/^harness\/(?:agents|commands)\//.test(path)) return 2;
+  if (path.startsWith('harness/')) return 3;
+  if (path.startsWith('schemas/')) return 4;
+  if (path.startsWith('templates/')) return 5;
+  return 6;
+}
+const isLicense = (path: string) => /(?:^|\/)(?:LICENSE|NOTICE)$/.test(path);
+
+/**
+ * An existing workflow's latest version for editing: an index of every file, then the contents of as
+ * many as fit (definition first), then the registered tools its text names. Nothing is dropped silently.
+ */
+export async function readWorkflow(ctx: AppContext, workspaceId: string, slug: string, version?: number): Promise<string> {
+  const v = await latestVersion(ctx, workspaceId, slug, version);
+  if (!v) throw new Error(version ? `no version ${version} of workflow '${slug}'` : `no workflow '${slug}'`);
+  const files = [...v.manifest.files].sort((a, b) => readRank(a.path) - readRank(b.path) || a.path.localeCompare(b.path));
+  const status = new Map<string, string>();
+  const load: string[] = [];
+  let used = 0;
+  for (const f of files) {
+    if (!PACKAGE_PATH.test(f.path)) status.set(f.path, 'not editable here, and not carried into a new version');
+    else if (isLicense(f.path)) status.set(f.path, 'licence text, not loaded');
+    else if (f.size > FILE_BYTES) status.set(f.path, `over ${FILE_BYTES / 1024} KB, not loaded`);
+    else if (used + f.size > LOAD_CHARS) status.set(f.path, 'not loaded (size budget); read it with read_workflow_file');
+    else {
+      used += f.size;
+      load.push(f.path);
+      status.set(f.path, 'loaded');
+    }
   }
+  const texts = new Map<string, string>();
+  for (const path of load) texts.set(path, (await packageFile(ctx, workspaceId, v.package_hash, path)).toString('utf8'));
+  const text = [...texts.values()].join('\n');
+  const tools = loadCatalog(ctx, workspaceId).then((c) => c.list().filter((t) => text.includes(toolRef(t))));
+  const out: string[] = [
+    `(version ${v.version}${v.draft ? ', draft' : ''}; id '${v.slug}'. Change it with propose_workflow new_version_of: '${v.slug}'.)`,
+    `## Files\n${files.map((f) => `- ${f.path} (${f.size} bytes): ${status.get(f.path)}`).join('\n')}`,
+  ];
+  for (const path of load) out.push(`=== ${path} ===\n${texts.get(path)}`);
+  const attached = await workflowAssets(ctx, workspaceId, v.slug).catch(() => []);
+  if (attached.length)
+    out.push(
+      `## Library assets attached to this workflow (MCP servers, agents, skills, commands: published versions kept outside the package; you can read them but not change them, tell the person to edit them in the Library)\n${attached
+        .map((a: any) => `- ${a.kind} ${a.slug} v${a.version}${a.enabled === false ? ' (disabled)' : ''}: ${JSON.stringify(a.definition).slice(0, 4000)}`)
+        .join('\n')}`,
+    );
+  const used_tools = await tools.catch(() => []);
+  if (used_tools.length)
+    out.push(
+      `## Registered tools this package names (read_workflow_file does not cover tools; get_tool gives schemas)\n${used_tools
+        .map((t) => `- ${toolRef(t)} (${t.effect}${t.credential ? `, secret ${t.credential}` : ''}): ${t.description}`)
+        .join('\n')}`,
+    );
   return out.join('\n\n');
 }
 
+/** One file of an existing workflow's latest version, for files `read_workflow` did not load. */
+async function readWorkflowFile(ctx: AppContext, workspaceId: string, slug: string, path: string, version?: number): Promise<string> {
+  const v = await latestVersion(ctx, workspaceId, slug, version);
+  if (!v) throw new Error(version ? `no version ${version} of workflow '${slug}'` : `no workflow '${slug}'`);
+  const f = v.manifest.files.find((x) => x.path === path);
+  if (!f || !PACKAGE_PATH.test(path)) throw new Error(`no file '${path}' in workflow '${slug}'; see the file list from read_workflow`);
+  if (f.size > FILE_BYTES) throw new Error(`${path} is over ${FILE_BYTES / 1024} KB`);
+  return (await packageFile(ctx, workspaceId, v.package_hash, path)).toString('utf8');
+}
+
+/**
+ * A change to an existing workflow, applied to its latest version: `files` replace or add paths and
+ * `remove` drops paths. The result is the whole package, so the compiler and the save step see it all.
+ */
+export async function applyChange(
+  ctx: AppContext,
+  workspaceId: string,
+  slug: string,
+  files: Record<string, unknown>,
+  remove: unknown,
+  version?: number,
+): Promise<{ ok: true; files: Record<string, unknown> } | { ok: false; errors: string[] }> {
+  const v = await latestVersion(ctx, workspaceId, slug, version);
+  if (!v) return { ok: false, errors: [`there is no workflow '${slug}' to make a new version of; leave new_version_of out for a new workflow`] };
+  const base: Record<string, unknown> = {};
+  for (const f of v.manifest.files) {
+    if (!PACKAGE_PATH.test(f.path) || f.size > FILE_BYTES) continue;
+    base[f.path] = (await packageFile(ctx, workspaceId, v.package_hash, f.path)).toString('utf8');
+  }
+  const errors: string[] = [];
+  const drop = Array.isArray(remove) ? remove.map(String) : [];
+  for (const path of drop) {
+    if (path === 'workflow.yaml') errors.push('workflow.yaml cannot be removed');
+    else if (!(path in base)) errors.push(`remove: no file '${path}' in the current version`);
+    else delete base[path];
+  }
+  return errors.length ? { ok: false, errors } : { ok: true, files: { ...base, ...files } };
+}
+
+const versionOf = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
+
 const describe = (d: Diagnostic) => `${d.severity} ${d.code}${d.node ? ` [${d.node}]` : ''}${d.path ? ` at ${d.path}` : ''}: ${d.message}`;
+
+/** One line per step that takes keys from shared contexts, so the summary for the person can say where its input comes from. */
+export function contextNotes(nodes: unknown[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes as Array<{ id: string; inputParts?: Array<{ key: string; source: string }> }>) {
+    const by = new Map<string, string[]>();
+    for (const p of n.inputParts ?? []) if (p.source.startsWith('context:')) by.set(p.source.slice('context:'.length), [...(by.get(p.source.slice('context:'.length)) ?? []), p.key]);
+    if (by.size) out.push(`step '${n.id}' takes ${[...by].map(([bundle, keys]) => `${keys.join(', ')} from shared context '${bundle}'`).join('; ')}`);
+  }
+  return out;
+}
 
 /** Checks a proposed package's paths and id, compiles it, and builds its run plan. */
 export async function checkProposal(
@@ -426,11 +593,11 @@ export async function checkProposal(
   const errors: string[] = [];
   const clean: Record<string, string> = {};
   const entries = Object.entries(files ?? {});
-  if (entries.length > 60) errors.push('at most 60 files in a package proposal');
+  if (entries.length > 300) errors.push('at most 300 files in a package');
   for (const [path, text] of entries) {
     if (typeof text !== 'string') errors.push(`${path}: file contents must be text`);
     else if (!PACKAGE_PATH.test(path) || path.includes('..')) errors.push(`${path}: files are workflow.yaml or live under profiles/, schemas/, templates/, scripts/ or harness/`);
-    else if (text.length > 64 * 1024) errors.push(`${path}: at most 64 KB per file`);
+    else if (text.length > FILE_BYTES) errors.push(`${path}: at most ${FILE_BYTES / 1024} KB per file`);
     else clean[path] = text;
   }
   if (!('workflow.yaml' in clean)) errors.push('the package needs workflow.yaml');
@@ -478,7 +645,7 @@ export async function checkProposal(
     id: r.definition.id,
     name: r.definition.name,
     files: clean,
-    nodes: r.compiled.plan.nodes.map((n) => ({ id: n.id, type: n.type, deps: n.deps, ...(n.route ? { route: n.route } : {}), def: n.def })),
+    nodes: r.compiled.plan.nodes.map((n) => ({ id: n.id, type: n.type, deps: n.deps, ...(n.route ? { route: n.route } : {}), ...(n.inputParts ? { inputParts: n.inputParts } : {}), def: n.def })),
     warnings: r.compiled.diagnostics.filter((d) => d.severity !== 'error'),
     missing,
     blockers,
@@ -518,6 +685,11 @@ export async function builderTurn(
 ): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
   const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
+  // A workflow read in an earlier turn may have a newer version by now (a saved draft, an edit in the
+  // editor); blank those reads so the model reads the latest again instead of editing from a stale copy.
+  const reads = new Set<string>();
+  for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && (b.name === 'read_workflow' || b.name === 'read_workflow_file') && !versionOf((b.input as any)?.version)) reads.add(b.id);
+  for (const m of messages) for (const b of m.content) if (b.type === 'tool_result' && reads.has(b.tool_use_id)) b.content = 'Stale: read from an earlier turn, and the workflow may have changed since. Call read_workflow again before changing it.';
   // After tool results the transcript ends on a user message; the person's words join it.
   const last = messages.at(-1);
   if (last?.role === 'user') last.content.push({ type: 'text', text: o.text });
@@ -546,7 +718,9 @@ export async function builderTurn(
         } else if (u.name === 'read_example') {
           answer(u.id, readExample(String(input.id)));
         } else if (u.name === 'read_workflow') {
-          answer(u.id, await readWorkflow(ctx, workspaceId, String(input.slug)));
+          answer(u.id, await readWorkflow(ctx, workspaceId, String(input.slug), versionOf(input.version)));
+        } else if (u.name === 'read_workflow_file') {
+          answer(u.id, await readWorkflowFile(ctx, workspaceId, String(input.slug), String(input.path), versionOf(input.version)));
         } else if (u.name === 'ask_user') {
           const questions = (Array.isArray(input.questions) ? input.questions : []).slice(0, 5).map((q: any, i: number) => ({
             id: String(q?.id ?? `q${i + 1}`),
@@ -561,13 +735,26 @@ export async function builderTurn(
           const r = await checkToolProposal(ctx, workspaceId, input.tool);
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
           event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
+        } else if (u.name === 'find_integrations') {
+          answer(u.id, JSON.stringify(await findIntegrations(ctx, workspaceId, input), null, 1));
+        } else if (u.name === 'propose_mcp_server') {
+          const r = await checkMcpProposal(ctx, workspaceId, input);
+          answer(u.id, `The MCP server is valid. The person now sees '${r.slug}' (${r.scope}${r.workflow ? ` · ${r.workflow}` : ''}) with an Add button${r.needs.length ? `; they must set ${r.needs.map((n) => n.name).join(', ')} where the harness runs` : ''}${r.runs_code ? '; it is a program that runs on a worker, so say where it comes from' : ''}. Summarise in a few plain sentences, and ask whether to use it in the workflow once it is added.`);
+          event = { kind: 'mcp_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
+        } else if (u.name === 'propose_mcp_connection') {
+          const r = await checkMcpConnectionProposal(ctx, workspaceId, input);
+          answer(u.id, `The connection is valid. The person now sees '${r.name}' with a button; an admin clicks it to connect${r.auth_kind === 'oauth' ? ' and sign in through a pop-up' : ''}. Say that tools are discovered and registered after that, and a workflow can only call them once they are. Summarise in a few plain sentences.`);
+          event = { kind: 'mcp_connection_proposal', proposal: { tool_use_id: u.id, summary: String(input.summary ?? ''), ...r } };
         } else if (u.name === 'propose_workflow') {
-          const r = await checkProposal(ctx, workspaceId, input.files, input.new_version_of ? String(input.new_version_of) : undefined);
+          const base = input.new_version_of ? String(input.new_version_of) : undefined;
+          const change = base ? await applyChange(ctx, workspaceId, base, input.files ?? {}, input.remove, versionOf(input.base_version)) : undefined;
+          const r = change && !change.ok ? change : await checkProposal(ctx, workspaceId, change ? change.files : input.files, base);
           if (!r.ok) {
             answer(u.id, `The draft does not compile yet. Fix these and propose the whole package again:\n${r.errors.map((e) => `- ${e}`).join('\n')}`, true);
           } else {
             const notes = [
               ...r.warnings.map(describe),
+              ...contextNotes(r.nodes),
               ...r.missing.map((m) => `missing ${m.kind} '${m.name}' (step ${m.node})`),
               ...r.blockers.map((b) => `run plan blocker ${b.code}: ${b.message}`),
             ];
@@ -585,7 +772,7 @@ export async function builderTurn(
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
     if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
-    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal') {
+    if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal' || event?.kind === 'mcp_connection_proposal') {
       const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');

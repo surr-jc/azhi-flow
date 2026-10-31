@@ -9,7 +9,10 @@ export interface PlanNode {
   deps: string[];
   /** Upstream nodes whose outputs this node reads (refs and CEL). Taint flows along these. */
   dataDeps: string[];
+  /** The node as the interpreter runs it. A step that uses `context` has the bundle keys merged into its `input`. */
   def: NodeDef;
+  /** Only for a step that uses `context`: where each top-level input key came from (`input` or `context:<name>`), for the manifest and the retrieval query. */
+  inputParts?: Array<{ key: string; source: string }>;
   outputSchema?: JsonSchema;
   /** Resolved input schemas loaded from the package (script/agent output schemas). */
   timeoutMs: number;
@@ -96,6 +99,7 @@ export const WORKSPACE_CHANGE_SCHEMA: JsonSchema = {
     },
     diff: { type: 'string' },
     diff_truncated: { type: 'boolean' },
+    step_limit_reached: { type: 'boolean' },
     stats: { type: 'object', properties: { files: { type: 'integer' }, additions: { type: 'integer' }, deletions: { type: 'integer' } } },
     tests: {
       type: 'object',

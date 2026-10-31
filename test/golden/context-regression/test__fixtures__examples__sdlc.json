@@ -1,0 +1,635 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "sdlc",
+    "definitionHash": "sha256:a5094db5b10d87031ff44f5ab6c9139ca05aa39e451a6c763bbe887ca56a3290",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "title": "Source",
+          "enum": [
+            "jira",
+            "github"
+          ],
+          "description": "Where the ticket lives"
+        },
+        "ticket": {
+          "type": "string",
+          "title": "Ticket",
+          "maxLength": 300,
+          "description": "A Jira key such as PAY-142, or a GitHub issue such as acme/payments#42"
+        }
+      },
+      "required": [
+        "source",
+        "ticket"
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}"
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source",
+          "type": "condition",
+          "description": "Read the ticket from Jira or from GitHub.",
+          "expression": "inputs.source",
+          "routes": {
+            "jira": [
+              "jira_issue"
+            ],
+            "github": [
+              "github_issue"
+            ]
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "jira_issue",
+        "type": "tool",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "jira_issue",
+          "type": "tool",
+          "description": "Read the Jira ticket through the Jira MCP server.",
+          "tool": "jira.get-issue@1",
+          "arguments": {
+            "issue_key": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "jira"
+        }
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the GitHub issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "github"
+        }
+      },
+      {
+        "id": "intake",
+        "type": "tool",
+        "deps": [
+          "github_issue",
+          "jira_issue"
+        ],
+        "dataDeps": [
+          "github_issue",
+          "jira_issue"
+        ],
+        "def": {
+          "id": "intake",
+          "type": "tool",
+          "description": "Turn the Jira ticket or GitHub issue into one plain ticket (key, title, description, priority, reporter).",
+          "tool": "ticket.normalize@1",
+          "merge": "any",
+          "arguments": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "issue": {
+              "cel": "inputs.source == 'jira' ? nodes.jira_issue.output : nodes.github_issue.output"
+            }
+          },
+          "project": [
+            "source",
+            "key",
+            "title",
+            "description",
+            "priority",
+            "reporter",
+            "status",
+            "labels",
+            "url"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "requirements",
+        "type": "agent",
+        "deps": [
+          "intake"
+        ],
+        "dataDeps": [
+          "intake"
+        ],
+        "def": {
+          "id": "requirements",
+          "type": "agent",
+          "description": "Turn the ticket into testable requirements.",
+          "profile": "product-analyst@1",
+          "input": {
+            "map": "{'ticket': nodes.intake.output}"
+          },
+          "output_schema": "schemas/requirements.json",
+          "budget": {
+            "max_output_tokens": 3000,
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "design",
+        "type": "agent",
+        "deps": [
+          "intake",
+          "requirements"
+        ],
+        "dataDeps": [
+          "intake",
+          "requirements"
+        ],
+        "def": {
+          "id": "design",
+          "type": "agent",
+          "description": "Propose a technical design that meets the requirements.",
+          "profile": "architect@1",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output}"
+          },
+          "output_schema": "schemas/design.json",
+          "budget": {
+            "max_output_tokens": 4000,
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "design_review",
+        "type": "approval",
+        "deps": [
+          "design",
+          "intake",
+          "requirements"
+        ],
+        "dataDeps": [
+          "design",
+          "intake",
+          "requirements"
+        ],
+        "def": {
+          "id": "design_review",
+          "type": "approval",
+          "description": "A senior engineer approves the design before any build work.",
+          "role": "author",
+          "message": {
+            "cel": "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.design.output.summary + '?'"
+          },
+          "payload": {
+            "map": "{'requirements': nodes.requirements.output, 'design': nodes.design.output}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "notes": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "build",
+        "type": "agent",
+        "deps": [
+          "design",
+          "design_review",
+          "requirements"
+        ],
+        "dataDeps": [
+          "design",
+          "requirements"
+        ],
+        "def": {
+          "id": "build",
+          "type": "agent",
+          "description": "Plan the code change. Swap in a harness executor (OpenCode) on a worker to make the change itself.",
+          "profile": "engineer@1",
+          "depends_on": [
+            "design_review"
+          ],
+          "input": {
+            "map": "{'requirements': nodes.requirements.output, 'design': nodes.design.output}"
+          },
+          "output_schema": "schemas/change.json",
+          "budget": {
+            "max_output_tokens": 4000,
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "code_review",
+        "type": "agent",
+        "deps": [
+          "build",
+          "design",
+          "requirements"
+        ],
+        "dataDeps": [
+          "build",
+          "design",
+          "requirements"
+        ],
+        "def": {
+          "id": "code_review",
+          "type": "agent",
+          "description": "Review the change against the requirements and design.",
+          "profile": "reviewer@1",
+          "input": {
+            "map": "{'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': nodes.build.output}"
+          },
+          "output_schema": "schemas/review.json",
+          "budget": {
+            "max_output_tokens": 3000,
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "tests",
+        "type": "tool",
+        "deps": [
+          "build",
+          "intake"
+        ],
+        "dataDeps": [
+          "intake"
+        ],
+        "def": {
+          "id": "tests",
+          "type": "tool",
+          "description": "Read the CI pipeline result for the change.",
+          "tool": "ci.get-pipeline@1",
+          "depends_on": [
+            "build"
+          ],
+          "arguments": {
+            "ref": {
+              "ref": "nodes.intake.output.key"
+            }
+          },
+          "project": [
+            "status",
+            "passed",
+            "failed",
+            "coverage_pct"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "quality_gate",
+        "type": "condition",
+        "deps": [
+          "code_review",
+          "tests"
+        ],
+        "dataDeps": [
+          "code_review",
+          "tests"
+        ],
+        "def": {
+          "id": "quality_gate",
+          "type": "condition",
+          "description": "Ship only when tests pass and the review approves.",
+          "expression": "nodes.tests.output.status == 'passed' && nodes.code_review.output.approved ? 'ship' : 'fix'",
+          "routes": {
+            "ship": [
+              "release_approval"
+            ],
+            "fix": [
+              "send_back"
+            ]
+          },
+          "default": "fix"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release_approval",
+        "type": "approval",
+        "deps": [
+          "build",
+          "code_review",
+          "intake",
+          "quality_gate",
+          "tests"
+        ],
+        "dataDeps": [
+          "build",
+          "code_review",
+          "intake",
+          "tests"
+        ],
+        "def": {
+          "id": "release_approval",
+          "type": "approval",
+          "description": "The release owner approves the release.",
+          "role": "admin",
+          "message": {
+            "cel": "'Release ' + nodes.intake.output.key + ' (' + nodes.intake.output.title + ')?'"
+          },
+          "payload": {
+            "map": "{'change': nodes.build.output.summary, 'review': nodes.code_review.output, 'tests': nodes.tests.output}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "quality_gate",
+          "route": "ship"
+        }
+      },
+      {
+        "id": "release",
+        "type": "notify",
+        "deps": [
+          "build",
+          "intake",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "build",
+          "intake"
+        ],
+        "def": {
+          "id": "release",
+          "type": "notify",
+          "description": "Announce the release.",
+          "depends_on": [
+            "release_approval"
+          ],
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'Released ' + nodes.intake.output.key + ': ' + nodes.build.output.summary"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "send_back",
+        "type": "notify",
+        "deps": [
+          "code_review",
+          "intake",
+          "quality_gate"
+        ],
+        "dataDeps": [
+          "code_review",
+          "intake"
+        ],
+        "def": {
+          "id": "send_back",
+          "type": "notify",
+          "description": "Send the change back with the reasons.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "nodes.intake.output.key + ' needs more work: ' + nodes.code_review.output.summary"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "quality_gate",
+          "route": "fix"
+        }
+      },
+      {
+        "id": "retro",
+        "type": "report",
+        "deps": [
+          "build",
+          "code_review",
+          "design",
+          "intake",
+          "release",
+          "requirements",
+          "tests"
+        ],
+        "dataDeps": [
+          "build",
+          "code_review",
+          "design",
+          "intake",
+          "requirements",
+          "tests"
+        ],
+        "def": {
+          "id": "retro",
+          "type": "report",
+          "description": "Write the delivery record and retro notes.",
+          "depends_on": [
+            "release"
+          ],
+          "template": "templates/retro.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'requirements': nodes.requirements.output, 'design': nodes.design.output, 'change': nodes.build.output, 'review': nodes.code_review.output, 'tests': nodes.tests.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

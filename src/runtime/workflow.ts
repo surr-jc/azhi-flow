@@ -28,6 +28,7 @@ import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
 import { resolveValue, type ValueScope } from './values.js';
+import { withheldBefore } from './withheld.js';
 import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
 export const statusQuery = defineQuery<RunStatus>('status');
@@ -145,6 +146,14 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     });
 
   /** Harness executors run on a worker; the gateway stays the only way out (bridged over MCP). */
+  /** Records, once per field, what a context_budget kept from an agent; the run page shows the flag. */
+  const noteWithheld = async (nodeId: string, withheld: Array<{ key: string; bytes: number; sha256: string }> | undefined) => {
+    if (!withheld?.length) return;
+    const names = withheld.map((w) => `${nodeId}.${w.key}`);
+    status.flags = { ...status.flags, context_withheld: [...new Set([...(status.flags.context_withheld ?? []), ...names])] };
+    await bookkeeping.recordRun(runId, workspaceId, { flags: status.flags, event: { kind: 'run.context_withheld', node: nodeId, data: { fields: withheld } } });
+  };
+
   const runHarness = async (executor: string, node: PlanNode, def: AgentNode, s: ValueScope, act: GatewayActivities, tools: Array<{ ref: string }>) => {
     try {
       const ws = def.workspace;
@@ -160,6 +169,11 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             ...(ws.mode === 'write' && ws.test ? { test: { command: ws.test.command, timeoutMs: ws.test.timeout ? parseDuration(ws.test.timeout) : 600_000, attempts: ws.test.attempts ?? 1 } } : {}),
           }
         : undefined;
+      // Where the continuing step's change lives. Only the ref goes through here: the server reads the change from
+      // the producing step's stored output, because a change carries up to 1 MB of file contents that must not be
+      // copied into workflow history again. A test run has no stored outputs, only fixtures, so it passes the value.
+      const fromRef = ws?.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
+      const workspaceFrom = fromRef ? (testNode ? { value: resolveValue(ws!.from!, s), producer: fromRef.split('.')[1] ?? '' } : { ref: fromRef }) : undefined;
       const prep = await act.harnessPrepare({
         runId,
         workspaceId,
@@ -171,11 +185,16 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         tools: tools as never,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
+        ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
+        ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
-        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}) } } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}) } } : {}),
+        ...(workspaceFrom ? { workspaceFrom } : {}),
       });
-      const queue = await selectWorker(node.id, executor, 1);
+      await noteWithheld(node.id, prep.withheld);
+      // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
+      const queue = await selectWorker(node.id, executor, 1, prep.continuation ? ['workspace_continuation'] : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
@@ -196,7 +215,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
         profile: def.profile,
-        ...(workspace ? { workspace } : {}),
+        ...(workspace ? { workspace: { ...workspace, ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
@@ -231,9 +250,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         tools,
         input: resolveValue(def.input, s) ?? null,
         inputSources: node.dataDeps,
+        ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
+        ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
       });
+      await noteWithheld(node.id, state.withheld);
       for (;;) {
         if (Date.now() > deadline) throw ApplicationFailure.create({ type: 'transient', message: `agent node ${node.id} passed its ${node.timeoutMs} ms deadline`, nonRetryable: true });
         const r = await act.agentTurn({
@@ -260,12 +282,15 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const awaitApproval = async (node: PlanNode, def: ApprovalNode, s: ValueScope) => {
     const expiresAt = new Date(Date.now() + node.timeoutMs).toISOString();
     const onExpiry = def.on_expiry ?? 'fail';
+    // Input a context_budget kept from an agent that this approval comes after: the person deciding is told.
+    const withheld = withheldBefore(plan.nodes, status.flags.context_withheld, node.id);
     await bookkeeping.requestApproval(runId, workspaceId, node.id, {
       message: resolveValue(def.message, s) ?? null,
       payload: resolveValue(def.payload, s) ?? null,
       role: def.role ?? 'operator',
       expires_at: expiresAt,
       on_expiry: onExpiry,
+      ...(withheld.length ? { context_withheld: withheld } : {}),
     });
     pendingApprovals.set(node.id, expiresAt);
     await refreshWaiting();
@@ -289,8 +314,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     return d;
   };
 
-  const selectWorker = async (nodeId: string, runtime: string, attempt: number): Promise<string> => {
-    let sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+  const selectWorker = async (nodeId: string, runtime: string, attempt: number, needs?: string[]): Promise<string> => {
+    // `needs` is passed only when a step requires something, so every other call keeps the shape older histories recorded.
+    const check = () => (needs ? bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime, needs) : bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime));
+    let sel = await check();
     if (sel.online > 0 && sel.accepted.length === 0) {
       throw ApplicationFailure.create({
         type: 'worker_trust_denied',
@@ -304,7 +331,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       while (sel.accepted.length === 0) {
         if (Date.now() >= expiresAt) throw ApplicationFailure.create({ type: 'expired', message: `no worker came online for node ${nodeId} within 30 minutes`, nonRetryable: true });
         await sleep('10s');
-        sel = await bookkeeping.checkWorkers(workspaceId, snapshot.package_hash, runtime);
+        sel = await check();
       }
       const { waiting_reason: _cleared, ...flags } = status.flags;
       await setState('running', { flags, event: 'run.worker_online' });

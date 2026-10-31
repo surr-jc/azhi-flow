@@ -50,6 +50,8 @@ export interface ScriptNode extends NodeCommon {
   entrypoint: string;
   lockfile?: string;
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   output_schema?: string | JsonSchema;
   limits?: { time?: string; memory_mb?: number };
 }
@@ -59,10 +61,14 @@ export interface AgentNode extends NodeCommon {
   executor?: string;
   profile: string;
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   datasets?: string[];
   tools?: string[];
   output_schema: string | JsonSchema;
   budget?: { max_output_tokens?: number; max_tool_calls?: number; max_cost_usd?: number };
+  /** Cap on the bytes of input that reach the model: fail (default) or withhold the largest fields. */
+  context_budget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
   requires?: { enforced_restrictions?: boolean };
   /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
   workspace?: AgentWorkspace;
@@ -75,6 +81,12 @@ export interface AgentWorkspace {
   ref: Value;
   /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
   base_ref?: Value;
+  /**
+   * Continue from an earlier change: a plain `{ref: nodes.<id>.output...}` to a workspace change (the `workspace`
+   * field of a write-mode step, or anything shaped like it). The worker checks out the change's own `base_sha`
+   * and applies its files as a local commit, so this step starts with the earlier files already in place.
+   */
+  from?: Value;
   /** Literal git host base URL. Default https://github.com. */
   host?: string;
   /** Workspace secret holding a read-only token, sent only to `host`. */
@@ -152,6 +164,8 @@ export interface ReportNode extends NodeCommon {
   template: string;
   format?: 'markdown' | 'html' | 'csv';
   input?: Value;
+  /** Names from the workflow's `contexts`: their keys are added to `input` when the workflow is compiled. */
+  context?: string[];
   summary?: Value;
 }
 
@@ -187,6 +201,11 @@ export interface WorkflowDefinition {
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;
+  /**
+   * Named sets of upstream values several steps need. A step lists `context: [name]`; the compiler adds the
+   * bundle's keys to the step's `input`, so a bundle is only a way to write the same input once.
+   */
+  contexts?: Record<string, Record<string, Value>>;
   /** Provider and model for every agent step whose profile says `name: default`; a run may override it. Steps that name a model keep it. */
   model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
   nodes: NodeDef[];

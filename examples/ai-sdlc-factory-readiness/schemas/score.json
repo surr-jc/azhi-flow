@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {"type": "string"},
+    "base_branch": {"type": "string"},
+    "level": {"enum": ["gold", "silver", "bronze", "none"]},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"enum": ["pass", "fail", "unavailable"]}
+        },
+        "required": ["id", "title", "status"]
+      }
+    },
+    "failing": {"type": "array", "items": {"type": "string"}},
+    "unavailable": {"type": "array", "items": {"type": "string"}},
+    "has_unavailable": {"type": "boolean"},
+    "ci_status": {"type": "string"},
+    "failed_jobs": {"type": "array", "items": {"type": "string"}},
+    "open_tickets": {"type": "integer"},
+    "propose_fix": {"type": "boolean"},
+    "ticket": {
+      "type": ["object", "null"],
+      "properties": {
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "additional_fields": {"type": "string"}
+      }
+    }
+  },
+  "required": ["level", "checks", "propose_fix", "ticket"]
+}

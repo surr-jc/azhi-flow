@@ -47,6 +47,20 @@ Things to know:
 
 **Library > MCP servers > Add an MCP server** asks how the server runs (hosted URL, or a package on a worker), builds the definition, and shows the setup for each harness as you type. It saves a draft library asset. For a hosted server it can also connect it to Azhi's gateway, so tool steps and model agents can call it with every write in the action ledger. The Tools and Connections pages remain for that gateway side.
 
+## Global and project scope, and the CLI
+
+Like OpenCode's user and project configs, an asset is **global** (any workflow can use it) or **project** (one workflow; publishing attaches it). Names are unique per workspace.
+
+```bash
+azhi mcp server add docs --remote https://mcp.example.com/mcp --header 'Authorization=Bearer {env:DOCS_TOKEN}'
+azhi mcp server add files --local --scope project --workflow my-flow -- npx -y @modelcontextprotocol/server-filesystem /workspace
+azhi mcp server list [--workflow my-flow]
+azhi mcp server attach docs my-flow
+azhi mcp server remove docs          # archives it
+```
+
+`add` publishes straight away (`--draft` to review first). Values must be `{env:NAME}` references: a definition holding something that looks like a token is refused. API: `POST /v1/mcp-servers` (author) and `GET /v1/mcp-servers?workflow=`. `azhi mcp add` and `azhi mcp discover` manage gateway connections, a separate thing: `azhi mcp add --name docs --url https://mcp.example.com/mcp --auth oauth` needs only a name and URL, finds the server's OAuth endpoints, registers Azhi as a client, opens sign-in and waits for it (`--no-wait` to skip). The builder chat can add a library server (see `docs/workflow-builder.md`).
+
 ## Harnesses
 
 Each asset can be exported for **OpenCode** (`opencode.jsonc`, `.opencode/...`) and **Claude Code** (`.mcp.json`, `.claude/agents`, `.claude/skills`, `.claude/commands`):

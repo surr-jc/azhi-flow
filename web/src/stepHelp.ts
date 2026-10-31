@@ -21,7 +21,7 @@ export const TYPE_HELP: Record<string, string> = {
 
 /** Help for a setting, keyed by "<step type>.<key>", then by "<key>" for settings every type shares. */
 export const FIELD_HELP: Record<string, string> = {
-  'tool.tool': 'Which registered tool to call, as id@version. The tools page lists what each one reads or changes.',
+  'tool.tool': 'Which registered tool to call, as id@version. Each one is marked read or writes. Open an MCP server in the Toolbox to make more of its tools available here.',
   'tool.arguments': 'The values passed to the tool. Use {ref: inputs.x} to read a workflow input or {ref: nodes.step.output.field} to read an earlier step.',
   'tool.project': 'Keeps only these fields of the tool output, so later steps and the ledger hold less.',
   'tool.guard': 'A CEL rule checked on the final arguments. If it is false the call is refused. Use it to pin a write to the thing under review.',
@@ -31,6 +31,10 @@ export const FIELD_HELP: Record<string, string> = {
   'agent.output_schema': 'The JSON schema the answer must match. A reply that does not match fails the step instead of passing bad data on.',
   'agent.tools': 'The tools the agent may call itself. Anything not listed is unreachable for it.',
   'agent.datasets': 'Datasets the agent may search.',
+  'agent.context_budget': 'Caps the bytes of input that reach the model. Over the cap the step stops (the default), or with on_exceed: withhold the largest fields are kept back and the run records which ones.',
+  'agent.context': 'Names of shared contexts (defined once in the workflow settings). Their values are added to this step\'s input; a key the step also writes itself is an error.',
+  'script.context': 'Names of shared contexts (defined once in the workflow settings). Their values are added to this step\'s input; a key the step also writes itself is an error.',
+  'report.context': 'Names of shared contexts (defined once in the workflow settings). Their values are added to this step\'s input; a key the step also writes itself is an error.',
   'agent.budget': 'Hard limits such as max_tool_calls, max_output_tokens and max_cost_usd. When one is hit the step stops and the run records why.',
   'agent.workspace': 'Where it works: the repository, the ref to check out and the credential used to clone. The agent never sees the credential value.',
   'script.runtime': 'The language the script runs in.',

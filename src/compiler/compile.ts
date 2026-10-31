@@ -23,6 +23,7 @@ import {
 } from './plan.js';
 import { compatible, projectSchema, resolvePath, schemaOfLiteral, typesOf } from './schema-path.js';
 import { analyseTaint, type DatasetInfo } from './taint.js';
+import { expandContexts, skipCauses, skipCoupling } from './contexts.js';
 
 export interface CompileOptions {
   pkg?: PackageSource;
@@ -69,7 +70,7 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'tool':
       return { arguments: n.arguments as Value };
     case 'agent':
-      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref } : { input: n.input };
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.from': n.workspace.from } : { input: n.input };
     case 'script':
     case 'subworkflow':
       return { input: n.input };
@@ -102,11 +103,17 @@ function nodeCel(n: NodeDef): Array<{ path: string; text: string }> {
   return out;
 }
 
-export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): CompileResult {
+export function compile(authored: WorkflowDefinition, opts: CompileOptions = {}): CompileResult {
   const diags: Diagnostic[] = [];
   const err = (code: string, message: string, node?: string, path?: string) => diags.push({ severity: 'error', code, message, node, path });
   const warn = (code: string, message: string, node?: string, path?: string) => diags.push({ severity: 'warning', code, message, node, path });
   const supported = opts.supportedNodeTypes ?? ALPHA_NODE_TYPES;
+
+  // Context bundles are written into the steps' inputs first, so everything below (refs, types, ordering, taint)
+  // sees an ordinary input. `authored` stays what the definition hash and signing cover.
+  const expansion = expandContexts(authored);
+  const def = expansion.def;
+  diags.push(...expansion.diagnostics);
 
   // Trigger
   if (def.trigger?.schedule) {
@@ -226,9 +233,11 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   // Topological order and cycle detection
   const order = topoSort(def.nodes.map((n) => n.id), deps);
   if (!order.ok) {
-    err('cycle', `the graph has a cycle through: ${order.cycle.join(' -> ')}; cycles are only allowed inside a loop node`);
+    const viaBundle = order.cycle.flatMap((c) => (expansion.fromBundle.get(c) ?? []).flatMap((k) => [...targetsOf(k.value)].filter((t) => order.cycle.includes(t)).map((t) => `step '${c}' takes '${t}' through context '${k.bundle}' (key '${k.key}')`)));
+    err('cycle', `the graph has a cycle through: ${order.cycle.join(' -> ')}; cycles are only allowed inside a loop node${viaBundle.length ? `. ${[...new Set(viaBundle)].join('; ')}` : ''}`);
     return { ok: false, diagnostics: diags };
   }
+  const topoOrder = order.order;
 
   // Output schemas, in dependency order
   const outputs = new Map<string, JsonSchema | undefined>();
@@ -357,6 +366,23 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
             err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
           }
         }
+        const from = n.workspace?.from;
+        if (from !== undefined) {
+          const plain = isValueExpr(from) && 'ref' in from && from.ref.startsWith('nodes.') ? from.ref : undefined;
+          if (!plain) {
+            err('workspace_from_invalid', "workspace.from must be a plain {ref: nodes.<id>.output...} to a workspace change; a CEL expression, a map or a literal cannot name the step the worker continues from", n.id, 'workspace.from');
+          } else if (n.workspace?.base_ref !== undefined) {
+            err('workspace_from_base_ref', 'workspace.from and workspace.base_ref cannot be used together: the worker starts from the change\'s own base_sha', n.id, 'workspace.from');
+          } else if (byId.has(plain.split('.')[1] ?? '') && plain.split('.')[1] !== n.id) {
+            const t = refTypes.get('workspace.from');
+            const props = (t as { properties?: Record<string, unknown> } | undefined)?.properties;
+            if (!t) warn('workspace_from_untyped', `workspace.from '${plain}' has no declared type, so it is checked when the step runs (it must carry base_sha and files)`, n.id, 'workspace.from');
+            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with base_sha and files)`, n.id, 'workspace.from');
+            else if (props && (!('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
+              err('workspace_from_type', `workspace.from '${plain}' does not carry base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
+            }
+          }
+        }
         if (n.workspace?.mode === 'write') {
           // The worker fills `workspace` with what really changed in the checkout; the agent may not claim it.
           const props = (outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
@@ -454,6 +480,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       deps: [...deps.get(id)!].sort(),
       dataDeps: [...dataDeps.get(id)!].sort(),
       def: n,
+      ...(expansion.parts.has(id) ? { inputParts: expansion.parts.get(id)! } : {}),
       outputSchema,
       timeoutMs,
       maxAttempts: n.retry?.max_attempts ?? 3,
@@ -461,6 +488,62 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
       ...(routeOf.has(id) ? { route: routeOf.get(id)! } : {}),
       ...(agentToolsById.has(id) ? { agentTools: agentToolsById.get(id)! } : {}),
     });
+  }
+
+  /** The steps a value refers to (refs and CEL), as the dependency pass reads them. */
+  function targetsOf(value: Value | undefined): Set<string> {
+    const out = new Set<string>();
+    for (const site of collectExprs(value, '')) {
+      if (site.kind === 'ref') {
+        const seg = site.text.split('.');
+        if (seg[0] === 'nodes' && seg[1] && byId.has(seg[1])) out.add(seg[1]);
+      } else for (const t of referencedNodes(site.text)) if (byId.has(t)) out.add(t);
+    }
+    return out;
+  }
+
+  /**
+   * What a bundle couples. Every ref in a bundle is a dependency and a data dependency of every step that uses
+   * it, so a step can be skipped because of a value it only takes from a shared context, and one untrusted
+   * field taints every step that uses the bundle. Both are legitimate, so they are warnings that say where.
+   */
+  function contextCoupling(): Diagnostic[] {
+    const consumers = [...expansion.parts.keys()];
+    // What each consumer depends on without its bundles: depends_on, its condition route, refs in its own values.
+    const ownDeps = new Map<string, Set<string>>();
+    const ownData = new Map<string, Set<string>>();
+    for (const c of consumers) {
+      const original = authored.nodes.find((x) => x.id === c)!;
+      const data = new Set<string>();
+      for (const v of Object.values(nodeValues(original))) for (const t of targetsOf(v)) data.add(t);
+      ownData.set(c, data);
+      ownDeps.set(c, new Set([...(original.depends_on ?? []), ...data, ...(routeOf.has(c) ? [routeOf.get(c)!.condition] : [])]));
+    }
+    const out = skipCoupling({ consumers, fromBundle: expansion.fromBundle, targets: targetsOf, ownDeps, deps, causes: skipCauses(topoOrder, byId, deps, routeOf), routeOf, byId });
+
+    // Taint again with the edges that exist only because of a bundle removed: a step tainted only through one is named.
+    const bundleOnly = new Map<string, Set<string>>();
+    for (const c of consumers) {
+      const set = new Set<string>();
+      for (const k of expansion.fromBundle.get(c) ?? []) for (const t of targetsOf(k.value)) if (!ownData.get(c)!.has(t)) set.add(t);
+      bundleOnly.set(c, set);
+    }
+    const without = analyseTaint(orderedNodes.map((p) => (bundleOnly.has(p.id) ? { ...p, dataDeps: p.dataDeps.filter((d) => !bundleOnly.get(p.id)!.has(d)) } : p)), opts.datasets).report;
+    for (const c of consumers) {
+      if (!((taint.report.tainted[c] && !without.tainted[c]) || (taint.report.untrusted[c] && !without.untrusted[c]))) continue;
+      const via = (expansion.fromBundle.get(c) ?? []).find((k) => [...targetsOf(k.value)].some((t) => bundleOnly.get(c)!.has(t) && taint.report.untrusted[t]));
+      const source = via && [...targetsOf(via.value)].find((t) => bundleOnly.get(c)!.has(t) && taint.report.untrusted[t]);
+      if (via && source) {
+        out.push({
+          severity: 'warning',
+          code: 'context_taints',
+          message: `context '${via.bundle}' key '${via.key}' carries untrusted data from '${source}' (${taint.report.untrusted[source]}), so step '${c}' is ${def.nodes.find((x) => x.id === c)?.type === 'agent' ? 'tainted' : 'untrusted'} and so is every step that uses this context. Keep untrusted values in their own context`,
+          node: c,
+          path: `input.${via.key}`,
+        });
+      }
+    }
+    return out;
   }
 
   function checkScript(runtime: string, entrypoint: string, nodeId: string) {
@@ -473,6 +556,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
   const orderedNodes = order.order.map((id) => planNodes.get(id)!);
   const taint = analyseTaint(orderedNodes, opts.datasets);
   diags.push(...taint.diagnostics);
+  if (expansion.parts.size) diags.push(...contextCoupling());
   for (const n of def.nodes) {
     if (n.type === 'approval' && n.payload === undefined) warn('approval_without_payload', `approval '${n.id}' shows no payload; approvers should see the concrete target and payload`, n.id);
   }
@@ -484,7 +568,7 @@ export function compile(def: WorkflowDefinition, opts: CompileOptions = {}): Com
     format: 'azhi-plan/1',
     compiler: COMPILER_VERSION,
     workflowId: def.id,
-    definitionHash: contentHash(def),
+    definitionHash: contentHash(authored),
     ...(opts.pkg ? { packageHash: opts.pkg.hash } : {}),
     ...(def.inputs ? { inputsSchema: def.inputs } : {}),
     config: def.config ?? {},

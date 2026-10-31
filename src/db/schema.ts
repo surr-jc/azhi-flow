@@ -88,6 +88,12 @@ export const mcpConnections = pgTable('mcp_connections', {
   oauthTokens: bytea('oauth_tokens'),
   oauthState: text('oauth_state'),
   oauthVerifier: bytea('oauth_verifier'),
+  oauthResource: text('oauth_resource'),
+  oauthIssuer: text('oauth_issuer'),
+  oauthRegistrationEndpoint: text('oauth_registration_endpoint'),
+  oauthAuthMethod: text('oauth_auth_method'),
+  oauthRegistrationToken: bytea('oauth_registration_token'),
+  oauthStateExpiresAt: ts('oauth_state_expires_at'),
   status: text('status').notNull(),
   lastError: text('last_error'),
   createdBy: text('created_by'),
@@ -96,7 +102,7 @@ export const mcpConnections = pgTable('mcp_connections', {
 });
 
 export const portableAssets = pgTable('portable_assets', {
-  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull(), kind: text('kind').notNull(), slug: text('slug').notNull(), name: text('name').notNull(), description: text('description').notNull(), status: text('status').notNull(), currentVersion: integer('current_version').notNull(), createdBy: text('created_by'), createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull(), kind: text('kind').notNull(), slug: text('slug').notNull(), name: text('name').notNull(), description: text('description').notNull(), status: text('status').notNull(), currentVersion: integer('current_version').notNull(), scope: text('scope').notNull().default('global'), projectWorkflow: text('project_workflow'), createdBy: text('created_by'), createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
 });
 export const portableAssetVersions = pgTable('portable_asset_versions', { id: text('id').primaryKey(), assetId: text('asset_id').notNull(), version: integer('version').notNull(), definition: jsonb('definition').notNull(), published: boolean('published').notNull(), createdBy: text('created_by'), createdAt: ts('created_at').notNull().defaultNow() });
 

@@ -9,8 +9,15 @@ Load the requirements-brief, implementation-plan and decision-rubric skills and 
 in the repository once with glob, grep and read, then return one object with submit_output:
 `requirements` (problem, checkable acceptance criteria, non-goals, evidence, open questions with
 recommended defaults) and `design` (approaches, the recommended one, files, patterns, ordered tasks,
-test plan, risks, risk signals, open questions with recommended defaults). Do not repeat a question
-in both parts.
+test plan, how each acceptance criterion will be verified, risks, risk signals, open questions with
+recommended defaults). Do not repeat a question in both parts.
+
+The repository may be in any language. Learn its build and test conventions from its own manifests,
+CI files and existing tests before you plan tests; do not assume a stack.
+
+If the ticket states no acceptance criteria, derive them from the request as the requirements-brief
+skill describes, set `criteria_source` to `derived` (or `mixed`), and ask for their confirmation as the
+first open question.
 
 Two checks before you return the plan:
 - **Is this the right base?** If the ticket names files, routes or components, look for each with glob. When

@@ -23,9 +23,10 @@ it is the first remaining gap below.
 | 7 | `ai-sdlc` reviewers (code, test, security) are not verified before their findings send the change into a fix round. | `ai-sdlc` | A wrong finding costs a build round (**fixed**, below) |
 | 8 | No labelled evaluation, so no workflow change can be shown to help. | `bench/` covers executors only | Quality changes are judged by feel |
 
-Not a gap: `max_tool_calls: 10`. It counts calls through the Azhi gateway bridge (for example
-`submit_output`), not OpenCode's own read and grep, so it does not limit how much code an agent reads.
-The limit on reading is the node `timeout`.
+Not a gap, but a trap: `max_tool_calls` on an OpenCode 2 step caps model calls (the value plus a few
+repair and submit calls), and each call may read or edit several files. A build with `max_tool_calls: 10`
+can run out before it has touched every planned file. When that happens the agent is asked to wrap up and
+the change carries `workspace.step_limit_reached: true`; `finalize` sends such a change back.
 
 ## What changed
 

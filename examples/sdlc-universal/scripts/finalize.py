@@ -10,6 +10,24 @@ reviewer approved (or all of their critical and major findings were refuted), no
 finding was confirmed, none is left unverified, and no reviewer saw a prompt injection attempt. If findings remain
 after the last allowed round, the change is flagged needs_human_attention, never silently shipped.
 
+Some problems block instead of flag: a confirmed critical finding, an unmet acceptance criterion, a reviewer
+that did not judge every acceptance criterion of the requirements, a build that ran out of steps, and (when the
+workflow passes the plan) a planned file that was not changed and not explained, or an acceptance criterion that
+needs an automated test and has none.
+
+When the workflow runs the criteria audit (an `audit` list per round: for each criterion the reviewer rated met, whether
+an independent auditor could trace an input to every outcome it names), a "met" survives only if the audit says
+`holds` with at least one traced outcome at the minimum confidence. A confirmed counterexample makes the criterion
+unmet, which blocks; anything the audit could not confirm is capped at partial.
+
+When the workflow passes the verification scope (which projects the preflight could and could not verify), the files
+the change touches in a project that could not be verified are listed and flag the change: no check backs them.
+
+A criterion is `met` only on evidence that ran: the reviewer names its `evidence_kind` (test_passed,
+test_written_not_run, code_read or manual_unchecked) and anything but a test that really ran and passed is
+capped at `partial`. A reviewer's "met" that rests on reading the code alone is therefore never a bare pass. A
+blocked change has ship=false and `blockers` says why; the workflow sends it back instead of asking for release.
+
 The evidence record is a plain digest of what was reviewed and tested. It is not a signature.
 """
 import hashlib
@@ -31,18 +49,23 @@ index, last = ran[-1]
 change = last["change"]
 ws = change.get("workspace") or {}
 
+# The verdicts and checks come from the latest round, up to the last build, that was reviewed. A fix whose diff is
+# identical to the build before it is not reviewed again, and then the earlier round's findings still stand.
+reviewed_index = next((i for i in range(index, -1, -1) if any((rounds[i].get("verdicts") or {}).values())), index)
+review = rounds[reviewed_index]
+
 # Critical and major findings count only when the verifier confirmed them with enough confidence.
 # Refuted ones (or confirmed below the bar) are dropped and listed; unverifiable ones, or ones the
 # verifier gave no check for, are kept apart and flag the change for a person instead of blocking it.
 minimum = int(data.get("min_confidence", 80))
 checks = {}
-for c in last.get("checks") or []:
+for c in review.get("checks") or []:
     checks.setdefault(c["id"], c)
 
 reviewers, counts, findings, dropped, unverified = [], {"critical": 0, "major": 0, "minor": 0, "suggestion": 0}, [], [], []
 injection = False
 reviewers_ok = True
-for name, v in (last.get("verdicts") or {}).items():
+for name, v in (review.get("verdicts") or {}).items():
     if not v:
         continue
     injection = injection or bool(v.get("prompt_injection_detected"))
@@ -76,13 +99,56 @@ tests = ws.get("tests") or {}
 tests_passed = tests.get("status") == "passed"
 # What the reviewers say about each acceptance criterion (the first reviewer that returned them).
 criteria = []
-for _v in (last.get("verdicts") or {}).values():
+for _v in (review.get("verdicts") or {}).values():
     if _v and _v.get("criteria"):
         criteria = _v["criteria"]
         break
+
+# Whether any test really ran and passed: the whole suite, or (static mode) the new and changed test files.
+_m0 = re.search(r"AZHI_TARGETED_TESTS (passed|failed) (\d+) file", tests.get("output") or "")
+_verification = data.get("verification") or ("none" if data.get("untested") else "full")
+ran_tests = (_verification == "full" and tests_passed) or bool(_m0 and _m0.group(1) == "passed")
+_plan = data.get("plan")
+_how = {int(v["criterion"]): v["how"] for v in ((_plan or {}).get("ac_verification") or [])}
+capped = []
+_checked = []
+audit_on = "audit" in review
+audits = {}
+for _a in review.get("audit") or []:
+    audits.setdefault(_a["criterion"], _a)
+audit_refuted, audit_unconfirmed = [], []
+for _i, _c in enumerate(criteria, 1):
+    _c = dict(_c)
+    if audit_on and _c.get("status") == "met":
+        _a = audits.get(_i)
+        _traced = [o for o in ((_a or {}).get("outcomes") or []) if o.get("input")]
+        if _a and _a["verdict"] == "counterexample" and _a["confidence"] >= minimum:
+            _c["status"] = "unmet"
+            _c["evidence"] = "audit counterexample: " + (_a.get("counterexample") or _a["evidence"])
+            audit_refuted.append(_i)
+        elif not _a or _a["verdict"] != "holds" or not _traced or _a["confidence"] < minimum:
+            _c["status"] = "partial"
+            _c["evidence"] = (_c.get("evidence") or "") + " [capped to partial: the criteria audit did not confirm it" + (": " + _a["evidence"] if _a else ", no audit result was returned") + "]"
+            audit_unconfirmed.append(_i)
+    kind = _c.get("evidence_kind") or ("test_passed" if ran_tests else "code_read")
+    if kind == "test_passed" and not ran_tests:
+        kind = "test_written_not_run"
+    # A criterion the plan verifies by a compile or type check is proven by that check passing.
+    proven = kind == "test_passed" or (_how.get(_i) == "static_check" and kind == "code_read" and _verification != "none" and tests_passed)
+    if _c.get("status") == "met" and not proven:
+        _c["status"] = "partial"
+        _c["evidence"] = (_c.get("evidence") or "") + f" [capped to partial: the evidence is {kind}, not a test that ran and passed]"
+        capped.append(_i)
+    _c["evidence_kind"] = kind
+    _checked.append(_c)
+criteria = _checked
 crit_counts = {k: sum(1 for c in criteria if c.get("status") == k) for k in ("met", "partial", "unmet", "unverifiable")}
 all_met = bool(criteria) and crit_counts["met"] == len(criteria)
-incomplete = crit_counts["partial"] + crit_counts["unmet"] > 0
+# The reviewer must judge every acceptance criterion of the requirements; a short or missing list is not a pass.
+expected = (data.get("requirements") or {}).get("acceptance_criteria") or []
+criteria_missing = max(0, len(expected) - len(criteria))
+incomplete = crit_counts["partial"] + crit_counts["unmet"] + criteria_missing > 0
+step_limit = bool(ws.get("step_limit_reached"))
 
 # Whether the new or changed test files were run (the static test command prints a marker line).
 _m = re.search(r"AZHI_TARGETED_TESTS (passed|failed) (\d+) file", tests.get("output") or "")
@@ -94,8 +160,48 @@ targeted = {"result": _m.group(1), "files": int(_m.group(2))} if _m else None
 verification = data.get("verification") or ("none" if data.get("untested") else "full")
 untested = verification == "none" and not tests_passed
 static = verification == "static"
-ship = (tests_passed or untested) and len(files) > 0
-flagged = (not approved) or untested or static or incomplete
+# The plan against the diff, when the workflow passes the plan: every planned file changed (or explained), and every
+# criterion that needs an automated test has one. The engineer writes `covers AC<n>` in tests_added and
+# `AC<n>: <reason>` in deviations for a criterion with no test.
+plan_missing, plan_unexplained, untested_acs = [], [], []
+if _plan:
+    deviations_text = "\n".join(change.get("deviations") or [])
+    changed = {f["path"] for f in files}
+    plan_missing = [f["path"] for f in _plan.get("files") or [] if f.get("action") != "delete" and f["path"] not in changed]
+    plan_unexplained = [x for x in plan_missing if x not in deviations_text]
+    covered = {int(n) for t in (change.get("tests_added") or []) for n in re.findall(r"\bAC\s*(\d+)", t)}
+    waived = {int(n) for d in (change.get("deviations") or []) for n in re.findall(r"^\s*AC\s*(\d+)\s*:", d, re.I)}
+    total = len(expected) or len(criteria)
+    untested_acs = [i for i in range(1, total + 1) if _how.get(i, "automated_test") == "automated_test" and i not in covered and i not in waived]
+
+# Which projects could be verified here. A changed file inside a project nothing could run is not backed by any check.
+scope = data.get("scope") if isinstance(data.get("scope"), dict) and data["scope"].get("known") else None
+unverified_files = []
+if scope:
+    def _under(path, d):
+        d = (d or ".").strip("/")
+        return d in ("", ".") or path == d or path.startswith(d + "/")
+    _blocked = [b.get("dir", ".") for b in scope.get("blocked") or []]
+    unverified_files = [f["path"] for f in files if any(_under(f["path"], d) for d in _blocked)]
+
+# Blockers keep the change from release approval altogether; everything else only flags the pull request.
+blockers = []
+if counts["critical"]:
+    blockers.append(f"{counts['critical']} confirmed critical finding(s): " + ", ".join(f["id"] for f in findings if f["severity"] == "critical"))
+if crit_counts["unmet"]:
+    blockers.append(f"{crit_counts['unmet']} acceptance criterion(s) unmet")
+if criteria_missing:
+    blockers.append(f"the reviewer judged {len(criteria)} of {len(expected)} acceptance criteria")
+if step_limit:
+    blockers.append("the build ran out of steps and may be unfinished")
+if audit_refuted:
+    blockers.append("the criteria audit found an outcome that cannot happen, or an input that breaks it, for " + ", ".join(f"AC{i}" for i in audit_refuted))
+if plan_unexplained:
+    blockers.append(f"{len(plan_unexplained)} planned file(s) not changed and not explained in the deviations: " + ", ".join(plan_unexplained[:5]) + (" ..." if len(plan_unexplained) > 5 else ""))
+if untested_acs:
+    blockers.append("no test covers " + ", ".join(f"AC{i}" for i in untested_acs) + " (no `covers AC<n>` entry in tests_added and no waiver in the deviations)")
+ship = (tests_passed or untested) and len(files) > 0 and not blockers
+flagged = (not approved) or untested or static or incomplete or step_limit or bool(plan_missing) or bool(capped) or bool(audit_unconfirmed) or bool(unverified_files)
 strategy = data.get("strategy") or {}
 
 # A pull request that closes its ticket on merge must be one that finishes it: otherwise the closing keyword
@@ -117,10 +223,20 @@ record = {
     "weight": weight,
     "design_review": data.get("design_review"),
     "fix_rounds_used": index,
+    "reviewed_round": reviewed_index,
+    "blockers": blockers,
+    "step_limit_reached": step_limit,
+    "plan_files_missing": plan_missing,
+    "criteria_without_test": untested_acs,
+    "criteria_capped": capped,
+    "verification_scope": scope,
+    "files_in_unverified_projects": unverified_files,
+    "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
     "tests": {k: tests.get(k) for k in ("status", "command", "exit_code", "attempts")},
     "verification": verification,
     "coverage": strategy or None,
     "criteria": criteria,
+    "criteria_expected": len(expected),
     "targeted_tests": targeted,
     "closing_keyword_replaced": closes_removed,
     "reviewers": [{k: r[k] for k in ("reviewer", "approved", "critical", "major", "minor", "suggestion")} for r in reviewers],
@@ -138,11 +254,46 @@ lines = ["## Evidence record", "",
          *([f"- Acceptance criteria: {crit_counts['met']} of {len(criteria)} met" + "".join(f", {crit_counts[k]} {k}" for k in ("partial", "unmet", "unverifiable") if crit_counts[k])] if criteria else []),
          *(["- Closing keyword replaced by `Refs`: this change does not finish the ticket, so merging it will not close it"] if closes_removed else []),
          "- Reviewers: " + ("; ".join(f"{r['reviewer']} {'approved' if r['approved'] else 'requested changes'} ({r['critical']} critical, {r['major']} major)" for r in reviewers) or "none"),
+         *([ "- Verification scope: " + ("verified " + (", ".join(f"{v['dir']} ({v['by']})" for v in scope.get("verified") or []) or "nothing") + "; could not run " + (", ".join(f"{b['dir']} (failed at {b['step'] or 'a step'})" for b in scope.get("blocked") or []) or "nothing")) ] if scope else []),
          f"- Verifier: {len(dropped)} critical or major finding(s) refuted or below {minimum}/100 and dropped, {len(unverified)} could not be verified",
          f"- Diff SHA-256: `{record['diff_sha256']}`",
          f"- Record SHA-256: `{record['record_sha256']}`",
          "", "This is a digest of what was reviewed and tested, not a signature.", "",
          "<details><summary>Record</summary>", "", "```json", json.dumps(record, indent=2, sort_keys=True), "```", "</details>"]
+def cell(text, limit=300):
+    t = " ".join(str(text).split()).replace("|", "\\|")
+    return t if len(t) <= limit else t[: limit - 3] + "..."
+
+
+# Reviewer text is model output about untrusted code: it goes into the pull request as table cells and list items only.
+detail = []
+if blockers:
+    detail += ["### Blockers", ""] + [f"- {b}" for b in blockers] + [""]
+if findings:
+    detail += ["### Review findings", "", "| ID | Severity | Where | Message | Confidence |", "|---|---|---|---|---|"]
+    for f in findings:
+        where = f.get("path", "") + (f":{f['line']}" if f.get("line") else "")
+        detail.append(f"| {f['id']} | {f['severity']} | {cell(where, 120)} | {cell(f['message'])} | {f.get('confidence', '-')} |")
+    detail.append("")
+if unverified:
+    detail += ["### Findings the verifier could not settle", ""] + [f"- {u.get('id')} ({u['severity']}, {cell(u.get('path', ''), 120)}): {cell(u['message'])} - {u['why']}" for u in unverified] + [""]
+if dropped:
+    detail += ["### Findings dropped by the verifier", ""] + [f"- {d['id']} ({d['severity']}): {d['verdict']} at {d['confidence']}/100" for d in dropped] + [""]
+open_criteria = [c for c in criteria if c.get("status") != "met"]
+if open_criteria or criteria_missing:
+    detail += ["### Acceptance criteria not met or not proven by a test that ran", "", "| Criterion | Status | Evidence kind | Evidence |", "|---|---|---|---|"]
+    detail += [f"| {cell(c['criterion'])} | {c['status']} | {c.get('evidence_kind', '-')} | {cell(c['evidence'])} |" for c in open_criteria]
+    if criteria_missing:
+        detail.append(f"| {criteria_missing} criterion(s) the reviewer did not judge | missing | | |")
+    detail.append("")
+if unverified_files:
+    detail += ["### Changed files in projects that could not be verified here", "", "No test or build backed these; read them with that in mind.", ""] + [f"- `{x}`" for x in unverified_files[:30]] + (["- ..."] if len(unverified_files) > 30 else []) + [""]
+if plan_missing:
+    detail += ["### Planned files that were not changed", ""] + [f"- `{x}`" + ("" if x in plan_unexplained else " (explained in the deviations)") for x in plan_missing] + [""]
+if detail:
+    at = lines.index("<details><summary>Record</summary>")
+    lines = lines[:at] + detail + lines[at:]
+
 if untested:
     lines = ["> **WARNING - NOT VERIFIED BY TESTS:** the test suite could not run in this environment (the base branch failed its own tests before any change), and a person chose to continue. Run the tests yourself before merging.", ""] + lines
 if static:
@@ -155,7 +306,7 @@ if static:
              + (f" The new or changed test files were also run and {targeted['result']}." if targeted else " No test was run.")
              + cov + " Run the tests before merging.", ""] + lines
 if flagged and not ((untested or static) and approved):
-    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, findings the verifier could not settle, or acceptance criteria that are not met.", ""] + lines
+    lines = ["> **Needs human attention:** reviewers still have critical or major findings after the last fix round, findings the verifier could not settle, acceptance criteria that are not met, or a build that ran out of steps.", ""] + lines
 
 title = change["pr_title"]
 if untested and "[untested]" not in title:
@@ -167,6 +318,9 @@ elif flagged and "[needs-human-attention]" not in title:
 
 out = {
     "ship": ship,
+    "blocked": bool(blockers),
+    "blockers": blockers,
+    "blockers_text": "; ".join(blockers),
     "needs_human_attention": flagged,
     "untested": untested,
     "verification": verification,
@@ -188,6 +342,11 @@ out = {
     "evidence": record,
     "criteria": criteria,
     "criteria_counts": crit_counts,
+    "criteria_missing": criteria_missing,
+    "criteria_capped": capped,
+    "files_in_unverified_projects": unverified_files,
+    "criteria_audit": {"enabled": audit_on, "refuted": audit_refuted, "unconfirmed": audit_unconfirmed},
+    "plan_files_missing": plan_missing,
     "targeted_tests": targeted,
     "closes_removed": closes_removed,
     "evidence_markdown": "\n".join(lines),

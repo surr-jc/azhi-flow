@@ -17,6 +17,9 @@ const common = {
 
 const schemaRef = { oneOf: [{ type: 'string' }, { type: 'object' }] };
 
+/** Names of the workflow's `contexts` whose keys a step takes into its input. */
+const contextList = { type: 'array', items: id, uniqueItems: true, minItems: 1 };
+
 function node(type: string, props: Record<string, unknown>, required: string[] = []) {
   return {
     type: 'object',
@@ -71,6 +74,16 @@ export const workflowSchema = {
     },
     inputs: { type: 'object' },
     config: { type: 'object' },
+    contexts: {
+      type: 'object',
+      propertyNames: id,
+      additionalProperties: {
+        type: 'object',
+        propertyNames: id,
+        minProperties: 1,
+        additionalProperties: { $ref: '#/$defs/value' },
+      },
+    },
     model_defaults: {
       type: 'object',
       properties: { provider: { enum: ['anthropic', 'openai', 'github-copilot', 'openai-chatgpt'] }, name: { type: 'string', minLength: 1, maxLength: 160 } },
@@ -119,13 +132,14 @@ export const workflowSchema = {
       ],
     },
     tool: node('tool', toolProps, ['tool']),
-    script: node('script', scriptProps, ['runtime', 'entrypoint']),
+    script: node('script', { ...scriptProps, context: contextList }, ['runtime', 'entrypoint']),
     agent: node(
       'agent',
       {
         executor: { type: 'string' },
         profile: { type: 'string', pattern: '^[a-z0-9][a-z0-9._-]*@\\d+$' },
         input: { $ref: '#/$defs/value' },
+        context: contextList,
         datasets: { type: 'array', items: { type: 'string' } },
         tools: { type: 'array', items: { type: 'string' } },
         output_schema: schemaRef,
@@ -138,6 +152,16 @@ export const workflowSchema = {
           },
           additionalProperties: false,
         },
+        context_budget: {
+          type: 'object',
+          properties: {
+            max_item_bytes: { type: 'integer', minimum: 256 },
+            max_input_bytes: { type: 'integer', minimum: 1024 },
+            on_exceed: { enum: ['fail', 'withhold'] },
+          },
+          minProperties: 1,
+          additionalProperties: false,
+        },
         requires: { type: 'object', properties: { enforced_restrictions: { type: 'boolean' } }, additionalProperties: false },
         workspace: {
           type: 'object',
@@ -145,6 +169,7 @@ export const workflowSchema = {
             repo: { $ref: '#/$defs/value' },
             ref: { $ref: '#/$defs/value' },
             base_ref: { $ref: '#/$defs/value' },
+            from: { $ref: '#/$defs/value' },
             host: { type: 'string', pattern: '^https?://' },
             credential: { type: 'string' },
             depth: { type: 'integer', minimum: 1 },
@@ -152,7 +177,8 @@ export const workflowSchema = {
             test: {
               type: 'object',
               properties: {
-                command: { type: 'string', minLength: 1, maxLength: 1000 },
+                // 8000: Windows' cmd.exe runs nothing longer than 8191 characters.
+                command: { type: 'string', minLength: 1, maxLength: 8000 },
                 timeout: duration,
                 attempts: { type: 'integer', minimum: 1, maximum: 5 },
               },
@@ -226,6 +252,7 @@ export const workflowSchema = {
         template: { type: 'string' },
         format: { enum: ['markdown', 'html', 'csv'] },
         input: { $ref: '#/$defs/value' },
+        context: contextList,
         summary: { $ref: '#/$defs/value' },
       },
       ['template'],

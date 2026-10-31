@@ -45,6 +45,7 @@ import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
 import { registerAssetRoutes } from './assets.js';
 import { registerConnectionRoutes } from './connections.js';
+import { registerToolboxRoutes } from './toolbox.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -106,6 +107,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerMcpRoutes(app, ctx);
   registerAssetRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
+  registerToolboxRoutes(app, ctx);
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -327,17 +329,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         since: z.string().datetime({ offset: true }).optional(),
         // Text found in the run's inputs, or the start of its id.
         q: z.string().trim().min(1).max(200).optional(),
+        // Leave out subworkflow runs; they show inside their parent's run page.
+        top_level: z.enum(['true', 'false']).optional(),
       })
       .parse(req.query);
     const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
            AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
+           AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
          ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null],
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === 'true'],
       )
     ).rows;
   });
@@ -570,7 +575,10 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const token = await ghCliToken(b.host);
     const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
     await checkEgress(`${api}/user`);
-    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
+      const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
+      throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
+    });
     if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
     const who = (await res.json().catch(() => ({}))) as { login?: string };
     const header = res.headers.get('x-oauth-scopes');

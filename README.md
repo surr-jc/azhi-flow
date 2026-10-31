@@ -7,6 +7,12 @@
 
 Governed, durable agent workflows that say plainly what they can and cannot guarantee.
 
+Azhi Flow is a self-hosted, open-source (Apache-2.0) AI agent workflow orchestration platform built on
+Temporal. It runs code, AI agents, MCP tools, knowledge retrieval and human approvals as nodes of one durable
+workflow, with an audit ledger, cost tracking and a taint rule that blocks unsafe writes.
+
+**Documentation: [surr-jc.github.io/azhi-flow](https://surr-jc.github.io/azhi-flow/)**
+
 Every run shows what the agent saw, what it was allowed to do, what it actually did, and what it cost,
 and says plainly where it cannot know. See Product Specification v2.0 and the Azhi Flow Implementation
 Plan for the design.
@@ -61,6 +67,9 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
   `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
   [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
+- Sharing context between steps: shared `contexts` for inputs several steps need, a byte cap on what reaches
+  an agent (`context_budget`), and `workspace.from` to start a checkout from an earlier step's change, so a
+  reviewer reads the code it reviews. All opt-in. See [docs/context-sharing.md](docs/context-sharing.md).
 - Issue splitter (`examples/issue-splitter` for GitHub, `examples/issue-splitter-jira` for Jira): sizes an
   issue, or a request typed as text, against the code and, when it is too big for one pull request, splits it
   into ordered sub-issues (sub-tasks in Jira) linked under it, after a person approves the plan and may leave
@@ -68,6 +77,13 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   label; something that is not code stops. Run it before the delivery workflow.
   `azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=...`. See
   [docs/issue-splitter.md](docs/issue-splitter.md).
+- AI SDLC Factory (`examples/ai-sdlc-factory-plan`, `ai-sdlc-factory`, `ai-sdlc-factory-readiness`): a software
+  factory from Jira or GitHub tickets. The plan workflow turns a goal or ticket into a release plan a person
+  approves and splits it into ordered tickets; a scheduled lap picks the next unblocked ticket by rules (priority,
+  then what it unblocks, then age), claims it and delivers it through `sdlc-universal` into a pull request on the
+  staging branch; the readiness workflow grades the repository bronze, silver or gold and, when CI is red, proposes
+  a fix ticket behind an approval. Nothing merges or closes. `azhi example install ai-sdlc-factory --repo OWNER/REPO
+  --set slack_channel=...`. See [docs/ai-sdlc-factory.md](docs/ai-sdlc-factory.md).
 - Pull request review with OpenCode agents (`examples/pr-review`): each reviewer works in its own
   fresh checkout of the PR on a worker (isolated git and HOME, read-only token never written,
   deleted after), with an agent prompt, command, skills, read-only tools and an MCP server from

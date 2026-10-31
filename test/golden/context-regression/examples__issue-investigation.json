@@ -1,0 +1,383 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "issue-investigation",
+    "definitionHash": "sha256:1a0a430b15604c4163e014b4c7dd7daf2716c930a12c0f85b2575a9862171b29",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "description": "owner/name, for example acme/payments"
+        },
+        "issue": {
+          "type": "integer",
+          "title": "Issue number"
+        },
+        "branch": {
+          "type": "string",
+          "title": "Branch",
+          "maxLength": 200,
+          "description": "Branch to investigate; leave empty for the default branch"
+        },
+        "post": {
+          "type": "boolean",
+          "title": "Post the analysis on the issue (after approval)"
+        }
+      },
+      "required": [
+        "repo",
+        "issue",
+        "post"
+      ]
+    },
+    "config": {
+      "min_confidence": 80
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "issue",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "issue",
+          "type": "tool",
+          "description": "Read the issue and its first comments from GitHub.",
+          "tool": "github.read-issue@1",
+          "arguments": {
+            "issue": {
+              "cel": "inputs.repo + '#' + string(inputs.issue)"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "investigate",
+        "type": "agent",
+        "deps": [
+          "issue"
+        ],
+        "dataDeps": [
+          "issue"
+        ],
+        "def": {
+          "id": "investigate",
+          "type": "agent",
+          "description": "Find the root cause in the code and its history, and propose a fix (root-cause-analysis skill).",
+          "executor": "opencode",
+          "profile": "issue-investigator@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.branch) && inputs.branch != '' ? 'refs/heads/' + inputs.branch : 'HEAD'"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'issue': nodes.issue.output}"
+          },
+          "output_schema": "schemas/rca.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "challenge",
+        "type": "agent",
+        "deps": [
+          "investigate",
+          "issue"
+        ],
+        "dataDeps": [
+          "investigate",
+          "issue"
+        ],
+        "def": {
+          "id": "challenge",
+          "type": "agent",
+          "description": "Try to refute the analysis in a fresh checkout - check every evidence line, look for a competing cause, test the fix (root-cause-challenge skill, a different model).",
+          "executor": "opencode",
+          "profile": "root-cause-challenger@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.branch) && inputs.branch != '' ? 'refs/heads/' + inputs.branch : 'HEAD'"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'issue': nodes.issue.output, 'analysis': nodes.investigate.output}"
+          },
+          "output_schema": "schemas/challenge.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "calibrate",
+        "type": "condition",
+        "deps": [
+          "challenge",
+          "investigate"
+        ],
+        "dataDeps": [
+          "challenge",
+          "investigate"
+        ],
+        "def": {
+          "id": "calibrate",
+          "type": "condition",
+          "description": "The confidence to trust: high only when the investigator is sure and the challenger supports the analysis with enough confidence; low when it is refuted or the investigator is unsure; otherwise medium.",
+          "expression": "nodes.challenge.output.verdict == 'refuted' || nodes.investigate.output.assessment.confidence == 'low' ? 'low' : (nodes.challenge.output.verdict == 'supported' && nodes.challenge.output.confidence >= config.min_confidence && nodes.investigate.output.assessment.confidence == 'high' ? 'high' : 'medium')",
+          "routes": {
+            "high": [],
+            "medium": [],
+            "low": []
+          },
+          "default": "low"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "report",
+        "type": "report",
+        "deps": [
+          "calibrate",
+          "challenge",
+          "investigate",
+          "issue"
+        ],
+        "dataDeps": [
+          "calibrate",
+          "challenge",
+          "investigate",
+          "issue"
+        ],
+        "def": {
+          "id": "report",
+          "type": "report",
+          "description": "The root-cause analysis and the challenger's verdict as a run artifact.",
+          "template": "templates/rca.md",
+          "input": {
+            "map": "{'issue': nodes.issue.output, 'rca': nodes.investigate.output, 'challenge': nodes.challenge.output, 'trusted': nodes.calibrate.output.route}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_post",
+        "type": "condition",
+        "deps": [
+          "challenge"
+        ],
+        "dataDeps": [
+          "challenge"
+        ],
+        "def": {
+          "id": "should_post",
+          "type": "condition",
+          "description": "Post only when asked to, and never an analysis the challenger refuted.",
+          "expression": "inputs.post && nodes.challenge.output.verdict != 'refuted' ? 'post' : 'skip'",
+          "depends_on": [
+            "challenge"
+          ],
+          "routes": {
+            "post": [
+              "approve_post"
+            ],
+            "skip": []
+          },
+          "default": "skip"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "approve_post",
+        "type": "approval",
+        "deps": [
+          "calibrate",
+          "challenge",
+          "investigate",
+          "should_post"
+        ],
+        "dataDeps": [
+          "calibrate",
+          "challenge",
+          "investigate"
+        ],
+        "def": {
+          "id": "approve_post",
+          "type": "approval",
+          "description": "A person reads the analysis before it is posted on the issue.",
+          "role": "author",
+          "message": {
+            "cel": "'Post this root-cause analysis (' + nodes.calibrate.output.route + ' confidence after an independent check: ' + nodes.challenge.output.verdict + ') on ' + inputs.repo + '#' + string(inputs.issue) + '?'"
+          },
+          "payload": {
+            "map": "{'assessment': nodes.investigate.output.assessment, 'trusted_confidence': nodes.calibrate.output.route, 'challenge': nodes.challenge.output, 'body': nodes.investigate.output.comment + '\\n\\n---\\nIndependent check: ' + nodes.challenge.output.verdict + ' (' + string(nodes.challenge.output.confidence) + '/100). Confidence to trust: ' + nodes.calibrate.output.route + '.'}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_post",
+          "route": "post"
+        }
+      },
+      {
+        "id": "post",
+        "type": "tool",
+        "deps": [
+          "approve_post",
+          "calibrate",
+          "challenge",
+          "investigate"
+        ],
+        "dataDeps": [
+          "calibrate",
+          "challenge",
+          "investigate"
+        ],
+        "def": {
+          "id": "post",
+          "type": "tool",
+          "description": "Post the analysis as a comment on the issue.",
+          "depends_on": [
+            "approve_post"
+          ],
+          "tool": "github.comment-on-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.issue"
+            },
+            "body": {
+              "cel": "nodes.investigate.output.comment + '\\n\\n---\\nIndependent check: ' + nodes.challenge.output.verdict + ' (' + string(nodes.challenge.output.confidence) + '/100). Confidence to trust: ' + nodes.calibrate.output.route + '.'"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == inputs.issue"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "investigate": "output of tainted agent investigate",
+        "challenge": "output of tainted agent challenge",
+        "calibrate": "output of tainted agent challenge",
+        "report": "output of tainted agent challenge",
+        "should_post": "output of tainted agent challenge",
+        "post": "output of tainted agent challenge"
+      },
+      "tainted": {
+        "investigate": "reads a cloned repository (its files are untrusted)",
+        "challenge": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": []
+    }
+  }
+}

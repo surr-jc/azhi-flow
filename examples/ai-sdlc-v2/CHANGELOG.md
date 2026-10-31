@@ -1,5 +1,34 @@
 # Changelog
 
+## Findings and unmet criteria block the pull request
+
+- Findings and unmet criteria now block, not only flag. `finalize` sets `ship: false` and lists `blockers` (also as
+  `blockers_text`) for a confirmed critical finding, an unmet acceptance criterion, acceptance criteria the reviewer did
+  not judge (it compares the count with `requirements.acceptance_criteria`; `criteria` is now required in
+  `verdict.json`), or a build that ran out of steps (`workspace.step_limit_reached`). The run goes to `send_back` with
+  the reasons. Major findings and partial criteria still open a flagged draft.
+- `finalize` keeps the last reviewed round's findings when the fix round is not reviewed again, and the pull request
+  body now lists the findings (id, severity, `path:line`, message, confidence), the unverified and dropped ones, and
+  the criteria that are not met.
+- Build and fix steps allow 40 model calls instead of 10 (the limit counts model calls, not gateway calls).
+
+## Shared contexts for repeated inputs
+
+| Gap | Change |
+|---|---|
+| The engineer's input (environment, ticket, requirements, design, decisions) was written out three times, once for the tested, the static-checks and the untested build, and each review round's change (a seven-field CEL map) was written twice per round, so an edit to one copy was easy to miss | `contexts:` defines `delivery_brief` (the three builds), and `round_1` and `round_2` (the lite reviewer and the verifier of each round). The seven steps list `context:` instead of repeating the map; the verifiers add their `findings` as their own input key. |
+
+Nothing the workflow does changes: the compiled plan has the same order, data edges, taint and diagnostics as before, and every one of the seven steps gets the same input, key for key (`test/ai-sdlc-v2-contexts.test.ts` checks both against the plan from before the change). The contexts only hold values from steps the using steps already wait on, so they add no skip coupling. The shared `workspace:` block (about a dozen copies) is not covered by contexts and is unchanged. An installed copy is updated by the usual three-way merge. If you edited the old `input` of one of these seven steps, the update reports a conflict and keeps your `input`, and the merged step then fails to compile (`context_input_shape`: a `{map: ...}` input cannot be combined with a context) until you move your change into the context or into per-key values.
+
+## Reviewers and verifiers see the change they review
+
+| Gap | Change |
+|---|---|
+| The lite reviewers and the finding verifiers checked out the base branch and got the change only as diff text, so a verifier told to "refute the finding in a fresh checkout" had a checkout without the code it was checking | Those four steps (`lite_review_1/2`, `lite_verify_1/2`) set `workspace.from` to the change they review (`change_1` or `change_2`). The worker fetches that change's own base commit, applies its files and commits them locally, so the files are in the checkout and a diff against `refs/azhi/base` shows them. The diff stays in the message. |
+| The reviewer and verifier instructions said the change was not in the folder | The command, skill, agent and profile text now says the folder holds the base with the change applied, and to confirm findings against the code as it is there. |
+
+Needs a worker and a server on a build with workspace continuation (`docs/context-sharing.md`); a worker without it is refused for these steps at plan time, and the run plan says so. Not verified by a live run yet: the definition and plan checks pass, and the next delivery run is the check. Fix rounds still start from a fresh base and receive the previous diff as text; continuing them needs the fix skill rewritten, which is a separate change.
+
 ## Spec-driven planning (after OpenSpec and GitHub Spec Kit)
 
 | Gap | Change |

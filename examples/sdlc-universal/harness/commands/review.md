@@ -10,5 +10,5 @@ diff, and read the base files it touches and their callers in the checkout. Retu
 submit_output.
 
 Return `criteria` as well: for each acceptance criterion in the requirements, whether the change meets
-it and the file:line of the code and of the test that prove it. The tests were not necessarily run
+it, the file:line of the code and of the test that prove it, and the `evidence_kind` (test_passed, test_written_not_run, code_read or manual_unchecked); only test_passed can stay met. The tests were not necessarily run
 (see the test result in the change): say so in `evidence` when a criterion rests on a test nobody ran.

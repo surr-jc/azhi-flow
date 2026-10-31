@@ -5,8 +5,9 @@ import { api, atLeast } from '../api';
 import { ScheduleForm, WorkflowFiles } from '../pages/Authoring';
 import { Link } from '../router';
 import { Badge, Loading, Table, when } from '../ui';
-import type { ToolInfo } from '../stepHelp';
+import { sourcesOf, type ToolInfo } from '../stepHelp';
 import { ConfigRow } from './ConfigRow';
+import { contextsUsed } from '../graph';
 import { Icon } from '../icons';
 import { ModelSteps } from './ModelChoice';
 import { RepoList } from './RepoAccess';
@@ -34,7 +35,7 @@ export interface SettingsData {
   assets?: PortableAsset[];
 }
 
-export type SectionId = 'inputs' | 'config' | 'models' | 'trigger' | 'secrets' | 'connections' | 'datasets' | 'limits' | 'assets' | 'files';
+export type SectionId = 'inputs' | 'config' | 'contexts' | 'models' | 'trigger' | 'secrets' | 'connections' | 'datasets' | 'limits' | 'assets' | 'files';
 interface Section { id: SectionId; icon: string; title: string; summary: string; chip?: { label: string; tone?: string } }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -89,12 +90,14 @@ export function sectionsOf(d: SettingsData): Section[] {
   const used = d.nodes.filter((n) => n.type === 'tool').map((n) => toolOf(d.tools, n.def?.tool)).filter((t): t is ToolRow => Boolean(t));
   const tools = [...new Map(used.map((t) => [`${t.id}@${t.version}`, t])).values()];
   const datasets = datasetsUsed(d.nodes);
+  const contexts = contextsUsed(d);
   const limited = d.nodes.filter((n) => n.def?.timeout || n.def?.budget || n.def?.retry || n.def?.limits);
   const sched = d.def?.trigger?.schedule as { cron?: string; timezone?: string } | undefined;
   const live = d.schedule;
   return [
     { id: 'inputs', icon: 'down', title: 'Inputs', summary: inputs.length ? inputs.map(([k]) => `${k}${required.has(k) ? '*' : ''}`).join(', ') : 'Takes no inputs', chip: { label: String(inputs.length) } },
     { id: 'config', icon: 'tool', title: 'Config', summary: config.length ? config.map(([k, v]) => `${k} = ${unfilled(v) ? 'not set' : String(v)}`).join(', ') : 'None', chip: config.length ? (config.some(([, v]) => unfilled(v)) ? { label: 'not set', tone: 'warn' } : { label: 'set', tone: 'ok' }) : undefined },
+    ...(contexts.length ? [{ id: 'contexts' as const, icon: 'flow', title: 'Shared contexts', summary: contexts.map((c) => `${c.name} (${plural(c.steps.length, 'step')})`).join(', '), chip: contexts.some((c) => !c.steps.length) ? { label: 'unused', tone: 'warn' } : { label: String(contexts.length) } }] : []),
     { id: 'models', icon: 'agent', title: 'Models', summary: modelSummary(d), chip: d.def?.model_defaults?.provider ? { label: 'set', tone: 'ok' } : undefined },
     { id: 'trigger', icon: 'clock', title: 'Trigger', summary: live ? `${live.cron} (${live.timezone})${live.enabled ? '' : ', off'}` : sched?.cron ? `${sched.cron} (${sched.timezone ?? 'UTC'})` : 'Manual only' },
     { id: 'secrets', icon: 'lock', title: 'Secrets', summary: secrets.size ? [...secrets.keys()].join(', ') : 'None used', chip: secrets.size ? { label: `${setCount} of ${secrets.size}`, tone: setCount === secrets.size ? 'ok' : 'warn' } : undefined },
@@ -193,6 +196,20 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
           <ConfigRow label="Starts" value={d.schedule ? `on a schedule: ${d.schedule.cron} (${d.schedule.timezone})` : sched?.cron ? `on a schedule: ${sched.cron}` : 'manually'} help="Manual workflows run when someone starts them. A schedule starts a run of the published version by itself." />
           {d.schedule ? <ConfigRow label="Next run" value={when(d.schedule.next_occurrence_at)} help={d.schedule.enabled ? undefined : 'The schedule is off.'} /> : null}
           {admin && d.hasPublished && d.schedulesLoaded ? <ScheduleForm key={d.slug} slug={d.slug} schema={d.def?.inputs} schedule={d.schedule} /> : <p className="muted small">{admin ? 'Publish a version before adding a schedule.' : 'Setting a schedule needs the admin role.'}</p>}
+        </>
+      );
+    }
+    case 'contexts': {
+      const list = contextsUsed(d);
+      return (
+        <>
+          <p className="muted">A shared context is a set of values several steps need, written once. A step that lists it takes the keys into its input. Every value in it becomes a dependency of every step that uses it, so keep a context small and keep values from conditional branches out of it.</p>
+          {list.map((c) => (
+            <ConfigRow key={c.name} label={<span className="mono">{c.name}</span>} value={c.steps.length ? undefined : 'not used by any step'} tone={c.steps.length ? undefined : 'warn'}>
+              <div className="cfg-from"><span className="muted small">keys</span>{Object.keys(c.values).map((k) => <span key={k} className="chip-effect" title={sourcesOf(c.values[k]).join(', ') || 'a fixed value'}>{k}</span>)}</div>
+              {c.steps.length ? <div className="cfg-from"><span className="muted small">used by</span>{c.steps.map((s) => <span key={s} className="chip-effect">{s}</span>)}</div> : null}
+            </ConfigRow>
+          ))}
         </>
       );
     }
@@ -337,7 +354,7 @@ export function PortableAssets({ slug, assets }: { slug: string; assets?: Portab
           <div className="asset-attached">{assets.map((a) => <span className="badge" key={a.id}>{a.kind}: {a.name} <span className="mono">v{a.version}</span></span>)}</div>
           <p><button type="button" onClick={download}>Download OpenCode bundle</button></p>
         </>
-      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/assets">Library</Link>.</p>}
+      ) : <p className="muted">No portable assets are attached. Add published ones from the <Link to="/ui/library">Library</Link>.</p>}
       {error ? <div className="error">{error}</div> : null}
     </>
   );

@@ -5,8 +5,9 @@ import { PublishAction } from './Authoring';
 import { useMe } from '../App';
 import { Icon } from '../icons';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, Table, useConfirm, when } from '../ui';
+import { ago, Badge, ErrorNote, formValues, Loading, PageHead, Panel, SchemaFields, StateBadge, useConfirm, when } from '../ui';
 import { RunTable } from './Overview';
+import { workflowCategory } from './Examples';
 import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { Popup } from '../components/Popup';
@@ -20,6 +21,13 @@ export function Workflows() {
   const me = useMe();
   const isAdmin = atLeast(me.data?.role, 'admin');
   const q = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary'), refetchInterval: 15_000 });
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const needle = search.trim().toLowerCase();
+  const all = q.data ?? [];
+  const categories = [...new Set(all.map((w) => workflowCategory(w.slug)))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w.slug) === c).length;
+  const shown = all.filter((w) => (!category || workflowCategory(w.slug) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''}`.toLowerCase().includes(needle)));
   return (
     <>
       <PageHead
@@ -28,23 +36,79 @@ export function Workflows() {
         actions={atLeast(me.data?.role, 'author') ? <><Link to="/ui/workflows/new" className="button primary">Build with chat</Link> <Link to="/ui/examples" className="button">Browse the marketplace</Link> <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link></> : undefined}
       />
       <ErrorNote error={q.error} />
-      <Panel>
-        {!q.data ? <Loading /> : (
-          <Table head={['Workflow', 'Published', 'Latest', 'Schedule', 'Last run', ...(isAdmin ? [''] : [])]} empty="No workflows yet. Run azhi init, then azhi publish.">
-            {q.data.map((w) => (
-              <tr key={w.slug}>
-                <td><Link to={`/ui/workflows/${encodeURIComponent(w.slug)}`}>{w.latest?.name ?? w.slug}</Link>{w.latest?.name && w.latest.name !== w.slug ? <div className="muted small mono">{w.slug}</div> : null}</td>
-                <td>{w.published ? <>v{w.published.version} {w.published.signed ? <Badge tone="ok">signed</Badge> : <Badge tone="warn">unsigned</Badge>}</> : <span className="muted">not published</span>}</td>
-                <td>v{w.latest?.version}{w.latest?.draft ? <> <Badge tone="idle">draft</Badge></> : null}</td>
-                <td>{w.schedule ? <>{w.schedule.cron} <span className="muted">{w.schedule.timezone}</span>{w.schedule.enabled ? null : <> <Badge tone="idle">off</Badge></>}</> : <span className="muted">manual</span>}</td>
-                <td>{w.last_run ? <><StateBadge state={w.last_run.state} /> <span className="muted">{ago(w.last_run.created_at)}</span></> : <span className="muted">never</span>}</td>
-                {isAdmin ? <td><DeleteAction slug={w.slug} compact /></td> : null}
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Panel>
+      {!q.data ? <Loading /> : !q.data.length ? (
+        <div className="empty"><p className="empty-title">No workflows yet.</p><p className="muted">Run <code>azhi init</code>, then <code>azhi publish</code>, or build one with chat.</p></div>
+      ) : (
+        <>
+          <div className="wfl-filters">
+            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+            {categories.length > 1 ? (
+              <div className="tpl-cats" role="group" aria-label="Category">
+                {['', ...categories].map((c) => (
+                  <button key={c || 'all'} type="button" className={`tpl-cat${category === c ? ' on' : ''}`} aria-pressed={category === c} onClick={() => setCategory(c)}>
+                    {c || 'All'} <span className="tpl-count">{countIn(c)}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <p className="sr-only" role="status">{shown.length} workflow{shown.length === 1 ? '' : 's'} shown</p>
+          <div className="wfl-grid">
+            {shown.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} />)}
+          </div>
+          {!shown.length ? (
+            <div className="empty"><p className="empty-title">No workflows match.</p><button type="button" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button></div>
+          ) : null}
+        </>
+      )}
     </>
+  );
+}
+
+function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) {
+  const href = `/ui/workflows/${encodeURIComponent(w.slug)}`;
+  const name = w.latest?.name ?? w.slug;
+  return (
+    <article className="wfl-card">
+      <header className="wfl-head">
+        <div className="wfl-title">
+          <span className="tpl-cat-label">{workflowCategory(w.slug)}</span>
+          <h2><Link to={href}>{name}</Link></h2>
+          <span className="muted small mono">{w.slug}</span>
+        </div>
+        {w.last_run ? <StateBadge state={w.last_run.state} /> : <Badge tone="idle">never run</Badge>}
+      </header>
+      <p className={`wfl-desc ${w.latest?.description ? 'muted' : 'faint'}`}>{w.latest?.description ?? 'No description.'}</p>
+      <dl className="wfl-facts">
+        <div>
+          <dt>Published</dt>
+          <dd>{w.published ? <>v{w.published.version} {w.published.signed ? <Badge tone="s ok">signed</Badge> : <Badge tone="s warn">unsigned</Badge>}</> : <span className="muted">Not published</span>}</dd>
+        </div>
+        <div>
+          <dt>Latest</dt>
+          <dd>{w.latest ? <>v{w.latest.version}{w.latest.draft ? <> <Badge tone="idle">draft</Badge></> : null}</> : '—'}</dd>
+        </div>
+        <div>
+          <dt>Schedule</dt>
+          <dd>
+            {w.schedule ? (
+              <>
+                <span className="mono">{w.schedule.cron}</span>{w.schedule.enabled ? null : <> <Badge tone="idle">off</Badge></>}
+                <span className="muted small wfl-sub">{w.schedule.timezone}{w.schedule.enabled && w.schedule.next_occurrence_at ? ` · next ${when(w.schedule.next_occurrence_at)}` : ''}</span>
+              </>
+            ) : <span className="muted">Manual</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Last run</dt>
+          <dd>{w.last_run ? <><span title={when(w.last_run.created_at)}>{ago(w.last_run.created_at)}</span> <Link to={`/ui/runs/${encodeURIComponent(w.last_run.id)}`} className="small">View</Link></> : <span className="muted">Never</span>}</dd>
+        </div>
+      </dl>
+      <footer className="wfl-foot">
+        <Link to={href} className="button">Open</Link>
+        {isAdmin ? <DeleteAction slug={w.slug} compact /> : null}
+      </footer>
+    </article>
   );
 }
 
@@ -79,7 +143,7 @@ function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; ver
   return (
     <>
       {compact ? (
-        <button type="button" className="small danger" disabled={remove.isPending} onClick={() => void confirmDelete()}>{version ? `Delete v${version.version}` : `Delete ${slug}`}</button>
+        <button type="button" className="small danger" disabled={remove.isPending} aria-label={label} onClick={() => void confirmDelete()}>Delete</button>
       ) : (
         <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} data-tip={label} onClick={() => void confirmDelete()}><Icon name="trash" /></button>
       )}
@@ -141,7 +205,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
         <div className="ed-main">
         <div className="ed-stage">
           {nodes ? (
-            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" controls="top-left" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}>
+            <WorkflowCanvas title={def?.name ?? slug} tag={`v${current.version}${current.draft ? ' draft' : ''}`} height="100%" nodes={nodes} plan={plan.data} select={{ selected, onSelect: setSelected }} detail={mode === 'run' ? lastRun.data : undefined} settings={mode === 'plan' ? settings : undefined}
+              head={<>
               <div className="ed-title">
                 <h1>{def?.name ?? slug}</h1>
                 <span className="pill">v{current.version}{current.draft ? ' draft' : ''}</span>
@@ -165,6 +230,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
                   <Link to={`/ui/examples/${encodeURIComponent(update.id)}`}>Review the update</Link>
                 </div>
               ) : null}
+              </>}
+              foot={<>
               {atLeast(me.data?.role, 'operator') ? (
                 <div className="ed-runbar">
                   <button type="button" className="run-btn" onClick={() => setStarting(true)} aria-label="Start a run" data-tip="Start a run"><Icon name="play" size={22} /></button>
@@ -180,7 +247,8 @@ export function WorkflowPage({ slug }: { slug: string }) {
                 {isAdmin ? <DeleteAction slug={slug} version={current} onDeleted={() => { setPicked(undefined); setSelected(null); if (versions.data.length <= 1) navigate('/ui/workflows'); }} /> : null}
                 <button type="button" className="tb-btn" onClick={() => setDockRequest((r) => ({ tab: 'plan', id: r.id + 1 }))} data-tip="View the run plan" aria-label="View the run plan"><Icon name="approval" /></button>
               </div>
-            </WorkflowCanvas>
+              </>}
+            />
           ) : <Loading />}
         </div>
         <PlanDock plan={plan.data} yaml={source.data?.files.find((f) => f.path === source.data?.workflow)?.text} file={source.data?.workflow} selected={selected} request={dockRequest} note="This is the plan as it stands now, for you, with the workers online now." />

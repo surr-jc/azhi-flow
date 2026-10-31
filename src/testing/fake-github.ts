@@ -21,6 +21,9 @@ export interface FakeGithubData {
     mergeable_state?: string;
     /** `open` unless set (a merged pull request is `closed`). */
     state?: 'open' | 'closed';
+    draft?: boolean;
+    /** Set when the pull request was merged (by `PUT .../merge`, or to start merged). */
+    merged?: boolean;
     files: Array<{ filename: string; status: string; additions: number; deletions: number }>;
   }>;
 }
@@ -52,7 +55,7 @@ export const BOT_LOGIN = 'azhi-bot';
 
 /** `token`: the accepted bearer token, or a list whose first entry may only read and the rest may also write. */
 /** `comments`: comments that already exist (on issues or pull requests). */
-export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }> } = {}) {
+export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }>; files?: Record<string, string[]> } = {}) {
   const requests: string[] = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
@@ -64,6 +67,8 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
   /** What the issue splitter created, and the sub-issue links it made. */
   const created: FakeGithubData['issues'] = [];
   const links: Array<{ repo: string; parent: number; child: number }> = [...(opts.links ?? [])];
+  /** Merges made through the API. */
+  const merges: Array<{ repo: string; number: number; sha: string; method: string }> = [];
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -84,6 +89,16 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const slice = <T>(xs: T[]) => xs.slice((page - 1) * per, page * per);
     // Every token is the same account here; comments it writes are by that login.
     if (url.pathname === '/user') return send(200, { login: BOT_LOGIN, type: 'User' });
+    // Repository contents (`opts.files`: repo to the file paths it has): a file, or the entries of a directory.
+    const content = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/(.+)$/);
+    if (content) {
+      const path = decodeURIComponent(content[2]!).replace(/\/$/, '');
+      const have = opts.files?.[content[1]!] ?? [];
+      if (have.includes(path)) return send(200, { type: 'file', path, name: path.split('/').pop(), size: 1 });
+      const kids = have.filter((f) => f.startsWith(`${path}/`)).map((f) => f.slice(path.length + 1).split('/')[0]!);
+      if (kids.length) return send(200, [...new Set(kids)].map((name) => ({ type: 'file', name, path: `${path}/${name}` })));
+      return send(404, { message: 'Not Found' });
+    }
     let m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/);
     if (m && req.method === 'PATCH') {
       const c = comments.find((x) => x.repo === m![1] && x.id === Number(m![2]));
@@ -113,7 +128,8 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     }
     if (m) {
       const label = url.searchParams.get('labels');
-      const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]));
+      const state = url.searchParams.get('state');
+      const found = data.issues.filter((i) => (!label || i.labels.includes(label)) && (!i.repo || i.repo === m![1]) && (!state || state === 'all' || (i.state ?? 'open') === state));
       return send(200, slice(found).map((i) => ({ number: i.number, id: i.id ?? 4000 + i.number, title: i.title, body: i.body ?? null, state: i.state ?? 'open', comments: i.comments ?? 0, created_at: i.created_at ?? '2026-09-25T04:10:00Z', labels: i.labels.map((name) => ({ name })), html_url: `https://github.com/${m![1]}/issues/${i.number}`, ...(i.pull_request ? { pull_request: {} } : {}) })));
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/sub_issues$/);
@@ -218,6 +234,19 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const head = url.searchParams.get('head')?.split(':').pop();
       return send(200, git.pulls.filter((p) => p.repo === repo && (!head || p.head === head)).map(view));
     }
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)\/merge$/);
+    if (m && req.method === 'PUT') {
+      const pr = data.pulls?.find((p) => p.number === Number(m![2]));
+      if (!pr) return send(404, { message: 'Not Found' });
+      const b = body();
+      if (pr.state === 'closed' || pr.mergeable === false || pr.mergeable_state === 'dirty') return send(405, { message: 'Pull Request is not mergeable' });
+      if (b.sha && b.sha !== pr.head.sha) return send(409, { message: 'Head branch was modified. Review and try the merge again.' });
+      pr.state = 'closed';
+      pr.merged = true;
+      const merge = { repo: m[1]!, number: pr.number, sha: b.sha as string, method: String(b.merge_method ?? 'merge') };
+      merges.push(merge);
+      return send(200, { merged: true, sha: sha('merge', merge), message: 'Pull Request successfully merged' });
+    }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/files)?$/);
     if (m) {
       const pr = data.pulls?.find((p) => p.number === Number(m![2]));
@@ -227,7 +256,7 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
       const reads = ((pr as any).reads = ((pr as any).reads ?? 0) + 1);
       const mergeable = seq[Math.min(reads, seq.length) - 1] ?? null;
       const sum = (k: 'additions' | 'deletions') => pr.files.reduce((n, f) => n + f[k], 0);
-      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: pr.state ?? 'open', draft: false, user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, mergeable, mergeable_state: mergeable === null ? 'unknown' : pr.mergeable_state ?? (mergeable ? 'clean' : 'dirty'), additions: sum('additions'), deletions: sum('deletions') });
+      return send(200, { number: pr.number, title: pr.title, body: pr.body ?? null, state: pr.state ?? 'open', draft: pr.draft ?? false, merged: pr.merged ?? false, ...(pr.merged ? { merge_commit_sha: sha('merge', pr.number) } : {}), user: { login: pr.user ?? 'octocat' }, html_url: `https://github.com/${m[1]}/pull/${pr.number}`, base: pr.base, head: pr.head, mergeable, mergeable_state: mergeable === null ? 'unknown' : pr.mergeable_state ?? (mergeable ? 'clean' : 'dirty'), additions: sum('additions'), deletions: sum('deletions') });
     }
     m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/);
     if (m) {
@@ -249,5 +278,5 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const t = c && git.trees.get(c.tree);
     return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
   };
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, merges, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

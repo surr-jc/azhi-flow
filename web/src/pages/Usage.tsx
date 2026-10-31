@@ -34,7 +34,7 @@ function UsageBody({ data }: { data: UsageSummary }) {
   const copilot = data.by_workflow.some((w) => w.credits !== null);
   return (
     <>
-      <div className="stats">
+      <div className="stats gv-stats">
         <div className="stat"><span className="stat-label">Spend</span><span className="stat-value">{money(total.cost, 'USD', total.unpriced === 0)}</span><span className="stat-hint">last {data.days} days</span></div>
         {total.credits !== null ? <div className="stat"><span className="stat-label">Copilot AI credits</span><span className="stat-value">{num(Math.round(total.credits * 10) / 10)}</span><span className="stat-hint">last {data.days} days</span></div> : null}
         <div className="stat"><span className="stat-label">Model turns</span><span className="stat-value">{num(total.turns)}</span><span className="stat-hint">{total.unpriced ? `${total.unpriced} unpriced` : 'all priced'}</span></div>
@@ -119,38 +119,56 @@ function SpendLimits() {
   return (
     <Panel title="Spend limits">
       {dialog}
-      <p className="muted small">When a limit is used up, new runs of workflows with agent steps are refused (scheduled ones too) until the period resets at midnight UTC or the start of the month. Test runs still work. Unpriced turns are not counted, so spend is a lower bound.</p>
+      <p className="muted small gv-lede">When a limit is used up, new runs of workflows with agent steps are refused (scheduled ones too) until the period resets at midnight UTC or the start of the month. Test runs still work. Unpriced turns are not counted, so spend is a lower bound.</p>
       <ErrorNote error={q.error ?? remove.error} />
-      {!q.data ? <Loading /> : (
-        <Table head={['Applies to', 'Period', 'Used', 'Resets', '']} empty="No spend limits set.">
-          {q.data.map((b) => (
-            <tr key={b.id}>
-              <td>{b.workflow ?? <strong>Whole workspace</strong>}</td>
-              <td>{b.period === 'day' ? 'Daily' : 'Monthly'}</td>
-              <td className="budget-cell">
-                <div className="meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(b.used_pct, 100)} aria-label={`${b.used_pct}% used`}>
-                  <span className={b.exceeded ? 'bad' : b.used_pct >= 80 ? 'warn' : ''} style={{ width: `${Math.min(b.used_pct, 100)}%` }} />
+      {!q.data ? <Loading /> : q.data.length === 0 ? (
+        <div className="empty"><p className="empty-title">No spend limits set.</p><p className="muted">{admin ? 'Add one below to stop runaway agent spend.' : 'An admin can add one to stop runaway agent spend.'}</p></div>
+      ) : (
+        <ul className="gv-limits">
+          {q.data.map((b) => {
+            const pct = Math.min(b.used_pct, 100);
+            const tone = b.exceeded ? 'bad' : b.used_pct >= 80 ? 'warn' : '';
+            return (
+              <li key={b.id} className={`gv-limit ${tone}`}>
+                <div className="gv-limit-top">
+                  <div>
+                    <strong>{b.workflow ?? 'Whole workspace'}</strong>
+                    <span className="muted small"> · {b.period === 'day' ? 'Daily' : 'Monthly'}</span>
+                  </div>
+                  {b.exceeded ? <Badge tone="s bad">used up</Badge> : b.used_pct >= 80 ? <Badge tone="s warn">nearly used</Badge> : null}
                 </div>
-                {money(b.spent, b.currency)} of {money(b.limit, b.currency)} {b.exceeded ? <Badge tone="bad">used up</Badge> : <span className="muted">({b.used_pct}%)</span>}
-              </td>
-              <td title={when(b.resets_at)} className="nowrap">{ago(b.resets_at)}</td>
-              <td>{admin ? <button className="small" disabled={remove.isPending} onClick={async () => (await ask({ title: `Remove the ${b.period === 'day' ? 'daily' : 'monthly'} spend limit for ${b.workflow ?? 'the whole workspace'}?`, text: 'Runs are no longer refused when spend passes it.', confirm: 'Remove limit' })) && remove.mutate(b.id)}>Remove limit</button> : null}</td>
-            </tr>
-          ))}
-        </Table>
+                <div className="meter gv-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`${b.used_pct}% used`}>
+                  <span className={tone} style={{ width: `${pct}%` }} />
+                </div>
+                <div className="gv-limit-foot">
+                  <span><strong>{money(b.spent, b.currency)}</strong> <span className="muted">of {money(b.limit, b.currency)} ({b.used_pct}%)</span></span>
+                  <span className="muted small" title={when(b.resets_at)}>resets {ago(b.resets_at)}</span>
+                  {admin ? <button className="small" disabled={remove.isPending} onClick={async () => (await ask({ title: `Remove the ${b.period === 'day' ? 'daily' : 'monthly'} spend limit for ${b.workflow ?? 'the whole workspace'}?`, text: 'Runs are no longer refused when spend passes it.', confirm: 'Remove limit' })) && remove.mutate(b.id)}>Remove</button> : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
       {admin ? (
-        <form onSubmit={submit} className="row limit-form">
-          <select aria-label="Applies to" value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
-            <option value="">Whole workspace</option>
-            {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
-          </select>
-          <select aria-label="Period" value={period} onChange={(e) => setPeriod(e.target.value as 'day' | 'month')}>
-            <option value="day">Per day</option>
-            <option value="month">Per month</option>
-          </select>
-          <label className="lbl"><span>Limit in USD</span><input type="number" min="0.01" step="0.01" placeholder="50.00" value={limit} onChange={(e) => setLimit(e.target.value)} required /></label>
-          <button type="submit" className="primary" disabled={save.isPending}>Set limit</button>
+        <form onSubmit={submit} className="gv-form">
+          <h3 className="gv-form-title">Add or update a limit</h3>
+          <div className="gv-form-row">
+            <label className="lbl"><span>Applies to</span>
+              <select value={workflow} onChange={(e) => setWorkflow(e.target.value)}>
+                <option value="">Whole workspace</option>
+                {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
+              </select>
+            </label>
+            <label className="lbl"><span>Period</span>
+              <select value={period} onChange={(e) => setPeriod(e.target.value as 'day' | 'month')}>
+                <option value="day">Per day</option>
+                <option value="month">Per month</option>
+              </select>
+            </label>
+            <label className="lbl"><span>Limit in USD</span><input type="number" min="0.01" step="0.01" placeholder="50.00" value={limit} onChange={(e) => setLimit(e.target.value)} required /></label>
+            <button type="submit" className="primary" disabled={save.isPending || !limit}>Set limit</button>
+          </div>
         </form>
       ) : null}
       <ErrorNote error={save.error} />

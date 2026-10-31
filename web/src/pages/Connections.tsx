@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, atLeast, type JsonSchema } from '../api';
 import { useMe } from '../App';
+import { McpStatusBadge, useReconnect, type McpStatus } from '../components/McpSignIn';
 import { RepoList } from '../components/RepoAccess';
 import { Link, useRoute } from '../router';
-import { Badge, ErrorNote, Loading, PageHead, Table } from '../ui';
+import { Badge, ErrorNote, Loading, PageHead, Panel, Table } from '../ui';
 
 /**
  * Everything the workflows reach outside Azhi, one page per system: its tokens, the repositories
@@ -61,7 +62,31 @@ export function Connections({ system }: { system?: string }) {
           </div>
         </div>
       )}
+      {admin ? <McpConnections /> : null}
     </>
+  );
+}
+
+/** Remote MCP connections and whether their sign-in still works. Reconnect starts a fresh sign-in. */
+function McpConnections() {
+  const q = useQuery({ queryKey: ['mcp-connections'], queryFn: () => api<Array<McpStatus & { url: string; auth_kind: 'none' | 'oauth' }>>('/v1/mcp/connections'), refetchInterval: (s) => (s.state.data?.some((c) => c.status === 'authorizing') ? 2000 : false) });
+  const re = useReconnect();
+  if (!q.data?.length) return q.error ? <ErrorNote error={q.error} /> : null;
+  return (
+    <Panel title="MCP connections">
+      <Table head={['Name', 'URL', 'Sign-in', 'Status', '']}>
+        {q.data.map((c) => (
+          <tr key={c.id}>
+            <td className="mono">{c.name}</td>
+            <td className="mono small">{c.url}</td>
+            <td>{c.auth_kind === 'oauth' ? 'OAuth' : 'None'}</td>
+            <td><McpStatusBadge c={c} />{c.last_error ? <div className="muted small">{c.last_error}</div> : null}</td>
+            <td>{c.auth_kind === 'oauth' ? <button type="button" className="small" disabled={re.isPending} onClick={() => re.reconnect(c.id)}>{c.status === 'ready' ? 'Sign in again' : 'Reconnect'}</button> : null}</td>
+          </tr>
+        ))}
+      </Table>
+      <ErrorNote error={re.error} />
+    </Panel>
   );
 }
 
@@ -69,7 +94,19 @@ const use = (u: Use) => (
   <Link key={`${u.workflow}/${u.node}`} to={`/ui/workflows/${encodeURIComponent(u.workflow)}`} className="chip-link" title={`${u.workflow} v${u.version}${u.draft ? ' (draft)' : ''}`}>{u.workflow} › {u.node}</Link>
 );
 
-function SystemView({ system, tools, usage, set, known, admin }: { system: string; tools: Tool[]; usage?: Usage; set: Set<string>; known: boolean; admin: boolean }) {
+/** One system on its own, for the Toolbox dialog: the same view, with its own data and no links to the old pages. */
+export function SystemPanel({ system }: { system: string }) {
+  const me = useMe();
+  const admin = atLeast(me.data?.role, 'admin');
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const usage = useQuery({ queryKey: ['connection-usage'], queryFn: () => api<Usage>('/v1/connections/usage') });
+  const secrets = useQuery({ queryKey: ['secrets'], queryFn: () => api<Array<{ name: string }>>('/v1/secrets'), enabled: admin });
+  const list = (tools.data ?? []).filter((t) => t.id.split('.')[0] === system);
+  if (!tools.data) return tools.error ? <ErrorNote error={tools.error} /> : <Loading />;
+  return <SystemView system={system} tools={list} usage={usage.data} set={new Set((secrets.data ?? []).map((s) => s.name))} known={admin && secrets.data !== undefined} admin={admin} embedded />;
+}
+
+function SystemView({ system, tools, usage, set, known, admin, embedded }: { system: string; tools: Tool[]; usage?: Usage; set: Set<string>; known: boolean; admin: boolean; embedded?: boolean }) {
   const qc = useQueryClient();
   const creds = [...new Set(tools.map((t) => t.credential).filter((c): c is string => Boolean(c)))].sort();
   const gh = tools.filter((t) => Array.isArray(t.transport?.config?.repos));
@@ -125,7 +162,7 @@ function SystemView({ system, tools, usage, set, known, admin }: { system: strin
             );
           })}
         </Table>
-        <p className="muted small">Writes are recorded in each run's action ledger. <Link to="/ui/tools">Register or change tools</Link></p>
+        <p className="muted small">Writes are recorded in each run's action ledger.{embedded ? null : <> <Link to="/ui/tools">Register or change tools</Link></>}</p>
       </div>
     </>
   );

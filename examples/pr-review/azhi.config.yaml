@@ -9,6 +9,10 @@
 #                          the PR and to clone the repository on the worker
 #    github-comment-token  fine-grained token with "Pull requests: write"; used only by the
 #                          comment step (the review is posted automatically, and later runs edit that comment)
+#    github-merge-token    fine-grained token with "Pull requests: write" and "Contents: write"; used only by
+#                          the merge step, which runs only when the run input offer_merge is true and a
+#                          person approves (Slack button or mission control). The approval goes to the
+#                          Slack approvals channel (Slack settings) with the same slack-bot-token.
 #    github-copilot-token  your GitHub Copilot sign-in; the reviewers run on Copilot models through
 #                          OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
 settings:
@@ -56,8 +60,18 @@ tools:
     transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-review}}
     input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
     output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
+  - id: github.merge-pr
+    version: 1
+    description: Merge a pull request at the head commit that was reviewed (GitHub); merging an already merged pull request changes nothing
+    effect: write-idempotent
+    source: github
+    credential: github-merge-token
+    transport: {kind: builtin, name: github.merge-pr, config: {repos: [OWNER/REPO], merge_method: squash}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, sha: {type: string}}, required: [repo, number, sha], additionalProperties: false}
+    output_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, merged: {type: boolean}, already_merged: {type: boolean}, sha: {type: string}, url: {type: string}}}
 secrets:
   - github-read-token
   - github-comment-token
+  - github-merge-token
   - github-copilot-token
   - slack-bot-token

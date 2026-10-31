@@ -1,0 +1,178 @@
+# ai-sdlc-factory: one lap of the software factory. Run it on a schedule; each run takes one ticket.
+#   queue      the ready tickets from GitHub (labels ready and azhi-split) or Jira (a JQL set at install)
+#   pick       RULES, not a model: never a ticket that is blocked, claimed, in a pull request, done or waiting
+#              for its owner; then priority first, then the ticket that unblocks the most others, then the oldest
+#   claim      label the ticket so the next lap skips it
+#   deliver    the published sdlc-universal workflow: readiness check, preflight, plan, build and test, one
+#              independent review, release approval, then a pushed azhi/ branch and a pull request into
+#              the staging branch. That workflow has its own approvals; this one adds no model steps.
+#   outcome    a pull request opened, or sent back (no pull request): a sent-back ticket is labelled for its owner
+# Nothing merges, closes or force-pushes. Merging the pull request into staging is a person's decision, and so is
+# closing the ticket afterwards (which is what releases the slices that depend on it). The only writes are labels on the
+# ticket this lap picked, each pinned by a guard to that ticket. Ticket text is data, never a command.
+# Not built: a lap whose delivery run fails or is rejected cannot label its ticket (a failed child fails this run);
+# the claim label stays, so the ticket is skipped until a person removes it.
+schema_version: "2.0"
+id: ai-sdlc-factory
+name: AI SDLC Factory - one lap
+description: Pick the next unblocked ticket from GitHub or Jira by priority and dependencies, claim it, deliver it through sdlc-universal into a pull request on the staging branch, and report. Nothing merges.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source:
+      type: string
+      title: Tracker
+      enum: [github, jira]
+      description: Where the tickets live. The code and pull requests are always on GitHub.
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository to change, owner/name"}
+    staging_branch: {type: string, title: Staging branch, minLength: 1, maxLength: 200, description: "The branch pull requests are opened against (for example dev). A person merges them there."}
+  required: [source, repo, staging_branch]
+config:
+  # Filled in by the example install (settings slack_channel and jira_jql).
+  channel: "{{slack_channel}}"
+  jira_jql: "{{jira_jql}}"
+  ready_label: ready
+  split_label: azhi-split
+  claim_label: factory-in-progress
+  owner_label: factory-needs-owner
+  priority_label: priority
+nodes:
+  - id: source
+    type: condition
+    description: Read the queue from GitHub or from Jira.
+    expression: inputs.source
+    routes: {github: [queue_ready, queue_split], jira: [queue_jira]}
+    default: github
+
+  - id: queue_ready
+    type: tool
+    description: Open issues labelled ready (independent tickets, and slices with nothing to wait for).
+    tool: github.factory-queue@1
+    arguments: {repo: {ref: inputs.repo}, label: {ref: config.ready_label}, claim_label: {ref: config.claim_label}, max_items: 50}
+
+  - id: queue_split
+    type: tool
+    description: Open issues labelled azhi-split (every slice, including those waiting for an earlier slice).
+    tool: github.factory-queue@1
+    arguments: {repo: {ref: inputs.repo}, label: {ref: config.split_label}, claim_label: {ref: config.claim_label}, max_items: 50}
+
+  - id: queue_jira
+    type: tool
+    description: The Jira issues matching the configured JQL (read-only). The JQL must also return recently done issues, so a dependency's status can be read.
+    tool: jira.search@1
+    arguments: {jql: {ref: config.jira_jql}, fields: "summary,status,priority,labels,issuelinks,parent,description,created", limit: 50}
+
+  - id: pick
+    type: script
+    description: Choose the ticket for this lap, by rules, and say why every other one was skipped. Anything unreadable counts as blocking.
+    runtime: python
+    entrypoint: scripts/pick.py
+    merge: any
+    depends_on: [source]
+    input:
+      map: >-
+        {'source': inputs.source, 'repo': inputs.repo,
+        'config': {'claim_label': config.claim_label, 'owner_label': config.owner_label, 'priority_label': config.priority_label},
+        'github': {'queues': has(nodes.queue_ready) ? [nodes.queue_ready.output, nodes.queue_split.output] : []},
+        'jira': {'issues': has(nodes.queue_jira) && has(nodes.queue_jira.output.issues) ? nodes.queue_jira.output.issues : null}}
+    output_schema: schemas/pick.json
+    limits: {time: 1m}
+
+  - id: has_work
+    type: condition
+    description: Something to deliver, or nothing workable.
+    expression: nodes.pick.output.route
+    routes: {work: [claim_source], idle: [idle_report]}
+    default: idle
+
+  - id: idle_report
+    type: report
+    description: Nothing is workable. No message is sent, so an empty queue is quiet.
+    template: templates/idle.md
+    input: {map: "{'repo': inputs.repo, 'pick': nodes.pick.output}"}
+
+  - id: claim_source
+    type: condition
+    description: Claim the ticket in its tracker.
+    expression: inputs.source
+    routes: {github: [claim_github], jira: [claim_jira]}
+    default: github
+
+  - id: claim_github
+    type: tool
+    description: Label the issue so the next lap skips it.
+    tool: github.label-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: nodes.pick.output.ticket.number}, labels: {ref: nodes.pick.output.claim_labels}}
+    guard: "args.repo == inputs.repo && args.number == nodes.pick.output.ticket.number && args.labels == nodes.pick.output.claim_labels"
+
+  - id: claim_jira
+    type: tool
+    description: Add the claim label to the Jira issue (its other labels are kept).
+    tool: jira.update-labels@1
+    arguments: {issue_key: {ref: nodes.pick.output.ticket.key}, fields: {ref: nodes.pick.output.claim_fields}, return_fields: "key"}
+    guard: "args.issue_key == nodes.pick.output.ticket.key && args.fields == nodes.pick.output.claim_fields"
+
+  - id: deliver
+    type: subworkflow
+    description: Deliver the ticket through the published sdlc-universal workflow (plan, build, test, review, release approval, pull request into the staging branch).
+    workflow: sdlc-universal
+    merge: any
+    depends_on: [claim_github, claim_jira]
+    input:
+      source: {ref: inputs.source}
+      ticket: {ref: nodes.pick.output.ticket.ref}
+      repo: {ref: inputs.repo}
+      base_branch: {ref: inputs.staging_branch}
+
+  - id: outcome
+    type: script
+    description: A pull request opened, or sent back without one.
+    runtime: python
+    entrypoint: scripts/outcome.py
+    input: {map: "{'child': nodes.deliver.output}"}
+    output_schema: schemas/outcome.json
+    limits: {time: 1m}
+
+  - id: lap_report
+    type: report
+    description: The lap as Markdown.
+    template: templates/lap.md
+    input: {map: "{'repo': inputs.repo, 'staging_branch': inputs.staging_branch, 'pick': nodes.pick.output, 'outcome': nodes.outcome.output, 'shipped': nodes.outcome.output.status == 'shipped'}"}
+
+  - id: lap_post
+    type: notify
+    description: Post the lap to the channel.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.lap_report.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: outcome_route
+    type: condition
+    description: A sent-back ticket is labelled for its owner, so the next lap does not pick it again.
+    expression: nodes.outcome.output.status
+    routes: {shipped: [], sent_back: [sendback_source]}
+    default: shipped
+
+  - id: sendback_source
+    type: condition
+    description: Label the ticket in its tracker.
+    expression: inputs.source
+    routes: {github: [sendback_github], jira: [sendback_jira]}
+    default: github
+
+  - id: sendback_github
+    type: tool
+    description: Label the issue for its owner.
+    tool: github.label-issue@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: nodes.pick.output.ticket.number}, labels: {ref: nodes.pick.output.sendback_labels}}
+    guard: "args.repo == inputs.repo && args.number == nodes.pick.output.ticket.number && args.labels == nodes.pick.output.sendback_labels"
+
+  - id: sendback_jira
+    type: tool
+    description: Add the owner label to the Jira issue (its other labels are kept).
+    tool: jira.update-labels@1
+    arguments: {issue_key: {ref: nodes.pick.output.ticket.key}, fields: {ref: nodes.pick.output.sendback_fields}, return_fields: "key"}
+    guard: "args.issue_key == nodes.pick.output.ticket.key && args.fields == nodes.pick.output.sendback_fields"

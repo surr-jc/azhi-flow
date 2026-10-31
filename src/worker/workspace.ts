@@ -4,6 +4,7 @@ import { mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { ErrorClass } from '../lib/errors.js';
 import { killTree, windowsSystemEnv } from '../lib/process.js';
+import { applyContinuation, validateContinuation, type Continuation } from './continuation.js';
 
 /**
  * Workspace checkouts for harness steps. Each step clones into a fresh directory under its own
@@ -26,6 +27,11 @@ export interface WorkspaceSpec {
   mode?: 'write';
   /** Write mode: a shell command run in the checkout after the agent submits. */
   test?: { command: string; timeoutMs: number; attempts: number };
+  /**
+   * Start from an earlier step's change: the worker checks out the change's own `baseSha` (not `ref`, which only
+   * labels the result), applies its files and commits them locally. Not combined with `baseRef`.
+   */
+  continuation?: Continuation;
 }
 
 export interface Checkout {
@@ -70,6 +76,10 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   for (const [name, ref] of [['ref', spec.ref], ['base_ref', spec.baseRef]] as const) {
     if (ref !== undefined && !REF.test(ref)) throw invalid(`workspace ${name} '${ref}' is not a plain git ref`);
   }
+  if (spec.continuation) {
+    if (spec.baseRef !== undefined) throw invalid('a workspace cannot continue from an earlier change and also set base_ref');
+    validateContinuation(spec.continuation);
+  }
   const dir = join(o.root, 'repo');
   mkdirSync(dir);
   const base = { ...isolatedGitEnv(o.home), GIT_ALLOW_PROTOCOL: new URL(url).protocol.replace(':', '') };
@@ -92,9 +102,12 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   // Kept in the checkout's own config too, so later git commands (an MCP server's diff) agree with the checkout.
   await git(['config', 'core.symlinks', 'false'], { ...base, ...config(always) });
   const auth: Array<[string, string]> = o.token ? [[`http.${new URL(url).origin}/.extraHeader`, `Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`]] : [];
-  const refspecs = [`+${spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : [])];
+  // A continuation starts from the commit its change was made against, however far the branch has moved since.
+  const refspecs = [`+${spec.continuation?.baseSha ?? spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : [])];
+  // A transfer under 1 KB/s for 60 s is stalled, not slow: fail it as transient so the retry starts now, not after the step timeout.
+  const stall: Array<[string, string]> = [['http.lowSpeedLimit', '1000'], ['http.lowSpeedTime', '60']];
   // Fetch by URL: no remote is configured, so neither the URL nor the header is written to .git/config.
-  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...auth]) });
+  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...stall, ...auth]) });
   await git(['checkout', '-q', '--detach', 'refs/azhi/head'], { ...base, ...config(always) });
   const head = await git(['rev-parse', 'HEAD'], { ...base, ...config(always) });
   const baseSha = spec.baseRef ? await git(['rev-parse', 'refs/azhi/base'], { ...base, ...config(always) }) : undefined;
@@ -102,6 +115,24 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   // diff: stop here rather than let agents review an empty change.
   if (baseSha && (baseSha === head || (await git(['merge-base', '--is-ancestor', head, baseSha], { ...base, ...config(always) }).then(() => true, () => false)))) {
     throw ApplicationFailure.create({ type: ErrorClass.invalidInput, nonRetryable: true, message: `workspace ref ${spec.ref} (${head.slice(0, 12)}) is already contained in base_ref ${spec.baseRef}, so there is no change to work on; was the pull request merged?` });
+  }
+  if (spec.continuation) {
+    const { baseSha: from, files } = spec.continuation;
+    if (head !== from) throw invalid(`the checkout is at ${head.slice(0, 12)}, not the change's base ${from.slice(0, 12)}`);
+    const identity = { GIT_AUTHOR_NAME: 'azhi', GIT_AUTHOR_EMAIL: 'azhi@localhost', GIT_COMMITTER_NAME: 'azhi', GIT_COMMITTER_EMAIL: 'azhi@localhost' };
+    const local = { ...base, ...config(always), ...identity };
+    applyContinuation(dir, files);
+    await git(['add', '-A', '--', '.'], local);
+    // The index keeps the mode the earlier step recorded, whatever this file system can represent.
+    for (const f of files) if (f.status !== 'deleted') await git(['update-index', f.mode === '100755' ? '--chmod=+x' : '--chmod=-x', '--', f.path], local);
+    // The files are committed locally so tools that diff commits (refs/azhi/base...HEAD) see them. An empty change makes no commit.
+    if (await git(['diff', '--cached', '--name-only'], local)) await git(['commit', '-q', '--no-verify', '--no-gpg-sign', '-m', `azhi: continue from an earlier change (${files.length} file${files.length === 1 ? '' : 's'})`], local);
+    await git(['update-ref', 'refs/azhi/base', from], local);
+    // `head` stays the base commit: the change a later step collects is measured from it, and it exists on the remote.
+    if (spec.mode !== 'write') return { dir, head, base: from };
+    const gitDir = join(o.root, 'git');
+    renameSync(join(dir, '.git'), gitDir);
+    return { dir, head, gitDir, base: from };
   }
   if (spec.mode !== 'write') return { dir, head, ...(baseSha ? { base: baseSha } : {}) };
   // An agent that may write files must not be able to write git's own files (hooks, config, filters run
@@ -123,6 +154,8 @@ export interface WorkspaceChange {
   diff_truncated: boolean;
   stats: { files: number; additions: number; deletions: number };
   tests: { status: 'passed' | 'failed' | 'not_run'; command: string; exit_code: number | null; attempts: number; output: string };
+  /** True when the agent hit its step limit and was asked to wrap up, so the change may be unfinished. */
+  step_limit_reached?: boolean;
 }
 
 /**
@@ -163,7 +196,7 @@ export async function restoreTree(c: Checkout, home: string, tree: string, timeo
 }
 
 /** The change from the checked-out commit to `tree`, with each changed file's new content. */
-export async function collectChange(c: Checkout, home: string, tree: string, meta: { repo: string; ref: string; tests: WorkspaceChange['tests'] }, timeoutMs = 120_000): Promise<WorkspaceChange> {
+export async function collectChange(c: Checkout, home: string, tree: string, meta: { repo: string; ref: string; tests: WorkspaceChange['tests']; stepLimitReached?: boolean }, timeoutMs = 120_000): Promise<WorkspaceChange> {
   const git = workGit(c, home, timeoutMs);
   // --raw gives modes and status; -z keeps unusual path names intact.
   const raw = (await git(['diff-tree', '-r', '--no-renames', '--raw', '-z', c.head, tree])).toString('utf8').split('\0');
@@ -207,7 +240,18 @@ export async function collectChange(c: Checkout, home: string, tree: string, met
     diff_truncated: truncated,
     stats: { files: files.length, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) },
     tests: meta.tests,
+    ...(meta.stepLimitReached ? { step_limit_reached: true } : {}),
   };
+}
+
+/**
+ * A test command as a person should read it in the activity log. The sdlc-universal gate is a compressed script of
+ * several thousand characters; it is named by its mode instead. Any other long command is cut.
+ */
+export function describeTestCommand(command: string): string {
+  const gate = /^node -e\s+"eval\(require\('zlib'\)\.inflateRawSync\(Buffer\.from\('[^']*','base64'\)\)\+''\)"\s+(full|static)\s*$/.exec(command);
+  if (gate) return `the Azhi test gate, ${gate[1] === 'full' ? 'full (install, typecheck, test)' : 'static (install, typecheck, build)'}; it runs every project it finds, each from its own folder`;
+  return command.length > 300 ? `${command.slice(0, 300)}... (${command.length} characters)` : command;
 }
 
 /**

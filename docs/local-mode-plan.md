@@ -73,8 +73,9 @@ Work:
 - Process trees: replace `process.kill(-pid)` with a cross-platform tree kill (`taskkill /T /F`
   on Windows) in `script-activity.ts` and `harness-activity.ts`.
 - Python: detect `uv`, then `python3`, then `py -3` / `python` on Windows.
-- Memory limits: stay unsupported off Linux; the run plan already marks them, so workflows that
-  set `limits.memory_mb` are refused with a clear reason. Later: Job Objects on Windows.
+- Memory limits: enforced only on Linux. Off Linux the run plan marks them `unverified` ("not enforced here"), so a
+  workflow that sets `limits.memory_mb` still installs and runs with its time limit; `AZHI_REQUIRE_MEMORY_LIMITS=1`
+  makes the plan refuse it instead. Later: Job Objects on Windows.
 - Paths: audit `join`/`/`-joined paths and shell quoting; run the suite on Windows to find the rest.
 
 ### 5. Working on the user's own files

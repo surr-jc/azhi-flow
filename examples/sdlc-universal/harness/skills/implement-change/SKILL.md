@@ -20,7 +20,9 @@ Also load `ai-sdlc-governance` and follow it: no scope creep, no governance or C
 not name, no CI-skip markers, conventional commits.
 
 If the input has a `feedback` section, this is a fix round: your first attempt was reviewed and
-`feedback` holds the reviewers' findings and the previous diff. The checkout is a fresh copy of the
+`feedback` holds the reviewers' findings, the previous diff and `audit`, the counterexamples an
+auditor found to criteria that had been rated met (fix each as an unmet criterion, with a test that drives the
+failing input). The checkout is a fresh copy of the
 base, so re-apply the change with the findings fixed. Fix every `critical` and `major` finding or
 say in `deviations` why you did not; do not widen the change.
 
@@ -32,6 +34,11 @@ way that still meets the criteria and record it in `deviations`. If the plan can
 no edits, and say why in `summary` and `risks`.
 
 ## 3. Implement task by task
+
+You have a limited number of steps. Work in the plan's order and finish every planned file, tests
+included, before polishing. If you are running short, stop polishing and submit; never submit a
+change that leaves a planned file untouched without saying so. In `deviations`, name each planned file
+or task you did not complete, as `NOT DONE: <file or task> - <why>`. A reviewer reads that line first.
 
 For each task, in order:
 
@@ -48,9 +55,20 @@ configuration unless a task says so. Never put secrets, tokens or credentials in
 ## 4. Tests
 
 Add the tests from the test plan, mirroring an existing test file of the same kind (location, naming,
-framework, fixtures): at least one test per acceptance criterion the change affects, the error paths,
-and the edge cases the plan lists. Tests must be deterministic: no network, no real time or random
-values without control.
+framework, fixtures; the project's language and test tool, never one you prefer): at least one test per
+acceptance criterion, the error paths, and the edge cases the plan lists. Follow the design's
+`ac_verification`, which says per criterion what to add. Tests must be deterministic: no network, no
+real time or random values without control.
+
+Where a criterion lists outcomes, write one test per outcome. Each test drives a real input through the code that
+production uses (the sender, handler or endpoint), not a hand-built result, and asserts the outcome that input
+must produce. Add one test for an unknown or empty input, which must give a neutral result, never success. A test
+that only checks that a label renders, or a string or its length, does not cover an outcome and does not count.
+
+Number the criteria in the order of the requirements (1 is the first). In `tests_added`, write each
+entry as `<test file>::<test name> - covers AC<n>[, AC<m>]`. Every criterion must appear in at least
+one entry, or in `deviations` as `AC<n>: no automated test, <reason>`. A criterion rated `manual` in
+the design is listed in `deviations` as a manual check for the reviewer, never dropped.
 
 ## 5. When the tests fail
 
@@ -61,8 +79,15 @@ behaviour it checks, update it and say so in `deviations`.
 
 ## 6. Self-review, then report
 
-Re-read every file you changed against the acceptance criteria and the non-goals. Then submit:
+Re-read every file you changed against the acceptance criteria and the non-goals. You cannot compile,
+so check compile-ability by reading, in whatever language this is: every name you call exists with that
+signature (grep for its definition), every import or using or include resolves, types and nullability
+agree at each call, a captured variable is allowed to be captured, and no branch assumes a setting is
+present when it may be unset. Then submit:
 
+- Open questions: where a person's answer at the design review did not settle a question (it said to use the
+  defaults, or the question was left out), list it under `## Open questions` in `pr_body` with the default you
+  used, so the reviewer sees what was assumed.
 - `summary`: one sentence on what the change does.
 - `commit_message`: a conventional commit, `type(scope): subject` (at most 72 characters), a blank
   line, then what changed and why.

@@ -17,16 +17,19 @@ export function Runs() {
   const text = search.get('q') ?? '';
   const from = search.get('from') ?? '';
   const to = search.get('to') ?? '';
+  // Subworkflow runs show inside their parent's run page; this lists them as rows of their own.
+  const subs = search.get('subs') === '1';
   const me = useMe();
   const [typed, setTyped] = useState(text);
   useEffect(() => setTyped(text), [text]);
   const o = useQuery({ queryKey: ['overview'], queryFn: () => api<Overview>('/v1/overview'), refetchInterval: 5_000 });
   const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
   const q = useInfiniteQuery({
-    queryKey: ['runs', state, workflow, text, from, to],
+    queryKey: ['runs', state, workflow, text, from, to, subs],
     initialPageParam: '',
     queryFn: ({ pageParam }) => {
       const p = new URLSearchParams({ limit: String(PAGE) });
+      if (!subs && !text) p.set('top_level', 'true');
       if (state) p.set('state', state);
       if (workflow) p.set('workflow', workflow);
       if (text) p.set('q', text);
@@ -46,7 +49,7 @@ export function Runs() {
     else p.delete(k);
     navigate(`/ui/runs${p.size ? `?${p}` : ''}`);
   };
-  const filtered = Boolean(state || workflow || text || from || to);
+  const filtered = Boolean(state || workflow || text || from || to || subs);
   const states = STATES.includes(state) ? STATES : [...STATES, state];
   return (
     <>
@@ -65,7 +68,8 @@ export function Runs() {
         </form>
         <label className="row small">From <input type="date" aria-label="From" value={from} onChange={(e) => set('from', e.target.value)} /></label>
         <label className="row small">To <input type="date" aria-label="To" value={to} onChange={(e) => set('to', e.target.value)} /></label>
-        {state || workflow || text || from || to ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : null}
+        <label className="row small"><input type="checkbox" checked={subs} onChange={(e) => set('subs', e.target.checked ? '1' : '')} /> Show subworkflow runs</label>
+        {state || workflow || text || from || to || subs ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : null}
       </div>
       <Panel>
         <ErrorNote error={q.error} />

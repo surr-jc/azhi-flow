@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "route": {"enum": ["work", "idle"]},
+    "ticket": {
+      "type": "object",
+      "properties": {
+        "source": {"enum": ["github", "jira"]},
+        "key": {"type": "string"},
+        "ref": {"type": "string"},
+        "number": {"type": "integer"},
+        "title": {"type": "string"}
+      },
+      "required": ["source", "key", "ref", "number", "title"]
+    },
+    "reason": {"type": "string"},
+    "claim_labels": {"type": "array", "items": {"type": "string"}},
+    "claim_fields": {"type": "string"},
+    "sendback_labels": {"type": "array", "items": {"type": "string"}},
+    "sendback_fields": {"type": "string"},
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"key": {"type": "string"}, "why": {"type": "string"}},
+        "required": ["key", "why"]
+      }
+    }
+  },
+  "required": ["route", "ticket", "reason", "claim_labels", "claim_fields", "sendback_labels", "sendback_fields", "skipped"]
+}

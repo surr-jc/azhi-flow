@@ -13,7 +13,7 @@ same nine-field ticket.
 
 | Part | Works with | Not covered |
 |---|---|---|
-| **Ticket** | Jira Cloud (`jira_get_issue`), GitHub issues, one Confluence Cloud page | Jira Server/Data Center (see below), GitLab/Linear/other trackers |
+| **Ticket** | Jira through the workspace's `jira-ccp_get_issue@1` tool, GitHub issues, one Confluence Cloud page | Jira Server/Data Center (see below), GitLab/Linear/other trackers |
 | **Models** | Anthropic, GitHub Copilot, ChatGPT plan, through OpenCode; one model per role (tiers) or one model for all | Plain OpenAI API keys: the built-in model agent drives them but cannot open a checkout |
 | **Harness** | `opencode` (every agent step needs a checkout, and only OpenCode can give one) | `claude-agent-sdk` and `codex` cannot run workspace steps; see "Other harnesses" |
 | **Language / test stack** | Node (npm, pnpm, yarn), Rust, Go, Python by detection; anything else through `.azhi/commands.json` | A repository with no runnable tests: the run goes to the static path or is paused |
@@ -29,7 +29,6 @@ node examples/sdlc-universal/scripts/apply_models.mjs anthropic     # or github-
 azhi example needs sdlc-universal
 azhi example install sdlc-universal --repo OWNER/REPO \
   --set slack_channel=C0123ABCD \
-  --set jira_url=https://your-company.atlassian.net \
   --set confluence_url=https://your-company.atlassian.net/wiki \
   --set atlassian_username=you@example.com
 
@@ -82,9 +81,10 @@ confluence_gate ─ confluence_page ──────┴─ intake ─ dor_chec
 characters. Every later step reads only `nodes.intake.output`: `source, key, title, description,
 priority, reporter, status, labels, url`. Ticket and page text are untrusted data.
 
-A Jira key must match `^[A-Z][A-Z0-9_]*-[0-9]+$` and a page id must be numeric before the MCP server sees
-them. Jira Server or Data Center: change the two `credential_env` values to `JIRA_PERSONAL_TOKEN` /
-`CONFLUENCE_PERSONAL_TOKEN` and drop the username, as described in [docs/sdlc.md](../../docs/sdlc.md).
+A page id must be numeric before the MCP server sees it. The Jira ticket is read by `jira-ccp_get_issue@1`,
+which must already be registered in the workspace (as must `jira-ccp_jira_search@1` if you add a step that
+searches); its key check and credential belong to that tool, not to this example. For Jira Server or Data Center
+the Confluence tool still follows [docs/sdlc.md](../../docs/sdlc.md).
 
 ## Models and tokens
 
@@ -95,7 +95,7 @@ Each profile has a `# tier:` line, and `models.json` maps tiers to model names p
 | strong | planner (requirements and design in one pass) | the one expensive decision; a good plan makes the build cheap |
 | balanced | engineer, reviewer | bounded work from the plan |
 | light | readiness check, preflight, test strategist | read and run only |
-| alt | finding verifier | a different model from the reviewer, so they do not share a blind spot |
+| alt | finding verifier, criteria auditor | a different model from the reviewer, so they do not share a blind spot |
 
 Names in `models.json` are the ones this repository already uses; edit them to what your account offers.
 Token savings come from the structure, not only the tiers: one planning pass instead of two, one reviewer
@@ -106,11 +106,17 @@ server default (see [docs/model-defaults.md](../../docs/model-defaults.md)).
 
 ## The test gate
 
-A workspace test command is a string of at most 1000 characters, so `scripts/gate.js` is carried
-compressed in `workflow.yaml` (`node scripts/build_gate_commands.mjs` prints both commands). `full` runs
+A workspace test command is a string of at most 8000 characters (cmd.exe stops at 8191), so
+`scripts/gate.js` is carried compressed in `workflow.yaml`. After editing `gate.js`, run
+`node examples/sdlc-universal/scripts/build_gate_commands.mjs --write` to put the new commands into
+`workflow.yaml`; a test checks they match. `full` runs
 install, type-check and tests. `static` runs install, type-check and build, and is used only when the full
 tests cannot run on the base branch; the pull request is then tagged `[static-checks-only]` and is a draft.
 Unlike v2, static mode does not run the changed test files, because that depends on the test framework.
+
+The gate works for any language and any repository layout. It checks every project it finds, each from its
+own folder, and fails if any of them fails. `node -e <command> full plan` prints what it would run without
+running it.
 
 The commands come from `.azhi/commands.json` in the repository if present:
 
@@ -118,8 +124,20 @@ The commands come from `.azhi/commands.json` in the repository if present:
 { "install": "mvn -q dependency:resolve", "typecheck": "", "test": "mvn -q test", "build": "mvn -q -DskipTests package" }
 ```
 
-otherwise from detection: `package.json` scripts (`typecheck`, `test`, `build`; pnpm or yarn by lockfile),
-`Cargo.toml`, `go.mod`, Python (`pytest`). With no usable command the gate exits 1 and says so.
+and, for a repository with several projects in subfolders (a backend, two front ends, a service), a list:
+
+```json
+{ "projects": [
+  { "dir": "backend", "test": "mvn -B test", "build": "mvn -B -DskipTests package" },
+  { "dir": "frontend", "install": "npm ci", "typecheck": "npx tsc --noEmit", "test": "npm test" }
+] }
+```
+
+Otherwise it detects, at the root and up to two folders below it (not hidden folders, `node_modules`, `vendor`,
+`target` or build output): node (npm, pnpm, yarn or bun by lockfile; `typecheck`, `test` and `build` scripts),
+Maven, Gradle (their wrapper scripts when present), .NET, Go, Rust, Python (pip, uv or poetry; `pytest`, and a
+byte-compile check as the type check), Ruby, PHP, Elixir, Swift, and a `Makefile` with a `test` target. With no
+usable command the gate exits 1 and says so.
 
 ## Other harnesses
 

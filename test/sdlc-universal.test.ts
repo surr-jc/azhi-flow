@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
@@ -14,11 +14,13 @@ const PKG = 'examples/sdlc-universal';
 const pkg = packageFromDirectory(PKG);
 const config = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8'));
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+// The Jira tools are registered in the workspace (a gateway connection), not defined by this example; stand-ins let it compile.
+const jiraCcp = ['jira-ccp_get_issue', 'jira-ccp_jira_search'].map((id) => ({ id, version: 1, description: id, effect: 'read', source: 'jira-ccp', input_schema: { type: 'object', properties: { issue_key: { type: 'string' }, include_all_fields: { type: 'boolean' }, fields: { type: 'array', items: { type: 'string' } } } }, output_schema: { type: 'object' }, transport: { kind: 'mcp-streamable-http', connection: 'jira-ccp', tool: id.replace('jira-ccp_', '') } }));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 
 describe('SDLC universal: definition', () => {
   it('compiles, and every write is behind a gate', () => {
-    const r = compile(def, { pkg, catalog: staticCatalog(config.tools) });
+    const r = compile(def, { pkg, catalog: staticCatalog([...config.tools, ...jiraCcp] as never) });
     expect(r.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(r.ok).toBe(true);
     const writes = new Set(r.plan!.taint.paths.map((p) => p.write));
@@ -32,7 +34,12 @@ describe('SDLC universal: definition', () => {
     expect((def.inputs as any).properties.source.enum).toEqual(['jira', 'github']);
     expect((def.inputs as any).required).not.toContain('confluence_page');
     const tools = config.tools.map((t: { id: string }) => t.id);
-    expect(tools).toEqual(expect.arrayContaining(['jira.get-issue', 'confluence.get-page', 'github.get-issue']));
+    expect(tools).toEqual(expect.arrayContaining(['confluence.get-page', 'github.get-issue']));
+    expect(tools).not.toContain('jira.get-issue');
+    const jira = (def.nodes as Array<{ id: string; tool?: string; arguments?: Record<string, unknown> }>).find((n) => n.id === 'jira_issue')!;
+    expect(jira.tool).toBe('jira-ccp_get_issue@1');
+    // Without this the tool returns a trimmed field set that has no description.
+    expect(jira.arguments!.include_all_fields).toBe(true);
   });
 
   it('names no repository-specific command and no hard-coded channel', () => {
@@ -40,9 +47,35 @@ describe('SDLC universal: definition', () => {
     for (const word of ['vitest', 'AZHI_TEST_DATABASE_URL', 'build:web', 'C0C6LTYB0MQ']) expect(text).not.toContain(word);
   });
 
-  it('keeps each test command within the 1000 character limit', () => {
+  it('asks for a typed acknowledgement at release, and pushes or opens nothing unless finalize said ship', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    expect(nodes.release_approval.decision_schema.required).toEqual(['acknowledged']);
+    expect(nodes.release_approval.on_expiry).toBe('reject');
+    for (const id of ['push_branch', 'open_pr']) expect(nodes[id].guard, id).toContain('nodes.finalize.output.ship');
+  });
+
+  it('gives the approver, the builds, the reviewers, the auditors and finalize the per-project scope', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    expect(nodes.gate_scope.depends_on).toEqual(['preflight_b']);
+    for (const id of ['build', 'build_static', 'build_untested', 'lite_fix', 'lite_fix_static', 'lite_fix_untested', 'lite_review_1', 'lite_review_2', 'lite_audit_1', 'lite_audit_2', 'finalize'])
+      expect(JSON.stringify(nodes[id].input), id).toContain('nodes.gate_scope.output');
+    expect(JSON.stringify(nodes.preflight_decision.payload)).toContain("'scope': nodes.gate_scope.output");
+  });
+
+  it('audits every criterion rated met, in a fix-round-triggering way, and feeds finalize the audit of each round', () => {
+    const nodes = Object.fromEntries(def.nodes.map((n: any) => [n.id, n]));
+    for (const n of [1, 2]) {
+      expect(nodes[`lite_audit_${n}`].profile).toBe('criteria-auditor@1');
+      expect(nodes[`lite_audit_${n}`].output_schema).toBe('schemas/audit.json');
+    }
+    expect(nodes.lite_gate_1.expression).toContain("nodes.lite_audit_1.output.checks.exists(c, c.verdict == 'counterexample'");
+    expect(JSON.stringify(nodes.finalize.input)).toContain('lite_audit_2.output.checks');
+    for (const id of ['lite_fix', 'lite_fix_untested', 'lite_fix_static']) expect(JSON.stringify(nodes[id].input), id).toContain("'audit': nodes.lite_audit_1");
+  });
+
+  it('keeps each test command within the 8000 character limit (cmd.exe stops at 8191)', () => {
     const out = JSON.parse(execFileSync('node', [`${PKG}/scripts/build_gate_commands.mjs`], { encoding: 'utf8' }));
-    for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(1000);
+    for (const c of Object.values(out) as string[]) expect(c.length).toBeLessThanOrEqual(8000);
     const used = readFileSync(`${PKG}/workflow.yaml`, 'utf8').replace(/\s*\n\s*/g, ' ');
     for (const c of Object.values(out) as string[]) expect(used).toContain(c);
   });
@@ -97,6 +130,121 @@ describe('SDLC universal: gate', () => {
     const r = run(d, 'static');
     expect(r.code).toBe(1);
     expect(r.out).toContain('no static command');
+  });
+
+  /** What the gate would run, without running it. */
+  const plan = (cwd: string, mode: 'full' | 'static' = 'full') => {
+    const out = execSync(`${full[mode]} plan`, { cwd, encoding: 'utf8', stdio: 'pipe' });
+    return (JSON.parse(out) as { projects: Array<{ dir: string; stack: string; commands: string[] }> }).projects;
+  };
+  const dirs = (cwd: string, mode: 'full' | 'static' = 'full') => plan(cwd, mode).map((p) => `${p.dir.replace(/\\/g, '/')}:${p.stack}`).sort();
+
+  it('finds every project of a repository with several stacks in subfolders, as the failing recovery-link repository was', () => {
+    const d = dir({
+      'backend/pom.xml': '<project/>',
+      'backend/src/test/java/AppTest.java': '',
+      'frontend/package.json': JSON.stringify({ scripts: { test: 'vitest run', build: 'vite build' } }),
+      'frontend-react/package.json': JSON.stringify({ scripts: { test: 'vitest run', build: 'vite build' } }),
+      'frontend-react/pnpm-lock.yaml': '',
+      'mcp-server/pyproject.toml': '[project]\nname = "x"\n',
+      'mcp-server/tests/test_a.py': '',
+      'README.md': 'x',
+    });
+    expect(dirs(d)).toEqual(['backend:java/maven', 'frontend-react:node/pnpm', 'frontend:node/npm', 'mcp-server:python']);
+    const maven = plan(d).find((p) => p.stack === 'java/maven')!;
+    expect(maven.commands).toContain('mvn -B test');
+    expect(plan(d, 'static').find((p) => p.stack === 'java/maven')!.commands).toEqual(['mvn -B -q compile', 'mvn -B -q -DskipTests package']);
+  });
+
+  it('detects the other build systems at the root', () => {
+    const cases: Array<[Record<string, string>, string, string]> = [
+      [{ 'build.gradle.kts': '' }, 'jvm/gradle', 'gradle test'],
+      [{ 'App.csproj': '' }, 'dotnet', 'dotnet test --no-restore'],
+      [{ 'go.mod': 'module x' }, 'go', 'go test ./...'],
+      [{ 'Cargo.toml': '' }, 'rust', 'cargo test'],
+      [{ Gemfile: '', Rakefile: '' }, 'ruby', 'bundle exec rake test'],
+      [{ 'composer.json': JSON.stringify({ scripts: { test: 'phpunit' } }) }, 'php', 'composer test'],
+      [{ 'mix.exs': '' }, 'elixir', 'mix test'],
+      [{ Makefile: 'test:\n\techo ok\n' }, 'make', 'make test'],
+      [{ 'pyproject.toml': '', 'uv.lock': '', tests: '' }, 'python', 'uv run pytest -q'],
+    ];
+    for (const [files, stack, test] of cases) {
+      const p = plan(dir(files))[0];
+      expect(p?.stack, stack).toBe(stack);
+      expect(p?.commands, stack).toContain(test);
+    }
+  });
+
+  it('uses the wrapper script of a Maven or Gradle project when it has one, and ignores the npm placeholder test', () => {
+    const wrapped = plan(dir({ 'pom.xml': '', mvnw: '' }))[0]!;
+    expect(wrapped.commands.some((c) => /mvnw/.test(c))).toBe(true);
+    const placeholder = dir({ 'package.json': JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }) });
+    expect(run(placeholder, 'full').out).toContain('no full command');
+  });
+
+  it('does not descend into build output, dependencies or hidden folders', () => {
+    const d = dir({ 'node_modules/x/package.json': JSON.stringify({ scripts: { test: 'x' } }), '.cache/go.mod': '', 'target/pom.xml': '', 'svc/go.mod': 'module x' });
+    expect(plan(d).map((p) => p.stack)).toEqual(['go']);
+  });
+
+  it('keeps going to a nested project when the root only has tooling', () => {
+    const d = dir({ 'package.json': JSON.stringify({ scripts: { prepare: 'husky' } }), 'api/go.mod': 'module x' });
+    expect(plan(d).map((p) => p.stack)).toEqual(['go']);
+  });
+
+  it('runs each project from its own folder and fails when any project fails, after running the rest', () => {
+    const ok = `node -e "require('fs').writeFileSync('ran.txt','1')"`;
+    const bad = `node -e "process.exit(3)"`;
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'a', test: ok }, { dir: 'b', test: bad }, { dir: 'c', test: ok }] }), 'a/x': '', 'b/x': '', 'c/x': '' });
+    const r = run(d, 'full');
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('AZHI_GATE full failed: b test');
+    expect(existsSync(join(d, 'a', 'ran.txt'))).toBe(true);
+    expect(existsSync(join(d, 'c', 'ran.txt'))).toBe(true);
+    expect(existsSync(join(d, 'ran.txt'))).toBe(false);
+    const good = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'a', test: ok }] }), 'a/x': '' });
+    const g = run(good, 'full');
+    expect(g.code).toBe(0);
+    expect(g.out).toContain('AZHI_GATE full passed (1 project(s))');
+  });
+
+  it('ends with one machine-readable result per project, so a partial pass can be told from a total failure', () => {
+    const ok = `node -e "0"`;
+    const bad = `node -e "process.exit(2)"`;
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: 'fe', test: ok }, { dir: 'be', install: bad, test: ok }] }), 'fe/x': '', 'be/x': '' });
+    const r = run(d, 'full');
+    expect(r.code).toBe(1);
+    const line = r.out.split('\n').find((l) => l.startsWith('AZHI_GATE_RESULT '))!;
+    expect(JSON.parse(line.slice('AZHI_GATE_RESULT '.length))).toEqual({
+      mode: 'full',
+      projects: [{ dir: 'fe', stack: 'configured', status: 'passed', step: '' }, { dir: 'be', stack: 'configured', status: 'failed', step: 'install' }],
+    });
+  });
+
+  it('refuses a configured folder outside the checkout', () => {
+    const d = dir({ '.azhi/commands.json': JSON.stringify({ projects: [{ dir: '..', test: 'node -e 0' }, { dir: '/tmp', test: 'node -e 0' }] }) });
+    expect(run(d, 'full').out).toContain('no full command');
+  });
+});
+
+describe('SDLC universal: gate_scope.py', () => {
+  const scope = (input: unknown) => JSON.parse(execFileSync(python, [`${PKG}/scripts/gate_scope.py`], { input: JSON.stringify(input), encoding: 'utf8' }));
+  const result = (mode: string, projects: unknown[]) => `== x ==\nnoise\nAZHI_GATE_RESULT ${JSON.stringify({ mode, projects })}\nAZHI_GATE ${mode} failed\n`;
+  const p = (dir: string, status: string, step = '') => ({ dir, stack: 's', status, step });
+
+  it('names each project verified (by tests, or only by compiling) or blocked, with the failing step', () => {
+    const out = scope({
+      full_output: result('full', [p('./frontend', 'passed'), p('./backend', 'failed', 'test'), p('./mcp-server', 'failed', 'install')]),
+      static_output: result('static', [p('./frontend', 'passed'), p('./backend', 'passed'), p('./mcp-server', 'failed', 'install')]),
+    });
+    expect(out.known).toBe(true);
+    expect(out.verified).toEqual([{ dir: 'backend', stack: 's', by: 'compile' }, { dir: 'frontend', stack: 's', by: 'tests' }]);
+    expect(out.blocked).toEqual([{ dir: 'mcp-server', stack: 's', step: 'install', failed_in: 'compile' }]);
+  });
+
+  it('says it does not know, rather than guessing, when no run printed a result', () => {
+    expect(scope({ full_output: 'no full command; see .azhi/commands.json', static_output: '' })).toEqual({ known: false, verified: [], blocked: [] });
+    expect(scope({ full_output: 'AZHI_GATE_RESULT {not json', static_output: null })).toEqual({ known: false, verified: [], blocked: [] });
   });
 });
 

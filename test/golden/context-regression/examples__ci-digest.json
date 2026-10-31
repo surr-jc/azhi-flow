@@ -1,0 +1,183 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "ci-digest",
+    "definitionHash": "sha256:c88d08287b3833619f6cbf188cd95b177febf3e744a276dc435b526f5cb7d54a",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "team"
+      ]
+    },
+    "config": {
+      "channel": "C-QUALITY"
+    },
+    "trigger": {
+      "schedule": {
+        "cron": "0 9 * * *",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    "nodes": [
+      {
+        "id": "fetch",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "fetch",
+          "type": "tool",
+          "tool": "ci.list-runs@1",
+          "arguments": {
+            "team": {
+              "ref": "inputs.team"
+            },
+            "since": {
+              "cel": "string(now - duration('24h'))"
+            }
+          },
+          "project": [
+            "id",
+            "status",
+            "duration_s"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "metrics",
+        "type": "script",
+        "deps": [
+          "fetch"
+        ],
+        "dataDeps": [
+          "fetch"
+        ],
+        "def": {
+          "id": "metrics",
+          "type": "script",
+          "runtime": "python",
+          "entrypoint": "scripts/metrics.py",
+          "input": {
+            "ref": "nodes.fetch.output"
+          },
+          "output_schema": "schemas/metrics.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "report",
+        "type": "report",
+        "deps": [
+          "metrics"
+        ],
+        "dataDeps": [
+          "metrics"
+        ],
+        "def": {
+          "id": "report",
+          "type": "report",
+          "template": "templates/digest.md",
+          "input": {
+            "map": "{'team': inputs.team, 'm': nodes.metrics.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "post",
+        "type": "notify",
+        "deps": [
+          "report"
+        ],
+        "dataDeps": [
+          "report"
+        ],
+        "def": {
+          "id": "post",
+          "type": "notify",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.report.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}

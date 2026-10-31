@@ -6,7 +6,9 @@
 # (80), lists the ones it could not settle as "check by hand", and drops the rest. A summarizer
 # merges what is left into one structured review. The review is always posted as a PR
 # comment, and when the reviewers have comments a short summary goes to Slack. Set input post to
-# false for a dry run (nothing is posted or sent).
+# false for a dry run (nothing is posted or sent). Set input offer_merge to true to be asked, in
+# Slack, whether to merge a clean pull request the review approved with nothing to fix; the merge
+# happens only after a person approves, and only at the commit that was reviewed.
 schema_version: "2.0"
 id: pr-review
 name: Pull request review (OpenCode)
@@ -20,6 +22,7 @@ inputs:
     pr: {type: integer, title: Pull request number}
     post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
     allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
+    offer_merge: {type: boolean, default: false, title: Offer to merge a clean approved pull request (asks for approval in Slack first; off by default)}
   required: [repo, pr]
 config:
   # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
@@ -165,3 +168,30 @@ nodes:
     message: {ref: nodes.slack_message.output.markdown}
     # Taint gate: the message may only go to the configured channel.
     guard: "args.channel == config.channel"
+
+  - id: should_offer_merge
+    type: condition
+    description: Offer the merge only when asked (offer_merge), the review was posted, and nothing needs a person first - verdict approve, no finding that must be fixed or checked by hand, and GitHub says the pull request is clean (no conflicts, checks passed, not a draft).
+    expression: "has(inputs.offer_merge) && inputs.offer_merge && !(has(inputs.post) && !inputs.post) && nodes.pr.output.state == 'open' && !nodes.pr.output.draft && nodes.pr.output.mergeable_state == 'clean' && nodes.summarize.output.verdict == 'approve' && nodes.summarize.output.findings.all(f, f.severity == 'minor' && f.triage == 'follow_up') && size(nodes.triage.output.unverified) == 0 ? 'offer' : 'skip'"
+    depends_on: [post]
+    routes: {offer: [approve_merge], skip: []}
+    default: skip
+
+  - id: approve_merge
+    type: approval
+    description: A person approves the merge. The request goes to Slack with Approve and Reject buttons (the workspace approvals channel); a rejection or no answer in 24 hours leaves the pull request unmerged.
+    role: admin
+    message: {cel: "'Merge ' + inputs.repo + '#' + string(inputs.pr) + ' \"' + nodes.pr.output.title + '\" into ' + nodes.pr.output.base_ref + '? The review approved it' + (size(nodes.summarize.output.findings) > 0 ? ' with ' + string(size(nodes.summarize.output.findings)) + ' minor follow-up(s)' : ' with no comments') + ' and GitHub reports it clean. Only the reviewed commit ' + nodes.pr.output.head_sha.substring(0, 8) + ' is merged.'"}
+    payload: {map: "{'pr': nodes.pr.output.url, 'verdict': nodes.summarize.output.verdict, 'summary': nodes.summarize.output.summary, 'head_sha': nodes.pr.output.head_sha, 'follow_ups': nodes.summarize.output.findings}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: merge
+    type: tool
+    description: Merge the pull request at the commit that was reviewed, after the approval.
+    depends_on: [approve_merge]
+    tool: github.merge-pr@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, sha: {ref: nodes.pr.output.head_sha}}
+    # Taint gate (ADR-10): the approval is the human check; this guard also pins the merge to the
+    # reviewed pull request and to the exact commit the reviewers read.
+    guard: "args.repo == inputs.repo && args.number == inputs.pr && args.sha == nodes.pr.output.head_sha"

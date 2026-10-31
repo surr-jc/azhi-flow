@@ -67,6 +67,21 @@ export interface RunPlanReport {
   blockers: Blocker[];
 }
 
+/**
+ * What a script step's `limits.memory_mb` needs from a worker. Only a worker with `prlimit` (Linux) can enforce it;
+ * on Windows and macOS the step runs with its time limit alone. That is a warning (`unverified`), not a refusal, so
+ * a workflow written on one platform installs on another without being edited, and the plan says plainly that the
+ * limit is not enforced. A server that must never run a step without its memory limit sets
+ * AZHI_REQUIRE_MEMORY_LIMITS=1, which makes it a blocker again.
+ */
+export function memoryRequirement(memoryMb: number, enforceable: boolean, anyWorker: boolean, strict = process.env.AZHI_REQUIRE_MEMORY_LIMITS === '1'): Requirement {
+  const name = `memory limit ${memoryMb} MB`;
+  if (enforceable) return { name, mark: 'native', detail: 'prlimit' };
+  if (!anyWorker) return { name, mark: 'unverified', detail: 'no capable worker online' };
+  if (strict) return { name, mark: 'unsupported', detail: 'no worker can enforce memory limits (this server requires them: AZHI_REQUIRE_MEMORY_LIMITS=1)' };
+  return { name, mark: 'unverified', detail: 'not enforced here: only a Linux worker with prlimit can; the step runs with its time limit only' };
+}
+
 export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }, runChoice?: ModelDefaults | null): Promise<RunPlanReport> {
   const plan = version.plan;
   // The run's choice wins over the workflow's defaults; both apply only to steps that say `name: default`.
@@ -75,7 +90,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const secrets = new Set((await ctx.pool.query(`SELECT DISTINCT name FROM secrets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const workers = (
     await ctx.pool.query(`SELECT id, name, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds'`, [workspaceId])
-  ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean } } }>;
+  ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean }; features?: string[] } }>;
   const trust = await evaluateWorkerTrust(ctx, workspaceId, (version.signature as PackageSignature | null) ?? null, version.package_hash);
   const accepting = new Set(trust.workers.filter((w) => w.accepted).map((w) => w.worker));
 
@@ -100,10 +115,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     if (!workers.length) reqs.push({ name: `${runtime} runtime on a worker`, mark: 'unverified', detail: 'no worker online; the run will wait (worker_offline)' });
     else if (!capable.length) reqs.push({ name: `${runtime} runtime on a worker`, mark: 'unsupported', detail: `none of ${workers.length} online workers has ${runtime}` });
     else reqs.push({ name: `${runtime} runtime on a worker`, mark: 'native', detail: capable.map((w) => `${w.name}: ${runtime} ${w.capabilities.runtimes![runtime]!.version}`).join(', ') });
-    if (memoryMb) {
-      const limited = capable.filter((w) => w.capabilities.limits?.memory);
-      reqs.push({ name: `memory limit ${memoryMb} MB`, mark: limited.length ? 'native' : capable.length ? 'unsupported' : 'unverified', detail: limited.length ? 'prlimit' : 'no worker can enforce memory limits' });
-    }
+    if (memoryMb) reqs.push(memoryRequirement(memoryMb, capable.some((w) => w.capabilities.limits?.memory), capable.length > 0));
     if (capable.length) {
       const trusted = capable.filter((w) => accepting.has(w.id));
       const refusals = trust.workers.filter((w) => !w.accepted && capable.some((c) => c.id === w.worker));
@@ -138,6 +150,23 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         enforcement: 'harness',
         detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
       });
+      const fromRef = ws.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
+      if (fromRef) {
+        const producer = fromRef.split('.')[1] ?? fromRef;
+        const continuing = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_continuation'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker supports workspace continuation', mark: 'unverified', detail: 'no worker online' }
+            : continuing.length
+              ? { name: 'worker supports workspace continuation', mark: 'native', detail: continuing.map((w) => w.name).join(', ') }
+              : { name: 'worker supports workspace continuation', mark: 'unsupported', detail: 'no online OpenCode worker has a build with workspace continuation; upgrade the worker' },
+        );
+        np.coverage.push({
+          action: `workspace continues from ${producer}`,
+          enforcement: 'harness',
+          detail: `starts from the change step ${producer} made: the worker fetches that change's own base commit (not the step's ref, which may have moved on), checks every path, applies the files and commits them locally. The files are untrusted data from an agent; nothing is pushed`,
+        });
+      }
       if (ws.mode === 'write') {
         np.coverage.push({
           action: 'edits in the checkout',
@@ -226,6 +255,15 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           enforcement: c.ambientTools === 'uncontrolled' ? 'unobservable' : c.ambientTools === 'disableable' && executor === 'model-agent' ? 'enforced' : 'harness',
           detail: executor === 'model-agent' ? 'none exist' : `${c.ambientTools}: ${decl.notes.join('; ')}`,
         });
+        const cap = { item: def.context_budget?.max_item_bytes ?? ctx.settings.contextBudget.maxItemBytes, input: def.context_budget?.max_input_bytes ?? ctx.settings.contextBudget.maxInputBytes };
+        if (cap.item !== undefined || cap.input !== undefined) {
+          const withhold = def.context_budget?.on_exceed === 'withhold';
+          np.coverage.push({
+            action: 'input cap',
+            enforcement: 'enforced',
+            detail: `${[cap.item !== undefined ? `${cap.item} bytes per field` : '', cap.input !== undefined ? `${cap.input} bytes in all` : ''].filter(Boolean).join(', ')}; ${withhold ? 'a field over the cap is withheld from the agent, recorded on the run, and shown to approvers' : 'the step fails (budget_exceeded) when the input is over the cap'}`,
+          });
+        }
         for (const d of def.datasets ?? []) np.requirements.push(await datasetRequirement(ctx, workspaceId, d, n.id, missing, principal));
         if (executor === 'opencode') await opencodeSetup(def, n.id, np);
         break;

@@ -10,17 +10,33 @@ import { Aside } from '@astrojs/starlight/components';
 | Mode | State |
 |---|---|
 | Local **stdio** MCP servers called through the gateway, with ledger and policy | <span class="tag tag-built">Built</span> |
-| Admin-managed remote **Streamable HTTP** connections (`azhi mcp add`, OAuth supported), tool discovery, registration | <span class="tag tag-built">Built</span> |
+| Admin-managed remote **Streamable HTTP** connections (`azhi mcp add`, OAuth found automatically from the URL), tool discovery, registration | <span class="tag tag-built">Built</span> |
 | The gateway **bridged into harnesses** over MCP, so OpenCode and the Claude Agent SDK use governed tools | <span class="tag tag-built">Built</span> |
 | Health, latency and cost metadata per tool | <span class="tag tag-partly">Partly built</span> |
 | Workflows exposed as MCP tools | <span class="tag tag-vision">Vision</span> |
 
 ```bash
-npx azhi mcp add ...               # add a remote endpoint (--auth oauth when required)
-npx azhi mcp login <connection>    # print the URL that authorizes a shared OAuth connection
+npx azhi mcp add --name wiki --url https://mcp.example.com/mcp --auth oauth
+npx azhi mcp login <connection>    # sign in again (prints the authorization URL)
 npx azhi mcp discover <connection> # list the tools it exposes
-npx azhi mcp register-tool ...     # register selected tools
+npx azhi mcp register-tool <connection> <tool>   # register one; id, description and schema come from the server
 ```
+
+### Connecting a server that needs sign-in
+
+Give Azhi the name, the URL and `--auth oauth`. Azhi reads the server's published OAuth metadata (RFC 9728 and
+RFC 8414), registers itself as a client (RFC 7591, with Azhi's callback as the redirect URI), sends you to the
+server's sign-in page and finishes the connection when you approve. The CLI waits and then reports how many tools
+are available; the web form (Tools, **Add MCP server by URL**) does the same and lists the tools when it is done.
+The Connections page shows each connection's status with a **Reconnect** button. The builder chat can propose the
+connection too.
+
+Some servers cannot register clients. Then creation fails and the message names the exact redirect URI to register;
+register a client by hand and pass `--client-id` (and `--client-secret`, `--authorization-url`, `--token-url`,
+`--scopes` if the server does not publish them), or use **Advanced: use my own OAuth client** in the web form.
+Anything you enter overrides what the server publishes. Every discovered address goes through the same egress check
+as the MCP URL, and Azhi sends the MCP URL as the OAuth `resource` on sign-in, token exchange and refresh. A sign-in
+link expires after 10 minutes.
 
 ## The Library (portable assets)
 

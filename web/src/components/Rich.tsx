@@ -58,90 +58,78 @@ export const fieldLabel = (k: string) => {
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
 const isScalar = (v: unknown) => v === null || v === undefined || ['string', 'number', 'boolean'].includes(typeof v);
-const scalar = (v: unknown) => (v === null || v === undefined ? '—' : typeof v === 'boolean' ? (v ? 'yes' : 'no') : String(v));
-const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-const STATUS_TONE: Record<string, string> = { pass: 'ok', passed: 'ok', ok: 'ok', fail: 'bad', failed: 'bad', error: 'bad', warn: 'warn', warning: 'warn', blocker: 'bad', critical: 'bad', major: 'bad', high: 'bad', medium: 'warn', minor: 'warn', low: 'idle', info: 'idle', nit: 'idle' };
-const looksLikeId = (s: string) => /^\S+$/.test(s) && s.length < 80 && !/[*_`#[]/.test(s);
 
-/**
- * Any JSON value as something a person can read: objects as labelled fields, lists of records as
- * tables, nested records as sections, and text as rendered Markdown. `plain` shows text as
- * preformatted instead (tool input and output, where Markdown would mangle commands and files).
- */
-export function Value({ value, plain, depth = 0 }: { value: unknown; plain?: boolean; depth?: number }): ReactNode {
+const CODE_KEY = /command|cmd|script|stdout|stderr|log|trace|diff|patch/i;
+const fence = (s: string, lang = '') => {
+  const ticks = '`'.repeat(Math.max(3, ...(s.match(/`+/g) ?? []).map((m) => m.length + 1)));
+  return `${ticks}${lang}\n${s}\n${ticks}`;
+};
+const inline = (v: unknown) => (typeof v === 'boolean' ? (v ? 'yes' : 'no') : v === null || v === undefined ? '—' : String(v));
+/** Text shown as it is: Markdown characters in it are escaped so they stay literal. */
+const esc = (s: string) => s.replace(/[\\`*_{}[\]<>#|~]/g, '\\$&');
+const TITLE_KEYS = ['title', 'name', 'gate', 'criterion', 'id', 'key', 'summary'];
+const LONG = 120;
+
+/** A JSON value written as Markdown: fields as a list, long text as paragraphs, nested records under headings, code in fences. */
+export function toMarkdown(value: unknown, depth = 0, key?: string, plain?: boolean): string {
+  const shown = (v: unknown) => (plain && typeof v === 'string' ? esc(v) : inline(v));
   if (typeof value === 'string') {
     const parsed = depth < 6 ? parseJsonText(value) : undefined;
-    if (parsed !== undefined && typeof parsed === 'object' && parsed !== null) return <Value value={parsed} plain={plain} depth={depth + 1} />;
-    if (!value.trim()) return <span className="muted">empty</span>;
-    if (looksLikeDiff(value)) return <DiffView text={value} />;
-    const pill = STATUS_TONE[value.trim().toLowerCase()];
-    if (pill) return <span className={`v-pill ${pill}`}>{value.trim()}</span>;
-    if (plain) return value.includes('\n') || value.length > 120 ? <pre className="json">{value}</pre> : <span className={/\s/.test(value) ? undefined : 'mono'}>{value}</span>;
-    if (looksLikeId(value)) return <span className={/[/.:]/.test(value) ? 'mono' : undefined}>{value}</span>;
-    return <Markdown text={value} inline={!value.includes('\n') && value.length < 200} />;
+    if (parsed !== undefined) return toMarkdown(parsed, depth, key, plain);
+    if (!value.trim()) return '_empty_';
+    if (looksLikeDiff(value)) return fence(value, 'diff');
+    if (key && CODE_KEY.test(key)) return fence(value);
+    // Tool input and output is text to read as it is, so Markdown must not reinterpret it.
+    if (plain) return value.includes('\n') ? fence(value) : value.length > 100 ? esc(value) : `\`${value}\``;
+    return value;
   }
-  if (isScalar(value)) return <>{scalar(value)}</>;
+  if (isScalar(value)) return inline(value);
   if (Array.isArray(value)) {
-    if (!value.length) return <span className="muted">none</span>;
-    if (value.every((v) => isScalar(v) && (typeof v !== 'string' || (v.length < 60 && !v.includes('\n'))))) return <>{value.map(scalar).join(', ')}</>;
-    if (value.every(isScalar)) return <ul className="v-list">{value.map((v, i) => <li key={i}><Value value={v} plain={plain} depth={depth + 1} /></li>)}</ul>;
-    const cols = [...new Set(value.flatMap((r) => (isRecord(r) ? Object.keys(r) : [])))];
-    const flat = value.every((r) => isRecord(r) && Object.values(r).every((x) => isScalar(x) && (typeof x !== 'string' || x.length < 160)));
-    if (flat && cols.length && cols.length <= 7 && value.length <= 100) {
-      return (
-        <div className="table-wrap">
-          <table className="v-table">
-            <thead><tr>{cols.map((c) => <th key={c}>{fieldLabel(c)}</th>)}</tr></thead>
-            <tbody>{value.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c}><Value value={(r as Record<string, unknown>)[c] ?? null} plain={plain} depth={depth + 1} /></td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      );
-    }
-    return (
-      <ol className={value.every(isRecord) ? 'v-items v-cards' : 'v-items'}>
-        {value.map((v, i) => <li key={i}><Value value={v} plain={plain} depth={depth + 1} /></li>)}
-      </ol>
-    );
+    if (!value.length) return '_none_';
+    if (value.every((v) => isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > LONG)))) return value.map((v) => `- ${shown(v)}`).join('\n');
+    return value.map((v, i) => {
+      let body = v;
+      let title = '';
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const rec = v as Record<string, unknown>;
+        const tk = TITLE_KEYS.find((k) => typeof rec[k] === 'string' && !(rec[k] as string).includes('\n') && (rec[k] as string).length <= LONG);
+        if (tk) {
+          title = ` ${shown(rec[tk])}`;
+          body = Object.fromEntries(Object.entries(rec).filter(([k]) => k !== tk));
+        }
+      }
+      return `**${i + 1}.${title}**\n\n${toMarkdown(body, depth + 1, undefined, plain)}`;
+    }).join('\n\n');
   }
   const entries = Object.entries(value as Record<string, unknown>);
-  if (!entries.length) return <span className="muted">none</span>;
-  return (
-    <dl className={`v-fields ${depth ? 'nested' : ''}`}>
-      {entries.map(([k, v]) => {
-        const big = !isScalar(v) && depth >= 2;
-        const block = !isScalar(v) || (typeof v === 'string' && (v.length > 90 || v.includes('\n')));
-        return (
-          <div key={k} className={block ? 'v-field block' : 'v-field'}>
-            <dt>{fieldLabel(k)}</dt>
-            <dd>
-              {big ? (
-                <details>
-                  <summary className="small muted">{Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : `${Object.keys(v as object).length} fields`}</summary>
-                  <Value value={v} plain={plain} depth={depth + 1} />
-                </details>
-              ) : (
-                <Value value={v} plain={plain} depth={depth + 1} />
-              )}
-            </dd>
-          </div>
-        );
-      })}
-    </dl>
-  );
+  if (!entries.length) return '_none_';
+  const hashes = '#'.repeat(Math.min(depth + 3, 6));
+  const out: string[] = [];
+  let list: string[] = [];
+  const flush = () => { if (list.length) out.push(list.join('\n')); list = []; };
+  for (const [k, v] of entries) {
+    const block = !isScalar(v) || (typeof v === 'string' && (v.includes('\n') || CODE_KEY.test(k) || parseJsonText(v) !== undefined));
+    if (block) {
+      flush();
+      out.push(`${hashes} ${fieldLabel(k)}\n\n${toMarkdown(v, depth + 1, k, plain)}`);
+    } else if (typeof v === 'string' && v.length > LONG) {
+      flush();
+      out.push(`**${fieldLabel(k)}:** ${shown(v)}`);
+    } else list.push(`- **${fieldLabel(k)}:** ${shown(v)}`);
+  }
+  flush();
+  return out.join('\n\n');
 }
 
-/** A value formatted for reading, with the raw JSON one click away. */
+/** Any JSON value shown as rendered Markdown, with the raw JSON one click away. */
 export function Formatted({ value, plain, rawLabel = 'raw JSON' }: { value: unknown; plain?: boolean; rawLabel?: string }) {
   const [raw, setRaw] = useState(false);
   if (value === undefined) return <span className="muted">—</span>;
   const structured = typeof value === 'object' && value !== null;
-  const jsonish = typeof value === 'string' && parseJsonText(value) !== undefined;
   return (
     <div className="formatted">
-      {raw ? <pre className="json">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre> : <Value value={value} plain={plain} />}
-      {structured || jsonish ? (
-        <button type="button" className="link small" onClick={() => setRaw((x) => !x)}>{raw ? 'Show formatted' : `Show ${rawLabel}`}</button>
-      ) : null}
+      {raw ? <pre className="json">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre> : <Markdown text={toMarkdown(value, 0, undefined, plain)} />}
+      {structured || (typeof value === 'string' && parseJsonText(value) !== undefined) ? <button type="button" className="link small" onClick={() => setRaw((x) => !x)}>{raw ? 'Show formatted' : `Show ${rawLabel}`}</button> : null}
     </div>
   );
 }

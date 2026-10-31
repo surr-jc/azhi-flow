@@ -1,15 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { ApiError, applyTheme, getTheme, isAuthError, setToken, takeTokenFromHash } from './api';
+import { ApiError, applyTheme, getTheme, isAuthError, setToken, syncChromeColor, takeTokenFromHash } from './api';
 import { App } from './App';
 import { Router } from './router';
-import '@fontsource-variable/public-sans';
-import '@fontsource/ibm-plex-mono/400.css';
-import '@fontsource/ibm-plex-mono/500.css';
+import '@fontsource-variable/inter';
 import './styles.css';
 
 takeTokenFromHash();
 applyTheme(getTheme());
+// With the system theme, the colour follows the operating system as it changes.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncChromeColor);
 
 const client = new QueryClient({
   defaultOptions: {

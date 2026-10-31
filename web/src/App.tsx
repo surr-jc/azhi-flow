@@ -25,6 +25,7 @@ import { WorkflowBuilder } from './pages/Builder';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
 import { Assets } from './pages/Assets';
+import { Toolbox } from './pages/Toolbox';
 
 // The editor (and its YAML library) loads only when someone opens it.
 const WorkflowEditor = lazy(() => import('./pages/Editor').then((m) => ({ default: m.WorkflowEditor })));
@@ -86,7 +87,8 @@ function SignIn({ onDone }: { onDone: () => void }) {
   );
 }
 
-type NavItem = { to: string; label: string; need?: 'admin'; count?: 'approvals' | 'alerts' };
+// `also` lists pages that live under this item without a tab of their own.
+type NavItem = { to: string; label: string; need?: 'admin'; count?: 'approvals' | 'alerts'; also?: string[] };
 type Section = { label: string; to: string; icon: string; items: NavItem[]; count?: 'approvals' };
 
 // Pages grouped by what a person is doing: deciding today, watching runs, building workflows,
@@ -94,13 +96,14 @@ type Section = { label: string; to: string; icon: string; items: NavItem[]; coun
 const SECTIONS: Section[] = [
   { label: 'Today', icon: 'home', to: '/ui', count: 'approvals', items: [] },
   { label: 'Runs', icon: 'runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
-  { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/assets', label: 'Library' }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }, { to: '/ui/datasets', label: 'Datasets' }, { to: '/ui/tools', label: 'Tools' }, { to: '/ui/connections', label: 'Connections' }] },
+  { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/toolbox', label: 'Toolbox', also: ['/ui/datasets', '/ui/tools', '/ui/connections'] }, { to: '/ui/library', label: 'Library', also: ['/ui/assets'] }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }] },
   { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/signins', label: 'Sign-ins', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
   { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
 ];
 
 const isAt = (to: string, path: string) => (to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/'));
-const sectionOf = (path: string) => (path === '/ui' ? SECTIONS[0] : SECTIONS.find((s) => s.items.some((i) => isAt(i.to, path))));
+const isItemAt = (i: NavItem, path: string) => [i.to, ...(i.also ?? [])].some((to) => isAt(to, path));
+const sectionOf = (path: string) => (path === '/ui' ? SECTIONS[0] : SECTIONS.find((s) => s.items.some((i) => isItemAt(i, path))));
 
 export function useMe() {
   return useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/v1/me'), staleTime: 60_000 });
@@ -117,6 +120,8 @@ function Shell() {
   const counts = { approvals: approvals.data?.length ?? 0, alerts: critical };
   const current = sectionOf(path);
   const items = current?.items.filter((i) => allowed(i.need)) ?? [];
+  // A page that lives under another item (opened from its cards) gets a way back to it.
+  const parent = current?.items.find((i) => i.also?.some((to) => isAt(to, path)));
   return (
     <div className="shell">
       <nav className="rail" aria-label="Main">
@@ -143,7 +148,7 @@ function Shell() {
           {current && items.length > 1 ? (
             <nav className="subnav" aria-label={current.label}>
               {items.map((i) => {
-                const active = isAt(i.to, path);
+                const active = isItemAt(i, path);
                 const count = i.count ? counts[i.count] : 0;
                 return (
                   <Link key={i.to} to={i.to} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}>
@@ -161,6 +166,7 @@ function Shell() {
           </span>
         </header>
         <main className={`content${/^\/ui\/workflows\/(?!new$|upload$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
+          {parent ? <Link to={parent.to} className="back-link"><Icon name="chev" size={14} className="back-ico" />Back to {parent.label}</Link> : null}
           <Page path={path} />
         </main>
       </div>
@@ -176,7 +182,8 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/approvals') return <Approvals />;
   if (path === '/ui/alerts') return <Alerts />;
   if (path === '/ui/workflows') return <Workflows />;
-  if (path === '/ui/assets') return <Assets />;
+  if (path === '/ui/toolbox') return <Toolbox />;
+  if (path === '/ui/library' || path === '/ui/assets') return <Assets />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;

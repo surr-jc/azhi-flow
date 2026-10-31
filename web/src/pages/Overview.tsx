@@ -343,7 +343,7 @@ export function RunTable({ runs, empty = 'No runs yet.', cancel, inputs, emptyHi
             {r.flags?.waiting_reason ? <span className="muted small"> {r.flags.waiting_reason.reason.replace('_', ' ')}</span> : null}
           </td>
           {inputs ? <td className="mono small inputs-cell">{JSON.stringify(r.inputs ?? {})}</td> : null}
-          <td>{r.trigger}</td>
+          <td>{r.parent_run_id ? <>↳ <RunLink id={r.parent_run_id} /></> : r.trigger}</td>
           <td title={when(r.created_at)}>{ago(r.created_at)}</td>
           <td>{r.ended_at ? duration(r.created_at, r.ended_at) : '—'}</td>
           {cancel ? (

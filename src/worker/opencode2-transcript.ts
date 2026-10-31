@@ -25,6 +25,8 @@ export class Opencode2Transcript {
   /** User input sent, by inbox id, until OpenCode delivers it to the session. */
   private inbox = new Map<string, string>();
   private abort = new AbortController();
+  /** Model calls finished in the followed session, counted from the event stream. */
+  calls = 0;
 
   constructor(
     private readonly client: OpenCodeClient,
@@ -106,6 +108,7 @@ export class Opencode2Transcript {
       case 'session.tool.failed':
         return this.putTool(d.id, { status: 'error', error: d.error?.message ?? JSON.stringify(d.error ?? {}) });
       case 'session.step.ended':
+        this.calls++;
         return this.putStep(d.assistantMessageID, d.tokens, this.model, d.finish);
       case 'session.step.failed':
       case 'session.execution.failed':

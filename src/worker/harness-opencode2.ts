@@ -22,7 +22,8 @@ import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDcpWrapper } from './tools.js';
 import { TranscriptSink } from './transcript.js';
-import { cloneWorkspace, collectChange, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { cloneWorkspace, collectChange, describeTestCommand, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
+import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 
 /**
  * The OpenCode 2 harness adapter, used when the worker sets AZHI_OPENCODE_MAJOR=2. Same isolation as the 1.x adapter
@@ -37,10 +38,24 @@ const MCP_NAME = 'azhi';
 const AGENT = 'azhi-step';
 /** OpenCode 2's file-editing tools, allowed only for a write-mode workspace. */
 export const OPENCODE2_EDIT_TOOLS = ['edit', 'write'];
-/** Model calls one turn may make before OpenCode 2 disables tools (it has no doom-loop guard of its own). */
+/** Model calls a step may make (OpenCode 2 has no doom-loop guard of its own). Azhi enforces it, see `limitHit`. */
 const stepsFor = (maxToolCalls: number | undefined) => (maxToolCalls ?? 100) + MAX_REPAIRS + 2;
+/** Model calls allowed after the limit, to submit the result. */
+const WRAP_UP_CALLS = 2;
+/**
+ * OpenCode's own `steps` limit is kept out of reach: at the limit it disables tools and appends its instruction as an
+ * assistant message, which Anthropic models reject (the conversation must end with a user message).
+ */
+const OPENCODE_STEPS_CEILING = 10_000;
 
 type Rule = { action: string; resource: string; effect: 'allow' | 'deny' };
+/** A request the provider rejected as malformed (a 400-class refusal other than auth, timeout or rate limit): resending it fails the same way. */
+export function isRejectedRequest(err: { type?: string; status?: number }): boolean {
+  if (/invalid.?request/i.test(err.type ?? '')) return true;
+  const s = err.status;
+  return s !== undefined && s >= 400 && s < 500 && ![401, 403, 408, 409, 425, 429].includes(s);
+}
+
 type Message = { id: string; type: string; finish?: string; error?: { type: string; message: string; status?: number; response?: { body: string } }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }; cost?: number };
 
 export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }, input: HarnessInput): Promise<HarnessResult> {
@@ -79,7 +94,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
             })
           ).value
         : undefined);
-      checkout = await cloneWorkspace(input.workspace, { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
+      checkout = await cloneWorkspace(await resolveWorkspace(input.workspace, runApi), { root, home, token, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
       project = checkout.dir;
     } else {
       mkdirSync(project);
@@ -147,7 +162,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
         permissions,
         // A profile's agent comes from its markdown file; without a profile the Azhi system prompt is this agent's prompt
         // (OpenCode 2 prompts take no system text). The title agent is off: its extra model call is not in the messages.
-        agents: { [agent]: { ...(setup ? {} : { description: 'Azhi agent step', mode: 'primary', system }), steps: stepsFor(input.maxToolCalls) }, title: { disabled: true } },
+        agents: { [agent]: { ...(setup ? {} : { description: 'Azhi agent step', mode: 'primary', system }), steps: OPENCODE_STEPS_CEILING }, title: { disabled: true } },
         // OpenCode 2 loads a plugin only from a folder (its server.js): the wrapper's, which loads DCP's OpenCode 2 build.
         ...(dcp ? { plugins: [pathToFileURL(dcp.dir).href] } : {}),
       }),
@@ -216,7 +231,9 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
           ? ` OpenAI refused the ChatGPT sign-in (secret ${input.credential}). Run \`azhi chatgpt check\`, or sign in again with \`azhi chatgpt login\`, and start a new run.`
           : chatgpt && (/usage.?limit|rate.?limit/i.test(text) || err.status === 429)
             ? ' The ChatGPT plan\'s usage limit is reached; it resets on its own (see your ChatGPT usage page). Start a new run after that.'
-            : '';
+            : isRejectedRequest(err)
+              ? ` The provider rejected the request itself, so retrying will not help. Model '${input.model}' may not work with this OpenCode version; try another model for this step (the profile's model or the workspace's model tiers) and start a new run.`
+              : '';
       return `${text}${hint}${saveLog()}`;
     };
     const step = async <T>(name: string, f: () => Promise<T>, idempotent = false): Promise<T> => {
@@ -288,11 +305,19 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     let turns = 0;
     let testRuns = 0;
     let lastTest: WorkspaceChange['tests'] | undefined;
+    // Past the model-call limit the turn is interrupted and the agent is asked, in a user message, to submit.
+    let allowed = stepsFor(input.maxToolCalls);
+    let limitHit = false;
+    let stepLimitReached = false;
     for (;;) {
       if (ctx.cancellationSignal.aborted) throw new CancelledFailure('harness cancelled');
       const watch = setInterval(() => {
         try {
           if (readState().stopped) interrupt();
+          else if (transcript!.calls >= allowed) {
+            limitHit = true;
+            interrupt();
+          }
         } catch {
           /* state file mid-write */
         }
@@ -325,7 +350,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
         if (test) {
           testRuns++;
           mkdirSync(join(root, 'test-tmp'), { recursive: true });
-          sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${test.command}`, at: Date.now() });
+          sink.put({ id: `test-${testRuns}`, kind: 'note', text: `Running the test command (attempt ${testRuns} of ${test.attempts}): ${describeTestCommand(test.command)}`, at: Date.now() });
           const left = deadline - Date.now();
           const unfilled = /\{\{(\w+)\}\}/.exec(test.command);
           const r = unfilled
@@ -341,14 +366,24 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
             continue;
           }
         }
-        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' } });
+        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' }, stepLimitReached });
         sink.put({ id: 'workspace-change', kind: 'note', text: `Change: ${change.stats.files} file(s), +${change.stats.additions} -${change.stats.deletions}${change.files.length ? `\n${change.files.map((f) => `${f.status} ${f.path}`).join('\n')}` : ''}`, at: Date.now() });
         return await finish({ output: { ...(state.output as Record<string, unknown>), workspace: change } }, state);
       }
       if (state.output !== undefined) return await finish({ output: state.output }, state);
       if (err) {
         const message = describe(err);
-        return await finish({ error: { class: /auth/i.test(message) || err.status === 401 || err.status === 403 ? ErrorClass.authorization : ErrorClass.transient, message: `opencode: ${message}` } }, state);
+        return await finish({ error: { class: /auth/i.test(message) || err.status === 401 || err.status === 403 ? ErrorClass.authorization : isRejectedRequest(err) ? ErrorClass.needsOperator : ErrorClass.transient, message: `opencode: ${message}` } }, state);
+      }
+      if (limitHit) {
+        if (transcript.calls >= allowed + WRAP_UP_CALLS) {
+          return await finish({ error: { class: ErrorClass.contractViolation, message: `the agent used its ${allowed} model calls and did not call ${SUBMIT_TOOL}` } }, state);
+        }
+        limitHit = false;
+        stepLimitReached = true;
+        allowed = transcript.calls + WRAP_UP_CALLS;
+        text = `You have reached the maximum number of steps for this task. Do not start new work. Call ${MCP_NAME}_${SUBMIT_TOOL} now with your result so far, noting what is unfinished.`;
+        continue;
       }
       if (++reminders > MAX_REPAIRS || Date.now() > deadline) {
         return await finish({ error: { class: ErrorClass.contractViolation, message: `the agent did not call ${SUBMIT_TOOL} after ${MAX_REPAIRS} reminders` } }, state);

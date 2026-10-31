@@ -23,6 +23,8 @@ export interface GithubConfig {
   branch_prefix?: string;
   /** The PR comment tool keeps one comment per pull request under this name and edits it on every run. */
   sticky?: string;
+  /** How the merge tool merges: `merge`, `squash` (default) or `rebase`. */
+  merge_method?: string;
 }
 
 const MAX_PAGES = 3;
@@ -37,7 +39,7 @@ async function get(cfg: GithubConfig, token: string | undefined, path: string, t
   return request(cfg, token, 'GET', path, undefined, timeoutMs);
 }
 
-async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH', path: string, body: unknown, timeoutMs: number): Promise<any> {
+async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body: unknown, timeoutMs: number): Promise<any> {
   if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
   await checkEgress(url);
@@ -243,6 +245,32 @@ export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: u
   const comments = await pages(cfg, token, `/repos/${repo}/issues/${number}/comments`, undefined, timeoutMs);
   const hit = comments.find((c: any) => String(c.body ?? '').includes(marker(key)));
   return hit ? { id: Number(hit.id), url: String(hit.html_url ?? '') } : null;
+}
+
+const MERGE_METHODS = ['merge', 'squash', 'rebase'];
+
+/**
+ * Merges a pull request (`github.merge-pr`, write-idempotent). `sha` is the head commit the reviewers
+ * saw: the tool refuses, and GitHub is told the same, when the branch moved since, so an approval
+ * never merges code nobody reviewed. A pull request that is already merged is a success (a retry or a
+ * second approval changes nothing); a closed, draft or conflicting one is refused. The method comes
+ * from the registration (`merge_method`), never from the arguments.
+ */
+export async function mergePullRequest(cfg: GithubConfig, args: { repo?: unknown; number?: unknown; sha?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const sha = String(args.sha ?? '');
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) throw new SendError(`sha must be the full head commit that was reviewed, got '${sha.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  const method = cfg.merge_method ?? 'squash';
+  if (!MERGE_METHODS.includes(method)) throw new SendError(`merge_method must be one of ${MERGE_METHODS.join(', ')}, got '${method}'`, true, ErrorClass.invalidInput);
+  const pr = await get(cfg, token, `/repos/${repo}/pulls/${number}`, timeoutMs);
+  const url = String(pr.html_url ?? '');
+  if (pr.merged) return { repo, number, merged: true, already_merged: true, sha: String(pr.merge_commit_sha ?? ''), url };
+  if (pr.state !== 'open') throw new SendError(`${repo}#${number} is ${String(pr.state)} and was not merged`, true, ErrorClass.invalidInput);
+  if (pr.draft) throw new SendError(`${repo}#${number} is a draft and is not merged`, true, ErrorClass.invalidInput);
+  if (String(pr.head?.sha ?? '') !== sha) throw new SendError(`${repo}#${number} has new commits since the review (head ${String(pr.head?.sha ?? '').slice(0, 12)}, reviewed ${sha.slice(0, 12)}); review it again before merging`, true, ErrorClass.invalidInput);
+  const r = await request(cfg, token, 'PUT', `/repos/${repo}/pulls/${number}/merge`, { sha, merge_method: method }, timeoutMs);
+  return { repo, number, merged: r.merged !== false, already_merged: false, sha: String(r.sha ?? ''), url };
 }
 
 const MAX_COMMENTS = 20;
@@ -646,6 +674,15 @@ export async function labelIssue(cfg: GithubConfig, args: { repo?: unknown; numb
 }
 
 
+/** What the issue splitter wrote into a sub-issue body: its slice number, the parent, and the slices it waits for. */
+function parseSliceText(body: string) {
+  const slice = body.match(/Slice (\d+) of (\d+)\./);
+  const dep = body.match(/Depends on ([^\n]*?)\. Do not start/);
+  const parent = Number(body.match(/^Part of #(\d+)/m)?.[1] ?? 0);
+  const depends = dep ? [...dep[1]!.matchAll(/slice (\d+):([^;]*)/g)].filter((d) => !/left out of this plan/.test(d[2]!)).map((d) => Number(d[1])) : [];
+  return { slice: Number(slice?.[1] ?? 0), of: Number(slice?.[2] ?? 0), parent, depends };
+}
+
 /**
  * `github.issue-blockers` (read): whether the slices an issue depends on are still open. The issue splitter
  * writes each sub-issue as "Slice N of M." and, when it has to wait, "Depends on slice 1: Title; slice 2:
@@ -669,12 +706,8 @@ export async function issueBlockers(cfg: GithubConfig, args: { issue?: unknown; 
   repo = argRepo(cfg, repo);
   const number = argNumber(m[2]);
   const it = await get(cfg, token, `/repos/${repo}/issues/${number}`, timeoutMs);
-  const body = String(it.body ?? '');
-  const slice = body.match(/Slice (\d+) of (\d+)\./);
-  const dep = body.match(/Depends on ([^\n]*?)\. Do not start/);
-  const parent = Number(body.match(/^Part of #(\d+)/m)?.[1] ?? 0);
-  const depends = dep ? [...dep[1]!.matchAll(/slice (\d+):([^;]*)/g)].filter((d) => !/left out of this plan/.test(d[2]!)).map((d) => Number(d[1])) : [];
-  const info = { ...none, slice: Number(slice?.[1] ?? 0), of: Number(slice?.[2] ?? 0), parent, depends };
+  const { slice, of, parent, depends } = parseSliceText(String(it.body ?? ''));
+  const info = { ...none, slice, of, parent, depends };
   if (!depends.length) return info;
   const fail = (reason: string) => ({ ...info, blocked: true, reason });
   if (!parent) return fail(`it depends on slice ${depends.join(', ')} but does not say which issue it is part of, so the dependencies cannot be checked`);
@@ -697,4 +730,107 @@ export async function issueBlockers(cfg: GithubConfig, args: { issue?: unknown; 
     else if (String(s.state) !== 'closed') blockers.push({ slice: d, number: Number(s.number), title: String(s.title ?? ''), state: String(s.state ?? 'open'), url: String(s.html_url ?? '') });
   }
   return { ...info, blocked: blockers.length > 0, blockers, warnings, reason: blockers.length ? `waiting for ${blockers.map((b) => `#${b.number}`).join(', ')}` : '' };
+}
+
+const MAX_PATHS = 20;
+
+/**
+ * `github.repo-files` (read): which of the given paths exist at a ref (a file or a directory). The readiness
+ * scorecard asks this for README, CODEOWNERS, the PR template and the CI workflows. A path GitHub answers 404 for
+ * does not exist; any other failure is an error, so a missing token is never read as "no README".
+ */
+export async function repoFiles(cfg: GithubConfig, args: { repo?: unknown; ref?: unknown; paths?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const ref = String(args.ref ?? '').trim();
+  if (ref.length > 200 || /[\s?#]/.test(ref)) throw new SendError(`not a ref: '${ref.slice(0, 60)}'`, true, ErrorClass.invalidInput);
+  if (!Array.isArray(args.paths) || !args.paths.length || args.paths.length > MAX_PATHS) throw new SendError(`paths must be a list of 1 to ${MAX_PATHS} paths`, true, ErrorClass.invalidInput);
+  const files: Array<{ path: string; exists: boolean; kind: string; entries: string[] }> = [];
+  for (const raw of args.paths) {
+    const path = String(raw).replace(/^\/+/, '');
+    if (!path || path.length > 300 || path.split('/').includes('..') || /[?#\s]/.test(path)) throw new SendError(`not a repository path: '${String(raw).slice(0, 80)}'`, true, ErrorClass.invalidInput);
+    try {
+      const found = await get(cfg, token, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`, timeoutMs);
+      const dir = Array.isArray(found);
+      files.push({ path, exists: true, kind: dir ? 'dir' : 'file', entries: dir ? found.slice(0, 100).map((e: any) => String(e.name)) : [] });
+    } catch (err) {
+      if (err instanceof SendError && /GitHub HTTP 404/.test(err.message)) files.push({ path, exists: false, kind: '', entries: [] });
+      else throw err;
+    }
+  }
+  return { repo, ref, files };
+}
+
+/**
+ * `github.factory-queue` (read): the open issues carrying a label (the factory's `ready`), each with the slice and
+ * dependency text the splitter wrote, whether it is blocked, and whether a lap already has it. A dependency that
+ * cannot be checked counts as blocking, so the queue fails closed like `github.issue-blockers`. In flight means the
+ * claim label is on it, or an open pull request from a branch with the tool's branch prefix mentions it.
+ */
+export async function factoryQueue(cfg: GithubConfig, args: { repo?: unknown; label?: unknown; claim_label?: unknown; max_items?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const label = String(args.label ?? '').trim();
+  const claim = String(args.claim_label ?? '').trim();
+  if (!label || label.length > 50 || /[,\n]/.test(label)) throw new SendError(`not a label name: '${label.slice(0, 60)}'`, true, ErrorClass.invalidInput);
+  const max = args.max_items === undefined ? 50 : Number(args.max_items);
+  if (!Number.isInteger(max) || max < 1 || max > 100) throw new SendError('max_items must be 1 to 100', true, ErrorClass.invalidInput);
+  const found = (await pages(cfg, token, `/repos/${repo}/issues?state=open&labels=${encodeURIComponent(label)}&sort=created&direction=asc`, undefined, timeoutMs)).filter((i: any) => !i.pull_request);
+  const prefix = cfg.branch_prefix ?? 'azhi/';
+  const prs = await pages(cfg, token, `/repos/${repo}/pulls?state=open`, undefined, timeoutMs);
+  const mentioned = new Set<number>();
+  for (const pr of prs) {
+    if (!String(pr.head?.ref ?? '').startsWith(prefix)) continue;
+    for (const m of `${pr.title ?? ''}\n${pr.body ?? ''}`.matchAll(/#(\d+)/g)) mentioned.add(Number(m[1]));
+  }
+  const siblings = new Map<number, Map<number, string>>();
+  const unreadable = new Map<number, string>();
+  const names = (i: any) => (i.labels ?? []).map((l: any) => String(typeof l === 'string' ? l : l.name));
+  const items: Array<Record<string, unknown>> = [];
+  for (const it of found.slice(0, max)) {
+    const info = parseSliceText(String(it.body ?? ''));
+    const blockers: Array<{ slice: number; number: number; state: string }> = [];
+    let reason = '';
+    if (info.depends.length) {
+      if (!info.parent) reason = `it depends on slice ${info.depends.join(', ')} but does not say which issue it is part of`;
+      else {
+        if (!siblings.has(info.parent) && !unreadable.has(info.parent)) {
+          try {
+            const map = new Map<number, string>();
+            for (const s of await pages(cfg, token, `/repos/${repo}/issues/${info.parent}/sub_issues`, undefined, timeoutMs)) {
+              const n = Number(String(s.body ?? '').match(/Slice (\d+) of \d+\./)?.[1] ?? 0);
+              if (n) map.set(n, `${s.number}:${s.state}`);
+            }
+            siblings.set(info.parent, map);
+          } catch (err) {
+            unreadable.set(info.parent, (err as Error).message.slice(0, 120));
+          }
+        }
+        if (unreadable.has(info.parent)) reason = `the sub-issues of #${info.parent} could not be read (${unreadable.get(info.parent)})`;
+        else {
+          const map = siblings.get(info.parent)!;
+          for (const d of info.depends) {
+            const s = map.get(d);
+            if (!s) reason = `slice ${d} was not found among the sub-issues of #${info.parent}`;
+            else if (!s.endsWith(':closed')) blockers.push({ slice: d, number: Number(s.split(':')[0]), state: s.split(':')[1]! });
+          }
+        }
+      }
+    }
+    const labels = names(it);
+    if (blockers.length) reason = `waiting for ${blockers.map((b) => `#${b.number}`).join(', ')}`;
+    items.push({
+      number: Number(it.number),
+      title: String(it.title ?? ''),
+      url: String(it.html_url ?? ''),
+      created_at: String(it.created_at ?? ''),
+      labels,
+      slice: info.slice,
+      of: info.of,
+      parent: info.parent,
+      depends: info.depends,
+      blocked: Boolean(reason),
+      reason,
+      in_flight: (claim !== '' && labels.includes(claim)) || mentioned.has(Number(it.number)),
+    });
+  }
+  return { repo, label, items, truncated: found.length > max };
 }

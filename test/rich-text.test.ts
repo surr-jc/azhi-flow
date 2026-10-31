@@ -1,10 +1,10 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { Formatted, Markdown, parseJsonText, plainText, Value } from '../web/src/components/Rich.js';
+import { Formatted, Markdown, parseJsonText, plainText, toMarkdown } from '../web/src/components/Rich.js';
 
 const md = (text: string) => renderToStaticMarkup(createElement(Markdown, { text }));
-const value = (v: unknown, plain?: boolean) => renderToStaticMarkup(createElement(Value, { value: v, plain }));
+const value = (v: unknown, plain?: boolean) => renderToStaticMarkup(createElement(Formatted, { value: v, plain }));
 
 describe('agent text rendering', () => {
   it('renders GitHub-flavored Markdown', () => {
@@ -24,11 +24,12 @@ describe('agent text rendering', () => {
     expect(html).toContain('href="https://example.com" target="_blank" rel="noopener noreferrer nofollow"');
   });
 
-  it('shows structured payloads as fields with Markdown text, not JSON', () => {
+  it('shows structured payloads as Markdown, not JSON', () => {
     const html = value({ design: '## Plan\n\n1. Add a gate\n2. Wire it', requirements: [{ id: 'R1', text: 'Only OpenCode' }], nested: { deep: { a: 1 } } });
-    expect(html).toContain('<dt>Design</dt>');
+    expect(html).toContain('<h3>Design</h3>');
     expect(html).toContain('<h2>Plan</h2>');
-    expect(html).toContain('<th>Id</th>');
+    expect(html).toContain('<strong>Text:</strong> Only OpenCode');
+    expect(html).toContain('<h3>Nested</h3>');
     expect(html).not.toContain('see the full payload');
     expect(html).not.toContain('{&quot;');
   });
@@ -36,8 +37,9 @@ describe('agent text rendering', () => {
   it('parses JSON held in strings and keeps tool text preformatted', () => {
     expect(parseJsonText('```json\n{"a":1}\n```')).toEqual({ a: 1 });
     expect(parseJsonText('not json')).toBeUndefined();
-    expect(value('{"files": ["a.ts", "b.ts"]}')).toContain('<dt>Files</dt>');
-    expect(value('rm -rf *.log\nls **/x', true)).toContain('<pre class="json">rm -rf *.log');
+    expect(toMarkdown({ files: ['a.ts', 'b.ts'] })).toContain('### Files\n\n- a.ts\n- b.ts');
+    expect(value('echo hi\nls **/x', true)).toContain('<pre><code>echo hi');
+    expect(toMarkdown({ command: 'node -e "x"', status: 'failed' })).toBe('### Command\n\n```\nnode -e "x"\n```\n\n- **Status:** failed');
     expect(renderToStaticMarkup(createElement(Formatted, { value: { a: 1 } }))).toContain('Show raw JSON');
   });
 

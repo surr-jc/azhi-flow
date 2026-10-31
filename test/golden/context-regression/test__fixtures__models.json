@@ -1,0 +1,124 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "model-check",
+    "definitionHash": "sha256:38911863f33b5fe87b3acb4fec3ad48c5c83c432142bb5fe3fcfe7700c91831c",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "team": {
+          "type": "string",
+          "title": "Team"
+        }
+      },
+      "required": [
+        "team"
+      ]
+    },
+    "config": {},
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "draft",
+        "type": "agent",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "draft",
+          "type": "agent",
+          "description": "Uses the default model.",
+          "profile": "drafter@1",
+          "input": {
+            "map": "{'team': inputs.team}"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "pinned",
+        "type": "agent",
+        "deps": [
+          "draft"
+        ],
+        "dataDeps": [
+          "draft"
+        ],
+        "def": {
+          "id": "pinned",
+          "type": "agent",
+          "description": "Names its own model.",
+          "profile": "pinned@1",
+          "depends_on": [
+            "draft"
+          ],
+          "input": {
+            "map": "{'draft': nodes.draft.output}"
+          },
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      }
+    ],
+    "taint": {
+      "untrusted": {},
+      "tainted": {},
+      "paths": []
+    }
+  }
+}
