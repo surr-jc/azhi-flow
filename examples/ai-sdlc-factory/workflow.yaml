@@ -78,7 +78,7 @@ nodes:
         'github': {'queues': has(nodes.queue_ready) ? [nodes.queue_ready.output, nodes.queue_split.output] : []},
         'jira': {'issues': has(nodes.queue_jira) && has(nodes.queue_jira.output.issues) ? nodes.queue_jira.output.issues : null}}
     output_schema: schemas/pick.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: has_work
     type: condition
@@ -133,7 +133,7 @@ nodes:
     entrypoint: scripts/outcome.py
     input: {map: "{'child': nodes.deliver.output}"}
     output_schema: schemas/outcome.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: lap_report
     type: report

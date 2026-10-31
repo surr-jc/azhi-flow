@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory-plan",
-    "definitionHash": "sha256:2563e8696142e50932df3847082779de666a76ffc857579c998d7692d50e8372",
+    "definitionHash": "sha256:672efb015303933cdb72f213639ee0734433a7429daa15c86683ba3df04efac2",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -301,8 +301,7 @@
           },
           "output_schema": "schemas/brief.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -480,8 +479,7 @@
           },
           "output_schema": "schemas/epics.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -695,8 +693,7 @@
           },
           "output_schema": "schemas/gate.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,
@@ -910,8 +907,7 @@
           },
           "output_schema": "schemas/gate.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,

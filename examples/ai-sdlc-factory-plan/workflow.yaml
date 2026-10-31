@@ -87,7 +87,7 @@ nodes:
     depends_on: [text_pass, normalize]
     input: {map: "{'ticket': has(nodes.normalize) ? nodes.normalize.output : null, 'goal': has(inputs.goal) ? inputs.goal : ''}"}
     output_schema: schemas/brief.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: plan_release
     type: agent
@@ -131,7 +131,7 @@ nodes:
     entrypoint: scripts/epics.py
     input: {map: "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"}
     output_schema: schemas/epics.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   # ---- Epic 1 ------------------------------------------------------------------------------------
   - id: has_1
@@ -170,7 +170,7 @@ nodes:
     depends_on: [split_1_github, split_1_jira]
     input: {map: "{'count': nodes.epics.output.count, 'n': 2}"}
     output_schema: schemas/gate.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: has_2
     type: condition
@@ -208,7 +208,7 @@ nodes:
     depends_on: [split_2_github, split_2_jira]
     input: {map: "{'count': nodes.epics.output.count, 'n': 3}"}
     output_schema: schemas/gate.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: has_3
     type: condition

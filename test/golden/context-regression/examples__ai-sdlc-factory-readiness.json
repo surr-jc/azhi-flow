@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory-readiness",
-    "definitionHash": "sha256:6e632d962c611fc4161ab9fcfa4e7ccc998cd81f42dd3ef69a5246e776e63f54",
+    "definitionHash": "sha256:899013445db03159d504cc62107a7bbab55d6b42e456e12ffc6d5f452a470805",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -273,8 +273,7 @@
           },
           "output_schema": "schemas/score.json",
           "limits": {
-            "time": "1m",
-            "memory_mb": 256
+            "time": "1m"
           }
         },
         "timeoutMs": 60000,

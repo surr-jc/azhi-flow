@@ -101,7 +101,7 @@ nodes:
         'open_tickets': inputs.source == 'jira' ? (has(nodes.open_jira) && has(nodes.open_jira.output.issues) ? nodes.open_jira.output.issues : null) : (has(nodes.open_github) ? nodes.open_github.output.items : null),
         'labels': [config.ci_label, config.ready_label, config.priority_label]}
     output_schema: schemas/score.json
-    limits: {time: 1m, memory_mb: 256}
+    limits: {time: 1m}
 
   - id: scorecard
     type: report

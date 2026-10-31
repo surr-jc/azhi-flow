@@ -89,6 +89,10 @@ describe('the same on Windows, Linux and macOS', () => {
     }
   });
 
+  it('sets no memory limit, which only Linux workers can enforce and which would block the run plan elsewhere', () => {
+    for (const name of PACKAGES) expect(readFileSync(`examples/${name}/workflow.yaml`, 'utf8'), name).not.toMatch(/memory_mb/);
+  });
+
   it('keeps non-ASCII ticket text intact, as the worker runs it', () => {
     const title = 'Café – 日本語 ✓ 🚀';
     const b = run('ai-sdlc-factory-plan', 'brief.py', { ticket: { source: 'github', key: '#1', title, description: 'naïve' }, goal: '' });
