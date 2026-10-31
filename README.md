@@ -7,6 +7,12 @@
 
 Governed, durable agent workflows that say plainly what they can and cannot guarantee.
 
+Azhi Flow is a self-hosted, open-source (Apache-2.0) AI agent workflow orchestration platform built on
+Temporal. It runs code, AI agents, MCP tools, knowledge retrieval and human approvals as nodes of one durable
+workflow, with an audit ledger, cost tracking and a taint rule that blocks unsafe writes.
+
+**Documentation: [surr-jc.github.io/azhi-flow](https://surr-jc.github.io/azhi-flow/)**
+
 Every run shows what the agent saw, what it was allowed to do, what it actually did, and what it cost,
 and says plainly where it cannot know. See Product Specification v2.0 and the Azhi Flow Implementation
 Plan for the design.

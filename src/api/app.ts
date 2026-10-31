@@ -575,7 +575,10 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const token = await ghCliToken(b.host);
     const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
     await checkEgress(`${api}/user`);
-    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
+      const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
+      throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
+    });
     if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
     const who = (await res.json().catch(() => ({}))) as { login?: string };
     const header = res.headers.get('x-oauth-scopes');

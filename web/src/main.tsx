@@ -4,8 +4,6 @@ import { ApiError, applyTheme, getTheme, isAuthError, setToken, syncChromeColor,
 import { App } from './App';
 import { Router } from './router';
 import '@fontsource-variable/inter';
-import '@fontsource/ibm-plex-mono/400.css';
-import '@fontsource/ibm-plex-mono/500.css';
 import './styles.css';
 
 takeTokenFromHash();

@@ -23,6 +23,38 @@ export default defineConfig({
         replacesTitle: true,
       },
       favicon: '/favicon.svg',
+      head: [
+        { tag: 'meta', attrs: { property: 'og:site_name', content: 'Azhi Flow' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary' } },
+        ...(site
+          ? [
+              { tag: 'meta', attrs: { property: 'og:image', content: `${site}${base ?? ''}/og.png` } },
+              { tag: 'meta', attrs: { name: 'twitter:image', content: `${site}${base ?? ''}/og.png` } },
+            ]
+          : []),
+        {
+          tag: 'meta',
+          attrs: {
+            name: 'keywords',
+            content:
+              'AI agent workflows, agent orchestration, Temporal, MCP, OpenCode, human-in-the-loop approvals, self-hosted, AI SDLC',
+          },
+        },
+        {
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'SoftwareSourceCode',
+            name: 'Azhi Flow',
+            description:
+              'Self-hosted, governed, durable AI agent workflow platform built on Temporal, with MCP tools, approvals and an action ledger.',
+            codeRepository: 'https://github.com/surr-jc/azhi-flow',
+            programmingLanguage: 'TypeScript',
+            license: 'https://www.apache.org/licenses/LICENSE-2.0',
+          }),
+        },
+      ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/surr-jc/azhi-flow' }],
       editLink: { baseUrl: 'https://github.com/surr-jc/azhi-flow/edit/dev/site/' },
       lastUpdated: true,

@@ -3,6 +3,29 @@
   "version": "0.1.0",
   "description": "Governed, durable agent workflows that say plainly what they can and cannot guarantee.",
   "license": "Apache-2.0",
+  "homepage": "https://surr-jc.github.io/azhi-flow/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/surr-jc/azhi-flow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/surr-jc/azhi-flow/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "agent-workflows",
+    "workflow-orchestration",
+    "temporal",
+    "mcp",
+    "model-context-protocol",
+    "opencode",
+    "human-in-the-loop",
+    "llm",
+    "self-hosted",
+    "typescript",
+    "ai-sdlc",
+    "agent-governance"
+  ],
   "type": "module",
   "private": true,
   "engines": {
