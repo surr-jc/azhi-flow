@@ -67,6 +67,21 @@ export interface RunPlanReport {
   blockers: Blocker[];
 }
 
+/**
+ * What a script step's `limits.memory_mb` needs from a worker. Only a worker with `prlimit` (Linux) can enforce it;
+ * on Windows and macOS the step runs with its time limit alone. That is a warning (`unverified`), not a refusal, so
+ * a workflow written on one platform installs on another without being edited, and the plan says plainly that the
+ * limit is not enforced. A server that must never run a step without its memory limit sets
+ * AZHI_REQUIRE_MEMORY_LIMITS=1, which makes it a blocker again.
+ */
+export function memoryRequirement(memoryMb: number, enforceable: boolean, anyWorker: boolean, strict = process.env.AZHI_REQUIRE_MEMORY_LIMITS === '1'): Requirement {
+  const name = `memory limit ${memoryMb} MB`;
+  if (enforceable) return { name, mark: 'native', detail: 'prlimit' };
+  if (!anyWorker) return { name, mark: 'unverified', detail: 'no capable worker online' };
+  if (strict) return { name, mark: 'unsupported', detail: 'no worker can enforce memory limits (this server requires them: AZHI_REQUIRE_MEMORY_LIMITS=1)' };
+  return { name, mark: 'unverified', detail: 'not enforced here: only a Linux worker with prlimit can; the step runs with its time limit only' };
+}
+
 export async function buildRunPlan(ctx: AppContext, workspaceId: string, version: VersionRow, principal?: { userId: string; role: string }, runChoice?: ModelDefaults | null): Promise<RunPlanReport> {
   const plan = version.plan;
   // The run's choice wins over the workflow's defaults; both apply only to steps that say `name: default`.
@@ -100,10 +115,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     if (!workers.length) reqs.push({ name: `${runtime} runtime on a worker`, mark: 'unverified', detail: 'no worker online; the run will wait (worker_offline)' });
     else if (!capable.length) reqs.push({ name: `${runtime} runtime on a worker`, mark: 'unsupported', detail: `none of ${workers.length} online workers has ${runtime}` });
     else reqs.push({ name: `${runtime} runtime on a worker`, mark: 'native', detail: capable.map((w) => `${w.name}: ${runtime} ${w.capabilities.runtimes![runtime]!.version}`).join(', ') });
-    if (memoryMb) {
-      const limited = capable.filter((w) => w.capabilities.limits?.memory);
-      reqs.push({ name: `memory limit ${memoryMb} MB`, mark: limited.length ? 'native' : capable.length ? 'unsupported' : 'unverified', detail: limited.length ? 'prlimit' : 'no worker can enforce memory limits' });
-    }
+    if (memoryMb) reqs.push(memoryRequirement(memoryMb, capable.some((w) => w.capabilities.limits?.memory), capable.length > 0));
     if (capable.length) {
       const trusted = capable.filter((w) => accepting.has(w.id));
       const refusals = trust.workers.filter((w) => !w.accepted && capable.some((c) => c.id === w.worker));

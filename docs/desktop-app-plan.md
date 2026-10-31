@@ -53,8 +53,8 @@ and SWC when the worker starts. A packaged app cannot depend on either. Phase 0 
 
 - First-run "what is missing" screen from the `capabilities.ts` detection (`azhi doctor` output) for
   `git`, `uv` or Python, `bun`, OpenCode. Detect and link to installers; bundle nothing.
-- `limits.memory_mb` stays unsupported off Linux; the run plan already refuses such workflows, and the
-  UI must show the reason.
+- `limits.memory_mb` is enforced only on Linux (`prlimit`). Elsewhere the run plan warns that it is not enforced
+  and the step runs with its time limit; the UI shows the reason. `AZHI_REQUIRE_MEMORY_LIMITS=1` makes it a blocker.
 - `workspace: local`: a workflow may point its workspace at a folder the user picks (native folder
   dialog). Requirements, because this weakens isolation:
   - off by default, opt-in per workflow, and recorded in the run plan as a capability with its own
