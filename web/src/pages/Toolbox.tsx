@@ -112,6 +112,7 @@ function Card({ item, onOpen }: { item: Item; onOpen: () => void }) {
       <div className="row">
         <button type="button" onClick={onOpen} aria-haspopup="dialog">Details</button>
         <Link to={item.href} className="small">Manage</Link>
+        {item.group === 'mcp' && item.status === 'ready' ? <Link to={`/ui/workflows/new?prompt=${encodeURIComponent(`Add the ${item.name} MCP server to a workflow`)}`} className="small">Use in chat</Link> : null}
       </div>
     </article>
   );
