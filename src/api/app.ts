@@ -329,17 +329,20 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         since: z.string().datetime({ offset: true }).optional(),
         // Text found in the run's inputs, or the start of its id.
         q: z.string().trim().min(1).max(200).optional(),
+        // Leave out subworkflow runs; they show inside their parent's run page.
+        top_level: z.enum(['true', 'false']).optional(),
       })
       .parse(req.query);
     const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
     return (
       await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, w.slug AS workflow, v.version FROM runs r
+        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
          JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
          WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
            AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
+           AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
          ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null],
+        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === 'true'],
       )
     ).rows;
   });

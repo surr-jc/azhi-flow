@@ -4,7 +4,7 @@ import { api, getToken, TERMINAL, type Approval, type RunPlan } from '../api';
 import { useMe } from '../App';
 import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
-import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, StateBadge, Table, useConfirm, when } from '../ui';
+import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
 import { Formatted, Markdown, plainText } from '../components/Rich';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
@@ -92,7 +92,7 @@ export function RunPage({ id }: { id: string }) {
     <>
       {dialog}
       <div className="crumbs">
-        <Link to="/ui/runs">Runs</Link> › <Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
+        <Link to="/ui/runs">Runs</Link> › {r.snapshot?.parent?.run_id ? <><Link to={`/ui/runs/${encodeURIComponent(r.snapshot.parent.run_id)}`}>Parent run</Link> › </> : null}<Link to={`/ui/workflows/${encodeURIComponent(r.workflow)}`}>{r.workflow}</Link> › <span className="mono">{r.id}</span>
         <span className="live">· {live}</span>
       </div>
       <PageHead
@@ -194,7 +194,7 @@ function outputSummary(v: unknown): string {
 }
 
 /** Each step in plan order, with what it did, when, and what its model calls cost. */
-function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; onAgent?: (node: string) => void }) {
+function Steps({ nodes, detail: d, onAgent, depth = 0 }: { nodes: PlanNode[]; detail: any; onAgent?: (node: string) => void; depth?: number }) {
   const states = nodeStates(d);
   return (
     <div className="receipt">
@@ -226,12 +226,41 @@ function Steps({ nodes, detail: d, onAgent }: { nodes: PlanNode[]; detail: any; 
               <div className="name">{n.id} <span className="muted small">{TYPE[n.type]?.label ?? n.type}{st && st.attempts > 1 ? ` · ${st.attempts} attempts` : ''}</span></div>
               <div className={`what ${err ? 'bad' : ''}`}><span className="visually-hidden">{word}: </span>{what}</div>
               {n.type === 'agent' && onAgent && state !== 'pending' && state !== 'skipped' ? <button type="button" className="link small" onClick={() => onAgent(n.id)}>{state === 'running' ? 'Watch the agent live' : 'See what the agent did'}</button> : null}
+              {n.type === 'subworkflow' ? <SubRun childId={(d.children as any[] | undefined)?.find((c) => c.parent_node_id === n.id)?.id ?? (st?.output as any)?.run_id} depth={depth} /> : null}
             </div>
             <span className="when">{at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}{cost ? <><br />{money(cost)}</> : null}</span>
           </div>
         );
       })}
     </div>
+  );
+}
+
+/** A subworkflow step's child run, expandable in place so its steps read without leaving the parent. */
+function SubRun({ childId, depth }: { childId?: string; depth: number }) {
+  const [shown, setShown] = useState<boolean | null>(null);
+  const detail = useQuery({
+    queryKey: ['run', childId],
+    queryFn: () => api<any>(`/v1/runs/${encodeURIComponent(childId!)}`),
+    enabled: Boolean(childId),
+    refetchInterval: (q) => (q.state.data && TERMINAL.includes(q.state.data.run.state) ? false : 3_000),
+  });
+  const versionId = detail.data?.run.workflow_version_id;
+  const version = useQuery({ queryKey: ['version', versionId], queryFn: () => api<any>(`/v1/versions/${encodeURIComponent(versionId)}`), enabled: Boolean(versionId), staleTime: Infinity });
+  if (!childId) return null;
+  const c = detail.data?.run;
+  // Open by default while the child runs or when it did not succeed, so trouble is visible without a click.
+  const open = shown ?? Boolean(c && c.state !== 'succeeded' && c.state !== 'skipped');
+  return (
+    <details className="sa-fold" open={open} onToggle={(e) => setShown(e.currentTarget.open)}>
+      <summary>
+        <b>Subworkflow run</b> {c ? <StateBadge state={c.state} /> : null} <RunLink id={childId} />
+        {c ? <span className="muted small"> {c.workflow}@{c.workflow_version}</span> : null}
+      </summary>
+      <div className="sa-fold-body">
+        {!open ? null : detail.error ? <ErrorNote error={detail.error} /> : version.data?.plan?.nodes && detail.data ? <Steps nodes={version.data.plan.nodes} detail={detail.data} depth={depth + 1} /> : <Loading />}
+      </div>
+    </details>
   );
 }
 

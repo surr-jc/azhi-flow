@@ -113,9 +113,9 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   };
   return tx(ctx.db, async (c: pg.PoolClient) => {
     const r = await c.query(
-      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by, repos)
-       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11::text[]) ON CONFLICT (occurrence_id) DO NOTHING`,
-      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy, runRepos(o.version.plan, o.inputs)],
+      `INSERT INTO runs(id, workspace_id, workflow_version_id, state, inputs, snapshot, interpreter_build, trigger, occurrence_id, test, created_by, repos, parent_run_id, parent_node_id)
+       VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8,$9,$10,$11::text[],$12,$13) ON CONFLICT (occurrence_id) DO NOTHING`,
+      [runId, workspaceId, o.version.id, JSON.stringify(o.inputs), JSON.stringify(snapshot), o.interpreterBuild, o.trigger, o.occurrenceId ?? null, o.test ?? false, o.createdBy, runRepos(o.version.plan, o.inputs), o.parent?.run_id ?? null, o.parent?.node_id ?? null],
     );
     if (r.rowCount === 0) {
       const existing = (await c.query(`SELECT id FROM runs WHERE occurrence_id=$1`, [o.occurrenceId])).rows[0].id as string;
@@ -149,7 +149,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     )
   ).rows[0];
   if (!run) return undefined;
-  const [attempts, actions, transitions, requests, decisions, usage, manifests, planned] = await Promise.all([
+  const [attempts, actions, transitions, requests, decisions, usage, manifests, planned, children] = await Promise.all([
     ctx.pool.query(`SELECT node_id, attempt, state, worker_id, started_at, ended_at, error, output FROM node_attempts WHERE run_id=$1 ORDER BY started_at, node_id, attempt`, [runId]),
     ctx.pool.query(`SELECT id, node_id, tool, effect, state, fence, receipt, error, target, created_at, updated_at FROM actions WHERE run_id=$1 ORDER BY created_at`, [runId]),
     ctx.pool.query(
@@ -165,9 +165,17 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     ),
     ctx.pool.query(`SELECT node_id, attempt, turn, tainted, items, total_tokens, token_source FROM context_manifests WHERE run_id=$1 ORDER BY node_id, attempt, turn`, [runId]),
     ctx.pool.query(`SELECT data FROM run_events WHERE run_id=$1 AND kind='run.planned' ORDER BY seq LIMIT 1`, [runId]),
+    // Read from the snapshot, not the parent_run_id column, so runs made before the column was filled still list their children.
+    ctx.pool.query(
+      `SELECT r.id, r.state, r.trigger, r.created_at, r.ended_at, r.snapshot->'parent'->>'node_id' AS parent_node_id, w.slug AS workflow, v.version FROM runs r
+       JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+       WHERE r.workspace_id=$1 AND r.snapshot->'parent'->>'run_id' = $2 ORDER BY r.created_at`,
+      [workspaceId, runId],
+    ),
   ]);
   return {
     run,
+    children: children.rows,
     plan: (planned.rows[0]?.data as RunPlanReport | undefined) ?? null,
     approvals: requests.rows.map((r) => {
       const d = decisions.rows.find((x) => x.node_id === r.node_id);

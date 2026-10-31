@@ -77,6 +77,7 @@ export interface RunRow {
   inputs?: Record<string, unknown>;
   created_at: string;
   ended_at: string | null;
+  parent_run_id?: string | null;
   workflow: string;
   version: number;
 }
