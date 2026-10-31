@@ -620,6 +620,8 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
       <input id={id} type="number" value={typeof value === 'number' ? value : ''} onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))} />
     ) : f.kind === 'expr' ? (
       <textarea id={id} className="mono" rows={2} value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+    ) : f.suggest === 'tools' ? (
+      <ToolSelect id={id} value={typeof value === 'string' ? value : ''} onChange={onChange} />
     ) : (
       <input id={id} value={typeof value === 'string' ? value : ''} list={list} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
     );
@@ -630,6 +632,25 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
       {input()}
       {f.hint ? <span className="muted small">{f.hint}</span> : null}
     </label>
+  );
+}
+
+/** Every registered tool to pick from, grouped by system; a value that is not registered stays visible and is flagged. */
+function ToolSelect({ id, value, onChange }: { id?: string; value: string; onChange: (v: unknown) => void }) {
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const list = [...(tools.data ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  const refOf = (t: Tool) => `${t.id}@${t.version}`;
+  const systems = [...new Set(list.map((t) => t.id.split('.')[0]!))];
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      {!value ? <option value="">Choose a tool…</option> : null}
+      {value && !list.some((t) => refOf(t) === value) ? <option value={value}>{value} (not registered here)</option> : null}
+      {systems.map((s) => (
+        <optgroup key={s} label={s}>
+          {list.filter((t) => t.id.split('.')[0] === s).map((t) => <option key={refOf(t)} value={refOf(t)}>{refOf(t)} · {t.effect === 'read' ? 'read' : 'writes'}{t.description ? ` · ${t.description}` : ''}</option>)}
+        </optgroup>
+      ))}
+    </select>
   );
 }
 

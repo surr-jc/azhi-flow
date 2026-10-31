@@ -21,7 +21,7 @@ export const TYPE_HELP: Record<string, string> = {
 
 /** Help for a setting, keyed by "<step type>.<key>", then by "<key>" for settings every type shares. */
 export const FIELD_HELP: Record<string, string> = {
-  'tool.tool': 'Which registered tool to call, as id@version. The tools page lists what each one reads or changes.',
+  'tool.tool': 'Which registered tool to call, as id@version. Each one is marked read or writes. Open an MCP server in the Toolbox to make more of its tools available here.',
   'tool.arguments': 'The values passed to the tool. Use {ref: inputs.x} to read a workflow input or {ref: nodes.step.output.field} to read an earlier step.',
   'tool.project': 'Keeps only these fields of the tool output, so later steps and the ledger hold less.',
   'tool.guard': 'A CEL rule checked on the final arguments. If it is false the call is refused. Use it to pin a write to the thing under review.',
