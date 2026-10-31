@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { api, type WorkflowSummary } from '../api';
-import { ErrorNote, Loading, useConfirm } from '../ui';
+import { Badge, ErrorNote, Loading, useConfirm } from '../ui';
+import { Link } from '../router';
+import { signVersion } from '../signing';
 import { DatasetPage, ToolForm } from '../pages/Authoring';
 import { SystemPanel } from '../pages/Connections';
 import { HarnessGuides, type Guide } from './LibraryParts';
@@ -131,6 +133,112 @@ function ConnectionPanel({ name, admin, onGone }: { name: string; admin: boolean
         <button type="button" className="danger" disabled={remove.isPending} onClick={async () => (await ask({ title: `Delete ${c.name}?`, text: 'Workflows can no longer reach this server. A connection with registered actions cannot be removed, because runs may have pinned them.', confirm: 'Delete' })) && remove.mutate(c.id)}>Delete</button>
       </div>
       <ErrorNote error={re.error ?? remove.error} />
+      {c.status === 'ready' ? <ConnectionTools id={c.id} name={c.name} /> : <p className="muted small">Finish signing in to see the tools this server offers.</p>}
+    </div>
+  );
+}
+
+// ---- the tools a signed-in server offers, and putting one in a workflow step -----------------------------------------------
+interface RemoteTool { name: string; description: string }
+interface Registered { id: string; version: number; effect: string; transport?: { kind?: string; connection?: string; tool?: string } }
+const EFFECTS = ['read', 'write-idempotent', 'write-dedupable', 'write-unsafe'];
+const toolId = (conn: string, tool: string) => `${conn}_${tool}`.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+
+function ConnectionTools({ id, name }: { id: string; name: string }) {
+  const remote = useQuery({ queryKey: ['mcp-remote-tools', id], queryFn: () => api<RemoteTool[]>(`/v1/mcp/connections/${encodeURIComponent(id)}/tools`), retry: false });
+  const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Registered[]>('/v1/tools') });
+  if (remote.error) return <ErrorNote error={remote.error} />;
+  if (!remote.data || !tools.data) return <Loading />;
+  const mine = tools.data.filter((t) => t.transport?.kind === 'mcp-streamable-http' && (t.transport.connection === id || t.transport.connection === name));
+  return (
+    <>
+      <h4 className="tb-h">Tools this server offers ({remote.data.length})</h4>
+      {!remote.data.length ? <p className="muted small">The server lists no tools.</p> : null}
+      <ul className="tb-offered">
+        {remote.data.map((t) => <OfferedTool key={t.name} conn={{ id, name }} tool={t} registered={mine.find((r) => r.transport?.tool === t.name)} />)}
+      </ul>
+    </>
+  );
+}
+
+function OfferedTool({ conn, tool, registered }: { conn: { id: string; name: string }; tool: RemoteTool; registered?: Registered }) {
+  const qc = useQueryClient();
+  const [effect, setEffect] = useState('');
+  const [adding, setAdding] = useState(false);
+  const register = useMutation({
+    mutationFn: () => api(`/v1/mcp/connections/${encodeURIComponent(conn.id)}/tools`, { method: 'POST', body: { id: toolId(conn.name, tool.name), version: 1, name: tool.name, description: tool.description || tool.name, effect, output_schema: { type: 'object' } } }),
+    onSuccess: async () => { await Promise.all([qc.invalidateQueries({ queryKey: ['tools'] }), qc.invalidateQueries({ queryKey: ['toolbox'] })]); },
+  });
+  const ref = registered ? `${registered.id}@${registered.version}` : null;
+  return (
+    <li>
+      <div className="row">
+        <span className="mono">{tool.name}</span>
+        {registered ? <Badge tone={registered.effect === 'read' ? 'ok' : 'warn'}>{registered.effect === 'read' ? 'read' : 'writes'}</Badge> : null}
+        {ref ? <button type="button" className="small" aria-expanded={adding} onClick={() => setAdding((a) => !a)}>{adding ? 'Close' : 'Add to a workflow step'}</button> : (
+          <>
+            <select aria-label={`What ${tool.name} does`} value={effect} onChange={(e) => setEffect(e.target.value)}>
+              <option value="">What does it do?</option>
+              {EFFECTS.map((x) => <option key={x} value={x}>{x === 'read' ? 'Only reads' : x}</option>)}
+            </select>
+            <button type="button" className="small" disabled={!effect || register.isPending} onClick={() => register.mutate()}>{register.isPending ? 'Adding…' : 'Make available to workflows'}</button>
+          </>
+        )}
+      </div>
+      {tool.description ? <p className="muted small">{tool.description}</p> : null}
+      <ErrorNote error={register.error} />
+      {ref && adding ? <AddToStep refName={ref} /> : null}
+    </li>
+  );
+}
+
+interface Step { id: string; type: string; [k: string]: unknown }
+/** Puts a registered tool into a workflow's latest version as a new draft: either a new tool step or an existing tool step. */
+function AddToStep({ refName }: { refName: string }) {
+  const workflows = useQuery({ queryKey: ['workflows'], queryFn: () => api<WorkflowSummary[]>('/v1/workflows/summary') });
+  const [slug, setSlug] = useState('');
+  const [where, setWhere] = useState('new');
+  const versions = useQuery({ queryKey: ['versions', slug], queryFn: () => api<Array<{ id: string; version: number }>>(`/v1/workflows/${encodeURIComponent(slug)}/versions`), enabled: Boolean(slug) });
+  const latest = versions.data?.[0];
+  const base = useQuery({ queryKey: ['version', latest?.id], queryFn: () => api<{ definition: { nodes: Step[] } & Record<string, unknown> }>(`/v1/versions/${latest!.id}`), enabled: Boolean(latest) });
+  const toolSteps = (base.data?.definition.nodes ?? []).filter((n) => n.type === 'tool');
+  const save = useMutation({
+    mutationFn: async () => {
+      const def = structuredClone(base.data!.definition);
+      if (where === 'new') {
+        let i = 1;
+        while (def.nodes.some((n) => n.id === `tool_${i}`)) i++;
+        def.nodes.push({ id: `tool_${i}`, type: 'tool', tool: refName });
+      } else {
+        const step = def.nodes.find((n) => n.id === where);
+        if (step) step.tool = refName;
+      }
+      const r = await api<{ ok: boolean; diagnostics: Array<{ message: string }>; version?: { id: string; version: number } }>(`/v1/versions/${latest!.id}/drafts`, { method: 'POST', body: { definition: def, profiles: {}, files: {} } });
+      // Workers run signed packages only; the workflow page offers signing again if this fails.
+      if (r.ok && r.version) await signVersion(r.version.id).catch(() => undefined);
+      return r;
+    },
+  });
+  const r = save.data;
+  return (
+    <div className="tb-addstep">
+      <div className="row">
+        <select aria-label="Workflow" value={slug} onChange={(e) => { setSlug(e.target.value); setWhere('new'); save.reset(); }}>
+          <option value="">Choose a workflow…</option>
+          {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
+        </select>
+        {slug && base.data ? (
+          <select aria-label="Step" value={where} onChange={(e) => { setWhere(e.target.value); save.reset(); }}>
+            <option value="new">As a new tool step</option>
+            {toolSteps.map((n) => <option key={n.id} value={n.id}>Replace the tool in step {n.id}</option>)}
+          </select>
+        ) : null}
+        <button type="button" className="primary small" disabled={!base.data || save.isPending} onClick={() => save.mutate()}>{save.isPending ? 'Saving…' : 'Add'}</button>
+      </div>
+      <p className="muted small">This saves a new draft of the workflow. Agent steps pick their tools in the step's own settings; this tool is listed there once it is registered.</p>
+      {r?.ok ? <p className="ok-note" role="status">Saved as draft v{r.version?.version}. <Link to={`/ui/workflows/${encodeURIComponent(slug)}/edit?from=${encodeURIComponent(r.version?.id ?? '')}`}>Open it in the editor</Link> to fill in the step's input.</p> : null}
+      {r && !r.ok ? <ul className="lib-warn">{r.diagnostics.map((d, i) => <li key={i}>{d.message}</li>)}</ul> : null}
+      <ErrorNote error={save.error ?? versions.error ?? base.error} />
     </div>
   );
 }

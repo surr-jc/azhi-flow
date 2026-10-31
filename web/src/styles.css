@@ -1736,6 +1736,10 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .tb-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .tb-tools li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
 .tb-tools li .muted { flex-basis: 100%; }
+.tb-offered { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.tb-offered li > p { margin: 2px 0 0; }
+.tb-addstep { margin-top: 8px; padding: 12px; border: 1px solid var(--line, currentColor); border-radius: 8px; display: grid; gap: 8px; }
+.tb-manage { display: grid; gap: 12px; }
 .tb-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 0; }
 .tb-facts dt { color: var(--muted); text-transform: capitalize; }
 .tb-facts dd { margin: 0; overflow-wrap: anywhere; }
