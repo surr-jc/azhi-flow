@@ -28,6 +28,8 @@ const PATHS: Record<string, ReactNode> = {
   notify: <path d="M21 3L3 10.5l7 3 3 7zM10 13.5L21 3" />,
   lock: <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 018 0v3" /></>,
   close: <path d="M6 6l12 12M18 6L6 18" />,
+  'chevron-left': <path d="M15 5l-7 7 7 7" />,
+  'chevron-right': <path d="M9 5l7 7-7 7" />,
   trash: <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   undo: <path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" />,
   save: <path d="M5 3h11l4 4v14H5zM8 3v6h8V3M8 21v-7h8v7" />,

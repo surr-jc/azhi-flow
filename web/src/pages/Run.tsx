@@ -395,14 +395,34 @@ function Drawer({ nodes, detail: d, show, className, onHide }: { nodes: PlanNode
     context: String(items),
   };
   const more = (k: string, label: string) => <button type="button" className="link small" onClick={() => show(k)}>{label}</button>;
+  const strip = useRef<HTMLDivElement>(null);
+  const [edge, setEdge] = useState({ left: false, right: false });
+  const measure = () => {
+    const el = strip.current;
+    if (el) setEdge({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+  };
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [d]);
+  useEffect(() => {
+    strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [tab]);
+  const nudge = (dir: -1 | 1) => strip.current?.scrollBy({ left: dir * 120, behavior: 'smooth' });
   return (
     <aside className={className} aria-label="Run evidence">
       <div className="atlas-head">
-        <div className="atlas-tabs" role="tablist">
+        {edge.left ? <button type="button" className="atlas-hide" onClick={() => nudge(-1)} aria-label="Scroll tabs left"><Icon name="chevron-left" size={16} /></button> : null}
+        <div className="atlas-tabs" role="tablist" ref={strip} onScroll={measure}>
           {Object.entries(DRAWER).map(([k, label]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{count[k] ? <span> {count[k]}</span> : null}</button>
           ))}
         </div>
+        {edge.right ? <button type="button" className="atlas-hide" onClick={() => nudge(1)} aria-label="Scroll tabs right"><Icon name="chevron-right" size={16} /></button> : null}
         {onHide ? <button type="button" className="atlas-hide" onClick={onHide} aria-label="Hide run details" title="Hide run details"><Icon name="close" size={16} /></button> : null}
       </div>
       <div className="atlas-panel" role="tabpanel">
