@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api } from '../api';
+import { BrandMark } from '../brand';
 import { Icon } from '../icons';
 import { Link, match, useRoute } from '../router';
 import { ErrorNote } from '../ui';
@@ -226,11 +227,13 @@ export function Assistant() {
                 onBuild={toBuilder}
               />
             ))}
+            {/* The message shows as soon as it is sent; the server's transcript replaces it when the reply arrives. */}
+            {send.isPending && send.variables ? <div className="bubble user">{send.variables}</div> : null}
             <WorkingRow pending={send.isPending}>
               <span>Looking it up…</span>
               <button type="button" className="small-btn" onClick={() => abort.current?.abort()}>Stop</button>
             </WorkingRow>
-            {send.error && (send.error as Error).name === 'AbortError' ? <div className="muted small">Stopped. Nothing was added; send it again to retry.</div> : <ErrorNote error={send.error} />}
+            {send.error && (send.error as Error).name === 'AbortError' ? <div className="muted small">Stopped. Your message is back in the box; send it again to retry.</div> : <ErrorNote error={send.error} />}
             <ErrorNote error={act.error} />
             {state.messages.length > 160 ? <div className="muted small">This chat is getting long and will soon be refused; start a new chat for a new question.</div> : null}
             <div className="sr-only" role="status">{send.isPending ? 'The assistant is working' : send.isSuccess ? 'The assistant replied' : ''}</div>
@@ -253,7 +256,7 @@ export function Assistant() {
         </section>
       ) : null}
       <button ref={fab} type="button" className={`asst-fab${open ? ' on' : ''}`} aria-label={open ? 'Close assistant' : 'Open assistant'} aria-expanded={open} title="Assistant (Ctrl+/)" onClick={() => (open ? close() : setOpen(true))}>
-        <Icon name={open ? 'close' : 'chat'} size={22} />
+        {open ? <Icon name="close" size={22} /> : <BrandMark size={52} />}
       </button>
     </>
   );

@@ -1868,6 +1868,9 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .asst-fab { position: fixed; right: 24px; bottom: 24px; z-index: 35; width: 52px; height: 52px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); box-shadow: 0 6px 20px -8px rgba(19, 33, 59, 0.45); }
 .asst-fab:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); border-color: color-mix(in srgb, var(--accent) 88%, #000); }
 .asst-fab:focus-visible { outline: none; box-shadow: var(--ring); }
+/* Closed, the bubble is the logo tile itself (rx 15 of 64); open, it is the accent close button. */
+.asst-fab:not(.on), .asst-fab:not(.on):hover:not(:disabled) { border-radius: 23%; background: transparent; border-color: transparent; overflow: hidden; }
+.asst-fab:not(.on):hover:not(:disabled) { filter: brightness(1.08); }
 .asst-panel { position: fixed; right: 24px; bottom: 88px; z-index: 35; width: min(420px, calc(100vw - 32px)); height: min(640px, calc(100dvh - 120px)); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 12px 40px -12px rgba(19, 33, 59, 0.35); overflow: hidden; }
 .asst-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--line); }
 .asst-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
