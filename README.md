@@ -339,6 +339,19 @@ npm run typecheck
 npm test     # unit tests; end-to-end tests run when Temporal is reachable on AZHI_TEMPORAL_ADDRESS
 ```
 
+A full run takes several minutes, so send its output to a file instead of piping it through `grep | head` (a pipe shows
+nothing until the run ends). The Temporal-backed tests wait on gRPC deadlines when no server is up, so start one first and
+keep it running in its own terminal:
+
+```bash
+temporal server start-dev                      # terminal 1, leave running
+npm run test:local > /tmp/t.log 2>&1           # terminal 2
+grep -aE "FAIL|Test Files|Tests " /tmp/t.log | sort -u
+```
+
+On Windows `npm run test:local` works as is (it uses `cross-env`). In WSL, install and run from a WSL-native clone
+(`~/azhi-flow`), not `/mnt/c`: Windows-installed `node_modules` have the wrong native binaries and `/mnt/c` I/O is slow.
+
 End-to-end tests create a fresh database per file on `AZHI_TEST_DATABASE_URL`
 (default `postgres://azhi:azhi@localhost:5433/azhi`). `test/gate1.test.ts` is the phase 1 gate and `test/gate2.test.ts` the phase 2 gate
 (refresh its golden plan with `UPDATE_GOLDEN=1` after an intended change). `test/opencode.test.ts`

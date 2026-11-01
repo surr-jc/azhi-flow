@@ -1811,3 +1811,8 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .undo-fill { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--ink); color: var(--panel); clip-path: inset(0 0 0 0); }
 .undo-btn[data-counting="true"] .undo-fill { clip-path: inset(0 100% 0 0); transition: clip-path var(--undo-ms) linear; }
 @media (prefers-reduced-motion: reduce) { .hold-fill, .hold-btn[data-status="holding"] .hold-fill, .undo-btn[data-counting="true"] .undo-fill { transition-duration: 0ms; } }
+
+/* LogoTraceLoader: a segment circles the logo, then the outline closes and the mark fades in. */
+@keyframes logo-trace-loader-loop { to { stroke-dashoffset: -1; } }
+@keyframes logo-trace-loader-close { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes logo-trace-loader-fill { from { opacity: 0; } to { opacity: 1; } }
