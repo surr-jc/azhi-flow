@@ -215,6 +215,29 @@ describe.skipIf(!up)('mission control', () => {
     await page.close();
   });
 
+  it('shows the GitHub CLI profile and replaces it with its API error when it cannot be read', async () => {
+    const page = await browser.newPage();
+    let lookups = 0;
+    await page.route('**/v1/github/cli-login', async (route) => {
+      lookups++;
+      if (lookups === 1) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ host: 'github.com', login: 'octo-profile', scopes: ['repo', 'read:org'] }) });
+      } else {
+        await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'The GitHub CLI is not signed in to github.com. Run: gh auth login' }) });
+      }
+    });
+    await page.goto(`${h.server.url}/ui#token=${encodeURIComponent(token)}`);
+    await page.waitForFunction(() => !location.hash);
+    await page.getByLabel('GitHub CLI profile').getByText('GitHub: octo-profile').waitFor();
+    await page.getByLabel('GitHub CLI profile').getByText('Scopes: repo, read:org').waitFor();
+
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.getByRole('alert').filter({ hasText: 'GitHub CLI is not signed in' }).waitFor();
+    expect(await page.getByLabel('GitHub CLI profile').count()).toBe(0);
+    expect(await page.getByText('octo-profile').count()).toBe(0);
+    await page.close();
+  });
+
   it('summarises usage, alerts and schedules, and turns a schedule off through the audited API', async () => {
     const usage = await h.api.get<any>('/v1/usage/summary?days=7');
     expect(usage).toMatchObject({ days: 7, by_day: expect.any(Array), by_workflow: expect.any(Array) });

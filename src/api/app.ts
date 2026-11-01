@@ -70,6 +70,34 @@ export interface ApiOptions {
   logger?: boolean;
 }
 
+interface GithubCliLogin {
+  host: string;
+  login: string | null;
+  scopes: string[];
+  warning?: string;
+}
+
+/** Reads the current CLI identity without exposing its token or changing stored secrets. */
+async function githubCliLogin(host: string): Promise<GithubCliLogin> {
+  const token = await ghCliToken(host);
+  const api = host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${host}/api/v3`;
+  await checkEgress(`${api}/user`);
+  const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
+    const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
+    throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
+  });
+  if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${host} (HTTP ${res.status}). Run on this machine: gh auth login`);
+  const who = (await res.json().catch(() => ({}))) as { login?: string };
+  const header = res.headers.get('x-oauth-scopes');
+  const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+  return {
+    host,
+    login: who.login ?? null,
+    scopes,
+    warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
+  };
+}
+
 export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: ApiOptions) {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 * 1024 });
 
@@ -568,6 +596,11 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
 
   // Points GitHub secrets at the GitHub CLI's login (`gh auth login` on this machine) instead of a stored
   // token: the token is asked of `gh` each time a step needs it and is never stored.
+  app.get('/v1/github/cli-login', async (req) => {
+    user(req);
+    return githubCliLogin('github.com');
+  });
+
   app.post('/v1/github/cli-login', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
@@ -577,24 +610,11 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         host: z.string().regex(/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$/).default('github.com'),
       })
       .parse(req.body ?? {});
-    const token = await ghCliToken(b.host);
-    const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
-    await checkEgress(`${api}/user`);
-    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
-      const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
-      throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
-    });
-    if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
-    const who = (await res.json().catch(() => ({}))) as { login?: string };
-    const header = res.headers.get('x-oauth-scopes');
-    const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+    const login = await githubCliLogin(b.host);
     for (const name of b.secrets) await setSecret(ctx, p.workspaceId, name, ghCliPointer(b.host), p.userId);
     return {
-      host: b.host,
-      login: who.login ?? null,
-      scopes,
+      ...login,
       secrets: b.secrets,
-      warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
     };
   });
 
