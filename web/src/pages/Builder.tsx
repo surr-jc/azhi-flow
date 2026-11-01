@@ -4,7 +4,7 @@ import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
-import { LogoTraceLoader } from '../components/LogoTraceLoader';
+import { WorkingRow } from '../components/WorkingRow';
 import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
@@ -297,14 +297,11 @@ export function WorkflowBuilder() {
               {state.messages.map((m, i) => (
                 <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
-              {send.isPending ? (
-                <div className="pending">
-                  <LogoTraceLoader size={20} ariaLabel="Working" />
-                  <span>Reading the workspace, drafting and checking with the compiler…</span>
-                  <span className="mono">{waited}s</span>
-                  <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>
-                </div>
-              ) : null}
+              <WorkingRow pending={send.isPending}>
+                <span>Reading the workspace, drafting and checking with the compiler…</span>
+                <span className="mono">{waited}s</span>
+                <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>
+              </WorkingRow>
               {send.error && (send.error as Error).name === 'AbortError' ? <div className="chat-note muted small">Stopped. Nothing was added to the conversation; send it again to retry.</div> : <ErrorNote error={send.error} />}
             </div>
             {away ? <button type="button" className="jump" onClick={toBottom}>New message ↓</button> : null}

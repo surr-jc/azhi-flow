@@ -5,7 +5,7 @@ import { Icon } from '../icons';
 import { Link, match, useRoute } from '../router';
 import { ErrorNote } from '../ui';
 import { HoldToConfirmButton } from './HoldToConfirmButton';
-import { LogoTraceLoader } from './LogoTraceLoader';
+import { WorkingRow } from './WorkingRow';
 import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from './ModelMenu';
 import { Markdown } from './Rich';
 
@@ -226,13 +226,10 @@ export function Assistant() {
                 onBuild={toBuilder}
               />
             ))}
-            {send.isPending ? (
-              <div className="pending">
-                <LogoTraceLoader size={20} ariaLabel="Working" />
-                <span>Looking it up…</span>
-                <button type="button" className="small-btn" onClick={() => abort.current?.abort()}>Stop</button>
-              </div>
-            ) : null}
+            <WorkingRow pending={send.isPending}>
+              <span>Looking it up…</span>
+              <button type="button" className="small-btn" onClick={() => abort.current?.abort()}>Stop</button>
+            </WorkingRow>
             {send.error && (send.error as Error).name === 'AbortError' ? <div className="muted small">Stopped. Nothing was added; send it again to retry.</div> : <ErrorNote error={send.error} />}
             <ErrorNote error={act.error} />
             {state.messages.length > 160 ? <div className="muted small">This chat is getting long and will soon be refused; start a new chat for a new question.</div> : null}
