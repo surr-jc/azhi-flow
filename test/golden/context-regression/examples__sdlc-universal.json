@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdlc-universal",
-    "definitionHash": "sha256:fdd1c778cb11eb316678ecc247305f75130d8e11272fec5b17d195b8aabcb1e4",
+    "definitionHash": "sha256:d8c0b26fe0ce713921ec0c739bf7007ac3c7b00d6febb6dc534a224483b91006",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -113,7 +113,8 @@
           "arguments": {
             "issue_key": {
               "ref": "inputs.ticket"
-            }
+            },
+            "include_all_fields": true
           }
         },
         "timeoutMs": 60000,
@@ -469,7 +470,7 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" full",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('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','base64'))+'')\" full",
               "timeout": "15m",
               "attempts": 1
             }
@@ -598,7 +599,7 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" static",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('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','base64'))+'')\" static",
               "timeout": "15m",
               "attempts": 1
             }
@@ -655,6 +656,37 @@
           }
         },
         "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "gate_scope",
+        "type": "script",
+        "deps": [
+          "preflight",
+          "preflight_b"
+        ],
+        "dataDeps": [
+          "preflight",
+          "preflight_b"
+        ],
+        "def": {
+          "id": "gate_scope",
+          "type": "script",
+          "description": "Say, project by project, what the two preflight runs could and could not verify, so the approver, the reviewers and the pull request know what a passing check covers.",
+          "runtime": "python",
+          "entrypoint": "scripts/gate_scope.py",
+          "depends_on": [
+            "preflight_b"
+          ],
+          "input": {
+            "map": "{'full_output': nodes.preflight.output.workspace.tests.output, 'static_output': nodes.preflight_b.output.workspace.tests.output}"
+          },
+          "output_schema": "schemas/gate_scope.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
         "maxAttempts": 3
       },
       {
@@ -817,12 +849,14 @@
         "id": "preflight_decision",
         "type": "approval",
         "deps": [
+          "gate_scope",
           "preflight",
           "preflight_b",
           "preflight_b_gate",
           "test_strategist"
         ],
         "dataDeps": [
+          "gate_scope",
           "preflight",
           "preflight_b",
           "test_strategist"
@@ -833,10 +867,10 @@
           "description": "The tests cannot run here. A person decides whether to continue without them (an untested draft) or stop.",
           "role": "author",
           "message": {
-            "cel": "'WARNING: neither the tests nor typecheck and build pass on the base branch of ' + inputs.repo + ' (' + nodes.test_strategist.output.failure_class + '), so this change cannot be verified. Continue anyway? It will be planned, built and reviewed, marked UNTESTED, and can only open as a draft pull request.'"
+            "cel": "'WARNING: neither the tests nor typecheck and build pass on the base branch of ' + inputs.repo + ' (' + nodes.test_strategist.output.failure_class + '), so this change cannot be verified. Continue anyway? It will be planned, built and reviewed, marked UNTESTED, and can only open as a draft pull request.' + (nodes.gate_scope.output.known ? ' Checked here: ' + string(size(nodes.gate_scope.output.verified)) + ' project(s) passed, ' + string(size(nodes.gate_scope.output.blocked)) + ' could not run (see the scope).' : '')"
           },
           "payload": {
-            "map": "{'tests': nodes.preflight.output.workspace.tests, 'static_checks': nodes.preflight_b.output.workspace.tests, 'diagnosis': nodes.test_strategist.output, 'consequence': 'No test or build result will back this change. Reviewers still read the code. The pull request opens as a draft marked untested.'}"
+            "map": "{'tests': nodes.preflight.output.workspace.tests, 'scope': nodes.gate_scope.output, 'static_checks': nodes.preflight_b.output.workspace.tests, 'diagnosis': nodes.test_strategist.output, 'consequence': 'No test or build result will back this change. Reviewers still read the code. The pull request opens as a draft marked untested.'}"
           },
           "decision_schema": {
             "type": "object",
@@ -1021,7 +1055,7 @@
           "description": "A senior engineer answers the open questions, confirms the design and the review path (lite or full) before any code is written.",
           "role": "author",
           "message": {
-            "cel": "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.plan.output.design.summary + '? Proposed review path: ' + nodes.weight_proposal.output.route + ' (risk ' + nodes.plan.output.design.risk + ', ' + string(size(nodes.plan.output.design.files)) + ' file(s)). Answer the ' + string(size(nodes.plan.output.requirements.open_questions) + size(nodes.plan.output.design.open_questions)) + ' open question(s) first.'"
+            "cel": "'Approve the design for ' + nodes.intake.output.key + ': ' + nodes.plan.output.design.summary + '? Proposed review path: ' + nodes.weight_proposal.output.route + ' (risk ' + nodes.plan.output.design.risk + ', ' + string(size(nodes.plan.output.design.files)) + ' file(s)). Answer the ' + string(size(nodes.plan.output.requirements.open_questions) + size(nodes.plan.output.design.open_questions)) + ' open question(s) first.' + (nodes.plan.output.requirements.criteria_source == 'ticket' ? '' : ' The ticket did not state all its acceptance criteria; the ' + nodes.plan.output.requirements.criteria_source + ' ones are the reading of the request by the planner, so check them.')"
           },
           "payload": {
             "map": "{'open_questions': nodes.plan.output.requirements.open_questions + nodes.plan.output.design.open_questions, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'proposed_weight': {'path': nodes.weight_proposal.output.route, 'risk': nodes.plan.output.design.risk, 'risk_reasons': nodes.plan.output.design.risk_reasons, 'sensitive': nodes.plan.output.design.touches_sensitive, 'migration': nodes.plan.output.design.has_migration, 'files': size(nodes.plan.output.design.files), 'confidence': nodes.plan.output.design.confidence}}"
@@ -1147,12 +1181,14 @@
         "deps": [
           "build_mode",
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
         ],
         "dataDeps": [
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
@@ -1177,18 +1213,18 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" full",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('hRhdc9u48V2/Yn2TCchEgpL0pWONzpPepXdNv24u6XRa2+ehSFBCRAIMAMpSLf/3zi5AEpTly4OGwu5iv7ELbK6VdZA3sAQjvrbSiITlG1kVd43RubCWpYtJTkSljYnKCNNkbhPjcD1gP8KSKPgXLVUHvJcKwV4Gb6rMldrUsFwugd1L9Yd3rKOsdSEi0sysd9dvbz2ldZmTOYOr4e8lsLKtqn67EVkBS0jKFJbfw8MEwJkDfQGMcK1R8PHTP//Bm8xYkZSW44Y/y0p8Oqg8KafAWlf+kaXpYgLwCHnm8s14u2qripCTx06oE3v3DaHPS3pWEGMnYiqMSFJ8U0ghDckonud9fXvC+68f/vMJlnDNpLIuqyo2BeYOjcg3It/SQliH31Urq4LddvusM6jUjpRKcIcuYdeFy0i1xnDtME5DiiiKPSSN3/UAhTSXyCppeCFNCscjMM6mYF2WbzsMLTwu16qU69aIgk0haNyRhWU6hV7/DtUDECms6+HCunQKZFoHo0UKj73SrRVlWw1qX1yEnahRxNsv/fbFZFK2KndSKyiEE7nD8GEkgiOyWmBQKxuCFY4eSlEkhSi4VHnVFsImKqLK1AHpjIgIra5FErYaQeolKo026RYz1Yc/sCnowJB3p6Dv1RRy2q9bx5vWbrr4FCEegah3O2MjV9OSnIv/gk/xL+c8J38CyBKSEgtHvs3Wgn+xWrE0DSkaisx2TTUmK5KPSTGFJ8THIzw8LqId6Mhmu+Y2N7Jx9ilBg0mHYlVTzyqdb/khqyuWYj1BGFaTMmGHzCiOaI/BZcCsWo9YMRIfQTzpqiVKhry84KwoEqZ0IeYMXkNTT+HiAnW812ZrmywXdhqshsGhTSiMpNJV7CmvtfcAClRNDbnsZHYcWArE5DWwHjQNQuIzEeXsVUdvWjXQBLOd9edtJHgPzuYwmyn9oZaOVBiE+LPlT8fLl3AxV5qAYBuRy1KKYu5z09OkJ/Kx1IwYdifTH6sxtS9IEblPsccozXTN9xjocYaFbKh36p6MSrBJXQEBeF57nnwe8JeEiMP6Jdtl8zrbCYUZb1oxhYfYv17F2Z9g9hVyXTeyEv3R6HGhrAYD4y2zH+1WNp+FdRZC+NmJbZk6JPPfaO8NX5usqERyw7fOplcv5ifWrr21nmpscIDxVeaCzQPVZYceWb6rA8l5y9dkRl5l1gpLJv7g//f2e4qx8R6GdPWqOm/rDU9spY65bYz+cizpk5KppFehnRIu0mmoUR4FRlinjTipWAHpkwtTehbR+VIWSCiJRxTjirbWvNYF6xRa6/MOYmsNO+GAzznng5B1OCUduCueax1084ixyB8ys9bcaZ/gJNa01j0jOEdq6Lp6kOuB42gEYDhdg0Sfc0lzQN+L3N2Q6GO4DNZCOctf3XC3d0crXNvc8ObQ/cvL9fEX2ZSyEumTBG13PkPbXaioo9KtQ+nWwpnDGQKsBEvkcQWs3dESc7nRVNxpVw9kzcFttIJZDSzmgQ4QhReE/21f5sk13aI54JJLJQe83o/WWC+JqDl42Pzm2mldoTMQHqof3hu77tb5s4tkGp03ry+bQplVVpzpGL3d9qDyJ3Z3PcBX81Gk3N6F/iebjg5mBp4QkdtiGgH8XFNJRiEIip8LxIDqzEt98au7YklivsJsD9/thNodsY3e1bpoK2GPVjoxC2XRfhfrQikdQnlFol5DiBnMvv5uo/hJ1Jib0TlaHSKvR+Vk1aqiEkN3DWLLhP2abYVnEm4ESCf2IgeTbUXf28qEYS88Q0Vg0nJ8ztEr2gpz9raUj+9KT2iju5DPqE1z3rBu5xBoLHZSOWEyusf2tub9Revly2Hhe/5VxKiz2BeOZtO0SrobbMjJDS+kddSscMtOqEKb+UqqeSAb+SEKVC33XOxtHyhRyb005y2q5R4K0Vi+9q0hKoaIOu3MBPQ6j9z/S7h+2ntZul6wX50vtYQLBbTn7oGn/C/wrl0JtXabkzvKFpYwlIkyYX8f5Ve/ovtJjwrFI6gebfHlKSL0ZiAgtoJ0nf9G33nti1W9JYl1nMXRDT/cQ86SR1e0KJbhKapbt5g8Trr35FbicGL+WzI67j41ji4za+GOxO+IuXPUrTuupDrq1ZcjVQn83d01hzzLN+Lu7pjrnTDZWowrRvpivhieZvdZtUX3FqJxG3zZOB2/0krdKmwL/QuOl7JywiT+SeijqJz2ryXOOW3og0tc4fslvCP3Iy680/xDsuH6XqVp8AfuKrWBJLwQQZf+edglBrJU12/CSIQzZIpe6x97qLWTqhU+CYYpQUgIiy9pRxMCSiqVplzaH6URudPmkKSpd0hABrfAa3gbXOP5jucKAPNX0CqsQdmqEvBq7on8lKGLbl72j7p+RJQwnv1vI5kvW3WmCtuVrcWkEg6aKlPhzYr6I4+XL+G9MdmBS0tfBPLQQG2adltiaBezzunII4wrGu9KvUJClvI6axIcUaSLiaisgCA1TolVZsWQEYwzzAlVdBkx1Nvw6r5HdTwkCu4Wg4uTl5RkBHXycn29vR2NUFLkQMCARUadX1DV5AGf16gVvbPpgU6PdkbXxdvF5BHIFooszVbeTIlDupgERvg58dIFRUna9yurq9aJbj6DbzpCGVFlTu6EZ+mxmF7G2X9Lt0kY5xTHflokGnym+yHfeKT3/OgpjJzg8lvjqX4qpQTd486LeZb3mIdplaJUPusZsoTbSuYieZuG87z1qXW9vUWbMaSjMea7EFRkx4Zs0pXglV4nNJf0AZflIXkg9afQJfBlrxEl6MnwjFzfD8zCsGwK3Ym6DAp3RkSaem4RAB7TFB6nNOicwjvfTDpDxF665E2KFZsaF7kmrmbo+jPueGouUxpwKEJBovei13UBVgigmjA/KQhPFHlLioQqncmKon49hFDYtnI2wKKD1+DB69x5RjWMEs5r0KmkW+KX5FUEpLBcsmishkPQ348EZmBr8baLL9yChpui8S1xQd2QdPU9xKTnKgWFMG4DFz5e43o/MuSFtwPJnnaDvOF45aROgCTY+q0rpL4EJtVGGIlXm/y+CEaF3v209HvXe9UHn6HkbdgBYLj3ACyBeXoWowR2/W0HWRmRhUXXQUZmvf/vz3+5++n95w93v3749K+/fSZZ3z4/IR0e0zDUfcpvnJG4SIJx/naGVxoPuCRsQPo+NgU/MAkRTofM6U9u4IKIoFdi0xQzaZTXpzLfwiXgofs/','base64'))+'')\" full",
               "timeout": "15m",
               "attempts": 3
             }
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1205,12 +1241,14 @@
         "deps": [
           "build_mode",
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
         ],
         "dataDeps": [
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
@@ -1236,12 +1274,12 @@
             "mode": "write"
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1258,12 +1296,14 @@
         "deps": [
           "build_mode",
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
         ],
         "dataDeps": [
           "design_review",
+          "gate_scope",
           "intake",
           "mode",
           "plan"
@@ -1288,18 +1328,18 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" static",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('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','base64'))+'')\" static",
               "timeout": "15m",
               "attempts": 3
             }
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1351,11 +1391,13 @@
         "type": "agent",
         "deps": [
           "change_1",
+          "gate_scope",
           "plan",
           "weight"
         ],
         "dataDeps": [
           "change_1",
+          "gate_scope",
           "plan"
         ],
         "def": {
@@ -1375,7 +1417,7 @@
             "depth": 1
           },
           "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
+            "map": "{'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}}"
           },
           "output_schema": "schemas/verdict.json",
           "timeout": "20m",
@@ -1434,21 +1476,67 @@
         "agentTools": []
       },
       {
+        "id": "lite_audit_1",
+        "type": "agent",
+        "deps": [
+          "change_1",
+          "gate_scope",
+          "lite_review_1",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_1",
+          "gate_scope",
+          "lite_review_1",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_audit_1",
+          "type": "agent",
+          "description": "Audit every criterion that lite review 1 rated met. For each outcome the criterion names, find an input that produces it and trace it through the code, or report a counterexample (criteria-audit skill, a different model).",
+          "executor": "opencode",
+          "profile": "criteria-auditor@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_1.output.summary, 'deviations': nodes.change_1.output.deviations, 'tests_added': nodes.change_1.output.tests_added, 'stats': nodes.change_1.output.workspace.stats, 'diff': nodes.change_1.output.workspace.diff, 'diff_truncated': nodes.change_1.output.workspace.diff_truncated, 'tests': nodes.change_1.output.workspace.tests}, 'criteria': nodes.lite_review_1.output.criteria}"
+          },
+          "output_schema": "schemas/audit.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 30
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
         "id": "lite_gate_1",
         "type": "condition",
         "deps": [
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1"
         ],
         "dataDeps": [
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1"
         ],
         "def": {
           "id": "lite_gate_1",
           "type": "condition",
-          "description": "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence; otherwise a fix round.",
-          "expression": "[nodes.lite_review_1.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'ok' : 'fix'",
+          "description": "Approved when no reviewer reported a prompt injection and no critical or major finding was confirmed by the verifier with enough confidence and the criteria auditor found no confirmed counterexample to a criterion rated met; otherwise a fix round.",
+          "expression": "[nodes.lite_review_1.output].all(v, !v.prompt_injection_detected && (v.approved || v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major'))) && !v.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) && !nodes.lite_audit_1.output.checks.exists(c, c.verdict == 'counterexample' && c.confidence >= config.min_confidence) ? 'ok' : 'fix'",
           "routes": {
             "ok": [],
             "fix": [
@@ -1518,7 +1606,9 @@
           "change_1",
           "design_review",
           "fix_mode",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1527,7 +1617,9 @@
         "dataDeps": [
           "change_1",
           "design_review",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1550,18 +1642,18 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" full",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('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','base64'))+'')\" full",
               "timeout": "15m",
               "attempts": 3
             }
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1579,7 +1671,9 @@
           "change_1",
           "design_review",
           "fix_mode",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1588,7 +1682,9 @@
         "dataDeps": [
           "change_1",
           "design_review",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1612,12 +1708,12 @@
             "mode": "write"
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1635,7 +1731,9 @@
           "change_1",
           "design_review",
           "fix_mode",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1644,7 +1742,9 @@
         "dataDeps": [
           "change_1",
           "design_review",
+          "gate_scope",
           "intake",
+          "lite_audit_1",
           "lite_review_1",
           "lite_verify_1",
           "mode",
@@ -1667,18 +1767,18 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('fVQ9b9swEN31K14XU0JsBtkKG6qHoh06NEPGICgYipIZSyRD0oHVxP+9IKkPu0k7ibx7vHfvdHdcK+fBDUpY8XyQVuSE72Rb/TJWc+EcKTYZj6DanYPqM8+OBVdeFyi/oHZUHKXz7q5XPK8nkBWsmlGvGeBtH7+AFf5gFX7c3f6khlkn8trR8OC7bEWKswQ5+PozKYpNBpzAmee7y+fq0LbRmZ1G0k5XAiUGLZTZ5uX+5gFlWYI4z7zkBNv5uAapD21Lxudm30TNrMqJYXzPGkGfnFaz9Cg8wBaLgKaOW2m8K/D2htcpDdOhDFXKiVGmW7Wa72nPupYUgT3YAncE9MwqGgDJF64xr4DZZK3wCFUMoWUdmYtkgFTOs7ZdR7KgL0bdIk+8KftEnSSE8Mp04HIkgCQFYoArkDEgWcL3RvCd4Ps1HJ0u2I5Ie1AzZlLiHdeqls0F3RHecaxWSn/rpI/EgUA4H2ML5+ew4TYiHg+yrQIkHi6poykBcdpkonUCoTgxi6/MNpp6HYo9lupMD+HBj5T5mMhgjPwT9WAcyN7xNJp2uvqYo9F4ER70mlI6kwwMk3nkGUkGx3sq0xurnwT3g6zQa9ExDGcnlHfUH/2czdQc/8DFNpRmxGFl8Q4UCnyBEThTY3q/0wqrDqaPslbPMfU0AHuUuH2MOTPnZKPyajnMFWW/d/Ka665jqnJDs8zz5YUJM5YG+XJs78ncomTuvyVI+kkPWP8HE//uQxqjOXocf2zxaZ+acR1PU8svFuEewxdx+YQsdStoq5ucKA2Cq5RraM5B1AZOCHyoM6yrcTmJo/T5TbHJTlmtLfJUgCN0napQZIg9sL8/PhTD5ptXKMANFUfB47oMmCVe4Xwl9RpEqp2wYd5OkfLvBfpBEhEUl+kf','base64'))+'')\" static",
+              "command": "node -e \"eval(require('zlib').inflateRawSync(Buffer.from('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','base64'))+'')\" static",
               "timeout": "15m",
               "attempts": 3
             }
           },
           "input": {
-            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none')}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))})}}"
+            "map": "{'environment': {'tests_unavailable': nodes.mode.output.mode != 'tested', 'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null}, 'ticket': nodes.intake.output, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'decisions': nodes.design_review.output.data, 'feedback': {'round': 1, 'previous_summary': nodes.change_1.output.summary, 'previous_diff': nodes.change_1.output.workspace.diff, 'verdicts': [nodes.lite_review_1.output].map(v, {'approved': v.approved, 'summary': v.summary, 'prompt_injection_detected': v.prompt_injection_detected, 'findings': v.findings.filter(f, !(f.severity == 'critical' || f.severity == 'major') || nodes.lite_verify_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))}), 'audit': nodes.lite_audit_1.output.checks.filter(c, c.verdict == 'counterexample')}}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1765,11 +1865,13 @@
         "type": "agent",
         "deps": [
           "change_2",
+          "gate_scope",
           "lite_changed",
           "plan"
         ],
         "dataDeps": [
           "change_2",
+          "gate_scope",
           "plan"
         ],
         "def": {
@@ -1789,7 +1891,7 @@
             "depth": 1
           },
           "input": {
-            "map": "{'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
+            "map": "{'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}}"
           },
           "output_schema": "schemas/verdict.json",
           "timeout": "20m",
@@ -1848,17 +1950,65 @@
         "agentTools": []
       },
       {
+        "id": "lite_audit_2",
+        "type": "agent",
+        "deps": [
+          "change_2",
+          "gate_scope",
+          "lite_review_2",
+          "plan"
+        ],
+        "dataDeps": [
+          "change_2",
+          "gate_scope",
+          "lite_review_2",
+          "plan"
+        ],
+        "def": {
+          "id": "lite_audit_2",
+          "type": "agent",
+          "description": "Audit every criterion that lite review 2 rated met. For each outcome the criterion names, find an input that produces it and trace it through the code, or report a counterexample (criteria-audit skill, a different model).",
+          "executor": "opencode",
+          "profile": "criteria-auditor@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null, 'requirements': nodes.plan.output.requirements, 'design': nodes.plan.output.design, 'change': {'summary': nodes.change_2.output.summary, 'deviations': nodes.change_2.output.deviations, 'tests_added': nodes.change_2.output.tests_added, 'stats': nodes.change_2.output.workspace.stats, 'diff': nodes.change_2.output.workspace.diff, 'diff_truncated': nodes.change_2.output.workspace.diff_truncated, 'tests': nodes.change_2.output.workspace.tests}, 'criteria': nodes.lite_review_2.output.criteria}"
+          },
+          "output_schema": "schemas/audit.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 30
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
         "id": "finalize",
         "type": "script",
         "deps": [
           "change_1",
           "change_2",
           "design_review",
+          "gate_scope",
+          "lite_audit_1",
+          "lite_audit_2",
           "lite_review_1",
           "lite_review_2",
           "lite_verify_1",
           "lite_verify_2",
           "mode",
+          "plan",
           "test_strategist",
           "weight_proposal"
         ],
@@ -1866,11 +2016,15 @@
           "change_1",
           "change_2",
           "design_review",
+          "gate_scope",
+          "lite_audit_1",
+          "lite_audit_2",
           "lite_review_1",
           "lite_review_2",
           "lite_verify_1",
           "lite_verify_2",
           "mode",
+          "plan",
           "test_strategist",
           "weight_proposal"
         ],
@@ -1882,7 +2036,7 @@
           "entrypoint": "scripts/finalize.py",
           "merge": "any",
           "input": {
-            "map": "{'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy': has(nodes.test_strategist) ? nodes.test_strategist.output : null, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by': null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.change_1) ? nodes.change_1.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.change_2) ? nodes.change_2.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': []}"
+            "map": "{'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy': has(nodes.test_strategist) ? nodes.test_strategist.output : null, 'scope': has(nodes.gate_scope) ? nodes.gate_scope.output : null, 'plan': {'files': nodes.plan.output.design.files.map(f, {'path': f.path, 'action': f.action}), 'ac_verification': nodes.plan.output.design.ac_verification}, 'requirements': nodes.plan.output.requirements, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by': null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.change_1) ? nodes.change_1.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : [], 'audit': has(nodes.lite_audit_1) ? nodes.lite_audit_1.output.checks : []}, {'change': has(nodes.change_2) ? nodes.change_2.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : [], 'audit': has(nodes.lite_audit_2) ? nodes.lite_audit_2.output.checks : []}], 'full': []}"
           },
           "output_schema": "schemas/finalize.json",
           "limits": {
@@ -1904,7 +2058,7 @@
         "def": {
           "id": "ship_gate",
           "type": "condition",
-          "description": "Ship to approval only when the tests passed and there is a change. Open findings do not block; they flag the pull request for a person.",
+          "description": "Ship to approval only when the tests passed and there is a change. A confirmed critical finding, an unmet acceptance criterion, criteria the reviewer did not judge, or a build that ran out of steps sends it back instead (see blockers in finalize). Major findings and below flag the pull request for a person.",
           "expression": "nodes.finalize.output.ship ? 'ship' : 'fix'",
           "routes": {
             "ship": [
@@ -1950,7 +2104,27 @@
             "cel": "'Push ' + string(nodes.finalize.output.change.stats.files) + ' changed file(s) for ' + nodes.intake.output.key + ' to ' + inputs.repo + ' and open a ' + (nodes.finalize.output.needs_human_attention ? 'draft ' : '') + 'pull request? Tests ' + nodes.finalize.output.change.tests.status + ', review path ' + nodes.weight.output.route + (nodes.finalize.output.needs_human_attention ? ', reviewers still have critical or major findings' : ', reviewers approve') + '.' + (nodes.finalize.output.verification == 'none' ? ' WARNING: UNTESTED - nothing could run, so this opens as a draft.' : (nodes.finalize.output.verification == 'static' ? ' NOTICE: static checks only (typecheck and build) - the tests could not run, so this opens as a draft.' : ''))"
           },
           "payload": {
-            "map": "{'criteria': nodes.finalize.output.criteria, 'criteria_counts': nodes.finalize.output.criteria_counts, 'closes_removed': nodes.finalize.output.closes_removed, 'targeted_tests': nodes.finalize.output.targeted_tests, 'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title': nodes.finalize.output.change.pr_title, 'stats': nodes.finalize.output.change.stats, 'diff': nodes.finalize.output.change.diff, 'tests': nodes.finalize.output.change.tests, 'review_path': nodes.weight.output.route, 'fix_rounds_used': nodes.finalize.output.round, 'needs_human_attention': nodes.finalize.output.needs_human_attention, 'verdict': nodes.finalize.output.verdict, 'evidence': nodes.finalize.output.evidence}"
+            "map": "{'criteria': nodes.finalize.output.criteria, 'criteria_counts': nodes.finalize.output.criteria_counts, 'closes_removed': nodes.finalize.output.closes_removed, 'targeted_tests': nodes.finalize.output.targeted_tests, 'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'pr_title': nodes.finalize.output.change.pr_title, 'stats': nodes.finalize.output.change.stats, 'diff': nodes.finalize.output.change.diff, 'tests': nodes.finalize.output.change.tests, 'review_path': nodes.weight.output.route, 'fix_rounds_used': nodes.finalize.output.round, 'needs_human_attention': nodes.finalize.output.needs_human_attention, 'verdict': nodes.finalize.output.verdict, 'evidence': nodes.finalize.output.evidence, 'criteria_capped': nodes.finalize.output.criteria_capped, 'plan_files_missing': nodes.finalize.output.plan_files_missing}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "acknowledged": {
+                "enum": [
+                  "I have read the review findings, the criteria that no test proved and the planned files that were not changed"
+                ],
+                "title": "Acknowledgement",
+                "description": "Pick this to release the change as shown (a draft when it needs attention); reject to stop the run."
+              },
+              "notes": {
+                "type": "string",
+                "title": "Notes"
+              }
+            },
+            "required": [
+              "acknowledged"
+            ],
+            "additionalProperties": false
           },
           "expires_in": "24h",
           "on_expiry": "reject"
@@ -2019,7 +2193,7 @@
               "ref": "nodes.finalize.output.change.files"
             }
           },
-          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.finalize.output.ship"
         },
         "timeoutMs": 60000,
         "maxAttempts": 3
@@ -2066,7 +2240,7 @@
               "cel": "nodes.finalize.output.needs_human_attention || nodes.finalize.output.verification != 'full' || nodes.plan.output.design.touches_sensitive || nodes.plan.output.design.has_migration"
             }
           },
-          "guard": "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
+          "guard": "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch && nodes.finalize.output.ship"
         },
         "timeoutMs": 60000,
         "maxAttempts": 3
@@ -2129,13 +2303,13 @@
         "def": {
           "id": "send_back",
           "type": "notify",
-          "description": "Send the change back with the reasons (tests failed, or nothing changed).",
+          "description": "Send the change back with the reasons (tests failed, nothing changed, or a blocker such as a critical finding or an unmet criterion).",
           "channel": "slack",
           "destination": {
             "ref": "config.channel"
           },
           "message": {
-            "cel": "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).'"
+            "cel": "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).' + (nodes.finalize.output.blocked ? ' Blocked: ' + nodes.finalize.output.blockers_text + '.' : '')"
           },
           "guard": "args.channel == config.channel"
         },
@@ -2239,6 +2413,7 @@
         "test_strategist": "output of tainted agent test_strategist",
         "preflight_b": "output of tainted agent preflight_b",
         "preflight_b_gate": "output of tainted agent preflight_b",
+        "gate_scope": "output of tainted agent preflight",
         "static_notice": "output of tainted agent test_strategist",
         "preflight_notify": "output of tainted agent test_strategist",
         "plan": "output of tainted agent plan",
@@ -2249,7 +2424,8 @@
         "change_1": "output of tainted agent build",
         "lite_review_1": "output of tainted agent lite_review_1",
         "lite_verify_1": "output of tainted agent lite_verify_1",
-        "lite_gate_1": "output of tainted agent lite_review_1",
+        "lite_audit_1": "output of tainted agent lite_audit_1",
+        "lite_gate_1": "output of tainted agent lite_audit_1",
         "lite_fix": "output of tainted agent lite_fix",
         "lite_fix_untested": "output of tainted agent lite_fix_untested",
         "lite_fix_static": "output of tainted agent lite_fix_static",
@@ -2257,6 +2433,7 @@
         "lite_changed": "output of tainted agent build",
         "lite_review_2": "output of tainted agent lite_review_2",
         "lite_verify_2": "output of tainted agent lite_verify_2",
+        "lite_audit_2": "output of tainted agent lite_audit_2",
         "finalize": "output of tainted agent build",
         "ship_gate": "output of tainted agent build",
         "push_branch": "output of tainted agent build",
@@ -2276,11 +2453,13 @@
         "build_static": "reads a cloned repository (its files are untrusted)",
         "lite_review_1": "reads a cloned repository (its files are untrusted)",
         "lite_verify_1": "reads a cloned repository (its files are untrusted)",
+        "lite_audit_1": "reads a cloned repository (its files are untrusted)",
         "lite_fix": "reads a cloned repository (its files are untrusted)",
         "lite_fix_untested": "reads a cloned repository (its files are untrusted)",
         "lite_fix_static": "reads a cloned repository (its files are untrusted)",
         "lite_review_2": "reads a cloned repository (its files are untrusted)",
-        "lite_verify_2": "reads a cloned repository (its files are untrusted)"
+        "lite_verify_2": "reads a cloned repository (its files are untrusted)",
+        "lite_audit_2": "reads a cloned repository (its files are untrusted)"
       },
       "paths": [
         {
@@ -2290,6 +2469,28 @@
             "dor_check",
             "dor_message",
             "dor_send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "preflight",
+          "write": "release",
+          "path": [
+            "preflight",
+            "gate_scope",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "preflight",
+          "write": "send_back",
+          "path": [
+            "preflight",
+            "gate_scope",
+            "finalize",
+            "send_back"
           ],
           "gate": "guard"
         },
@@ -2312,6 +2513,18 @@
             "preflight",
             "…",
             "preflight_decision",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "preflight",
+          "write": "release",
+          "path": [
+            "preflight",
+            "…",
+            "release_approval",
             "…",
             "release"
           ],
@@ -2393,6 +2606,28 @@
         },
         {
           "agent": "preflight_b",
+          "write": "release",
+          "path": [
+            "preflight_b",
+            "gate_scope",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "preflight_b",
+          "write": "send_back",
+          "path": [
+            "preflight_b",
+            "gate_scope",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "preflight_b",
           "write": "send_back",
           "path": [
             "preflight_b",
@@ -2416,11 +2651,23 @@
           "gate": "approval"
         },
         {
+          "agent": "preflight_b",
+          "write": "release",
+          "path": [
+            "preflight_b",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
           "agent": "plan",
           "write": "release",
           "path": [
             "plan",
-            "open_pr",
+            "finalize",
             "release"
           ],
           "gate": "guard"
@@ -2430,7 +2677,6 @@
           "write": "send_back",
           "path": [
             "plan",
-            "weight_proposal",
             "finalize",
             "send_back"
           ],
@@ -2639,6 +2885,38 @@
           "gate": "approval"
         },
         {
+          "agent": "lite_audit_1",
+          "write": "release",
+          "path": [
+            "lite_audit_1",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_audit_1",
+          "write": "send_back",
+          "path": [
+            "lite_audit_1",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_audit_1",
+          "write": "release",
+          "path": [
+            "lite_audit_1",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
           "agent": "lite_fix",
           "write": "release",
           "path": [
@@ -2797,6 +3075,38 @@
           "write": "release",
           "path": [
             "lite_verify_2",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "lite_audit_2",
+          "write": "release",
+          "path": [
+            "lite_audit_2",
+            "finalize",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_audit_2",
+          "write": "send_back",
+          "path": [
+            "lite_audit_2",
+            "finalize",
+            "send_back"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "lite_audit_2",
+          "write": "release",
+          "path": [
+            "lite_audit_2",
             "…",
             "release_approval",
             "…",

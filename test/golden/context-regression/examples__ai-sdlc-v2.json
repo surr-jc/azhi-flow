@@ -39,7 +39,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-v2",
-    "definitionHash": "sha256:2879c96f9a0c2e0253eaeed7fc9f274eaa0017827ab815e088b38e40c90aa4fe",
+    "definitionHash": "sha256:7f7f2628e401a108ed7356276d2218785c2e308ff87680893bb70db0bb0469e8",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -1092,7 +1092,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           },
           "input": {
             "environment": {
@@ -1184,7 +1184,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           },
           "input": {
             "environment": {
@@ -1281,7 +1281,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           },
           "input": {
             "environment": {
@@ -1645,7 +1645,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1701,7 +1701,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -1762,7 +1762,7 @@
           "output_schema": "schemas/change.json",
           "timeout": "60m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 40
           }
         },
         "timeoutMs": 3600000,
@@ -2006,6 +2006,7 @@
           "lite_verify_1",
           "lite_verify_2",
           "mode",
+          "plan",
           "test_strategist",
           "weight_proposal"
         ],
@@ -2018,6 +2019,7 @@
           "lite_verify_1",
           "lite_verify_2",
           "mode",
+          "plan",
           "test_strategist",
           "weight_proposal"
         ],
@@ -2029,7 +2031,7 @@
           "entrypoint": "scripts/finalize.py",
           "merge": "any",
           "input": {
-            "map": "{'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy': has(nodes.test_strategist) ? nodes.test_strategist.output : null, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by': null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.change_1) ? nodes.change_1.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.change_2) ? nodes.change_2.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': []}"
+            "map": "{'verification': nodes.mode.output.mode == 'tested' ? 'full' : (nodes.mode.output.mode == 'static' ? 'static' : 'none'), 'strategy': has(nodes.test_strategist) ? nodes.test_strategist.output : null, 'requirements': nodes.plan.output.requirements, 'min_confidence': config.min_confidence, 'ticket': inputs.ticket, 'repo': inputs.repo, 'weight': {'proposed': nodes.weight_proposal.output.route, 'final': 'lite', 'overridden_by': null}, 'design_review': {'by': nodes.design_review.output.by}, 'lite': [{'change': has(nodes.change_1) ? nodes.change_1.output : null, 'verdicts': {'lite': has(nodes.lite_review_1) ? nodes.lite_review_1.output : null}, 'checks': has(nodes.lite_verify_1) ? nodes.lite_verify_1.output.checks : []}, {'change': has(nodes.change_2) ? nodes.change_2.output : null, 'verdicts': {'lite': has(nodes.lite_review_2) ? nodes.lite_review_2.output : null}, 'checks': has(nodes.lite_verify_2) ? nodes.lite_verify_2.output.checks : []}], 'full': []}"
           },
           "output_schema": "schemas/finalize.json",
           "limits": {
@@ -2051,7 +2053,7 @@
         "def": {
           "id": "ship_gate",
           "type": "condition",
-          "description": "Ship to approval only when the tests passed and there is a change. Open findings do not block; they flag the pull request for a person.",
+          "description": "Ship to approval only when the tests passed and there is a change. A confirmed critical finding, an unmet acceptance criterion, criteria the reviewer did not judge, or a build that ran out of steps sends it back instead (see blockers in finalize). Major findings and below flag the pull request for a person.",
           "expression": "nodes.finalize.output.ship ? 'ship' : 'fix'",
           "routes": {
             "ship": [
@@ -2276,13 +2278,13 @@
         "def": {
           "id": "send_back",
           "type": "notify",
-          "description": "Send the change back with the reasons (tests failed, or nothing changed).",
+          "description": "Send the change back with the reasons (tests failed, nothing changed, or a blocker such as a critical finding or an unmet criterion).",
           "channel": "slack",
           "destination": {
             "ref": "config.channel"
           },
           "message": {
-            "cel": "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).'"
+            "cel": "nodes.intake.output.key + ' needs more work (tests ' + nodes.finalize.output.change.tests.status + ', ' + string(nodes.finalize.output.change.stats.files) + ' file(s) changed after ' + string(nodes.finalize.output.round) + ' fix round(s)).' + (nodes.finalize.output.blocked ? ' Blocked: ' + nodes.finalize.output.blockers_text + '.' : '')"
           },
           "guard": "args.channel == config.channel"
         },
@@ -2567,7 +2569,7 @@
           "write": "release",
           "path": [
             "plan",
-            "open_pr",
+            "finalize",
             "release"
           ],
           "gate": "guard"
@@ -2577,7 +2579,6 @@
           "write": "send_back",
           "path": [
             "plan",
-            "weight_proposal",
             "finalize",
             "send_back"
           ],

@@ -39,7 +39,9 @@ describe('builder edits an existing workflow', () => {
     expect(text.indexOf('=== workflow.yaml ===')).toBeLessThan(text.indexOf(`=== ${planner} ===`));
     expect(text).toContain('=== harness/skills/code-review/SKILL.md ===');
     expect(text).toContain('## Files');
-    expect(text).not.toContain('size budget');
+    // The package is larger than one read loads: what does not fit is indexed with how to read it, never dropped.
+    expect(text).toMatch(/^- profiles\/planner@1\.yaml \(\d+ bytes\): loaded$/m);
+    for (const m of text.matchAll(/^- (\S+) \(\d+ bytes\): not loaded \(size budget\)(.*)$/gm)) expect(m[2]).toContain('read_workflow_file');
     expect(text.length).toBeLessThan(200_000);
 
     const changed = readFileSync(`${dir}${planner}`, 'utf8') + '# edited\n';
