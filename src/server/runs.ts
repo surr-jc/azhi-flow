@@ -196,6 +196,26 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
   };
 }
 
+/** Runs newest first; `q` is text found in the run's inputs, or the start of its id. */
+export async function listRuns(
+  ctx: AppContext,
+  workspaceId: string,
+  q: { limit: number; state?: string[]; workflow?: string; before?: string; since?: string; q?: string; top_level?: boolean },
+) {
+  const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return (
+    await ctx.pool.query(
+      `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
+       JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+       WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+         AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
+         AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
+       ORDER BY r.created_at DESC LIMIT $2`,
+      [workspaceId, q.limit, q.state?.length ? q.state : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === true],
+    )
+  ).rows;
+}
+
 export async function runEvents(ctx: AppContext, workspaceId: string, runId: string, after = 0, limit = 500) {
   return (
     await ctx.pool.query(`SELECT seq, at, kind, node_id, data FROM run_events WHERE run_id=$1 AND workspace_id=$2 AND seq > $3 ORDER BY seq LIMIT $4`, [

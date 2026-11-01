@@ -1823,3 +1823,32 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 @keyframes logo-trace-loader-loop { to { stroke-dashoffset: -1; } }
 @keyframes logo-trace-loader-close { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes logo-trace-loader-fill { from { opacity: 0; } to { opacity: 1; } }
+
+/* Assistant: a bubble on every page and a non-modal panel docked bottom right (components/Assistant.tsx). */
+.asst-fab { position: fixed; right: 24px; bottom: 24px; z-index: 35; width: 52px; height: 52px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); box-shadow: 0 6px 20px -8px rgba(19, 33, 59, 0.45); }
+.asst-fab:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); border-color: color-mix(in srgb, var(--accent) 88%, #000); }
+.asst-fab:focus-visible { outline: none; box-shadow: var(--ring); }
+.asst-panel { position: fixed; right: 24px; bottom: 88px; z-index: 35; width: min(420px, calc(100vw - 32px)); height: min(640px, calc(100dvh - 120px)); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 12px 40px -12px rgba(19, 33, 59, 0.35); overflow: hidden; }
+.asst-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--line); }
+.asst-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.asst-head-actions { display: inline-flex; align-items: center; gap: 4px; }
+.asst-head .icon-btn, .asst-context .icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 0; border-color: transparent; background: none; color: var(--muted); }
+.asst-head .icon-btn { width: 40px; height: 40px; }
+.asst-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.asst-log .bubble.user { white-space: pre-wrap; }
+.asst-empty, .asst-setup { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.asst-empty .chip-btn { min-height: 40px; text-align: left; white-space: normal; }
+.asst-card { align-self: stretch; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--panel); }
+.asst-card.danger { border-color: var(--bad); }
+.asst-detail { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.asst-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.asst-actions > button { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; }
+.asst-composer { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+.asst-composer .composer-box textarea { min-height: 48px; }
+.asst-context { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; padding: 0 0 0 8px; border-radius: 999px; background: var(--idle-bg); font-size: calc(13px * var(--fs, 1)); }
+.asst-context .icon-btn { width: 28px; height: 28px; min-height: 28px; }
+@media (max-width: 800px) {
+  .asst-fab { right: 16px; bottom: 16px; }
+  .asst-panel { right: 16px; left: 16px; bottom: 80px; width: auto; height: calc(100dvh - 104px); }
+}
+@media print { .asst-fab, .asst-panel { display: none; } }

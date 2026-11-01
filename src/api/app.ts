@@ -14,11 +14,12 @@ import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
 import { registerModelOptionRoutes } from './model-options.js';
-import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
+import { MODEL_PROVIDERS } from '../agents/profile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
 import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
-import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
+import { getRunDetail, listRuns, requestCancel, runEvents } from '../server/runs.js';
+import { startRun, startRunBody } from '../server/start-run.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
@@ -33,6 +34,7 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerAssistantRoutes } from './assistant.js';
 import { registerBuilderRoutes } from './builder.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
@@ -109,6 +111,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerAssetRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
   registerToolboxRoutes(app, ctx);
+  registerAssistantRoutes(app, { ctx, temporal, interpreterBuild });
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -280,46 +283,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/runs', async (req, reply) => {
     const p = user(req);
     requireRole(p, 'operator');
-    const body = z
-      .object({
-        version: z.string(),
-        inputs: z.record(z.string(), z.unknown()).default({}),
-        test: z.boolean().optional(),
-        node: z.string().optional(),
-        fixtures: z.record(z.string(), z.unknown()).optional(),
-        /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
-        preflight: z.boolean().optional(),
-        /** Provider and model for steps whose profile says `name: default`; steps that name a model keep it. Overrides the workflow's model_defaults. */
-        // `force` also replaces steps that name their own model; `executor` is the harness for every step that can run on it.
-        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional(), force: z.boolean().optional(), executor: z.string().optional() }).strict().optional(),
-      })
-      .parse(req.body);
-    if (body.model_defaults) {
-      const { force: _f, executor, ...choice } = body.model_defaults;
-      if (executor && !EXECUTORS[executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${executor}`);
-      const problems = modelDefaultsProblems(choice);
-      if (problems.length) throw new AzhiError(ErrorClass.invalidInput, problems.join('; '));
-    }
-    if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
-    const v = await resolveVersion(ctx, p.workspaceId, body.version);
-    if (!v) throw notFound(`workflow version ${body.version}`);
-    // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
-    // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
-    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, body.model_defaults);
-    if (!body.test) {
-      if (!plan.ok) {
-        const first = plan.blockers[0]!;
-        throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
-      }
-      if (body.preflight) {
-        const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role } });
-        if (!pre.ok) {
-          const failed = pre.checks.filter((c) => c.status === 'fail');
-          throw new AzhiError(ErrorClass.unsupportedCapability, `preflight failed: ${failed.map((c) => (c.node ? `${c.node}: ` : '') + c.message).join('; ')}`, { checks: pre.checks });
-        }
-      }
-    }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.model_defaults ? { modelDefaults: body.model_defaults } : {}), ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
+    const r = await startRun(ctx, p, startRunBody.parse(req.body), interpreterBuild);
     return reply.status(202).send({ run_id: r.runId });
   });
 
@@ -338,18 +302,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         top_level: z.enum(['true', 'false']).optional(),
       })
       .parse(req.query);
-    const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
-    return (
-      await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
-         JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-         WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
-           AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
-           AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
-         ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === 'true'],
-      )
-    ).rows;
+    return listRuns(ctx, p.workspaceId, { ...q, state: q.state?.split(','), top_level: q.top_level === 'true' });
   });
 
   app.get('/v1/runs/:id', async (req) => {

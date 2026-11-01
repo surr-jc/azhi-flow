@@ -132,7 +132,7 @@ export async function builderProviders(ctx: AppContext, workspaceId: string): Pr
   return { providers: out, default: preferred?.id as BuilderProviderId | undefined };
 }
 
-async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId, model?: string): Promise<{ provider: ModelProvider; info: BuilderProviderInfo & { id: BuilderProviderId; model: string } }> {
+export async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId, model?: string): Promise<{ provider: ModelProvider; info: BuilderProviderInfo & { id: BuilderProviderId; model: string } }> {
   const { providers, default: def } = await builderProviders(ctx, workspaceId);
   const id = wanted ?? def;
   const info = providers.find((p) => p.id === id);

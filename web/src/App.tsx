@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
 import { BrandLogo, BrandMark } from './brand';
+import { Assistant } from './components/Assistant';
 import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -170,6 +171,7 @@ function Shell() {
           <Page path={path} />
         </main>
       </div>
+      <Assistant />
     </div>
   );
 }
