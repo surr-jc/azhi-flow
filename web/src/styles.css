@@ -651,6 +651,12 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .pending { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); }
 .jump { align-self: center; margin: -44px 0 8px; position: relative; z-index: 2; border-radius: 999px; box-shadow: var(--shadow); font-weight: 600; }
 .draft-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; border-top: 1px solid var(--line); background: var(--ok-bg); }
+.draft-bar.warn { background: var(--warn-bg); }
+.dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 20px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.dialog::backdrop { background: color-mix(in srgb, var(--bg) 70%, transparent); }
+.dialog h2 { margin: 0 0 8px; font-size: calc(18px * var(--fs, 1)); }
+.dialog-list { list-style: none; margin: 12px 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dialog-actions { justify-content: flex-end; margin-top: 12px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip-btn { border-radius: 999px; font-size: calc(13px * var(--fs, 1)); }
 .lookups { align-self: stretch; }

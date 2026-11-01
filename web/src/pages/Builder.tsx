@@ -64,7 +64,8 @@ interface Usage { input_tokens: number | null; output_tokens: number | null; cac
 interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal }; provider: string; model: string; usage: Usage }
 /** One answered turn: what it used and how long it took, kept by the index of its last message. */
 interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
+/** `registered`: the revision each confirmed tool proposal became, by its tool_use_id. */
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; registered?: Record<string, number>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
 const KEY = 'azhi-builder';
 const CHOICE_KEY = 'azhi-builder-model';
@@ -157,7 +158,7 @@ export function WorkflowBuilder() {
         if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
         if (r.event.kind === 'mcp_proposal' && r.event.proposal) mcps[r.event.proposal.tool_use_id] = r.event.proposal as McpProposal;
         if (r.event.kind === 'mcp_connection_proposal' && r.event.proposal) conns[r.event.proposal.tool_use_id] = r.event.proposal as McpConnectionProposal;
-        return { messages: r.messages, proposals, tools, mcps, conns, shown, stats };
+        return { ...s, messages: r.messages, proposals, tools, mcps, conns, shown, stats };
       });
     },
     // A failed or stopped turn puts the typed message back, unless something new was typed meanwhile.
@@ -235,6 +236,24 @@ export function WorkflowBuilder() {
     return answered ? undefined : (lastAssistant.content.find((b) => b.type === 'tool_use' && b.name === 'ask_user') as Extract<Block, { type: 'tool_use' }>).id;
   }, [state.messages]);
 
+  // Tools the builder proposed and nobody registered yet: the newest proposal for each ref.
+  const unregistered = useMemo(() => {
+    const byRef = new Map<string, ToolProposal>();
+    for (const t of Object.values(state.tools ?? {})) byRef.set(t.ref, t);
+    return [...byRef.values()].filter((t) => state.registered?.[t.tool_use_id] === undefined);
+  }, [state.tools, state.registered]);
+  const markRegistered = (id: string, revision: number) => setState((s) => ({ ...s, registered: { ...s.registered, [id]: revision } }));
+  // After a turn ends with tools still waiting, ask once in a dialog; "Not now" leaves the bar below to reopen it.
+  const [asking, setAsking] = useState(false);
+  const offered = useRef(new Set(unregistered.map((t) => t.tool_use_id)));
+  useEffect(() => {
+    if (send.isPending) return;
+    const fresh = unregistered.filter((t) => !offered.current.has(t.tool_use_id));
+    if (!fresh.length) return;
+    fresh.forEach((t) => offered.current.add(t.tool_use_id));
+    setAsking(true);
+  }, [unregistered, send.isPending]);
+
   const shown = state.shown ? state.proposals[state.shown] : undefined;
   const latest = Object.values(state.proposals).at(-1);
   if (status.error) return <ErrorNote error={status.error} />;
@@ -295,7 +314,7 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} registered={state.registered ?? {}} onRegistered={markRegistered} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
               <WorkingRow pending={send.isPending}>
                 <span>Reading the workspace, drafting and checking with the compiler…</span>
@@ -305,6 +324,21 @@ export function WorkflowBuilder() {
               {send.error && (send.error as Error).name === 'AbortError' ? <div className="chat-note muted small">Stopped. Nothing was added to the conversation; send it again to retry.</div> : <ErrorNote error={send.error} />}
             </div>
             {away ? <button type="button" className="jump" onClick={toBottom}>New message ↓</button> : null}
+            {unregistered.length > 0 && !asking ? (
+              <div className="draft-bar warn">
+                <span><strong>{unregistered.length} tool{unregistered.length === 1 ? '' : 's'}</strong> <span className="muted small">to register before the builder can draft with {unregistered.length === 1 ? 'it' : 'them'}</span></span>
+                <button type="button" onClick={() => setAsking(true)}>Register…</button>
+              </div>
+            ) : null}
+            {asking && unregistered.length ? (
+              <RegisterDialog
+                tools={unregistered}
+                busy={send.isPending}
+                onRegistered={markRegistered}
+                onClose={() => setAsking(false)}
+                onContinue={(text) => { setAsking(false); submit(text); }}
+              />
+            ) : null}
             {latest && state.shown !== latest.tool_use_id ? (
               <div className="draft-bar">
                 <span><strong>{latest.name ?? latest.id}</strong> <Badge tone={latest.blockers.length ? 'bad' : 'ok'}>{latest.blockers.length ? 'blocked' : 'compiles'}</Badge> <span className="muted small">{latest.nodes.length} step{latest.nodes.length === 1 ? '' : 's'}</span></span>
@@ -421,11 +455,13 @@ function TurnMeta({ s }: { s: TurnStat }) {
   );
 }
 
-function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
+function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
   m: Message;
   stat?: TurnStat;
   proposals: Record<string, Proposal>;
   tools: Record<string, ToolProposal>;
+  registered: Record<string, number>;
+  onRegistered: (id: string, revision: number) => void;
   mcps: Record<string, McpProposal>;
   conns: Record<string, McpConnectionProposal>;
   openAsk?: string;
@@ -464,7 +500,7 @@ function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer
         if (b.name === 'ask_user') return void push(false, <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />);
         if (b.name === 'propose_tool') {
           const t = tools[b.id];
-          return void (t ? push(false, <ToolCard key={i} t={t} />) : push(true, <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>));
+          return void (t ? push(false, <ToolCard key={i} t={t} registered={registered[b.id]} onRegistered={(rev) => onRegistered(b.id, rev)} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>));
         }
         if (b.name === 'propose_mcp_server') {
           const t = mcps[b.id];
@@ -514,25 +550,95 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** A tool the builder proposes: an admin confirms to register it (a new revision when it exists). */
-function ToolCard({ t }: { t: ToolProposal }) {
+type Registered = { ref: string; revision: number; changed: boolean };
+const registerTool = (t: ToolProposal) => api<Registered>('/v1/builder/register-tool', { method: 'POST', body: { tool: t.spec } });
+const continueText = (done: Registered[]) => `I registered ${done.map((r) => `${r.ref} (revision ${r.revision})`).join(', ')}. Continue.`;
+
+/** One proposed tool: what it runs and which secret it needs. */
+function ToolFacts({ t }: { t: ToolProposal }) {
+  const tr = t.spec.transport ?? {};
+  return (
+    <>
+      <strong className="mono">{t.ref}</strong> <Badge tone="ok">{t.spec.effect}</Badge> {t.exists ? <Badge tone="warn">new revision</Badge> : null}
+      <div className="muted small">{tr.kind === 'mcp-stdio' ? `MCP: ${(tr.command ?? []).join(' ')} → ${tr.tool}` : tr.kind === 'mcp-streamable-http' ? `MCP connection ${tr.connection} → ${tr.tool}` : `${tr.method} ${tr.url}`}</div>
+      {t.credential ? <div className="muted small">Secret <code>{t.credential.name}</code>: {t.credential.set ? 'set' : 'not set yet (Secrets page)'}</div> : null}
+    </>
+  );
+}
+
+/** A tool the builder proposes: an admin confirms to register it (a new revision when it exists), then continues the chat. */
+function ToolCard({ t, registered, onRegistered, busy, onAnswer }: { t: ToolProposal; registered?: number; onRegistered: (revision: number) => void; busy: boolean; onAnswer: (text: string) => void }) {
   const qc = useQueryClient();
   const reg = useMutation({
-    mutationFn: () => api<{ ref: string; revision: number; changed: boolean }>('/v1/builder/register-tool', { method: 'POST', body: { tool: t.spec } }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+    mutationFn: () => registerTool(t),
+    onSuccess: (r) => {
+      onRegistered(r.revision);
+      void qc.invalidateQueries({ queryKey: ['tools'] });
+    },
   });
-  const tr = t.spec.transport ?? {};
+  const revision = reg.data?.revision ?? registered;
   return (
     <div className="draft-card">
       <div>
-        <strong className="mono">{t.ref}</strong> <Badge tone="ok">{t.spec.effect}</Badge> {t.exists ? <Badge tone="warn">new revision</Badge> : null}
-        <div className="muted small">{tr.kind === 'mcp-stdio' ? `MCP: ${(tr.command ?? []).join(' ')} → ${tr.tool}` : `${tr.method} ${tr.url}`}</div>
-        {t.credential ? <div className="muted small">Secret <code>{t.credential.name}</code>: {t.credential.set ? 'set' : 'not set yet (Secrets page)'}</div> : null}
-        {reg.data ? <div className="ok-note" role="status">{reg.data.changed ? `Registered revision ${reg.data.revision}.` : `Already registered (revision ${reg.data.revision}).`}</div> : null}
+        <ToolFacts t={t} />
+        {revision !== undefined ? <div className="ok-note" role="status">{reg.data && !reg.data.changed ? `Already registered (revision ${revision}).` : `Registered revision ${revision}.`}</div> : null}
         {reg.error ? <ErrorNote error={reg.error} /> : null}
       </div>
-      <button type="button" className="primary" disabled={reg.isPending || Boolean(reg.data)} onClick={() => reg.mutate()}>{reg.data ? 'Registered' : 'Register tool'}</button>
+      {revision !== undefined
+        ? <button type="button" className="primary" disabled={busy} onClick={() => onAnswer(continueText([{ ref: t.ref, revision, changed: true }]))}>Continue</button>
+        : <button type="button" className="primary" disabled={reg.isPending} onClick={() => reg.mutate()}>Register tool</button>}
     </div>
+  );
+}
+
+/**
+ * Asks to register the tools the builder is waiting on, without scrolling back to their cards.
+ * Registering adds them to the workspace catalog (admin only); it publishes nothing, and nothing
+ * checks the command or URL works until a run calls the tool.
+ */
+function RegisterDialog({ tools, busy, onRegistered, onClose, onContinue }: { tools: ToolProposal[]; busy: boolean; onRegistered: (id: string, revision: number) => void; onClose: () => void; onContinue: (text: string) => void }) {
+  const qc = useQueryClient();
+  const ref = useRef<HTMLDialogElement>(null);
+  const primary = useRef<HTMLButtonElement>(null);
+  // showModal focuses the first button; the confirming one is the likely answer.
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+    primary.current?.focus();
+  }, []);
+  // One at a time, so a refused spec stops the rest and those already registered stay registered.
+  // They are recorded only at the end: recording one empties the waiting list, which closes this dialog.
+  const reg = useMutation({
+    mutationFn: async () => {
+      const done: Array<[ToolProposal, Registered]> = [];
+      try {
+        for (const t of tools) done.push([t, await registerTool(t)]);
+      } catch (e) {
+        done.forEach(([t, r]) => onRegistered(t.tool_use_id, r.revision));
+        throw e;
+      }
+      return done;
+    },
+    onSuccess: (done) => {
+      done.forEach(([t, r]) => onRegistered(t.tool_use_id, r.revision));
+      onContinue(continueText(done.map(([, r]) => r)));
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+  });
+  const n = tools.length;
+  return (
+    <dialog ref={ref} className="dialog" aria-labelledby="register-title" onClose={onClose}>
+      <h2 id="register-title">Register {n === 1 ? 'this tool' : `${n} tools`} to continue</h2>
+      <p className="muted small">The builder cannot compile a workflow that uses an unregistered tool. Registering adds {n === 1 ? 'it' : 'them'} to this workspace (admins only) and publishes nothing. Azhi does not check that the command or URL works; a run that calls {n === 1 ? 'it' : 'one'} fails if it does not.</p>
+      <ul className="dialog-list">
+        {tools.map((t) => <li key={t.tool_use_id} className="draft-card"><div><ToolFacts t={t} />{t.summary ? <div className="small">{t.summary}</div> : null}</div></li>)}
+      </ul>
+      <ErrorNote error={reg.error} />
+      <div className="row dialog-actions">
+        <button type="button" onClick={() => ref.current?.close()} disabled={reg.isPending}>Not now</button>
+        <button ref={primary} type="button" className="primary" disabled={reg.isPending || busy} aria-busy={reg.isPending} onClick={() => reg.mutate()}>{reg.isPending ? 'Registering…' : 'Register and continue'}</button>
+      </div>
+    </dialog>
   );
 }
 

@@ -108,7 +108,10 @@ When a requirement needs a tool that is not registered (your own MCP server, an 
 the chat. The builder asks for the MCP start command and tool name (or the HTTP method and URL), what it reads
 or changes, and the input and output shape, then proposes the tool with `propose_tool`. The server checks the
 spec (and refuses anything that looks like a secret value). The chat shows a card with **Register tool**; an
-admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
+admin clicks it and the tool is registered (a new revision if that `id@version` exists). When a turn ends with
+proposed tools still unregistered, a dialog lists them with **Register and continue**, which registers them and
+tells the builder to go on; **Not now** leaves a bar above the composer to reopen it. Registering publishes
+nothing and does not check that the command or URL works. The builder never asks
 for a token: it names the credential and you set its value on the Secrets page. Local stdio MCP servers and
 admin-managed remote Streamable HTTP MCP connections run today. Add a remote connection on Tools (or with
 `azhi mcp add`) with just its name and URL, approve access once for the workspace when it asks for sign-in, discover
