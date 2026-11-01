@@ -255,6 +255,16 @@ program
   });
 
 program
+  .command('resume')
+  .description('Continue a failed, cancelled or expired run as a new run: steps that succeeded are not repeated')
+  .argument('<run-id>')
+  .option('--from <node>', 'also rerun this step and everything after it')
+  .action(async (runId: string, opts: { from?: string }) => {
+    const r = await client().post<{ run_id: string; carried: string[]; rerun: string[] }>(`/v1/runs/${runId}/resume`, opts.from ? { from_node: opts.from } : {});
+    console.log(`run ${bold(r.run_id)} queued: ${r.carried.length} step(s) carried over from ${runId}, ${r.rerun.length} to run`);
+  });
+
+program
   .command('cancel')
   .description('Cancel a run')
   .argument('<run-id>')

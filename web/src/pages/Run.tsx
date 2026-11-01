@@ -74,6 +74,11 @@ export function RunPage({ id }: { id: string }) {
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
 
+  const resume = useMutation({
+    mutationFn: () => api<{ run_id: string }>(`/v1/runs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: {} }),
+    onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
+  });
+
   if (detail.error) return <ErrorNote error={detail.error} />;
   if (!detail.data) return <Loading />;
   const d = detail.data;
@@ -102,12 +107,13 @@ export function RunPage({ id }: { id: string }) {
           operator ? (
             <>
               {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={async () => (await ask({ title: `Cancel run ${r.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && cancel.mutate()}>Cancel run</button> : null}
+              {!open && !d.run.test && ['failed', 'cancelled', 'expired'].includes(r.state) ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()} title="Start a new run that keeps every step that already succeeded and runs the rest">Resume</button> : null}
               {!open && !d.run.snapshot?.test_node ? <button disabled={rerun.isPending} onClick={() => rerun.mutate()} title="Start a new run of the same version with the same inputs">Run again</button> : null}
             </>
           ) : null
         }
       />
-      <ErrorNote error={cancel.error ?? rerun.error} />
+      <ErrorNote error={cancel.error ?? rerun.error ?? resume.error} />
       {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
       {version.data?.plan?.nodes ? (

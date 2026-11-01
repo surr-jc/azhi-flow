@@ -18,7 +18,7 @@ import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
 import { EXECUTORS } from '../executors/capabilities.js';
 import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
-import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
+import { createRun, getRunDetail, requestCancel, resumeRun, runEvents } from '../server/runs.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
@@ -393,6 +393,15 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'operator');
     await requestCancel(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId);
     return { ok: true };
+  });
+
+  // A new run that continues a failed, cancelled or expired one: steps that succeeded are carried over, not repeated.
+  app.post('/v1/runs/:id/resume', async (req, reply) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    const b = z.object({ from_node: z.string().optional() }).parse(req.body ?? {});
+    const r = await resumeRun(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId, interpreterBuild, { fromNode: b.from_node });
+    return reply.status(202).send({ run_id: r.runId, carried: r.carried, rerun: r.rerun });
   });
 
   // Knowledge datasets (spec section 11)
