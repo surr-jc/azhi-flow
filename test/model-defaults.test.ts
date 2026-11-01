@@ -7,7 +7,9 @@ import { applyModelDefaults, modelDefaultsProblems, parseProfile, usesDefaultMod
 import { compile } from '../src/compiler/compile.js';
 import { loadDefinitionText } from '../src/definition/load.js';
 import { packageFromDirectory } from '../src/definition/package.js';
-import { startHarness, uploadDir, type Harness } from './helpers/harness.js';
+import { startHarness, temporalAvailable, uploadDir, type Harness } from './helpers/harness.js';
+
+const up = await temporalAvailable();
 
 /**
  * The provider and model a person chooses for a workflow or a run apply only to steps whose profile says
@@ -74,7 +76,7 @@ describe('model defaults: the rule', () => {
   });
 });
 
-describe('model defaults: the run plan and the options', () => {
+describe.skipIf(!up)('model defaults: the run plan and the options', () => {
   let h: Harness;
   let version: string;
 

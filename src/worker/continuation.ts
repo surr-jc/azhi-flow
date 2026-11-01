@@ -1,5 +1,5 @@
 import { ApplicationFailure } from '@temporalio/common';
-import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ErrorClass } from '../lib/errors.js';
 import type { ApiClient } from './api-client.js';
@@ -147,5 +147,7 @@ export function applyContinuation(dir: string, files: ContinuationFile[]): void 
     if (f.status === 'modified' && !exists) throw invalid(`the change modifies '${f.path}', which is not in the base commit; the change does not match its base_sha`);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, f.encoding === 'base64' ? Buffer.from(f.content!, 'base64') : Buffer.from(f.content!, 'utf8'));
+    // A file system that keeps modes must agree with the recorded one, or git sees (or drops) a mode change.
+    if (process.platform !== 'win32') chmodSync(target, f.mode === '100755' ? 0o755 : 0o644);
   }
 }
