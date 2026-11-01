@@ -6,7 +6,7 @@ import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '
 import { getDataset } from '../knowledge/datasets.js';
 import { datasetAllows } from '../plan/run-plan.js';
 import { budgetStatus } from '../server/budgets.js';
-import { concurrencySettings } from '../server/repo-slots.js';
+import { concurrencySettings, opencodeMajorSetting } from '../server/repo-slots.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { requireRole } from './auth.js';
@@ -275,6 +275,34 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
     // A higher limit may free slots for held runs at once.
     await ctx.pool.query(`NOTIFY azhi_outbox`);
     return concurrencySettings(ctx, p.workspaceId);
+  });
+
+  // The OpenCode SDK major for every OpenCode step in the workspace: reading needs any user; changing it needs admin and is audited.
+  const harnessSettings = async (workspaceId: string) => {
+    const online = (
+      await ctx.pool.query(`SELECT name, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds' ORDER BY name`, [workspaceId])
+    ).rows as Array<{ name: string; capabilities: { opencodeMajors?: Record<string, { version: string }>; runtimes?: { opencode?: { version: string; major?: number } } } }>;
+    const versions = (c: (typeof online)[number]['capabilities']) => ({
+      1: c.opencodeMajors?.['1']?.version ?? (c.runtimes?.opencode && (c.runtimes.opencode.major ?? 1) === 1 ? c.runtimes.opencode.version : null),
+      2: c.opencodeMajors?.['2']?.version ?? (c.runtimes?.opencode?.major === 2 ? c.runtimes.opencode.version : null),
+    });
+    return { opencode_major: await opencodeMajorSetting(ctx, workspaceId), workers: online.map((w) => ({ name: w.name, opencode: versions(w.capabilities) })) };
+  };
+
+  app.get('/v1/settings/harness', async (req) => harnessSettings(user(req).workspaceId));
+
+  app.put('/v1/settings/harness', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ opencode_major: z.union([z.literal(1), z.literal(2)]).nullable() }).parse(req.body);
+    await ctx.pool.query(
+      b.opencode_major === null
+        ? `UPDATE workspaces SET settings = settings - 'harness' WHERE id=$1`
+        : `UPDATE workspaces SET settings = jsonb_set(settings, '{harness}', $2::jsonb) WHERE id=$1`,
+      b.opencode_major === null ? [p.workspaceId] : [p.workspaceId, JSON.stringify({ opencode_major: b.opencode_major })],
+    );
+    await audit(ctx, p.workspaceId, p.userId, 'settings.harness_changed', b);
+    return harnessSettings(p.workspaceId);
   });
 
   // Spend limits: reading needs any user; changing them needs admin and is audited.

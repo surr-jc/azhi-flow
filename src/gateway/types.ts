@@ -31,6 +31,8 @@ export interface ToolSpec {
   transport: ToolTransport;
   /** Name of a workspace secret, resolved at execution time; never stored in packages. */
   credential?: string;
+  /** The credential may be absent at run start: the person is asked to sign in then, and the tool fails only if it is called without it. */
+  credential_optional?: boolean;
   timeout?: string;
   rate_limit?: { per_minute: number };
   access?: { roles?: string[] };

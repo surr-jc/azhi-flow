@@ -399,7 +399,10 @@ function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflow
           <div key={c.id} className="pf-line bad"><Badge tone="bad">{c.node ?? c.kind}</Badge> {c.message}{c.fix ? <div className="muted small">{c.fix}</div> : null}</div>
         ))}
         {warned.map((c) => (
-          <div key={c.id} className="pf-line warn"><Badge tone="warn">{c.node ?? c.kind}</Badge> {c.message}</div>
+          <div key={c.id} className="pf-line warn">
+            <Badge tone="warn">{c.node ?? c.kind}</Badge> {c.message}
+            {c.optional && c.kind === 'secret' ? <SignIn name={c.target} onDone={() => void pre.refetch()} /> : null}
+          </div>
         ))}
         {pre.data ? (
           <details className="small">
@@ -420,5 +423,24 @@ function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflow
       {formError ? <div className="error">{formError}</div> : null}
       <ErrorNote error={start.error} />
     </form>
+  );
+}
+
+/** Optional sign-in at the start of a run: saves the secret a step needs, or the run starts without it. */
+function SignIn({ name, onDone }: { name: string; onDone: () => void }) {
+  const [value, setValue] = useState('');
+  const save = useMutation({
+    mutationFn: () => api(`/v1/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { value: value.trim() } }),
+    onSuccess: () => {
+      setValue('');
+      onDone();
+    },
+  });
+  return (
+    <div className="row small">
+      <input type="password" autoComplete="off" aria-label={`Value for ${name}`} placeholder={`Paste ${name} (optional)`} value={value} onChange={(e) => setValue(e.target.value)} />
+      <button type="button" disabled={!value.trim() || save.isPending} onClick={() => save.mutate()}>Sign in</button>
+      <ErrorNote error={save.error} />
+    </div>
   );
 }

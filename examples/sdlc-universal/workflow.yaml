@@ -66,8 +66,8 @@ nodes:
         - jira_issue
   - id: jira_issue
     type: tool
-    description: Read the Jira ticket through the workspace's jira-ccp tool.
-    tool: jira-ccp_get_issue@1
+    description: Read the Jira ticket through the Atlassian MCP server.
+    tool: jira.get-issue@1
     arguments:
       issue_key:
         ref: inputs.ticket

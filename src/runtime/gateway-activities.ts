@@ -183,7 +183,7 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         const t = trust.workers.find((x) => x.worker === w.id);
         const missing = needs.find((f) => !w.capabilities.features?.includes(f));
         if (!w.capabilities.runtimes?.[runtime]) refused.push({ id: w.id, reason: `no ${runtime} runtime` });
-        else if (missing) refused.push({ id: w.id, reason: `worker build does not support ${missing.replaceAll('_', ' ')}; upgrade it` });
+        else if (missing) refused.push({ id: w.id, reason: missing.startsWith('opencode_') ? `no OpenCode ${missing.slice(9)}.x on this worker${missing === 'opencode_2' ? '; run azhi setup --opencode2' : ''}` : `worker build does not support ${missing.replaceAll('_', ' ')}; upgrade it` });
         else if (!t?.accepted) refused.push({ id: w.id, reason: t?.reason ?? 'trust policy refused the package' });
         else accepted.push({ id: w.id, queue: w.task_queue });
       }

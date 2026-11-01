@@ -151,6 +151,8 @@ export interface HarnessPlan {
   provider: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt';
   /** Models a custom Copilot endpoint (AZHI_COPILOT_API_URL) serves: the server's default model. */
   endpointModels?: string[];
+  /** The workspace's chosen OpenCode major; absent when the workers' own default applies. */
+  opencodeMajor?: 1 | 2;
 }
 
 export interface HarnessRecordInput {

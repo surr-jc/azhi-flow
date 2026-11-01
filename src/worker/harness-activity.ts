@@ -48,6 +48,8 @@ export interface HarnessInput {
   /** Which harness runs the node; OpenCode when absent (older histories). */
   executor?: 'opencode' | 'claude-agent-sdk' | 'codex';
   provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt';
+  /** OpenCode only: the major the workspace chose; the worker's default when absent. */
+  opencodeMajor?: 1 | 2;
   runToken: string;
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
@@ -105,9 +107,11 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
     async runHarness(input: HarnessInput): Promise<HarnessResult> {
       if (input.executor === 'claude-agent-sdk') return runClaudeAgentSdk(o, input);
       if (input.executor === 'codex') return runCodex(o, input);
-      const oc = o.capabilities.runtimes.opencode;
-      if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: 'this worker has no OpenCode', nonRetryable: true });
-      if (oc.major === 2) return runOpencode2(o, input);
+      // The workspace's choice wins; otherwise the worker's own default (AZHI_OPENCODE_MAJOR).
+      const want = input.opencodeMajor ?? o.capabilities.runtimes.opencode?.major ?? 1;
+      const oc = o.capabilities.opencodeMajors?.[want] ?? (o.capabilities.runtimes.opencode && (o.capabilities.runtimes.opencode.major ?? 1) === want ? o.capabilities.runtimes.opencode : undefined);
+      if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: `this worker has no OpenCode ${want}.x`, nonRetryable: true });
+      if (want === 2) return runOpencode2(o, input, oc);
       // Same trust check as scripts: the package's profile is what the harness runs.
       const pkg = await preparePackage(o, input.packageHash);
       const profileHarness = input.profile ? readProfileHarness(pkg.dir, input.profile) : undefined;

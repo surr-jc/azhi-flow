@@ -194,7 +194,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       });
       await noteWithheld(node.id, prep.withheld);
       // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
-      const queue = await selectWorker(node.id, executor, 1, prep.continuation ? ['workspace_continuation'] : undefined);
+      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
+      const queue = await selectWorker(node.id, executor, 1, needs.length ? needs : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
@@ -203,6 +204,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         packageHash: snapshot.package_hash,
         executor: executor as HarnessExecutor,
         provider: prep.provider,
+        ...(prep.opencodeMajor ? { opencodeMajor: prep.opencodeMajor } : {}),
         runToken,
         credential: prep.credential,
         providerUrl: prep.providerUrl,

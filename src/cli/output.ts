@@ -43,7 +43,7 @@ export function printPlan(p: RunPlanReport) {
   }
   if (p.missing_grants.length) {
     console.log(`\n${bold('missing grants')}`);
-    for (const g of p.missing_grants) console.log(`  ${red('✗')} ${g.kind} ${g.name} ${dim(`(${g.node})`)}`);
+    for (const g of p.missing_grants) console.log(`  ${g.optional ? dim('○') : red('✗')} ${g.kind} ${g.name} ${dim(`(${g.node}${g.optional ? ', optional: sign in to use it' : ''})`)}`);
   }
   if (p.worker_trust.length) {
     console.log(`\n${bold('workers')}`);

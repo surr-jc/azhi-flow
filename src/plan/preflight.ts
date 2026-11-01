@@ -28,6 +28,8 @@ export interface PreflightCheck {
   node?: string;
   message: string;
   fix?: string;
+  /** A sign-in the run can start without; set `target` as a secret to use the step. */
+  optional?: boolean;
 }
 export interface PreflightReport {
   ok: boolean;
@@ -80,11 +82,12 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
     checks.push({
       id: `${g.kind}:${g.name}:${g.node}`,
       kind: g.kind === 'secret' ? 'secret' : g.kind === 'dataset' ? 'dataset' : 'tool',
-      status: 'fail',
+      status: g.optional ? 'warn' : 'fail',
       target: g.name,
       node: g.node,
-      message: g.kind === 'secret' ? `The secret ${g.name} is not set (used by ${g.node}).` : g.kind === 'dataset' ? `The dataset ${g.name} is not available to this workflow (read by ${g.node}).` : `The tool ${g.name} is not registered (called by ${g.node}).`,
-      fix: g.kind === 'secret' ? 'Set it under Secrets, or from the Marketplace page of this workflow.' : g.kind === 'dataset' ? 'Create and publish the dataset, or grant access to it.' : 'Register the tool, or install the workflow from the Marketplace.',
+      ...(g.optional ? { optional: true } : {}),
+      message: g.optional ? `Not signed in: ${g.name} is not set (${g.node} needs it only if this run reaches that step).` : g.kind === 'secret' ? `The secret ${g.name} is not set (used by ${g.node}).` : g.kind === 'dataset' ? `The dataset ${g.name} is not available to this workflow (read by ${g.node}).` : `The tool ${g.name} is not registered (called by ${g.node}).`,
+      fix: g.optional ? 'Sign in below to use it, or start without: the run fails at that step only if it is reached.' : g.kind === 'secret' ? 'Set it under Secrets, or from the Marketplace page of this workflow.' : g.kind === 'dataset' ? 'Create and publish the dataset, or grant access to it.' : 'Register the tool, or install the workflow from the Marketplace.',
     });
   }
   for (const b of plan.blockers) {
@@ -179,7 +182,7 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
     if (n.type !== 'tool') continue;
     const def = n.def as ToolNode;
     const spec = catalog.get(def.tool);
-    if (spec && !checks.some((c) => c.node === n.id && c.status === 'fail')) checks.push({ id: `tool:${n.id}`, kind: 'tool', status: 'ok', target: def.tool, node: n.id, message: `${def.tool} is registered${spec.credential ? ` and its secret ${spec.credential} is set` : ''}.` });
+    if (spec && !checks.some((c) => c.node === n.id && (c.status === 'fail' || c.optional))) checks.push({ id: `tool:${n.id}`, kind: 'tool', status: 'ok', target: def.tool, node: n.id, message: `${def.tool} is registered${spec.credential ? ` and its secret ${spec.credential} is set` : ''}.` });
   }
   return { ok: !checks.some((c) => c.status === 'fail'), checks };
 }

@@ -62,7 +62,7 @@ export interface RunPlanReport {
   ok: boolean;
   nodes: NodePlan[];
   taint: TaintReport;
-  missing_grants: Array<{ kind: 'secret' | 'dataset' | 'tool'; name: string; node: string }>;
+  missing_grants: Array<{ kind: 'secret' | 'dataset' | 'tool'; name: string; node: string; optional?: boolean }>;
   worker_trust: Array<{ worker: string; name: string; policy: unknown; accepted: boolean; reason?: string }>;
   blockers: Blocker[];
 }
@@ -101,11 +101,12 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const toolRequirement = (n: PlanNode, ref: string): Requirement => {
     const spec = catalog.get(ref);
     if (!spec) return { name: `tool ${ref}`, mark: 'unsupported', detail: 'not registered' };
-    if (spec.credential && !secrets.has(spec.credential)) missing.push({ kind: 'secret', name: spec.credential, node: n.id });
+    const absent = Boolean(spec.credential && !secrets.has(spec.credential));
+    if (absent) missing.push({ kind: 'secret', name: spec.credential!, node: n.id, ...(spec.credential_optional ? { optional: true } : {}) });
     return {
       name: `tool ${ref}`,
-      mark: spec.credential && !secrets.has(spec.credential) ? 'unsupported' : 'native',
-      detail: `${spec.effect} via ${spec.transport.kind}${spec.credential ? `, credential '${spec.credential}' ${secrets.has(spec.credential) ? 'set' : 'MISSING'}` : ''}`,
+      mark: absent && !spec.credential_optional ? 'unsupported' : 'native',
+      detail: `${spec.effect} via ${spec.transport.kind}${spec.credential ? `, credential '${spec.credential}' ${absent ? (spec.credential_optional ? 'not signed in (optional)' : 'MISSING') : 'set'}` : ''}`,
     };
   };
 

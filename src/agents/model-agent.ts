@@ -9,6 +9,7 @@ import { byteSize } from '../lib/json.js';
 import { loadToolRevision } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
+import { opencodeMajorSetting } from '../server/repo-slots.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { WORKSPACE_CHANGE_SCHEMA } from '../compiler/plan.js';
@@ -571,6 +572,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     [i.workspaceId, i.runId, i.nodeId, false, JSON.stringify(items)],
   );
   const first = t.messages[0]!.content[0];
+  const opencodeMajor = executor === 'opencode' ? await opencodeMajorSetting(ctx, i.workspaceId) : null;
   return {
     system: t.system,
     prompt: `${first && first.type === 'text' ? first.text : ''}${note}`,
@@ -582,6 +584,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     credential: profile.model.credential ?? PROVIDER_DEFAULTS[provider].credential,
     providerUrl: PROVIDER_DEFAULTS[provider].apiUrl(ctx.settings),
     provider,
+    ...(executor === 'opencode' && opencodeMajor ? { opencodeMajor } : {}),
     ...(provider === 'github-copilot' && ctx.settings.copilotApiUrl ? { endpointModels: [...new Set([ctx.settings.copilotModel, ...ctx.settings.copilotEndpointModels, ...(i.modelDefaults?.name ? [t.model] : [])])] } : {}),
   };
 }

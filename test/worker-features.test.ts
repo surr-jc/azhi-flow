@@ -32,6 +32,7 @@ describe('worker feature gating', () => {
     await add('new', { features: ['workspace_continuation'] });
     await add('old', {}); // a build from before the field existed
     await add('empty', { features: [] });
+    await add('two', { features: ['opencode_2'] });
   });
 
   it('every worker build advertises workspace continuation', () => {
@@ -40,16 +41,22 @@ describe('worker feature gating', () => {
 
   it('without a requirement, any worker with the runtime is accepted (nothing changes for existing steps)', async () => {
     const sel = await gatewayActivities(ctx).checkWorkers(WS, 'sha256:x', 'opencode');
-    expect(sel.accepted.map((w) => w.id).sort()).toEqual(['empty', 'new', 'old']);
+    expect(sel.accepted.map((w) => w.id).sort()).toEqual(['empty', 'new', 'old', 'two']);
     expect(sel.refused).toEqual([]);
   });
 
   it('a step that continues from a change is only given workers that support it, and the others say why', async () => {
     const sel = await gatewayActivities(ctx).checkWorkers(WS, 'sha256:x', 'opencode', ['workspace_continuation']);
     expect(sel.accepted.map((w) => w.id)).toEqual(['new']);
-    expect(sel.refused.map((r) => r.id).sort()).toEqual(['empty', 'old']);
+    expect(sel.refused.map((r) => r.id).sort()).toEqual(['empty', 'old', 'two']);
     for (const r of sel.refused) expect(r.reason).toBe('worker build does not support workspace continuation; upgrade it');
-    expect(sel.online).toBe(3);
+    expect(sel.online).toBe(4);
+  });
+
+  it('a workspace that chose OpenCode 2 is only given workers that have it, and the others say how to get it', async () => {
+    const sel = await gatewayActivities(ctx).checkWorkers(WS, 'sha256:x', 'opencode', ['opencode_2']);
+    expect(sel.accepted.map((w) => w.id)).toEqual(['two']);
+    expect(sel.refused.map((r) => r.reason)).toEqual(Array(3).fill('no OpenCode 2.x on this worker; run azhi setup --opencode2'));
   });
 
   it('still refuses a worker without the runtime first', async () => {

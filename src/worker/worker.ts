@@ -84,7 +84,7 @@ export async function startWorker(o: WorkerOptions) {
   });
   const running = worker.run();
   let stopped = false;
-  log(`worker ${name} (${workerId}) up; runtimes: ${Object.entries(capabilities.runtimes).map(([k, v]) => `${k} ${v.version}`).join(', ') || 'none'}`);
+  log(`worker ${name} (${workerId}) up; runtimes: ${Object.entries(capabilities.runtimes).map(([k, v]) => `${k} ${v.version}`).join(', ') || 'none'}${capabilities.opencodeMajors?.[1] && capabilities.opencodeMajors[2] ? `; opencode majors: 1 (${capabilities.opencodeMajors[1].version}), 2 (${capabilities.opencodeMajors[2].version})` : ''}`);
   return {
     workerId,
     capabilities,

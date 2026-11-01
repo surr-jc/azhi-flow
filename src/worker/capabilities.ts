@@ -10,12 +10,14 @@ export interface WorkerCapabilities {
   runtimes: { python?: { version: string; via: 'uv' | 'python3' | 'python' | 'py' }; bun?: { version: string }; opencode?: { version: string; path: string; major?: 1 | 2 }; ripgrep?: { version: string; path: string }; dcp?: { version: string; path: string; dir?: string }; 'claude-agent-sdk'?: { version: string }; codex?: { version: string; path: string }; git?: { version: string } };
   limits: { memory: boolean; time: boolean };
   executors: string[];
+  /** Every OpenCode major this worker has installed; `runtimes.opencode` is the one it uses unless a workspace picks another. */
+  opencodeMajors?: { 1?: { version: string; path: string }; 2?: { version: string; path: string } };
   /** Behaviours this worker build has that a step can require (a worker without the field predates them all). */
   features?: WorkerFeature[];
 }
 
 /** `workspace_continuation`: a workspace can start from an earlier step's change (`workspace.from`). */
-export type WorkerFeature = 'workspace_continuation';
+export type WorkerFeature = 'workspace_continuation' | 'opencode_1' | 'opencode_2';
 export const WORKER_FEATURES: WorkerFeature[] = ['workspace_continuation'];
 
 function tryRun(cmd: string, args: string[]): string | undefined {
@@ -47,10 +49,21 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
   const bun = tryRun('bun', ['--version']);
   // Agent steps with a workspace clone with git.
   const git = tryRun('git', ['--version'])?.replace(/^git version\s+/, '');
-  // AZHI_OPENCODE_MAJOR=2 runs OpenCode steps on OpenCode 2 (its own adapter); anything else keeps the pinned 1.x.
-  const major = process.env.AZHI_OPENCODE_MAJOR === '2' ? 2 : 1;
-  const ocPath = major === 2 ? opencode2Binary() : opencodeBinary();
-  const oc = ocPath ? opencodeVersion(tryRun(ocPath, ['--version'])) : undefined;
+  // Both OpenCode majors are advertised when installed; the workspace setting picks one per step. AZHI_OPENCODE_MAJOR=2
+  // makes OpenCode 2 this worker's own default (used when the workspace has not chosen); anything else keeps the pinned 1.x.
+  const probe = (path: string | undefined) => {
+    const version = path ? opencodeVersion(tryRun(path, ['--version'])) : undefined;
+    return path && version ? { version, path } : undefined;
+  };
+  const v1 = probe(opencodeBinary());
+  const v2 = probe(opencode2Binary());
+  const majors: NonNullable<WorkerCapabilities['opencodeMajors']> = { ...(v1 ? { 1: v1 } : {}), ...(v2 ? { 2: v2 } : {}) };
+  const major: 1 | 2 = process.env.AZHI_OPENCODE_MAJOR === '2' ? 2 : 1;
+  // A worker with only the other major still serves it, so a workspace that chose that major can reach the worker.
+  const defaultMajor: 1 | 2 = majors[major] ? major : major === 2 ? 1 : 2;
+  const chosen = majors[defaultMajor];
+  const oc = chosen?.version;
+  const ocPath = chosen?.path;
   const rgPath = oc ? ripgrepBinary() : undefined;
   const rg = rgPath ? ripgrepVersion(rgPath) : undefined;
   const dcp = oc ? dcpPlugin() : undefined;
@@ -64,7 +77,7 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
     runtimes: {
       ...(python ? { python } : {}),
       ...(bun ? { bun: { version: bun } } : {}),
-      ...(oc && ocPath ? { opencode: { version: oc, path: ocPath, ...(major === 2 ? { major } : {}) } } : {}),
+      ...(oc && ocPath ? { opencode: { version: oc, path: ocPath, ...(defaultMajor === 2 ? { major: defaultMajor } : {}) } } : {}),
       ...(rg && rgPath ? { ripgrep: { version: rg, path: rgPath } } : {}),
       ...(dcp ? { dcp } : {}),
       ...(sdk ? { 'claude-agent-sdk': { version: sdk } } : {}),
@@ -72,8 +85,9 @@ export function detectCapabilities(pythonVersion = process.env.AZHI_PYTHON_VERSI
       ...(git ? { git: { version: git } } : {}),
     },
     limits: { memory: process.platform === 'linux' && Boolean(tryRun('prlimit', ['--version'])), time: true },
+    ...(Object.keys(majors).length ? { opencodeMajors: majors } : {}),
     executors: ['script', ...(oc ? ['opencode'] : []), ...(sdk ? ['claude-agent-sdk'] : []), ...(codex ? ['codex'] : [])],
-    features: WORKER_FEATURES,
+    features: [...WORKER_FEATURES, ...(majors[1] ? ['opencode_1' as const] : []), ...(majors[2] ? ['opencode_2' as const] : [])],
   };
 }
 

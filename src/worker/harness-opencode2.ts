@@ -58,8 +58,7 @@ export function isRejectedRequest(err: { type?: string; status?: number }): bool
 
 type Message = { id: string; type: string; finish?: string; error?: { type: string; message: string; status?: number; response?: { body: string } }; tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }; cost?: number };
 
-export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }, input: HarnessInput): Promise<HarnessResult> {
-  const oc = o.capabilities.runtimes.opencode!;
+export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: WorkerCapabilities }, input: HarnessInput, oc: { version: string; path: string }): Promise<HarnessResult> {
   const pkg = await preparePackage(o, input.packageHash);
   const profileHarness = input.profile ? readProfileHarness(pkg.dir, input.profile) : undefined;
   const ctx = Context.current();

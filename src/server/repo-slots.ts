@@ -48,6 +48,12 @@ export async function concurrencySettings(ctx: AppContext, workspaceId: string):
   return { max_runs_per_repo: ctx.settings.maxRunsPerRepo, source: 'server' };
 }
 
+/** The OpenCode major every OpenCode step of the workspace runs on (1 or 2), or null to leave it to the worker's own default. */
+export async function opencodeMajorSetting(ctx: AppContext, workspaceId: string): Promise<1 | 2 | null> {
+  const v = (await ctx.pool.query(`SELECT settings->'harness'->'opencode_major' AS m FROM workspaces WHERE id=$1`, [workspaceId])).rows[0]?.m;
+  return v === 1 || v === 2 ? v : null;
+}
+
 export type Admission = { ok: true } | { ok: false; repo: string; limit: number; holders: string[] };
 
 /**

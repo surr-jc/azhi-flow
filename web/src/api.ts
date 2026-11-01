@@ -171,12 +171,13 @@ export interface RunPlan {
   ok: boolean;
   nodes: Array<{ id: string; type: string; executor?: string; requirements: Array<{ name: string; mark: string; detail: string }>; coverage: Array<{ action: string; enforcement: string; detail: string }>; tainted?: string; model?: { provider: string; name: string | null; source: 'profile' | 'server_default' | 'workflow_default' | 'run_choice' } }>;
   blockers: Array<{ code: string; message: string; node?: string }>;
-  missing_grants: Array<{ kind: string; name: string; node: string }>;
+  missing_grants: Array<{ kind: string; name: string; node: string; optional?: boolean }>;
 }
 
 export interface PreflightCheck {
   id: string;
   kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  optional?: boolean;
   status: 'ok' | 'warn' | 'fail' | 'skipped';
   target: string;
   node?: string;

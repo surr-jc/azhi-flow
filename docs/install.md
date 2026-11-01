@@ -130,7 +130,9 @@ steps; a step's Agent activity says when DCP is on, its limits, and each time it
 the limits a worker will use and flags a bad value, which would otherwise fail OpenCode steps that load DCP.
 
 **OpenCode 2 (preview, off by default).** A worker started with `AZHI_OPENCODE_MAJOR=2` runs OpenCode steps on
-OpenCode 2 instead of the pinned 1.x, through its own adapter. `npx azhi setup --opencode2` installs the pinned
+OpenCode 2 instead of the pinned 1.x, through its own adapter. An admin can instead choose the version for every
+workflow in the workspace on the Workers page (OpenCode SDK); a worker advertises each major it has installed, and
+steps wait for a worker that has the chosen one. Left on "Worker default", `AZHI_OPENCODE_MAJOR` decides. `npx azhi setup --opencode2` installs the pinned
 `@opencode/cli` into the tools folder (about 250 MB; it is not an npm dependency of Azhi), or set
 `AZHI_OPENCODE2_BIN`. Steps keep the same isolation, gateway bridge, profile harness, write mode and token saving.
 Differences: Copilot and ChatGPT sign-ins go in through OpenCode 2's credential API and sit in the step's own
