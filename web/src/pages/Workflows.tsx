@@ -12,6 +12,8 @@ import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { FitToSignins } from '../components/FitToSignins';
 import { Popup } from '../components/Popup';
+import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { UndoNotice } from '../components/UndoNotice';
 import { StepPanel } from '../components/StepDrawer';
 import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
 import { nodeStates, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
@@ -139,14 +141,18 @@ function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; ver
       onDeleted?.();
     },
   });
-  const confirmDelete = async () => (await ask({ title: `Delete ${what}?`, text: 'This cannot be undone.', confirm: `Delete ${version ? `v${version.version}` : slug}` })) && remove.mutate();
+  // Holding the button replaces the confirm dialog; the DELETE only goes out once the undo window lapses.
+  const [undoing, setUndoing] = useState(false);
+  const commit = useCallback(() => { setUndoing(false); remove.mutate(); }, [remove]);
   const label = version ? `Delete v${version.version}` : `Delete ${slug}`;
   return (
     <>
-      {compact ? (
-        <button type="button" className="small danger" disabled={remove.isPending} aria-label={label} onClick={() => void confirmDelete()}>Delete</button>
+      {undoing ? (
+        <UndoNotice message={`Deleting ${version ? `v${version.version}` : slug}`} onExpire={commit} onUndo={() => setUndoing(false)} />
+      ) : compact ? (
+        <HoldToConfirmButton className="small" disabled={remove.isPending} aria-label={`Hold to ${label.toLowerCase()}`} onConfirm={() => setUndoing(true)}>Hold to delete</HoldToConfirmButton>
       ) : (
-        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} data-tip={label} onClick={() => void confirmDelete()}><Icon name="trash" /></button>
+        <HoldToConfirmButton className="tb-btn" disabled={remove.isPending} aria-label={`Hold to ${label.toLowerCase()}`} data-tip={`Hold to ${label.toLowerCase()}`} onConfirm={() => setUndoing(true)}><Icon name="trash" /></HoldToConfirmButton>
       )}
       {dialog}
       {remove.error ? <span className="warn-text small" role="alert">{(remove.error as Error).message}</span> : null}

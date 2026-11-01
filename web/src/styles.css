@@ -1796,3 +1796,18 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .formatted .md h3, .formatted .md h4, .formatted .md h5 { margin: 12px 0 4px; font-size: calc(13px * var(--fs, 1)); }
 .formatted .md pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 .formatted .md pre code { white-space: inherit; }
+
+/* hold-to-confirm delete and its undo notice */
+.hold-btn { position: relative; isolation: isolate; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; touch-action: none; user-select: none; color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
+.hold-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.hold-label, .hold-fill { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.hold-fill { position: absolute; inset: 0; background: var(--bad); color: var(--panel); clip-path: inset(0 100% 0 0); transition: clip-path 180ms var(--ease-out); }
+.hold-btn[data-status="holding"] .hold-fill { clip-path: inset(0 0 0 0); transition: clip-path var(--hold-ms) linear; }
+.hold-btn[data-input="keyboard"] .hold-fill { transition-duration: 0ms; }
+.undo-notice { display: inline-flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; padding: 2px 2px 2px 12px; background: var(--idle-bg); border-radius: var(--r-md); }
+.undo-msg { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--ink); }
+.undo-msg svg { color: var(--ok); flex: none; }
+.undo-btn { position: relative; isolation: isolate; overflow: hidden; min-width: 72px; display: inline-flex; align-items: center; justify-content: center; }
+.undo-fill { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--ink); color: var(--panel); clip-path: inset(0 0 0 0); }
+.undo-btn[data-counting="true"] .undo-fill { clip-path: inset(0 100% 0 0); transition: clip-path var(--undo-ms) linear; }
+@media (prefers-reduced-motion: reduce) { .hold-fill, .hold-btn[data-status="holding"] .hold-fill, .undo-btn[data-counting="true"] .undo-fill { transition-duration: 0ms; } }
