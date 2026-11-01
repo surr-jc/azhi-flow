@@ -27,7 +27,7 @@ const block = z.union([
 const chat = z.object({
   provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']).optional(),
   model: z.string().min(1).max(160).optional(),
-  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })).max(200),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })),
   text: z.string().min(1).max(8_000),
   page: z.unknown().optional(),
 });
@@ -48,7 +48,7 @@ export function registerAssistantRoutes(app: FastifyInstance, d: AssistantDeps) 
   app.post('/v1/assistant/chat', async (req) => {
     const p = user(req);
     const b = chat.parse(req.body);
-    if (JSON.stringify(b.messages).length > 1_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
+    if (b.messages.length > 200 || JSON.stringify(b.messages).length > 1_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
     const r = await assistantTurn(d, p, { messages: b.messages as Message[], text: b.text, page: checkPage(b.page), provider: b.provider, model: b.model });
     await audit(ctx, p.workspaceId, p.userId, 'assistant.turn', { provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
     return r;

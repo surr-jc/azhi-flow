@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { Block, Message, ModelTool, Usage } from '../agents/providers.js';
 import { providerFor, type BuilderProviderId } from '../builder/builder.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { checkCall, TOOLS, type ActionPreview, type AssistantDeps, type Caller } from './tools.js';
+import { checkCall, toolNamed, TOOLS, type ActionPreview, type AssistantDeps, type Caller } from './tools.js';
 
 /**
  * The assistant chat behind the bubble on every mission control page: a model with the assistant
@@ -125,7 +125,7 @@ export async function assistantTurn(
       try {
         if (res.stop === 'max_tokens') {
           answer(u.id, `Your reply was cut off at ${MAX_OUTPUT_TOKENS} output tokens, so this call is incomplete. Try again with less.`, true);
-        } else if (event) {
+        } else if (event && (u.name === 'open_builder' || toolNamed(u.name)?.effect === 'act')) {
           answer(u.id, 'Not run: one action or hand-off at a time. Propose this again after the person has answered.', true);
         } else if (u.name === 'open_builder') {
           if (!allowed(p, 'author')) throw new AzhiError(ErrorClass.authorization, `building workflows needs the author role (the person is ${p.role})`);

@@ -67,6 +67,8 @@ function suggestions(page: PageContext): string[] {
 }
 
 const LOOKUP = (name: string) => name.replace(/_/g, ' ');
+/** The notes `note()` adds when a card is confirmed or dismissed; anything else the person typed is their own words. */
+const CARD_NOTE = /^\(I (confirmed|dismissed) ".*\)$/s;
 const toHandoff = (input: Record<string, unknown>): Handoff | undefined =>
   typeof input.prompt === 'string' && input.prompt.trim() ? { prompt: input.prompt.trim(), ...(typeof input.workflow === 'string' ? { workflow: input.workflow } : {}) } : undefined;
 
@@ -176,7 +178,10 @@ export function Assistant() {
   return (
     <>
       {open ? (
-        <section className="asst-panel" role="dialog" aria-label="Assistant" onKeyDown={(e) => e.key === 'Escape' && close()}>
+        <section className="asst-panel" role="dialog" aria-label="Assistant" onKeyDown={(e) => {
+          // Escape in the open model picker closes only the picker.
+          if (e.key === 'Escape' && !e.currentTarget.querySelector('.model-pop')) close();
+        }}>
           <header className="asst-head">
             <span className="asst-title"><Icon name="agent" size={16} />Assistant</span>
             <span className="asst-head-actions">
@@ -221,6 +226,7 @@ export function Assistant() {
             ) : null}
             {send.error && (send.error as Error).name === 'AbortError' ? <div className="muted small">Stopped. Nothing was added; send it again to retry.</div> : <ErrorNote error={send.error} />}
             <ErrorNote error={act.error} />
+            {state.messages.length > 160 ? <div className="muted small">This chat is getting long and will soon be refused; start a new chat for a new question.</div> : null}
             <div className="sr-only" role="status">{send.isPending ? 'The assistant is working' : send.isSuccess ? 'The assistant replied' : ''}</div>
           </div>
           <form className="asst-composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
@@ -260,7 +266,7 @@ function MessageView({ m, results, proposals, outcomes, busy, onConfirm, onDismi
   if (m.role === 'user') {
     // Tool results are the assistant's own lookups; only the person's words (and their notes on cards) show.
     const text = m.content.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text').map((b) => b.text);
-    return <>{text.map((t, i) => (t.startsWith('(I ') ? <div key={i} className="chat-note muted small">{t.slice(1, -1)}</div> : <div key={i} className="bubble user">{t}</div>))}</>;
+    return <>{text.map((t, i) => (CARD_NOTE.test(t) ? <div key={i} className="chat-note muted small">{t.slice(1, -1)}</div> : <div key={i} className="bubble user">{t}</div>))}</>;
   }
   const lookups = m.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use' && !proposals[b.id] && b.name !== 'open_builder');
   return (

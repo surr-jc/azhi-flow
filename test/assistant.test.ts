@@ -97,6 +97,10 @@ describe('assistant', () => {
     const audited = (await ctx.pool.query(`SELECT data FROM audit_events WHERE kind='assistant.turn'`)).rows;
     expect(audited.at(-1).data).toMatchObject({ event: 'text', provider: 'anthropic' });
 
+    // A conversation over the limit gets a plain answer, not a schema error.
+    const long = Array.from({ length: 201 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: 'x' }] }));
+    expect(await call(owner, 'POST', '/v1/assistant/chat', { messages: long, text: 'hi' })).toMatchObject({ status: 400, body: { message: expect.stringContaining('start a new one') } });
+
     // A page the server does not recognise is dropped, never put into the prompt.
     fake.requests.length = 0;
     script = () => [{ text: 'ok' }];
