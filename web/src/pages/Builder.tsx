@@ -5,6 +5,7 @@ import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Markdown } from '../components/Rich';
+import { Icon } from '../icons';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
@@ -266,18 +267,6 @@ export function WorkflowBuilder() {
           ) : undefined
         }
       />
-      {status.data.providers.length ? (
-        <details className="model-fold">
-          <summary>Model: {status.data.providers.find((p) => p.id === using)?.label ?? 'none'} · {model ?? status.data.providers.find((p) => p.id === using)?.model ?? 'default'}</summary>
-          <ModelPicker
-            providers={status.data.providers}
-            provider={using}
-            model={model}
-            serverDefault={status.data.providers.find((p) => p.id === using)?.model}
-            onChange={setChoice}
-          />
-        </details>
-      ) : null}
       {!ready.length ? (
         <Panel>
           <p>The builder uses this workspace’s model provider, and none is set up yet.</p>
@@ -341,7 +330,7 @@ export function WorkflowBuilder() {
                   {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}>Explain the draft</button> : null}
                 </div>
               ) : null}
-              <div className="composer-row">
+              <div className="composer-box">
                 <textarea
                   ref={composer}
                   rows={2}
@@ -353,7 +342,15 @@ export function WorkflowBuilder() {
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onKey}
                 />
-                <button type="submit" className="primary" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}>Send</button>
+                <div className="composer-foot">
+                  <ModelMenu
+                    providers={status.data.providers}
+                    provider={using}
+                    model={model}
+                    onChange={setChoice}
+                  />
+                  <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
+                </div>
               </div>
               <div id="composer-meta" className="composer-meta muted">
                 <span><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line</span>
@@ -730,6 +727,34 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       <ErrorNote error={save.error} />
       {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.errors?.join('; ')}</div> : null}
     </section>
+  );
+}
+
+/** The composer's model pill; opens the provider and model picker in a popover above it. */
+function ModelMenu({ providers, provider, model, onChange }: { providers: ProviderInfo[]; provider?: string; model?: string; onChange: (c: Choice) => void }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const info = providers.find((p) => p.id === provider);
+  return (
+    <div className="model-menu" ref={box}>
+      <button type="button" className="model-pill" aria-haspopup="dialog" aria-expanded={open} aria-label="Select model" title={info ? `${info.label} · ${model ?? info.model ?? 'default'}` : undefined} onClick={() => setOpen((o) => !o)}>
+        <span className="truncate">{model ?? info?.model ?? info?.label ?? 'Select model'}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open ? (
+        <div className="model-pop" role="dialog" aria-label="Model for the builder">
+          <ModelPicker providers={providers} provider={provider} model={model} serverDefault={info?.model} onChange={onChange} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
