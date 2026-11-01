@@ -7,6 +7,7 @@ import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { WorkingRow } from '../components/WorkingRow';
 import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
+import { ACCEPT, AttachChips, MAX_FILES, readFiles, ToolPicker, type Attached, type Pin } from '../components/Attachments';
 import { BrandMark } from '../brand';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
 import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from '../components/ModelMenu';
@@ -137,14 +138,46 @@ export function WorkflowBuilder() {
   const model = choice.provider === using ? choice.model : undefined;
   // Stop only ends the wait in this tab; the server may still finish the turn, and nothing is added to the conversation.
   const abort = useRef<AbortController | null>(null);
+  // Files and pinned items wait here until the message is sent; they are not kept in the saved conversation except as the text the model read.
+  const [files, setFiles] = useState<Attached[]>([]);
+  const [pins, setPins] = useState<Pin[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [savedAs, setSavedAs] = useState<Record<string, string>>({});
+  const picker = useRef<HTMLInputElement>(null);
+  const read = useMutation({
+    mutationFn: (picked: File[]) => readFiles(picked.slice(0, Math.max(0, MAX_FILES - files.length))),
+    onSuccess: (r) => setFiles((f) => [...f, ...r].slice(0, MAX_FILES)),
+  });
+  const addFiles = (list: FileList | File[] | null) => {
+    const picked = list ? [...list] : [];
+    if (picked.length && !read.isPending && files.length < MAX_FILES) read.mutate(picked);
+  };
+  const save = useMutation({
+    mutationFn: async (f: Attached) => {
+      // Never reuse a name: creating a dataset again would reset an existing dataset's trust and access.
+      const taken = new Set((await api<Array<{ name: string }>>('/v1/datasets')).map((d) => d.name));
+      const base = `chat-${f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'file'}`;
+      let name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+      await api('/v1/datasets', { method: 'POST', body: { name } });
+      await api(`/v1/datasets/${encodeURIComponent(name)}/documents`, { method: 'POST', body: { documents: [{ path: `${name}.txt`, content: f.text }] } });
+      return { id: f.id, name };
+    },
+    onSuccess: ({ id, name }) => setSavedAs((m) => ({ ...m, [id]: name })),
+  });
+  const usable = files.filter((f) => f.kind !== 'unsupported');
   const send = useMutation({
     mutationFn: async (text: string) => {
       const t0 = performance.now();
       abort.current = new AbortController();
-      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model }, signal: abort.current.signal });
+      const attachments = usable.map(({ name, kind, text: t, truncated }) => ({ name, kind, text: t, truncated }));
+      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, attachments, pinned: pins.map((p) => p.id), provider: using, model }, signal: abort.current.signal });
       return { r, ms: Math.round(performance.now() - t0) };
     },
     onSuccess: ({ r, ms }) => {
+      setFiles([]);
+      setPins([]);
       setState((s) => {
         const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms } };
         const proposals = { ...s.proposals };
@@ -340,6 +373,7 @@ export function WorkflowBuilder() {
                 onContinue={(text) => { setAsking(false); submit(text); }}
               />
             ) : null}
+            {picking ? <ToolPicker picked={pins} onDone={setPins} onClose={() => setPicking(false)} /> : null}
             {latest && state.shown !== latest.tool_use_id ? (
               <div className="draft-bar">
                 <span><strong>{latest.name ?? latest.id}</strong> <Badge tone={latest.blockers.length ? 'bad' : 'ok'}>{latest.blockers.length ? 'blocked' : 'compiles'}</Badge> <span className="muted small">{latest.nodes.length} step{latest.nodes.length === 1 ? '' : 's'}</span></span>
@@ -347,6 +381,14 @@ export function WorkflowBuilder() {
               </div>
             ) : null}
             <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
+              <AttachChips files={files} pins={pins} onRemoveFile={(id) => setFiles((f) => f.filter((x) => x.id !== id))} onRemovePin={(id) => setPins((p) => p.filter((x) => x.id !== id))} onSave={(f) => save.mutate(f)} saved={savedAs} />
+              {read.isPending ? <div className="muted small" role="status">Reading the files…</div> : null}
+              <ErrorNote error={read.error ?? save.error} />
+              {usable.length && !send.isPending ? (
+                <div className="chips suggest" aria-label="Attachment suggestions">
+                  <button type="button" className="chip-btn" onClick={() => submit('Read the attached files and draft a workflow from them. Ask me about anything that is unclear or cut off.')}><Icon name="report" size={13} />Draft from my attachments</button>
+                </div>
+              ) : null}
               {state.messages.length > 1 && !send.isPending ? (
                 <div className="chips suggest" aria-label="Suggestions">
                   <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}><Icon name="play" size={13} />Draft it</button>
@@ -354,7 +396,12 @@ export function WorkflowBuilder() {
                   {latest ? <button type="button" className="chip-btn" onClick={() => submit('Check this draft for gaps: failure paths with no handling, approvals with no timeout, and steps that could act twice. Suggest fixes; do not change it yet.')}><Icon name="search" size={13} />Check for gaps</button> : null}
                 </div>
               ) : null}
-              <div className="composer-box">
+              <div
+                className={`composer-box ${dragging ? 'drop' : ''}`}
+                onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+              >
                 <textarea
                   ref={composer}
                   rows={2}
@@ -365,8 +412,14 @@ export function WorkflowBuilder() {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onKey}
+                  onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                 />
                 <div className="composer-foot">
+                  <div className="row attach-actions">
+                    <input ref={picker} type="file" multiple hidden accept={ACCEPT} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending || read.isPending || files.length >= MAX_FILES} title={`Attach up to ${MAX_FILES} files (text, CSV, JSON, YAML, SQL, code, PDF, DOCX, XLSX; 10 MB each)`} onClick={() => picker.current?.click()}><Icon name="plus" size={13} />Attach files</button>
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending} title="Tell the builder which tools, MCP servers, skills or datasets to use" onClick={() => setPicking(true)}><Icon name="tool" size={13} />Tools{pins.length ? ` (${pins.length})` : ''}</button>
+                  </div>
                   <ModelMenu
                     providers={status.data.providers}
                     provider={using}
@@ -457,6 +510,22 @@ function TurnMeta({ s }: { s: TurnStat }) {
   );
 }
 
+/**
+ * A sent message carries attached file text and pinned items after what the person typed (see
+ * src/builder/attachments.ts and pinnedNote in builder.ts). The bubble shows the words and chips, not the file text.
+ */
+function splitUser(text: string): { say: string; files: string[]; pinned: string[] } {
+  const cut = [text.indexOf('\n\nThe person pinned these workspace items'), text.indexOf('\n\nThe person attached ')].filter((i) => i >= 0);
+  if (!cut.length) return { say: text, files: [], pinned: [] };
+  const rest = text.slice(Math.min(...cut));
+  const pinnedBlock = rest.match(/pinned these workspace items[^\n]*\n((?:- [^\n]*\n?)+)/)?.[1] ?? '';
+  return {
+    say: text.slice(0, Math.min(...cut)),
+    files: [...rest.matchAll(/<attachment name="([^"]*)"/g)].map((m) => m[1]!),
+    pinned: pinnedBlock.split('\n').filter(Boolean).map((l) => l.replace(/^- /, '').replace(/ \(.*$/, '')),
+  };
+}
+
 function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
   m: Message;
   stat?: TurnStat;
@@ -474,7 +543,18 @@ function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conn
 }) {
   if (m.role === 'user') {
     const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
-    return text ? <div className="bubble user">{text}</div> : null;
+    const { say, files, pinned } = splitUser(text);
+    return text ? (
+      <div className="bubble user">
+        {say}
+        {files.length || pinned.length ? (
+          <ul className="attach-chips" aria-label="Attached">
+            {files.map((n, i) => <li key={`f${i}`} className="attach-chip"><Icon name="report" size={13} /><span className="attach-name">{n}</span></li>)}
+            {pinned.map((n, i) => <li key={`p${i}`} className="attach-chip"><Icon name="tool" size={13} /><span className="attach-name">{n}</span></li>)}
+          </ul>
+        ) : null}
+      </div>
+    ) : null;
   }
   // Consecutive lookup notes collapse into one run log so a long turn reads as its replies, not its tool calls.
   const items: Array<{ note: boolean; node: ReactNode; retry?: boolean }> = [];

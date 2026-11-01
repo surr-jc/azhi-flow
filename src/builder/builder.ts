@@ -4,6 +4,7 @@ import { parse } from 'yaml';
 import { anthropicProvider, openaiProvider, responsesProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
 import { chatgptAuth } from '../agents/chatgpt-auth.js';
 import { freshChatgptAuth } from '../api/chatgpt.js';
+import { toolbox } from '../api/toolbox.js';
 import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import { examplesDir } from '../api/examples.js';
 import type { Diagnostic } from '../definition/load.js';
@@ -15,6 +16,7 @@ import { loadCatalog, registerTool } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
+import { renderAttachments, type AttachmentInput } from './attachments.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
 import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
 import { workflowAssets } from '../server/assets.js';
@@ -675,13 +677,27 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 });
 
 /**
+ * Items the person pinned in the composer (toolbox ids: apps, MCP servers, skills, roles, datasets).
+ * Each id is looked up in the workspace toolbox; unknown ids are dropped. Only the toolbox's own
+ * names and summaries reach the model, never the pinned string itself.
+ */
+export async function pinnedNote(ctx: AppContext, workspaceId: string, ids: string[]): Promise<string> {
+  if (!ids.length) return '';
+  const items = new Map((await toolbox(ctx, workspaceId, false)).map((i) => [i.id, i]));
+  const picked = [...new Set(ids)].slice(0, 20).flatMap((id) => items.get(id) ?? []);
+  if (!picked.length) return '';
+  const lines = picked.map((i) => `- ${i.name} (${i.kind}, ${i.status}${i.changes_things ? ', changes things' : ''}): ${i.summary}`);
+  return `The person pinned these workspace items for this workflow. Use them where they fit (look each up with get_tool, workspace_overview or read_example) and say so if one cannot be used:\n${lines.join('\n')}`;
+}
+
+/**
  * One person message: appends it to the transcript and runs the model until it asks questions,
  * proposes a compiling draft, or answers in text.
  */
 export async function builderTurn(
   ctx: AppContext,
   workspaceId: string,
-  o: { messages: Message[]; text: string; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
+  o: { messages: Message[]; text: string; attachments?: AttachmentInput[]; pinned?: string[]; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
 ): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
   const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
@@ -691,9 +707,10 @@ export async function builderTurn(
   for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && (b.name === 'read_workflow' || b.name === 'read_workflow_file') && !versionOf((b.input as any)?.version)) reads.add(b.id);
   for (const m of messages) for (const b of m.content) if (b.type === 'tool_result' && reads.has(b.tool_use_id)) b.content = 'Stale: read from an earlier turn, and the workflow may have changed since. Call read_workflow again before changing it.';
   // After tool results the transcript ends on a user message; the person's words join it.
+  const text = [o.text, await pinnedNote(ctx, workspaceId, o.pinned ?? []), renderAttachments(o.attachments ?? [])].filter(Boolean).join('\n\n');
   const last = messages.at(-1);
-  if (last?.role === 'user') last.content.push({ type: 'text', text: o.text });
-  else messages.push({ role: 'user', content: [{ type: 'text', text: o.text }] });
+  if (last?.role === 'user') last.content.push({ type: 'text', text });
+  else messages.push({ role: 'user', content: [{ type: 'text', text }] });
 
   let usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
   for (let call = 0; call < MAX_CALLS; call++) {

@@ -1944,3 +1944,20 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
   .asst-panel { right: 16px; left: 16px; bottom: 80px; width: auto; height: calc(100dvh - 104px); }
 }
 @media print { .asst-fab, .asst-panel { display: none; } }
+
+/* Builder composer: attached files and pinned items */
+.attach-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 28px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: calc(13px * var(--fs, 1)); }
+.attach-chip.bad { border-color: var(--bad); }
+.attach-chip .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; min-height: 20px; padding: 0; border-color: transparent; background: none; color: var(--muted); }
+.attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.bubble.user .attach-chips { margin-top: 8px; }
+.attach-actions { gap: 4px; }
+.attach-btn { display: inline-flex; align-items: center; gap: 4px; }
+.composer-box.drop { border-color: var(--accent); background: var(--accent-bg); }
+.pick-list { max-height: 50vh; overflow: auto; margin: 12px 0; }
+.pick-list fieldset { border: 0; padding: 0; margin: 0 0 12px; }
+.pick-list legend { font-weight: 600; margin-bottom: 4px; }
+.pick-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
+.pick-row .block { display: block; }
+@media (max-width: 640px) { .attach-btn { min-height: 44px; } }

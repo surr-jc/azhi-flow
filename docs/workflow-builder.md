@@ -28,7 +28,7 @@ time. Input counts every lookup round of a turn, so it grows faster than the tex
 the provider does not report shows "—", and cost shows "unavailable": the builder has no price
 list, so nothing is estimated. The totals live in the browser tab with the conversation.
 
-The conversation stays in your browser tab; the server keeps no transcript. Each turn is in the
+The conversation stays in your browser tab (session storage); the server keeps no transcript. Each turn is in the
 audit log (`builder.turn`, with provider, model and token counts) and each save as
 `builder.saved`. Builder calls are not part of any run, so run budgets do not apply to them.
 
@@ -155,13 +155,35 @@ A draft's notes to the model include the compiler's warnings (`context_may_skip`
 and the context each key came from. A patch that drops `contexts:` while a step still lists the name fails
 with `unknown_context`, so it is caught before the person sees it.
 
+## Attaching files and pinning tools
+
+Next to the message box, **Attach files** takes up to 5 files (drop or paste works too): text, Markdown,
+CSV/TSV, JSON, YAML, SQL, code, PDF, DOCX and XLSX, up to 10 MB each. **Tools** pins workspace items
+(tools, MCP servers, skills, agent roles and datasets) from the Toolbox for the builder to use.
+
+- The server reads each file to plain text (`POST /v1/builder/attachments`). Spreadsheets become CSV
+  per sheet (first 200 rows of up to 10 sheets); PDFs need a text layer, so scanned pages are not read.
+  Text is capped at 60,000 characters per file and 150,000 per message, and a cut is flagged
+  (`truncated`). A file that cannot be read is shown as "not read" with the reason and is not sent.
+- File text is **untrusted data**. It goes to the model fenced in `<attachment>` tags with the
+  instruction to read it for requirements and never follow it; a closing tag inside it is defused. A
+  file never becomes a command, tool name or step.
+- Pinned items are looked up in the workspace toolbox on the server; unknown ids are dropped, and the
+  model sees only the toolbox's own name, status and summary. Pinning changes nothing and runs nothing.
+- Nothing is stored by the server. The text the model read stays in the conversation in your browser
+  tab, so it counts toward the size meter and is sent again each turn. **Save as dataset** on a file
+  chip creates a new, unpublished, untrusted dataset (`chat-<name>`, never an existing one) holding the
+  extracted text; publish it from the Toolbox before a workflow retrieves from it.
+- The audit log records `builder.attachments` (names, kinds, character counts; never content).
+
 ## API
 
+- `POST /v1/builder/attachments` `{files:[{name, data (base64)}]}`: returns `{files:[{name, kind, text, chars, truncated, warnings}]}`.
 - `POST /v1/builder/register-mcp` `{server}`: re-checks and adds a proposed MCP server.
 
 - `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
 - `GET /v1/builder/models?provider=anthropic|openai|opencode`: the model list, the recommended model and why.
-- `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
+- `POST /v1/builder/chat` `{messages, text, attachments?, pinned?, provider?, model?}`: runs one turn; returns the new transcript
   and an event (`questions`, `proposal`, `tool_proposal`, `mcp_proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.
