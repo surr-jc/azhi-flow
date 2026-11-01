@@ -29,6 +29,32 @@ export function resolveRef(ref: string, scope: ValueScope): unknown {
   return current;
 }
 
+const isHandle = (v: unknown) => Boolean(v && typeof v === 'object' && '$artifact' in (v as object));
+
+/**
+ * Nodes whose output is stored as an artifact and that a CEL expression in `value` reads into
+ * (`nodes.x.output.field`). CEL cannot see inside a stored output, so a caller that finds any resolves
+ * the value where the artifact store is reachable. Passing an output on whole (`nodes.x.output`)
+ * needs nothing: the handle travels and the activity that receives it opens it.
+ */
+export function artifactReads(value: Value | undefined, nodes: Record<string, { output?: unknown }>): string[] {
+  const found = new Set<string>();
+  const scan = (v: unknown) => {
+    if (typeof v === 'string' || v === undefined || v === null) return;
+    if (Array.isArray(v)) return v.forEach(scan);
+    if (typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    const expr = typeof o.cel === 'string' ? o.cel : typeof o.map === 'string' ? o.map : undefined;
+    if (expr !== undefined && isValueExpr(v as Value)) {
+      for (const m of expr.matchAll(/\bnodes\.([A-Za-z_][A-Za-z0-9_]*)\.output\s*[.[]/g)) if (isHandle(nodes[m[1]!]?.output)) found.add(m[1]!);
+      return;
+    }
+    Object.values(o).forEach(scan);
+  };
+  scan(value);
+  return [...found];
+}
+
 export function resolveValue(value: Value | undefined, scope: ValueScope): unknown {
   if (value === undefined) return undefined;
   if (isValueExpr(value)) {

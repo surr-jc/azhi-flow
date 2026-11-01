@@ -322,6 +322,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi dataset create/add/publish/tag/revoke/search/list` | Knowledge datasets (Markdown and text) |
 | `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
+| `azhi resume <run> [--from <step>]` | Continue a failed, cancelled or expired run as a new run: steps that succeeded are carried over with their outputs and not repeated (a pushed branch or a sent message is not done twice); `--from` also reruns that step and everything after it. Mission control: **Resume** on the run page |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
 | `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |

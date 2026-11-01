@@ -39,6 +39,8 @@ export interface RunSnapshot {
   /** Set when the defaults were chosen for this run (not taken from the workflow), so subworkflows inherit them. */
   model_defaults_chosen?: boolean;
   model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string; force?: boolean; executor?: string };
+  /** A run resumed from an earlier one: the steps that already succeeded there and are not run again. */
+  resume?: { from_run: string; nodes: string[] };
   /** The harness this run's choice gave each agent step, where it differs from the step's own; fixed when the run is created. */
   run_executors?: Record<string, string>;
 }
