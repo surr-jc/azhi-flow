@@ -26,13 +26,13 @@ type Event = { kind: 'text' } | { kind: 'action_proposal'; proposal: Proposal } 
 interface Turn { messages: Message[]; event: Event }
 /** What became of a proposed action: confirmed (with the result), or dismissed. */
 interface Outcome { state: 'done' | 'dismissed'; result?: Record<string, unknown> }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; outcomes: Record<string, Outcome>; handoffs: Record<number, Handoff> }
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; outcomes: Record<string, Outcome> }
 interface PageContext { kind: 'run' | 'workflow' | 'dataset' | 'connection' | 'page'; id?: string; path: string }
 
 const KEY = 'azhi-assistant';
 const CHOICE_KEY = 'azhi-assistant-model';
 const MAX_TEXT = 8000;
-const EMPTY: Saved = { messages: [], proposals: {}, outcomes: {}, handoffs: {} };
+const EMPTY: Saved = { messages: [], proposals: {}, outcomes: {} };
 
 function load(): Saved {
   try {
@@ -67,6 +67,8 @@ function suggestions(page: PageContext): string[] {
 }
 
 const LOOKUP = (name: string) => name.replace(/_/g, ' ');
+const toHandoff = (input: Record<string, unknown>): Handoff | undefined =>
+  typeof input.prompt === 'string' && input.prompt.trim() ? { prompt: input.prompt.trim(), ...(typeof input.workflow === 'string' ? { workflow: input.workflow } : {}) } : undefined;
 
 export function Assistant() {
   const { path, navigate } = useRoute();
@@ -106,7 +108,6 @@ export function Assistant() {
         ...s,
         messages: r.messages,
         proposals: r.event.kind === 'action_proposal' ? { ...s.proposals, [r.event.proposal.tool_use_id]: r.event.proposal } : s.proposals,
-        handoffs: r.event.kind === 'build_handoff' ? { ...s.handoffs, [r.messages.length - 1]: r.event.handoff } : s.handoffs,
       }));
       setDraft('');
     },
@@ -205,7 +206,6 @@ export function Assistant() {
                 results={results}
                 proposals={state.proposals}
                 outcomes={state.outcomes}
-                handoff={state.handoffs[i]}
                 busy={act.isPending || send.isPending}
                 onConfirm={(p) => act.mutate(p)}
                 onDismiss={dismiss}
@@ -247,12 +247,11 @@ export function Assistant() {
   );
 }
 
-function MessageView({ m, results, proposals, outcomes, handoff, busy, onConfirm, onDismiss, onBuild }: {
+function MessageView({ m, results, proposals, outcomes, busy, onConfirm, onDismiss, onBuild }: {
   m: Message;
   results: Map<string, Extract<Block, { type: 'tool_result' }>>;
   proposals: Record<string, Proposal>;
   outcomes: Record<string, Outcome>;
-  handoff?: Handoff;
   busy: boolean;
   onConfirm: (p: Proposal) => void;
   onDismiss: (p: Proposal) => void;
@@ -275,7 +274,9 @@ function MessageView({ m, results, proposals, outcomes, handoff, busy, onConfirm
       {m.content.map((b, i) => {
         if (b.type === 'text') return <Markdown key={i} text={b.text} className="bubble assistant" />;
         if (b.type === 'tool_use' && proposals[b.id]) return <ActionCard key={i} p={proposals[b.id]!} outcome={outcomes[b.id]} busy={busy} onConfirm={onConfirm} onDismiss={onDismiss} />;
-        if (b.type === 'tool_use' && b.name === 'open_builder' && handoff) {
+        // The hand-off is the builder call itself, shown once the server accepted it (its result is not an error).
+        const handoff = b.type === 'tool_use' && b.name === 'open_builder' && results.has(b.id) && !results.get(b.id)!.is_error ? toHandoff(b.input) : undefined;
+        if (handoff) {
           return (
             <div key={i} className="asst-card">
               <strong>Build with the workflow builder</strong>
