@@ -233,7 +233,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   };
 
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
-    const executor = def.executor ?? 'model-agent';
+    const executor = snapshot.run_executors?.[node.id] ?? def.executor ?? 'model-agent';
     if (executor !== 'model-agent' && !isHarness(executor)) {
       throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${executor}' is not available on this interpreter build`, nonRetryable: true });
     }

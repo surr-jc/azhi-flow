@@ -39,6 +39,15 @@ describe('model defaults: the rule', () => {
     expect(applyModelDefaults(def, {})).toBe(def);
   });
 
+  it('replaces a profile that names a model only when forced, and never a scripted one', () => {
+    const pinned = profile('{provider: github-copilot, name: gpt-5.4, credential: my-copilot}');
+    expect(applyModelDefaults(pinned, { provider: 'openai-chatgpt', name: 'gpt-5.6-terra', force: true }).model).toEqual({ provider: 'openai-chatgpt', name: 'gpt-5.6-terra' });
+    // Forced onto the same provider the credential stays; without a model the provider's default is used.
+    expect(applyModelDefaults(pinned, { provider: 'github-copilot', force: true }).model).toEqual({ provider: 'github-copilot', name: 'default', credential: 'my-copilot' });
+    const scripted = parseProfile('model: {provider: scripted}\ninstructions: x\nscript: []\n', 'p.yaml');
+    expect(applyModelDefaults(scripted, { provider: 'anthropic', force: true })).toBe(scripted);
+  });
+
   it('checks a choice: known provider, valid model id, and a model needs its provider', () => {
     expect(modelDefaultsProblems(undefined)).toEqual([]);
     expect(modelDefaultsProblems({ provider: 'anthropic', name: 'claude-sonnet-5' })).toEqual([]);
@@ -109,6 +118,19 @@ describe('model defaults: the run plan and the options', () => {
     // A provider alone: that provider's server default model.
     const only = await h.api.get<any>(`/v1/versions/${version}/plan?provider=anthropic`);
     expect(modelOf(only, 'correctness')).toMatchObject({ provider: 'anthropic', name: 'claude-sonnet-5-5', source: 'run_choice' });
+  });
+
+  it('forces steps that name their own model, and the harness, only when asked', async () => {
+    const forced = await h.api.get<any>(`/v1/versions/${version}/plan?provider=anthropic&model=claude-opus-5-5&force=true`);
+    expect(modelOf(forced, 'security')).toEqual({ provider: 'anthropic', name: 'claude-opus-5-5', source: 'run_choice' });
+    expect(modelOf(forced, 'verify')).toMatchObject({ provider: 'anthropic', source: 'run_choice' });
+    // A harness that cannot drive the provider is ignored for that step; one that can is used.
+    const kept = await h.api.get<any>(`/v1/versions/${version}/plan?provider=anthropic&executor=opencode`);
+    expect(kept.nodes.find((n: any) => n.id === 'correctness').executor).toBe('opencode');
+    const ignored = await h.api.get<any>(`/v1/versions/${version}/plan?provider=anthropic&executor=codex`);
+    expect(ignored.nodes.find((n: any) => n.id === 'correctness').executor).not.toBe('codex');
+    await expect(h.api.get(`/v1/versions/${version}/plan?provider=anthropic&executor=nope`)).rejects.toThrow();
+    await expect(h.api.get(`/v1/versions/${version}/plan?executor=opencode`)).rejects.toThrow();
   });
 
   it('marks a provider the step\'s executor cannot drive, and refuses a model without a provider', async () => {

@@ -108,6 +108,10 @@ export type ModelProviderName = (typeof MODEL_PROVIDERS)[number];
 export interface ModelDefaults {
   provider?: ModelProviderName;
   name?: string;
+  /** A run's choice only: also replace the model of steps whose profile names its own (scripted profiles are never touched). */
+  force?: boolean;
+  /** A run's choice only: the harness for every agent step it can drive with the step's provider. */
+  executor?: string;
 }
 
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
@@ -135,7 +139,7 @@ export function usesDefaultModel(p: AgentProfile): boolean {
  * A default provider without a model uses that provider's server default model.
  */
 export function applyModelDefaults(p: AgentProfile, defaults?: ModelDefaults | null): AgentProfile {
-  if (!defaults?.provider || !usesDefaultModel(p)) return p;
+  if (!defaults?.provider || p.model.provider === 'scripted' || !(defaults.force || usesDefaultModel(p))) return p;
   const sameProvider = defaults.provider === p.model.provider;
   return { ...p, model: { provider: defaults.provider, name: defaults.name?.trim() || 'default', ...(sameProvider && p.model.credential ? { credential: p.model.credential } : {}) } };
 }

@@ -15,6 +15,7 @@ import { addDocuments, createDataset, listDatasets, publishRevision, resolveData
 import { buildRunPlan } from '../plan/run-plan.js';
 import { registerModelOptionRoutes } from './model-options.js';
 import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
+import { EXECUTORS } from '../executors/capabilities.js';
 import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
@@ -188,9 +189,10 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
     // `provider` and `model` show the plan as it would be for a run that chooses them.
-    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional() }).parse(req.query ?? {});
-    if (q.model && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model needs provider');
-    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}) } : undefined);
+    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional(), force: z.enum(['true', 'false']).optional(), executor: z.string().optional() }).parse(req.query ?? {});
+    if ((q.model || q.executor || q.force === 'true') && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model, force and executor need provider');
+    if (q.executor && !EXECUTORS[q.executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${q.executor}`);
+    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}), ...(q.force === 'true' ? { force: true } : {}), ...(q.executor ? { executor: q.executor } : {}) } : undefined);
   });
 
   // Checks the workflow against the systems it uses, before a run: tools, secrets, GitHub tokens
@@ -288,11 +290,14 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
         preflight: z.boolean().optional(),
         /** Provider and model for steps whose profile says `name: default`; steps that name a model keep it. Overrides the workflow's model_defaults. */
-        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional() }).strict().optional(),
+        // `force` also replaces steps that name their own model; `executor` is the harness for every step that can run on it.
+        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional(), force: z.boolean().optional(), executor: z.string().optional() }).strict().optional(),
       })
       .parse(req.body);
     if (body.model_defaults) {
-      const problems = modelDefaultsProblems(body.model_defaults);
+      const { force: _f, executor, ...choice } = body.model_defaults;
+      if (executor && !EXECUTORS[executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${executor}`);
+      const problems = modelDefaultsProblems(choice);
       if (problems.length) throw new AzhiError(ErrorClass.invalidInput, problems.join('; '));
     }
     if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');

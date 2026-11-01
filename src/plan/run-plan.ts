@@ -229,7 +229,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         break;
       case 'agent': {
         const def = n.def as AgentNode;
-        const executor = def.executor ?? 'model-agent';
+        const executor = await runExecutor(ctx, workspaceId, version.package_hash, def, modelDefaults.from === 'run_choice' ? modelDefaults.value : undefined);
         np.executor = executor;
         const decl = EXECUTORS[executor];
         if (!decl) {
@@ -360,6 +360,24 @@ function modelOrigin(explicit: boolean, chosen: 'workflow_default' | 'run_choice
   return defaultName ? ` (${who})` : ` (${who} provider, its server default model)`;
 }
 
+/**
+ * The harness an agent step runs on: the one chosen for the run when it can drive the step's provider
+ * (and a step with a checkout stays on OpenCode), otherwise the step's own.
+ */
+async function runExecutor(ctx: AppContext, workspaceId: string, packageHash: string, def: AgentNode, choice?: ModelDefaults): Promise<string> {
+  const own = def.executor ?? 'model-agent';
+  if (!choice?.executor || !choice.provider) return own;
+  const path = profilePath(def.profile);
+  try {
+    const profile = applyModelDefaults(parseProfile((await packageFile(ctx, workspaceId, packageHash, path)).toString('utf8'), path), choice);
+    const provider = profile.model.provider;
+    const can = provider !== 'scripted' && EXECUTORS[choice.executor]?.providers.includes(provider) && (!def.workspace || choice.executor === 'opencode');
+    return can ? choice.executor : own;
+  } catch {
+    return own;
+  }
+}
+
 /** The model binding, credential and budget enforceability of a model-agent node. */
 async function modelRequirements(
   ctx: AppContext,
@@ -381,7 +399,7 @@ async function modelRequirements(
   } catch (e) {
     return [{ name: `profile ${def.profile}`, mark: 'unsupported', detail: (e as Error).message }];
   }
-  const chosen = usesDefaultModel(profile) && defaults?.provider ? defaultsFrom : undefined;
+  const chosen = (usesDefaultModel(profile) || defaults?.force) && profile.model.provider !== 'scripted' && defaults?.provider ? defaultsFrom : undefined;
   profile = applyModelDefaults(profile, defaults);
   const reqs: Requirement[] = [];
   if (np && profile.model.provider !== 'scripted') {

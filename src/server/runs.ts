@@ -87,6 +87,13 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
   // The plan as it stood when the run was created is kept with the run, so the run page shows
   // the coverage this run actually had, not whatever the workers look like later.
   const plan = o.plan ?? (await buildRunPlan(ctx, workspaceId, o.version, principal, o.modelDefaults));
+  // A harness chosen for the run is resolved against the plan once, so the interpreter only reads the result.
+  const runExecutors = o.modelDefaults?.executor
+    ? Object.fromEntries(plan.nodes.flatMap((np) => {
+        const n = o.version.plan.nodes.find((x) => x.id === np.id);
+        return np.executor && n?.type === 'agent' && np.executor !== ((n.def as AgentNode).executor ?? 'model-agent') ? [[np.id, np.executor]] : [];
+      }))
+    : undefined;
   const modelDefaults = o.modelDefaults?.provider ? o.modelDefaults : o.version.definition.model_defaults?.provider ? o.version.definition.model_defaults : undefined;
 
   // Spend limits hold back every trigger, scheduled runs included; test runs are exempt like
@@ -108,6 +115,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     ...(principal ? { principal } : {}),
     ...(modelDefaults ? { model_defaults: modelDefaults } : {}),
     ...(o.modelDefaults?.provider ? { model_defaults_chosen: true } : {}),
+    ...(runExecutors && Object.keys(runExecutors).length ? { run_executors: runExecutors } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
     ...(o.parent ? { parent: o.parent } : {}),
   };

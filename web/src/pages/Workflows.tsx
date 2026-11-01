@@ -304,10 +304,12 @@ export function WorkflowPage({ slug }: { slug: string }) {
 }
 
 const CHOICE_KEY = 'azhi-run-model';
-function loadChoice(): ModelValue {
+/** The run's choice: provider and model, whether it also replaces steps that name their own model, and the harness. */
+type RunChoice = ModelValue & { force?: boolean; executor?: string };
+function loadChoice(): RunChoice {
   try {
     const v = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}');
-    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}) } : {};
+    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}), ...(v.force === true ? { force: true } : {}), ...(typeof v.executor === 'string' && v.executor ? { executor: v.executor } : {}) } : {};
   } catch {
     return {};
   }
@@ -316,8 +318,8 @@ function loadChoice(): ModelValue {
 function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; slug: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
   const { navigate } = useRoute();
   // The provider and model for this run's default-model steps; empty keeps the workflow's own default.
-  const [choice, setChoice] = useState<ModelValue>(loadChoice);
-  const pick = (v: ModelValue) => {
+  const [choice, setChoice] = useState<RunChoice>(loadChoice);
+  const remember = (v: RunChoice) => {
     setChoice(v);
     try {
       localStorage.setItem(CHOICE_KEY, JSON.stringify(v));
@@ -325,15 +327,18 @@ function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflow
       /* the choice just is not remembered */
     }
   };
+  // Force and harness only mean something under a provider, so clearing the provider clears them.
+  const pick = (v: ModelValue) => remember(v.provider ? { ...v, ...(choice.force ? { force: true } : {}), ...(choice.executor ? { executor: choice.executor } : {}) } : {});
+  const executors = useQuery({ queryKey: ['executors'], queryFn: () => api<{ executors: Array<{ id: string }> }>('/v1/executors'), staleTime: 5 * 60_000 });
   const chosenPlan = useQuery({
-    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? ''],
-    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}`),
+    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? '', choice.force ?? false, choice.executor ?? ''],
+    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}${choice.force ? '&force=true' : ''}${choice.executor ? `&executor=${encodeURIComponent(choice.executor)}` : ''}`),
     enabled: Boolean(choice.provider),
     staleTime: 0,
   });
   // With a choice the plan is the one under that choice (its blockers included).
   const plan = choice.provider ? chosenPlan.data ?? workflowPlan : workflowPlan;
-  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}) } } : {};
+  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}), ...(choice.force ? { force: true } : {}), ...(choice.executor ? { executor: choice.executor } : {}) } } : {};
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [formError, setFormError] = useState<string>();
   // The inputs the checks use settle half a second after typing stops.
@@ -382,6 +387,22 @@ function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflow
           onChange={pick}
           noneLabel={workflowDefault?.provider ? `The workflow's default (${workflowDefault.provider}${workflowDefault.name ? `, ${workflowDefault.name}` : ''})` : 'Each step\'s own default (set on the server)'}
         />
+        {choice.provider ? (
+          <>
+            <label className="small">
+              <span className="muted small">Harness</span>
+              <select name="run-executor" value={choice.executor ?? ''} onChange={(e) => remember({ ...choice, executor: e.target.value || undefined })}>
+                <option value="">Each step's own</option>
+                {(executors.data?.executors ?? []).map((e) => <option key={e.id} value={e.id}>{e.id}</option>)}
+              </select>
+              <span className="muted small"> Used for every step it can drive with the chosen provider; the others keep theirs.</span>
+            </label>
+            <label className="small">
+              <input type="checkbox" name="run-force" checked={Boolean(choice.force)} onChange={(e) => remember({ ...choice, force: e.target.checked || undefined })} /> Also replace steps that name their own model
+              <span className="muted small"> Pinned reviewers move to this provider too, so the independent multi-model review is lost for this run.</span>
+            </label>
+          </>
+        ) : null}
         <details className="small">
           <summary>Which model each step will use</summary>
           <ModelSteps plan={plan} />

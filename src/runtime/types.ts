@@ -38,7 +38,9 @@ export interface RunSnapshot {
   /** Provider and model for agent steps whose profile says `name: default`: the run's choice, else the workflow's. */
   /** Set when the defaults were chosen for this run (not taken from the workflow), so subworkflows inherit them. */
   model_defaults_chosen?: boolean;
-  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
+  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string; force?: boolean; executor?: string };
+  /** The harness this run's choice gave each agent step, where it differs from the step's own; fixed when the run is created. */
+  run_executors?: Record<string, string>;
 }
 
 export interface RunInput {
