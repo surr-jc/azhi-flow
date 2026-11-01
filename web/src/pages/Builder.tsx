@@ -7,6 +7,7 @@ import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { WorkingRow } from '../components/WorkingRow';
 import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
+import { BrandMark } from '../brand';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
 import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from '../components/ModelMenu';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
@@ -347,9 +348,10 @@ export function WorkflowBuilder() {
             ) : null}
             <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
               {state.messages.length > 1 && !send.isPending ? (
-                <div className="chips">
-                  <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}>Draft it</button>
-                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}>Explain the draft</button> : null}
+                <div className="chips suggest" aria-label="Suggestions">
+                  <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}><Icon name="play" size={13} />Draft it</button>
+                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}><Icon name="chat" size={13} />Explain the draft</button> : null}
+                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Check this draft for gaps: failure paths with no handling, approvals with no timeout, and steps that could act twice. Suggest fixes; do not change it yet.')}><Icon name="search" size={13} />Check for gaps</button> : null}
                 </div>
               ) : null}
               <div className="composer-box">
@@ -474,9 +476,9 @@ function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conn
     const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
     return text ? <div className="bubble user">{text}</div> : null;
   }
-  // Consecutive lookup notes collapse into one line so a long turn reads as its replies, not its tool calls.
-  const items: Array<{ note: boolean; node: ReactNode }> = [];
-  const push = (note: boolean, node: ReactNode) => items.push({ note, node });
+  // Consecutive lookup notes collapse into one run log so a long turn reads as its replies, not its tool calls.
+  const items: Array<{ note: boolean; node: ReactNode; retry?: boolean }> = [];
+  const push = (note: boolean, node: ReactNode, retry?: boolean) => items.push({ note, node, retry });
   const grouped = () => {
     const out: ReactNode[] = [];
     for (let i = 0; i < items.length; ) {
@@ -484,12 +486,24 @@ function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conn
       let j = i;
       while (j < items.length && items[j]!.note) j++;
       const run = items.slice(i, j);
-      out.push(run.length === 1 ? run[0]!.node : (
-        <details key={`l${i}`} className="lookups">
-          <summary>Looked at {run.length} things</summary>
-          {run.map((r) => r.node)}
-        </details>
-      ));
+      const retries = run.filter((r) => r.retry).length;
+      out.push(
+        <details key={`l${i}`} className="run-log">
+          <summary>
+            <Icon name="chev" size={14} className="run-chev" />
+            <strong>{run.length === 1 ? '1 step' : `${run.length} steps`}</strong>
+            <span className="muted">{retries ? `· ${retries} fixed after the compiler` : '· workspace lookups'}</span>
+          </summary>
+          <ol className="run-steps">
+            {run.map((r, k) => (
+              <li key={k} className={r.retry ? 'retry' : ''}>
+                <span className="run-dot" aria-hidden="true"><Icon name={r.retry ? 'undo' : 'check'} size={11} /></span>
+                {r.node}
+              </li>
+            ))}
+          </ol>
+        </details>,
+      );
       i = j;
     }
     return out;
@@ -500,39 +514,48 @@ function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conn
         if (b.name === 'ask_user') return void push(false, <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />);
         if (b.name === 'propose_tool') {
           const t = tools[b.id];
-          return void (t ? push(false, <ToolCard key={i} t={t} registered={registered[b.id]} onRegistered={(rev) => onRegistered(b.id, rev)} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>));
+          return void (t ? push(false, <ToolCard key={i} t={t} registered={registered[b.id]} onRegistered={(rev) => onRegistered(b.id, rev)} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted a tool spec the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_mcp_server') {
           const t = mcps[b.id];
-          return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>));
+          return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted an MCP server the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_mcp_connection') {
           const t = conns[b.id];
-          return void (t ? push(false, <McpConnectionCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP connection the server sent back; fixing it…</div>));
+          return void (t ? push(false, <McpConnectionCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted an MCP connection the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
-          if (!p) return void push(true, <div key={i} className="chat-note muted small">Drafted a version the compiler sent back; fixing it…</div>);
+          if (!p) return void push(true, <span key={i}>Drafted a version the compiler sent back; fixing it</span>, true);
+          const on = shown === b.id;
           return void push(false, (
-            <div key={i} className="draft-card">
-              <div>
-                <strong>{p.name ?? p.id}</strong> <Badge tone="ok">compiles</Badge>
-                {p.missing.length ? <Badge tone="warn">{p.missing.length} to set up</Badge> : null}
-                <div className="muted small">{p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {Object.keys(p.files).length} files</div>
-              </div>
-              <button type="button" onClick={() => onShow(b.id)} disabled={shown === b.id}>{shown === b.id ? 'Shown' : 'View draft'}</button>
-            </div>
+            <button key={i} type="button" className={`draft-tile ${on ? 'on' : ''}`} onClick={() => onShow(b.id)} aria-pressed={on}>
+              <span className="draft-tile-icon" aria-hidden="true"><Icon name="check" size={18} /></span>
+              <span className="draft-tile-text">
+                <strong>{p.name ?? p.id}</strong>
+                <span className="muted small">
+                  Compiles · {p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {Object.keys(p.files).length} files
+                  {p.missing.length ? <> · <span className="warn-text">{p.missing.length} to set up</span></> : null}
+                </span>
+              </span>
+              <span className="draft-tile-go">{on ? 'Reviewing' : 'Review'}<Icon name="chev" size={14} /></span>
+            </button>
           ));
         }
         const label = LOOKUPS[b.name];
         const what = b.input.ref ?? b.input.id ?? b.input.slug;
-        if (label) push(true, <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div>);
+        if (label) push(true, <span key={i}>{label}{what ? <> <code>{String(what)}</code></> : null}</span>);
   });
+  const body = grouped();
+  if (!body.length && !stat) return null;
   return (
-    <>
-      {grouped()}
-      {stat ? <TurnMeta s={stat} /> : null}
-    </>
+    <div className="agent-turn">
+      <span className="agent-av" aria-hidden="true"><BrandMark size={28} /></span>
+      <div className="agent-body">
+        {body}
+        {stat ? <TurnMeta s={stat} /> : null}
+      </div>
+    </div>
   );
 }
 
@@ -711,23 +734,40 @@ function Questions({ intro, questions, open, busy, onAnswer }: { intro?: string;
   const answerOf = (q: Question) => [...(picked[q.id] ?? []), ...(other[q.id]?.trim() ? [other[q.id]!.trim()] : [])].join('; ');
   const answered = questions.filter((q) => answerOf(q));
   const send = () => onAnswer(questions.map((q) => `${q.question}\n→ ${answerOf(q) || '(no preference, use your recommendation)'}`).join('\n\n'));
+  // With focus on one question's options, its number keys pick an option (never while typing).
+  const onKeys = (q: Question) => (e: KeyboardEvent<HTMLDivElement>) => {
+    const n = Number(e.key);
+    const o = q.options?.[n - 1];
+    if (!o || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    toggle(q, o);
+  };
   const Root = open ? 'div' : 'details';
   return (
     <Root className={`questions ${open ? '' : 'closed'}`}>
       {open ? null : <summary>The builder asked {questions.length} question{questions.length === 1 ? '' : 's'}</summary>}
       {intro ? <p className="q-intro">{intro}</p> : null}
       <ol>
-        {questions.map((q) => (
+        {questions.map((q, qi) => (
           <li key={q.id}>
+            {open && questions.length > 1 ? <div className="q-count muted">Question {qi + 1} of {questions.length}</div> : null}
             <div className="q-text">{q.question}</div>
             {q.why ? <div className="muted small">{q.why}</div> : null}
             {open ? (
               <>
                 {q.options?.length ? (
-                  <div className="q-options" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question}>
-                    {q.options.map((o) => {
+                  <div className="q-options" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question} onKeyDown={onKeys(q)}>
+                    {q.options.map((o, oi) => {
                       const on = (picked[q.id] ?? []).includes(o);
-                      return <button key={o} type="button" className={`option ${on ? 'on' : ''}`} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => toggle(q, o)}>{o}</button>;
+                      // The builder marks its pick "(recommended)" in the option text; it shows as a tag instead.
+                      const rec = /\s*\(recommended\)\s*$/i.test(o);
+                      return (
+                        <button key={o} type="button" className={`option ${on ? 'on' : ''}`} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => toggle(q, o)}>
+                          <kbd className="option-key" aria-hidden="true">{oi + 1}</kbd>
+                          <span className="option-text">{rec ? o.replace(/\s*\(recommended\)\s*$/i, '') : o}</span>
+                          {rec ? <span className="option-rec">Recommended</span> : null}
+                        </button>
+                      );
                     })}
                   </div>
                 ) : null}
@@ -772,18 +812,19 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
   });
   return (
     <section className="panel draft" aria-label="Draft workflow">
-      <header className="panel-head">
-        <h2>{p.name ?? p.id} <span className="muted small mono">{p.id}</span></h2>
+      <header className="panel-head draft-head">
+        <div>
+          <div className="draft-eyebrow">Review draft{p.new_version_of ? ` · new version of ${p.new_version_of}` : ''}</div>
+          <h2>{p.name ?? p.id} <span className="muted small mono">{p.id}</span></h2>
+        </div>
         <button type="button" className="link small" onClick={onClose}>Hide</button>
       </header>
-      <dl className="draft-facts">
-        <div><dt>Status</dt><dd><Badge tone={p.blockers.length ? 'bad' : 'ok'}>{p.blockers.length ? 'blocked' : 'compiles'}</Badge></dd></div>
-        <div><dt>Steps</dt><dd>{p.nodes.length}</dd></div>
-        <div><dt>Files</dt><dd>{paths.length}</dd></div>
-        <div><dt>To set up</dt><dd>{p.missing.length}</dd></div>
-        <div><dt>Warnings</dt><dd>{p.warnings.length}</dd></div>
-        {shared.length ? <div><dt>Shared context</dt><dd>{[...new Set(shared.map((s) => s.bundle))].join(', ')}</dd></div> : null}
-      </dl>
+      <ul className="draft-checks" aria-label="Checks">
+        <li className={p.blockers.length ? 'bad' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.blockers.length ? 'alert' : 'check'} size={11} /></span>{p.blockers.length ? `Blocked by ${p.blockers.length} problem${p.blockers.length === 1 ? '' : 's'}` : 'Compiles'} · {p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {paths.length} file{paths.length === 1 ? '' : 's'}</li>
+        <li className={p.missing.length ? 'warn' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.missing.length ? 'alert' : 'check'} size={11} /></span>{p.missing.length ? `${p.missing.length} thing${p.missing.length === 1 ? '' : 's'} to set up before it can run` : 'Nothing to set up'}</li>
+        <li className={p.warnings.length ? 'warn' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.warnings.length ? 'alert' : 'check'} size={11} /></span>{p.warnings.length ? `${p.warnings.length} warning${p.warnings.length === 1 ? '' : 's'}` : 'No warnings'}</li>
+        {shared.length ? <li className="ok"><span className="run-dot" aria-hidden="true"><Icon name="flow" size={11} /></span>Shared context: {[...new Set(shared.map((s) => s.bundle))].join(', ')}</li> : null}
+      </ul>
       {p.summary ? <p className="draft-summary">{p.summary}</p> : null}
       {shared.length ? (
         <ul className="muted small draft-context" aria-label="Shared context">
@@ -802,7 +843,7 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       {p.warnings.length ? (
         <ul className="muted small draft-warnings">{p.warnings.map((w, i) => <li key={i}>{w.node ? `${w.node}: ` : ''}{w.message}</li>)}</ul>
       ) : null}
-      <div className="tabs" role="tablist">
+      <div className="tabs seg-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'graph'} onClick={() => setTab('graph')}>Steps</button>
         <button type="button" role="tab" aria-selected={tab === 'files'} onClick={() => setTab('files')}>Files ({paths.length})</button>
       </div>
