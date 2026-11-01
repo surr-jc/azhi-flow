@@ -113,6 +113,9 @@ describe('assistant', () => {
     for (const t of ['audit_log', 'start_run', 'cancel_run', 'decide_approval', 'open_builder']) expect(fake.requests[0]!.tools).not.toContain(t);
     // Called anyway, it is refused with the role it needs.
     expect(JSON.stringify(fake.requests[1]!.messages)).toContain('requires role admin');
+    // Anyone who may chat may pick the model; the builder's list stays for authors.
+    expect(await call(viewer, 'GET', '/v1/assistant/models?provider=anthropic')).toMatchObject({ status: 200, body: { models: expect.arrayContaining([expect.objectContaining({ id: 'claude-opus-5-5' })]) } });
+    expect((await call(viewer, 'GET', '/v1/builder/models?provider=anthropic')).status).toBe(403);
   });
 
   it('proposes an action without running it; it runs only when the person confirms', async () => {

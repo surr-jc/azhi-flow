@@ -7,6 +7,7 @@ import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
 import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
+import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from '../components/ModelMenu';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
 /**
@@ -57,9 +58,6 @@ interface Proposal {
   blockers: Array<{ code: string; message: string; node?: string }>;
   new_version_of?: string;
 }
-interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode' | 'chatgpt'; label: string; ready: boolean; model?: string; reason?: string }
-interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
-interface Choice { provider?: string; model?: string }
 /** Tokens the provider reported; null when it did not say (never estimated). */
 interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
 interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal }; provider: string; model: string; usage: Usage }
@@ -68,6 +66,7 @@ interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
 interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
 const KEY = 'azhi-builder';
+const CHOICE_KEY = 'azhi-builder-model';
 // The server refuses a longer conversation (src/api/builder.ts), so the size meter counts toward these.
 const MAX_MESSAGES = 400;
 const MAX_BYTES = 2_000_000;
@@ -82,24 +81,7 @@ function total(stats: TurnStat[], f: keyof Usage): number | null {
 const compact = (n: number | null) => (n === null ? '—' : n >= 1_000_000 ? `${(n / 1e6).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const exact = (n: number | null) => (n === null ? 'not reported' : n.toLocaleString());
 const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
-const CHOICE_KEY = 'azhi-builder-model';
-const OTHER = '__other__';
 
-/** The provider and model last picked in this browser. */
-function loadChoice(): Choice {
-  try {
-    return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') ?? {};
-  } catch {
-    return {};
-  }
-}
-function storeChoice(c: Choice) {
-  try {
-    localStorage.setItem(CHOICE_KEY, JSON.stringify(c));
-  } catch {
-    /* remembered for this page only */
-  }
-}
 const STARTERS = [
   'Every Monday, post a summary of last week’s failing CI runs to our team Slack channel.',
   'When I give it a GitHub issue, draft requirements and a design, and ask me to approve before anything is posted.',
@@ -134,10 +116,10 @@ function store(s: Saved) {
 export function WorkflowBuilder() {
   const status = useQuery({ queryKey: ['builder'], queryFn: () => api<{ providers: ProviderInfo[]; default?: string }>('/v1/builder') });
   const [state, setState] = useState<Saved>(load);
-  const [choice, setChoiceState] = useState<Choice>(loadChoice);
+  const [choice, setChoiceState] = useState<Choice>(() => loadChoice(CHOICE_KEY));
   const setChoice = (c: Choice) => {
     setChoiceState(c);
-    storeChoice(c);
+    storeChoice(CHOICE_KEY, c);
   };
   // `?prompt=` pre-fills the composer (the Toolbox uses it); it is never sent until the person does.
   const route = useRoute();
@@ -348,6 +330,8 @@ export function WorkflowBuilder() {
                     provider={using}
                     model={model}
                     onChange={setChoice}
+                    modelsUrl="/v1/builder/models"
+                    purpose="building workflows"
                   />
                   <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
                 </div>
@@ -727,110 +711,5 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       <ErrorNote error={save.error} />
       {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.errors?.join('; ')}</div> : null}
     </section>
-  );
-}
-
-/** The composer's model pill; opens the provider and model picker in a popover above it. */
-function ModelMenu({ providers, provider, model, onChange }: { providers: ProviderInfo[]; provider?: string; model?: string; onChange: (c: Choice) => void }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
-    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key); };
-  }, [open]);
-  const info = providers.find((p) => p.id === provider);
-  return (
-    <div className="model-menu" ref={box}>
-      <button type="button" className="model-pill" aria-haspopup="dialog" aria-expanded={open} aria-label="Select model" title={info ? `${info.label} · ${model ?? info.model ?? 'default'}` : undefined} onClick={() => setOpen((o) => !o)}>
-        <span className="truncate">{model ?? info?.model ?? info?.label ?? 'Select model'}</span>
-        <Icon name="chevron-down" size={14} />
-      </button>
-      {open ? (
-        <div className="model-pop" role="dialog" aria-label="Model for the builder">
-          <ModelPicker providers={providers} provider={provider} model={model} serverDefault={info?.model} onChange={onChange} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Provider and model for the builder: every provider Azhi knows (those not usable here are shown
- * disabled, with why), the provider's own model list with one recommended for building
- * workflows, and "Other" for an id the list does not show. The choice is remembered.
- */
-function ModelPicker({ providers, provider, model, serverDefault, onChange }: {
-  providers: ProviderInfo[];
-  provider?: string;
-  model?: string;
-  serverDefault?: string;
-  onChange: (c: Choice) => void;
-}) {
-  const list = useQuery({
-    queryKey: ['builder-models', provider],
-    queryFn: () => api<ModelList>(`/v1/builder/models?provider=${encodeURIComponent(provider!)}`),
-    enabled: Boolean(provider),
-    staleTime: 5 * 60_000,
-  });
-  const models = list.data?.models ?? [];
-  const recommended = list.data?.recommended;
-  // No pick yet: the recommended model, else what the server would use.
-  const current = model ?? recommended?.id ?? serverDefault;
-  const listed = models.some((m) => m.id === current);
-  const [typing, setTyping] = useState(false);
-  const other = typing || (Boolean(current) && !listed && models.length > 0) || (!models.length && !list.isLoading);
-  const [custom, setCustom] = useState('');
-  useEffect(() => setCustom(current && !listed ? current : ''), [current, listed]);
-  // The model's name, as the provider's own picker shows it; the id is the option's tooltip.
-  const label = (m: { id: string; label: string }) => `${m.label}${m.id === recommended?.id ? ' · Recommended' : ''}`;
-  const pickedReason = current === recommended?.id ? recommended?.reason : undefined;
-  return (
-    <div className="model-picker" aria-label="Model for the builder" role="group">
-      <label>
-        <span className="muted small">Provider</span>
-        <select aria-label="Provider" value={provider ?? ''} onChange={(e) => { setTyping(false); onChange({ provider: e.target.value }); }}>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id} disabled={!p.ready} title={p.reason}>
-              {p.label}{p.ready ? '' : ' (not available)'}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="muted small">Model</span>
-        <select
-          aria-label="Model"
-          value={other ? OTHER : (current ?? '')}
-          disabled={!provider || list.isLoading}
-          onChange={(e) => {
-            if (e.target.value === OTHER) setTyping(true);
-            else {
-              setTyping(false);
-              onChange({ provider, model: e.target.value });
-            }
-          }}
-        >
-          {list.isLoading ? <option value={current ?? ''}>Loading models…</option> : null}
-          {models.map((m) => <option key={m.id} value={m.id} title={m.id}>{label(m)}</option>)}
-          <option value={OTHER}>Other model id…</option>
-        </select>
-      </label>
-      {other ? (
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (custom.trim()) { onChange({ provider, model: custom.trim() }); setTyping(false); } }}>
-          <input type="text" aria-label="Model id" placeholder="model id, for example gpt-5" value={custom} onChange={(e) => setCustom(e.target.value)} />
-          <button type="submit" disabled={!custom.trim()}>Use</button>
-        </form>
-      ) : null}
-      <div className="model-note muted small">
-        {pickedReason ? <>Recommended for building workflows: {pickedReason}</> : recommended ? <>Recommended: {recommended.id}. {recommended.reason}</> : null}
-        {list.data?.note ? <> {list.data.note}.</> : list.data?.source === 'built-in' ? ' Showing the built-in list.' : null}
-        {providers.filter((p) => !p.ready).map((p) => <span key={p.id} className="block">{p.label} is not available: {p.reason}.</span>)}
-      </div>
-      <ErrorNote error={list.error} />
-    </div>
   );
 }

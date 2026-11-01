@@ -5,6 +5,7 @@ import { assistantTurn, checkPage } from '../assistant/assistant.js';
 import { handleMcp } from '../assistant/mcp.js';
 import { checkCall, type AssistantDeps } from '../assistant/tools.js';
 import { builderProviders } from '../builder/builder.js';
+import { builderModels } from '../builder/models.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { audit } from '../server/catalog.js';
 
@@ -36,6 +37,13 @@ export function registerAssistantRoutes(app: FastifyInstance, d: AssistantDeps) 
 
   // Which model providers are set up, so the bubble can say what to do when none is.
   app.get('/v1/assistant', async (req) => builderProviders(ctx, user(req).workspaceId));
+
+  // A provider's models for the assistant's picker; unlike the builder's, any role may chat, so any role may list them.
+  app.get('/v1/assistant/models', async (req) => {
+    const p = user(req);
+    const q = z.object({ provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']), refresh: z.enum(['1', 'true']).optional() }).parse(req.query);
+    return builderModels(ctx, p.workspaceId, q.provider, Boolean(q.refresh));
+  });
 
   app.post('/v1/assistant/chat', async (req) => {
     const p = user(req);

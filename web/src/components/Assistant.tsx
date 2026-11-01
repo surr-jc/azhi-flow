@@ -5,6 +5,7 @@ import { Icon } from '../icons';
 import { Link, match, useRoute } from '../router';
 import { ErrorNote } from '../ui';
 import { HoldToConfirmButton } from './HoldToConfirmButton';
+import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from './ModelMenu';
 import { Markdown } from './Rich';
 
 /**
@@ -29,6 +30,7 @@ interface Saved { messages: Message[]; proposals: Record<string, Proposal>; outc
 interface PageContext { kind: 'run' | 'workflow' | 'dataset' | 'connection' | 'page'; id?: string; path: string }
 
 const KEY = 'azhi-assistant';
+const CHOICE_KEY = 'azhi-assistant-model';
 const MAX_TEXT = 8000;
 const EMPTY: Saved = { messages: [], proposals: {}, outcomes: {}, handoffs: {} };
 
@@ -81,14 +83,23 @@ export function Assistant() {
   const log = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
 
-  const status = useQuery({ queryKey: ['assistant'], queryFn: () => api<{ providers: Array<{ id: string; label: string; ready: boolean; reason?: string }>; default?: string }>('/v1/assistant'), enabled: open, staleTime: 60_000 });
+  const status = useQuery({ queryKey: ['assistant'], queryFn: () => api<{ providers: ProviderInfo[]; default?: string }>('/v1/assistant'), enabled: open, staleTime: 60_000 });
   const ready = status.data?.providers.some((p) => p.ready);
+  // Provider (an API key, or OpenCode with a Copilot or ChatGPT sign-in) and model, remembered apart from the builder's.
+  const [choice, setChoiceState] = useState<Choice>(() => loadChoice(CHOICE_KEY));
+  const setChoice = (c: Choice) => {
+    setChoiceState(c);
+    storeChoice(CHOICE_KEY, c);
+  };
+  // A remembered provider that is no longer set up falls back to the server's default.
+  const using = status.data?.providers.some((p) => p.ready && p.id === choice.provider) ? choice.provider : status.data?.default;
+  const model = choice.provider === using ? choice.model : undefined;
 
   const abort = useRef<AbortController | null>(null);
   const send = useMutation({
     mutationFn: (text: string) => {
       abort.current = new AbortController();
-      return api<Turn>('/v1/assistant/chat', { method: 'POST', body: { messages: state.messages, text, ...(usePage ? { page } : {}) }, signal: abort.current.signal });
+      return api<Turn>('/v1/assistant/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model, ...(usePage ? { page } : {}) }, signal: abort.current.signal });
     },
     onSuccess: (r) => {
       setState((s) => ({
@@ -222,7 +233,7 @@ export function Assistant() {
             <div className="composer-box">
               <textarea ref={composer} rows={2} aria-label="Message" maxLength={MAX_TEXT} placeholder="Ask about this workspace…" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} disabled={!ready} />
               <div className="composer-foot">
-                <span className="muted small"><kbd>Enter</kbd> sends</span>
+                {status.data && ready ? <ModelMenu providers={status.data.providers} provider={using} model={model} onChange={setChoice} modelsUrl="/v1/assistant/models" purpose="the assistant" /> : <span />}
                 <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending || !ready} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
               </div>
             </div>

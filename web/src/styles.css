@@ -1845,6 +1845,9 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .asst-actions > button { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; }
 .asst-composer { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
 .asst-composer .composer-box textarea { min-height: 48px; }
+/* the panel clips overflow, so the model picker fits inside it */
+.asst-composer .model-pop { width: min(360px, calc(100vw - 72px)); }
+.asst-composer .model-pill { max-width: 240px; }
 .asst-context { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; padding: 0 0 0 8px; border-radius: 999px; background: var(--idle-bg); font-size: calc(13px * var(--fs, 1)); }
 .asst-context .icon-btn { width: 28px; height: 28px; min-height: 28px; }
 @media (max-width: 800px) {
