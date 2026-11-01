@@ -43,7 +43,7 @@
     "demo": "tsx demo/demo.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",
-    "test:local": "AZHI_TEST_DATABASE_URL=pglite:// vitest run"
+    "test:local": "cross-env AZHI_TEST_DATABASE_URL=pglite:// vitest run"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8",
@@ -87,6 +87,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "@xyflow/react": "12.12.0",
+    "cross-env": "^10.1.0",
     "playwright-core": "1.56.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",

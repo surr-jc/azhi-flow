@@ -2,3 +2,6 @@
 # AI SDLC Factory packages (and their baselines) byte-identical on Windows, Linux and macOS checkouts.
 examples/ai-sdlc-factory*/** text eol=lf
 test/golden/context-regression/examples__ai-sdlc-factory*.json text eol=lf
+examples/ai-sdlc-v2/** text eol=lf
+examples/sdlc-universal/** text eol=lf
+test/golden/context-regression/*.json text eol=lf

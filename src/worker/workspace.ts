@@ -55,7 +55,7 @@ export function isolatedGitEnv(home: string): NodeJS.ProcessEnv {
     // Windows: git and an MCP server need the system variables to start and reach the network; the home folder is the step's.
     ...(process.platform === 'win32' ? { ...windowsSystemEnv(), USERPROFILE: home } : {}),
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
     GIT_ALLOW_PROTOCOL: 'https:http',
@@ -87,7 +87,7 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     GIT_CONFIG_COUNT: String(pairs.length),
     ...Object.fromEntries(pairs.flatMap(([k, v], i) => [[`GIT_CONFIG_KEY_${i}`, k], [`GIT_CONFIG_VALUE_${i}`, v]])),
   });
-  const always: Array<[string, string]> = [['core.hooksPath', process.platform === 'win32' ? 'NUL' : '/dev/null'], ['core.symlinks', 'false'], ['credential.helper', ''], ['advice.detachedHead', 'false']];
+  const always: Array<[string, string]> = [['core.hooksPath', '/dev/null'], ['core.symlinks', 'false'], ['credential.helper', ''], ['advice.detachedHead', 'false']];
   const scrub = (s: string) => (o.token ? s.split(o.token).join('***') : s);
   const git = (args: string[], env: NodeJS.ProcessEnv) =>
     new Promise<string>((resolve, reject) => {
@@ -163,7 +163,7 @@ export interface WorkspaceChange {
  * isolated environment, and the settings that would run commands (hooks, fsmonitor) switched off.
  */
 function workGit(c: Checkout, home: string, timeoutMs: number) {
-  const pairs: Array<[string, string]> = [['core.hooksPath', process.platform === 'win32' ? 'NUL' : '/dev/null'], ['core.fsmonitor', 'false'], ['core.symlinks', 'false'], ['core.autocrlf', 'false'], ['core.quotePath', 'false']];
+  const pairs: Array<[string, string]> = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['core.symlinks', 'false'], ['core.autocrlf', 'false'], ['core.quotePath', 'false']];
   const env = {
     ...isolatedGitEnv(home),
     GIT_DIR: c.gitDir!,
