@@ -4,9 +4,11 @@ Before a run, a workflow can be updated to match the providers you are signed in
 and model you pick. A published workflow names a provider that may not be signed in on this machine
 (for example a Claude API key, when you only have a ChatGPT plan); this saves editing YAML by hand.
 
-In mission control, open a workflow, then **Fit this workflow to my sign-ins, harness or model** above
-the run checks. It shows what each agent step runs on now and what it would run on, and **Update
-workflow** saves the change as a new **unsigned draft**. Published versions are never changed.
+The mission control **Start run** panel has one place for this: **Models and harness for this run**. Pick a
+provider, a model and a harness; they apply to every agent step of that run, steps that name their own model
+included (the multi-model review of `ai-sdlc` is then one family for that run). The panel is not saved to the
+workflow. To save a change as a new **unsigned draft** (published versions are never changed), use the API or
+the editor:
 
 ```sh
 # API: report only, or save the draft
