@@ -159,9 +159,15 @@ export function WorkflowBuilder() {
         if (r.event.kind === 'mcp_connection_proposal' && r.event.proposal) conns[r.event.proposal.tool_use_id] = r.event.proposal as McpConnectionProposal;
         return { messages: r.messages, proposals, tools, mcps, conns, shown, stats };
       });
-      setDraft('');
+    },
+    // A failed or stopped turn puts the typed message back, unless something new was typed meanwhile.
+    onError: () => {
+      const d = sent.current;
+      if (d) setDraft((x) => x || d);
     },
   });
+  // The composer clears on submit; this keeps what it held so a failed turn can restore it.
+  const sent = useRef('');
   // Follow the newest message only while the reader is at the bottom; otherwise offer a jump so reading is not interrupted.
   const [away, setAway] = useState(false);
   const toBottom = () => {
@@ -192,6 +198,8 @@ export function WorkflowBuilder() {
   const submit = (text: string) => {
     const t = text.trim();
     if (!t || send.isPending) return;
+    sent.current = text === draft ? draft : '';
+    if (text === draft) setDraft('');
     send.mutate(t);
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {

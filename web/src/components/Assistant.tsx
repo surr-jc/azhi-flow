@@ -112,12 +112,20 @@ export function Assistant() {
         messages: r.messages,
         proposals: r.event.kind === 'action_proposal' ? { ...s.proposals, [r.event.proposal.tool_use_id]: r.event.proposal } : s.proposals,
       }));
-      setDraft('');
+    },
+    // A failed or stopped turn puts the typed message back, unless something new was typed meanwhile.
+    onError: () => {
+      const d = sent.current;
+      if (d) setDraft((x) => x || d);
     },
   });
+  // The composer clears on submit; this keeps what it held so a failed turn can restore it.
+  const sent = useRef('');
   const submit = (text: string) => {
     const t = text.trim();
     if (!t || send.isPending) return;
+    sent.current = text === draft ? draft : '';
+    if (text === draft) setDraft('');
     send.mutate(t);
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
