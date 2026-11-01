@@ -183,6 +183,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 @keyframes fade-bottom { from { --fade-bottom: 76px; } to { --fade-bottom: 0px; } }
 @supports (appearance: base-select) {
   select, ::picker(select) { appearance: base-select; }
+  /* the closed control: its value and arrow on one line, centred in any height (the theme switch is 44px tall) */
+  select { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; }
   select::picker-icon { color: var(--muted); transition: rotate var(--dur-150); }
   select:open::picker-icon { rotate: 180deg; }
   ::picker(select) {
