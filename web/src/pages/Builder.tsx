@@ -4,6 +4,7 @@ import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
+import { LogoTraceLoader } from '../components/LogoTraceLoader';
 import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
@@ -229,7 +230,7 @@ export function WorkflowBuilder() {
   const shown = state.shown ? state.proposals[state.shown] : undefined;
   const latest = Object.values(state.proposals).at(-1);
   if (status.error) return <ErrorNote error={status.error} />;
-  if (!status.data) return <Loading />;
+  if (!status.data) return <Loading variant="page" />;
   return (
     <>
       <PageHead
@@ -290,7 +291,7 @@ export function WorkflowBuilder() {
               ))}
               {send.isPending ? (
                 <div className="pending">
-                  <span className="dots" aria-hidden="true" />
+                  <LogoTraceLoader size={20} ariaLabel="Working" />
                   <span>Reading the workspace, drafting and checking with the compiler…</span>
                   <span className="mono">{waited}s</span>
                   <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>

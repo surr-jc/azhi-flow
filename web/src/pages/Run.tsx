@@ -80,7 +80,7 @@ export function RunPage({ id }: { id: string }) {
   });
 
   if (detail.error) return <ErrorNote error={detail.error} />;
-  if (!detail.data) return <Loading />;
+  if (!detail.data) return <Loading variant="page" />;
   const d = detail.data;
   const r = d.run;
   const open = !TERMINAL.includes(r.state);

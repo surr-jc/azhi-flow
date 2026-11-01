@@ -5,6 +5,7 @@ import { Icon } from '../icons';
 import { Link, match, useRoute } from '../router';
 import { ErrorNote } from '../ui';
 import { HoldToConfirmButton } from './HoldToConfirmButton';
+import { LogoTraceLoader } from './LogoTraceLoader';
 import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from './ModelMenu';
 import { Markdown } from './Rich';
 
@@ -219,7 +220,7 @@ export function Assistant() {
             ))}
             {send.isPending ? (
               <div className="pending">
-                <span className="dots" aria-hidden="true" />
+                <LogoTraceLoader size={20} ariaLabel="Working" />
                 <span>Looking it up…</span>
                 <button type="button" className="small-btn" onClick={() => abort.current?.abort()}>Stop</button>
               </div>

@@ -65,6 +65,26 @@ async function post(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+/**
+ * POST and read the whole body. A connection dropped mid-reply is retried once: every request
+ * carries the full transcript and nothing is stored, so resending is safe. undici's own message for
+ * the drop is only "terminated", so the cause goes in the error.
+ */
+async function exchange(id: string, url: string, init: RequestInit): Promise<{ res: Response; text: string }> {
+  for (let attempt = 1; ; attempt++) {
+    const res = await post(url, init);
+    try {
+      return { res, text: await res.text() };
+    } catch (err) {
+      if ((err as Error).name === 'AbortError' || init.signal?.aborted) throw err;
+      if (attempt < 2) continue;
+      const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+      const detail = [cause?.code, cause?.message].filter(Boolean).join(': ');
+      throw new AzhiError(ErrorClass.transient, `${id} closed the connection before the reply finished, twice (HTTP ${res.status}): ${detail || (err as Error).message}`);
+    }
+  }
+}
+
 /** OpenAI counts cached tokens inside the prompt; usage records keep them apart so each is priced once. */
 const exclCached = (input: number | null, cached: number | null) => (input === null ? null : Math.max(0, input - (cached ?? 0)));
 
@@ -75,7 +95,7 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
   return {
     id: 'anthropic',
     async complete(req) {
-      const res = await post(`${o.apiUrl.replace(/\/$/, '')}/v1/messages`, {
+      const { res, text } = await exchange('anthropic', `${o.apiUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': o.apiKey, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
@@ -88,7 +108,6 @@ export function anthropicProvider(o: { apiUrl: string; apiKey: string }): ModelP
         }),
         signal: req.signal,
       });
-      const text = await res.text();
       let body: any;
       try {
         body = JSON.parse(text);
@@ -200,7 +219,7 @@ export function openaiProvider(o: OpenAIOptions): ModelProvider {
         for (const b of m.content) if (b.type === 'tool_result') messages.push({ role: 'tool', tool_call_id: b.tool_use_id, content: b.is_error ? `ERROR: ${b.content}` : b.content });
         if (text) messages.push({ role: 'user', content: text });
       }
-      const res = await post(`${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/chat/completions'}`, {
+      const { res, text: raw } = await exchange(id, `${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/chat/completions'}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}`, ...o.headers?.(req) },
         body: JSON.stringify({
@@ -212,7 +231,6 @@ export function openaiProvider(o: OpenAIOptions): ModelProvider {
         }),
         signal: req.signal,
       });
-      const raw = await res.text();
       let body: any;
       try {
         body = JSON.parse(raw);
@@ -275,7 +293,7 @@ export function responsesProvider(o: OpenAIOptions): ModelProvider {
         for (const b of m.content) if (b.type === 'tool_result') input.push({ type: 'function_call_output', call_id: b.tool_use_id, output: b.is_error ? `ERROR: ${b.content}` : b.content });
         if (text) input.push({ role: 'user', content: text });
       }
-      const res = await post(`${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/responses'}`, {
+      const { res, text: raw } = await exchange(id, `${o.apiUrl.replace(/\/$/, '')}${o.path ?? '/v1/responses'}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${o.apiKey}`, ...o.headers?.(req) },
         body: JSON.stringify({
@@ -289,7 +307,6 @@ export function responsesProvider(o: OpenAIOptions): ModelProvider {
         }),
         signal: req.signal,
       });
-      const raw = await res.text();
       let body: any;
       if (o.codex && res.ok) body = responseFromStream(id, raw);
       else {

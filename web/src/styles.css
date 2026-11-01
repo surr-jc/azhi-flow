@@ -656,9 +656,8 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .lookups { align-self: stretch; }
 .lookups > summary, .questions > summary { cursor: pointer; color: var(--muted); font-size: calc(13px * var(--fs, 1)); min-height: 40px; display: flex; align-items: center; }
 .lookups .chat-note { margin-top: 4px; }
-.dots { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1.2s ease-in-out infinite; /* functional: shows work in progress */ vertical-align: middle; }
-@keyframes pulse { 50% { opacity: 0.25; } }
-@media (prefers-reduced-motion: reduce) { .dots { animation: none; } }
+.pending svg, .page-loading svg { color: var(--accent); flex: none; }
+.page-loading { display: grid; place-items: center; min-height: 40vh; }
 .chat-note { align-self: flex-start; padding-left: 4px; }
 .chat-note::before { content: "↳ "; }
 .questions { align-self: stretch; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 16px; background: var(--panel); }

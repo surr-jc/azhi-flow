@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } f
 import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
 import { BrandLogo, BrandMark } from './brand';
 import { Assistant } from './components/Assistant';
+import { LogoTraceLoader } from './components/LogoTraceLoader';
 import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -189,7 +190,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/workflows/upload') return <UploadPackage />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
-  if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
+  if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<div className="page-loading"><LogoTraceLoader size={56} /></div>}><WorkflowEditor slug={m.slug!} /></Suspense>;
   if (path === '/ui/examples' || path.startsWith('/ui/examples/')) return <Examples />;
   if (path === '/ui/schedules') return <Schedules />;
   if (path === '/ui/workers') return <Workers />;

@@ -223,7 +223,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
 
   if (versions.error || base.error) return <ErrorNote error={versions.error ?? base.error} />;
   if (me.data && !atLeast(me.data.role, 'author')) return <p>Editing workflows needs the author role or higher. Your role is {me.data.role}.</p>;
-  if (!def || !base.data) return <Loading />;
+  if (!def || !base.data) return <Loading variant="page" />;
 
   const diagnostics = check.data?.diagnostics ?? [];
   const errors = diagnostics.filter((d) => d.severity === 'error');
