@@ -199,6 +199,25 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
   };
 }
 
+/** Inline review comments on one pull request (`github.review-comments`), mapped to the declared shape. Thread resolution needs GraphQL, so it is left out. */
+export async function reviewComments(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const found = await pages(cfg, token, `/repos/${repo}/pulls/${number}/comments`, undefined, timeoutMs);
+  return {
+    comments: found.map((c: any) => ({
+      id: c.id,
+      body: String(c.body ?? '').slice(0, MAX_BODY),
+      path: String(c.path ?? ''),
+      line: c.line ?? c.original_line ?? null,
+      author: String(c.user?.login ?? ''),
+      author_is_bot: c.user?.type === 'Bot',
+      created_at: String(c.created_at ?? ''),
+      in_reply_to_id: c.in_reply_to_id ?? null,
+    })),
+  };
+}
+
 const marker = (key: string) => `<!-- azhi-action:${key} -->`;
 const stickyMarker = (name: string) => `<!-- azhi-sticky:${name} -->`;
 
