@@ -8,7 +8,7 @@ import { TERMINAL_STATES } from '../runtime/types.js';
 import { callTool } from '../gateway/gateway.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, loadCatalog, registerTool, updateToolRepos } from '../server/catalog.js';
+import { audit, loadCatalog, registerTool, unregisterTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
@@ -513,6 +513,13 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
       .passthrough()
       .parse(req.body) as unknown as ToolSpec;
     return registerTool(ctx, p.workspaceId, spec, p.userId);
+  });
+
+  // Unregisters a tool for new workflows; runs that already pinned a revision keep running on it.
+  app.delete('/v1/tools/:ref', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    return unregisterTool(ctx, p.workspaceId, decodeURIComponent((req.params as { ref: string }).ref), p.userId);
   });
 
   app.get('/v1/secrets', async (req) => {

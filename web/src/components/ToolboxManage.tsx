@@ -130,7 +130,7 @@ function ConnectionPanel({ name, admin, onGone }: { name: string; admin: boolean
       <p className="small"><McpStatusBadge c={c} /> <span className="muted">{c.auth_kind === 'oauth' ? 'Signs in with OAuth' : 'No sign-in'}</span>{c.last_error ? <span className="muted"> · {c.last_error}</span> : null}</p>
       <div className="row">
         {c.auth_kind === 'oauth' ? <button type="button" disabled={re.isPending} onClick={() => re.reconnect(c.id)}>{c.status === 'ready' ? 'Sign in again' : 'Reconnect'}</button> : null}
-        <button type="button" className="danger" disabled={remove.isPending} onClick={async () => (await ask({ title: `Delete ${c.name}?`, text: 'Workflows can no longer reach this server. A connection with registered actions cannot be removed, because runs may have pinned them.', confirm: 'Delete' })) && remove.mutate(c.id)}>Delete</button>
+        <button type="button" className="danger" disabled={remove.isPending} onClick={async () => (await ask({ title: `Delete ${c.name}?`, text: 'Workflows can no longer reach this server. Unregister its tools below first: a connection with registered tools cannot be deleted.', confirm: 'Delete' })) && remove.mutate(c.id)}>Delete</button>
       </div>
       <ErrorNote error={re.error ?? remove.error} />
       {c.status === 'ready' ? <ConnectionTools id={c.id} name={c.name} /> : <p className="muted small">Finish signing in to see the tools this server offers.</p>}
@@ -165,6 +165,8 @@ function OfferedTool({ conn, tool, registered }: { conn: { id: string; name: str
   const qc = useQueryClient();
   const [effect, setEffect] = useState('');
   const [adding, setAdding] = useState(false);
+  const [ask, dialog] = useConfirm();
+  const unregister = useUnregister();
   const register = useMutation({
     mutationFn: () => api(`/v1/mcp/connections/${encodeURIComponent(conn.id)}/tools`, { method: 'POST', body: { id: toolId(conn.name, tool.name), version: 1, name: tool.name, description: tool.description || tool.name, effect, output_schema: { type: 'object' } } }),
     onSuccess: async () => { await Promise.all([qc.invalidateQueries({ queryKey: ['tools'] }), qc.invalidateQueries({ queryKey: ['toolbox'] })]); },
@@ -172,6 +174,7 @@ function OfferedTool({ conn, tool, registered }: { conn: { id: string; name: str
   const ref = registered ? `${registered.id}@${registered.version}` : null;
   return (
     <li>
+      {dialog}
       <div className="row">
         <span className="mono">{tool.name}</span>
         {registered ? <Badge tone={registered.effect === 'read' ? 'ok' : 'warn'}>{registered.effect === 'read' ? 'read' : 'writes'}</Badge> : null}
@@ -185,12 +188,23 @@ function OfferedTool({ conn, tool, registered }: { conn: { id: string; name: str
           </>
         )}
       </div>
+      {ref ? <button type="button" className="danger small" disabled={unregister.isPending} onClick={async () => (await ask(unregisterPrompt(ref))) && unregister.mutate(ref)}>Unregister</button> : null}
       {tool.description ? <p className="muted small">{tool.description}</p> : null}
-      <ErrorNote error={register.error} />
+      <ErrorNote error={register.error ?? unregister.error} />
       {ref && adding ? <AddToStep refName={ref} /> : null}
     </li>
   );
 }
+
+/** Takes a registered tool away from new workflows. Runs that already started keep the revision they pinned. */
+function useUnregister() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ref: string) => api(`/v1/tools/${encodeURIComponent(ref)}`, { method: 'DELETE' }),
+    onSuccess: async () => { await Promise.all([qc.invalidateQueries({ queryKey: ['tools'] }), qc.invalidateQueries({ queryKey: ['toolbox'] })]); },
+  });
+}
+const unregisterPrompt = (ref: string) => ({ title: `Unregister ${ref}?`, text: 'New workflows and drafts stop finding it. Runs that already started keep using it. You can register it again later.', confirm: 'Unregister' });
 
 interface Step { id: string; type: string; [k: string]: unknown }
 /** Puts a registered tool into a workflow's latest version as a new draft: either a new tool step or an existing tool step. */
@@ -249,9 +263,12 @@ interface RegisteredTool { id: string; version: number; revision?: number; [k: s
 function AppPanel({ system, admin }: { system: string; admin: boolean }) {
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<RegisteredTool[]>('/v1/tools'), enabled: admin });
   const [editing, setEditing] = useState<{ key: string; spec: Record<string, unknown> }>();
+  const [ask, dialog] = useConfirm();
+  const unregister = useUnregister();
   const own = (tools.data ?? []).filter((t) => t.id.split('.')[0] === system && t.revision !== undefined);
   return (
     <div className="tb-manage">
+      {dialog}
       <SystemPanel system={system} />
       {admin && own.length ? (
         <details>
@@ -261,9 +278,11 @@ function AppPanel({ system, admin }: { system: string; admin: boolean }) {
               <li key={`${t.id}@${t.version}`}>
                 <span className="mono">{t.id}@{t.version}</span>
                 <button type="button" className="small" onClick={() => { const { revision: _r, ...spec } = t; setEditing({ key: `${t.id}@${t.version}/${t.revision}`, spec }); }}>Change</button>
+                <button type="button" className="danger small" disabled={unregister.isPending} onClick={async () => (await ask(unregisterPrompt(`${t.id}@${t.version}`))) && unregister.mutate(`${t.id}@${t.version}`)}>Unregister</button>
               </li>
             ))}
           </ul>
+          <ErrorNote error={unregister.error} />
           {editing ? <ToolForm key={editing.key} from={editing.spec} /> : null}
         </details>
       ) : null}
