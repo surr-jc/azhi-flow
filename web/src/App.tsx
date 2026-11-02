@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
+import { api, ApiError, atLeast, getToken, setToken, type Alert, type Me } from './api';
 import { BrandLogo, BrandMark } from './brand';
 import { Assistant } from './components/Assistant';
 import { LogoTraceLoader } from './components/LogoTraceLoader';
+import { ApprovalsBell, ProfileMenu } from './components/ProfileMenu';
 import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -140,10 +141,6 @@ function Shell() {
           );
         })}
         <span className="rail-gap" />
-        <button type="button" className="rail-link" data-tip="Sign out" aria-label="Sign out" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>
-          <Icon name="signout" size={22} />
-          <span className="rail-label">Sign out</span>
-        </button>
       </nav>
       <div className="main">
         <header className="topbar">
@@ -162,9 +159,9 @@ function Shell() {
             </nav>
           ) : <span className="topbar-title">{current?.label ?? 'Azhi Flow'}</span>}
           <span className="top-right">
-            <ThemeSwitch />
             {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
-            {role ? <span className="role-pill">{role}</span> : null}
+            <ApprovalsBell count={counts.approvals} />
+            <ProfileMenu me={me.data} approvals={counts.approvals} alerts={critical} />
           </span>
         </header>
         <main className={`content${/^\/ui\/workflows\/(?!new$|upload$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
@@ -218,21 +215,3 @@ function DatasetRoute({ name }: { name: string }) {
   return <DatasetPage name={name} canEdit={atLeast(me.data?.role, 'author')} />;
 }
 
-const THEME_ICONS: Record<Theme, { label: string; icon: ReactNode }> = {
-  system: { label: 'System theme', icon: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></> },
-  light: { label: 'Light theme', icon: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></> },
-  dark: { label: 'Dark theme', icon: <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /> },
-};
-
-function ThemeSwitch() {
-  const [theme, setTheme] = useState<Theme>(getTheme());
-  return (
-    <div className="seg theme-switch" role="group" aria-label="Theme">
-      {(Object.keys(THEME_ICONS) as Theme[]).map((t) => (
-        <button key={t} type="button" aria-pressed={theme === t} aria-label={THEME_ICONS[t].label} title={THEME_ICONS[t].label} onClick={() => { applyTheme(t); setTheme(t); }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{THEME_ICONS[t].icon}</svg>
-        </button>
-      ))}
-    </div>
-  );
-}

@@ -47,6 +47,8 @@ const PATHS: Record<string, ReactNode> = {
   step: <circle cx="12" cy="12" r="4" />,
   expand: <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />,
   shrink: <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />,
+  bell: <path d="M6 16V11a6 6 0 0112 0v5l2 2H4zM10 21h4" />,
+  copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 012-2h9" /></>,
   map: <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14" />,
 };
 
