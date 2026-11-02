@@ -1917,6 +1917,11 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 /* Closed, the bubble is the logo tile itself (rx 15 of 64); open, it is the accent close button. */
 .asst-fab:not(.on), .asst-fab:not(.on):hover:not(:disabled) { border-radius: 23%; background: transparent; border-color: transparent; overflow: hidden; }
 .asst-fab:not(.on):hover:not(:disabled) { filter: brightness(1.08); }
+.asst-fab:not(.on) > * { transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.asst-fab:not(.on):hover:not(:disabled) > * { animation: asst-fab-wiggle 0.6s ease-in-out; transform: scale(1.1); }
+.asst-fab:not(.on):hover:not(:disabled) { transform: translateY(-3px); box-shadow: 0 10px 24px -8px rgba(19, 33, 59, 0.5); }
+@keyframes asst-fab-wiggle { 0%, 100% { rotate: 0deg; } 25% { rotate: -10deg; } 50% { rotate: 8deg; } 75% { rotate: -4deg; } }
+@media (prefers-reduced-motion: reduce) { .asst-fab:not(.on) > *, .asst-fab:not(.on):hover:not(:disabled) > * { animation: none; transition: none; transform: none; } .asst-fab:not(.on):hover:not(:disabled) { transform: none; } }
 .asst-panel { position: fixed; right: 24px; bottom: 88px; z-index: 35; width: min(420px, calc(100vw - 32px)); height: min(640px, calc(100dvh - 120px)); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: 0 12px 40px -12px rgba(19, 33, 59, 0.35); overflow: hidden; }
 .asst-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--line); }
 .asst-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
