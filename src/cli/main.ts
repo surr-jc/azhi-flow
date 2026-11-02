@@ -18,6 +18,7 @@ import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
 import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
+import { opencodeAuthFile, opencodeCandidates } from '../lib/opencode-auth.js';
 import { printContext, printInspect } from './inspect.js';
 import { publisherKey, signForUpload } from './signing-client.js';
 import { signPackage } from '../security/signing.js';
@@ -517,28 +518,11 @@ copilot
     }
   });
 
-const opencodeAuthFile = () => join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
-
-/** The github-copilot sign-ins in OpenCode's auth.json, as candidates for /v1/copilot/import. */
-function opencodeCandidates(file: string): Array<{ name: string; auth: string }> {
-  const candidates: Array<{ name: string; auth: string }> = [];
-  if (!existsSync(file)) {
-    console.error(dim(`no OpenCode sign-in file at ${file}`));
-    return candidates;
-  }
-  try {
-    const j = JSON.parse(readFileSync(file, 'utf8'));
-    for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
-      const e = j[k];
-      const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
-      candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
-      // Some OpenCode versions send the entry's `access` token rather than `refresh`.
-      if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
-    }
-  } catch {
-    console.error(dim(`${file} is not JSON; skipped`));
-  }
-  return candidates;
+/** OpenCode's github-copilot sign-ins, noting on stderr why there are none. */
+function fileCandidates(file: string) {
+  const r = opencodeCandidates(file);
+  if (r.problem) console.error(dim(r.problem));
+  return r.candidates;
 }
 
 copilot
@@ -553,7 +537,7 @@ copilot
     // Only a fingerprint of the sign-in is kept in memory, to tell when OpenCode has written a new one.
     let last = '';
     const syncOnce = async (): Promise<boolean> => {
-      const candidates = opencodeCandidates(file);
+      const candidates = fileCandidates(file);
       if (!candidates.length) return false;
       const fingerprint = createHash('sha256').update(candidates.map((c) => c.auth).join('\n')).digest('hex');
       if (fingerprint === last) return true;
@@ -587,7 +571,7 @@ copilot
   .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
   .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
     const file = opts.file ?? opencodeAuthFile();
-    const candidates = opencodeCandidates(file);
+    const candidates = fileCandidates(file);
     for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
     try {
       const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();

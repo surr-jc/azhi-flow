@@ -368,7 +368,9 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   token kind and length, expiry), never a token. To use one login for both tools, sign in with
   `opencode auth login` and run `azhi copilot sync` (once; it imports from OpenCode's file only), or
   `azhi copilot sync --watch` to import again each time OpenCode signs in; a sign-in Copilot refuses
-  leaves the saved one unchanged. A GitHub CLI sign-in (`gh auth token`) works with Copilot
+  leaves the saved one unchanged. The web UI has the same as the **Sync with OpenCode** button next to
+  Check sign-in: the server reads `auth.json` on its own machine (so it suits a server running where you
+  use OpenCode). A GitHub CLI sign-in (`gh auth token`) works with Copilot
   where a token from the OpenCode device flow may be refused; import picks it up (re-import after `gh auth login`). The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
   `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
   whenever your OpenCode signs in again.
