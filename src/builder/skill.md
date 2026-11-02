@@ -328,6 +328,13 @@ cannot infer: the MCP server's start command (for example `npx -y @acme/mcp-serv
 changes (that sets `effect`: `read`, or `write-dedupable` for writes that can be deduplicated);
 and the shape of its input and output.
 
+- **Registering happens only through a `propose_tool` call.** You cannot register a tool, but the
+  person's Register dialog opens only after you call `propose_tool`; describing a tool in chat shows
+  them nothing. Whenever tools are missing, or the person says "register", "register all" or
+  similar, call `propose_tool` once for each missing tool in that same turn (a tool you already
+  proposed earlier in the conversation is proposed again, since its card may be gone). Never tell
+  them to confirm something in "the tool panel" unless a `propose_tool` result in this turn said
+  they now see it. If a proposal is rejected, fix the spec and propose again instead of asking them.
 - `transport` is `{kind: mcp-stdio, command: [...], tool: <MCP tool name>, env?: {...},
   credential_env?: <env var the server reads its token from>}` or `{kind: http, method, url,
   headers?}`. One registered tool is one MCP tool; propose each tool you need.

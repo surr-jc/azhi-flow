@@ -83,7 +83,7 @@ export type BuilderEvent =
   | { kind: 'text' }
   | { kind: 'mcp_proposal'; proposal: BuilderMcpProposal }
   | { kind: 'mcp_connection_proposal'; proposal: BuilderMcpConnectionProposal }
-  | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
+  | { kind: 'tool_proposal'; proposal: BuilderToolProposal; proposals?: BuilderToolProposal[] }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
 
@@ -751,7 +751,9 @@ export async function builderTurn(
         } else if (u.name === 'propose_tool') {
           const r = await checkToolProposal(ctx, workspaceId, input.tool);
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
-          event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
+          const proposal = { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists };
+          // Several tools proposed in one turn all reach the person, not just the last.
+          event = { kind: 'tool_proposal', proposal, proposals: [...(event?.kind === 'tool_proposal' ? event.proposals ?? [event.proposal] : []), proposal] };
         } else if (u.name === 'find_integrations') {
           answer(u.id, JSON.stringify(await findIntegrations(ctx, workspaceId, input), null, 1));
         } else if (u.name === 'propose_mcp_server') {

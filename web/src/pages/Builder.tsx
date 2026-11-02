@@ -63,7 +63,7 @@ interface Proposal {
 }
 /** Tokens the provider reported; null when it did not say (never estimated). */
 interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal }; provider: string; model: string; usage: Usage }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal; proposals?: ToolProposal[] }; provider: string; model: string; usage: Usage }
 /** One answered turn: what it used and how long it took, kept by the index of its last message. */
 interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
 /** `registered`: the revision each confirmed tool proposal became, by its tool_use_id. */
@@ -189,7 +189,9 @@ export function WorkflowBuilder() {
           proposals[r.event.proposal.tool_use_id] = r.event.proposal as Proposal;
           shown = r.event.proposal.tool_use_id;
         }
-        if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
+        if (r.event.kind === 'tool_proposal' && r.event.proposal) {
+          for (const t of (r.event.proposals ?? [r.event.proposal]) as ToolProposal[]) tools[t.tool_use_id] = t;
+        }
         if (r.event.kind === 'mcp_proposal' && r.event.proposal) mcps[r.event.proposal.tool_use_id] = r.event.proposal as McpProposal;
         if (r.event.kind === 'mcp_connection_proposal' && r.event.proposal) conns[r.event.proposal.tool_use_id] = r.event.proposal as McpConnectionProposal;
         return { ...s, messages: r.messages, proposals, tools, mcps, conns, shown, stats };
@@ -320,7 +322,6 @@ export function WorkflowBuilder() {
       ) : (
         <div className={`builder ${shown ? 'with-draft' : ''}`}>
           <section className="panel chat" aria-label="Conversation">
-            {state.messages.length || send.isPending ? <UsageBar turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} /> : null}
             <div className="sr-only" role="status">{send.isPending ? 'The builder is working' : send.isSuccess ? 'The builder replied' : ''}</div>
             <div className="chat-log" ref={log} onScroll={onScroll} tabIndex={0} aria-label="Conversation messages">
               {!state.messages.length ? (
@@ -420,14 +421,17 @@ export function WorkflowBuilder() {
                     <button type="button" className="small-btn attach-btn" disabled={send.isPending || read.isPending || files.length >= MAX_FILES} title={`Attach up to ${MAX_FILES} files (text, CSV, JSON, YAML, SQL, code, PDF, DOCX, XLSX; 10 MB each)`} onClick={() => picker.current?.click()}><Icon name="plus" size={13} />Attach files</button>
                     <button type="button" className="small-btn attach-btn" disabled={send.isPending} title="Tell the builder which tools, MCP servers, skills or datasets to use" onClick={() => setPicking(true)}><Icon name="tool" size={13} />Tools{pins.length ? ` (${pins.length})` : ''}</button>
                   </div>
-                  <ModelMenu
-                    providers={status.data.providers}
-                    provider={using}
-                    model={model}
-                    onChange={setChoice}
-                    modelsUrl="/v1/builder/models"
-                    purpose="building workflows"
-                  />
+                  <div className="model-ctx">
+                    <ModelMenu
+                      providers={status.data.providers}
+                      provider={using}
+                      model={model}
+                      onChange={setChoice}
+                      modelsUrl="/v1/builder/models"
+                      purpose="building workflows"
+                    />
+                    <ContextMenu turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} />
+                  </div>
                   <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
                 </div>
               </div>
@@ -450,7 +454,17 @@ export function WorkflowBuilder() {
  * lookup round of a turn (each re-sends the context), so it grows faster than the text you see.
  * Cost is not shown: the builder has no price list, and an unknown value is never guessed.
  */
-function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
+function ContextMenu({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
   const last = turns[turns.length - 1];
   const sum = (f: keyof Usage) => total(turns, f);
   const all = USAGE_FIELDS.map((f) => sum(f));
@@ -458,45 +472,55 @@ function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns:
   const lastTokens = last ? (last.usage.input_tokens ?? 0) + (last.usage.output_tokens ?? 0) : null;
   const fill = Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
   const full = fill >= 0.8;
+  const pct = messages ? Math.max(1, Math.round(fill * 100)) : 0;
+  const turnsLabel = turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet';
   const cells: Array<{ label: string; value: number | null; hint: string }> = [
     { label: 'Input', value: sum('input_tokens'), hint: 'Tokens sent to the model across all turns, including each lookup round' },
     { label: 'Output', value: sum('output_tokens'), hint: 'Tokens the model wrote across all turns' },
     { label: 'Cached', value: sum('cache_read_tokens'), hint: 'Input tokens served from the provider’s prompt cache' },
   ];
   return (
-    <details className="usage" aria-label="Session usage">
-      <summary>
-        <span><strong>{compact(grand)}</strong> tokens · {turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
-        <span className={full ? 'warn-text' : 'muted'}>{messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
-      </summary>
-      <div className="usage-main">
-        <div className="usage-total">
-          <span className="usage-label">Session tokens</span>
-          <strong className="usage-value" title={exact(grand)}>{compact(grand)}</strong>
-          <span className="muted small">{turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
-        </div>
-        <dl className="usage-cells">
-          {cells.map((c) => (
-            <div key={c.label} title={`${c.hint}. ${exact(c.value)}`}>
-              <dt>{c.label}</dt>
-              <dd>{compact(c.value)}</dd>
-            </div>
-          ))}
-          <div title="Cost is not estimated: the builder has no price list for this model">
-            <dt>Cost</dt>
-            <dd className="muted">unavailable</dd>
+    <div className="ctx-wrap" ref={wrap}>
+      <button type="button" className={`ctx-btn${full ? ' warn' : ''}`} aria-label={`Context: ${messages ? `${pct}% full` : 'empty'}`} aria-expanded={open} aria-haspopup="dialog" title="Context window" onClick={() => setOpen((o) => !o)}>
+        <svg className="ctx-ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle className="ctx-track" cx="10" cy="10" r="8" />
+          <circle className="ctx-fill" cx="10" cy="10" r="8" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - Math.min(100, pct)} />
+        </svg>
+      </button>
+      {open ? (
+        <div className="ctx-pop" role="dialog" aria-label="Context window">
+          <div className="ctx-head">
+            <span className="ctx-title">Context window</span>
+            <span className={full ? 'warn-text' : 'muted'}>{messages ? `${pct}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
           </div>
-        </dl>
-      </div>
-      <div className="usage-foot muted small">
-        <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>
-        {last ? <span title={`Input ${exact(last.usage.input_tokens)}, output ${exact(last.usage.output_tokens)}`}>Last turn {compact(lastTokens)} tokens · {seconds(last.ms)}</span> : null}
-        <span className={full ? 'warn-text' : ''} title={`${messages} of ${MAX_MESSAGES} messages; ${(bytes / 1000).toFixed(0)} KB of ${(MAX_BYTES / 1000).toFixed(0)} KB`}>
-          Conversation {messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}
-          {full ? ' · start over soon' : ''}
-        </span>
-      </div>
-    </details>
+          <div className="ctx-meter" aria-hidden="true"><span style={{ width: `${Math.min(100, pct)}%` }} /></div>
+          <div className="muted small">{messages} of {MAX_MESSAGES} messages · {(bytes / 1000).toFixed(0)} of {(MAX_BYTES / 1000).toFixed(0)} KB</div>
+          <div className="usage-main">
+            <div className="usage-total">
+              <span className="usage-label">Session tokens</span>
+              <strong className="usage-value" title={exact(grand)}>{compact(grand)}</strong>
+              <span className="muted small">{turnsLabel}</span>
+            </div>
+            <dl className="usage-cells">
+              {cells.map((c) => (
+                <div key={c.label} title={`${c.hint}. ${exact(c.value)}`}>
+                  <dt>{c.label}</dt>
+                  <dd>{compact(c.value)}</dd>
+                </div>
+              ))}
+              <div title="Cost is not estimated: the builder has no price list for this model">
+                <dt>Cost</dt>
+                <dd className="muted">unavailable</dd>
+              </div>
+            </dl>
+          </div>
+          <div className="usage-foot muted small">
+            <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>
+            {last ? <span title={`Input ${exact(last.usage.input_tokens)}, output ${exact(last.usage.output_tokens)}`}>Last turn {compact(lastTokens)} tokens · {seconds(last.ms)}</span> : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
