@@ -1978,3 +1978,12 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .pick-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
 .pick-row .block { display: block; }
 @media (max-width: 640px) { .attach-btn { min-height: 44px; } }
+.tool-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.tool-trigger:hover { background: var(--idle-bg); }
+.tool-trigger .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-pick { margin-top: 12px; }
+.tool-pick-group { padding: 8px 8px 4px; font-weight: 600; }
+.tool-pick-row { width: 100%; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; text-align: left; border: 0; background: transparent; padding: 8px; border-radius: 8px; font: inherit; color: var(--ink); cursor: pointer; }
+.tool-pick-row:hover { background: var(--idle-bg); }
+.tool-pick-row.picked { background: var(--accent-soft, var(--accent-bg)); }
+.tool-pick-row .d { flex-basis: 100%; }
