@@ -122,6 +122,13 @@ chat shows a card; an admin clicks **Connect and sign in**, approves access in t
 status. It never asks for a client ID, secret or token. Tools are then discovered on the Tools page, and the builder
 proposes each one with `propose_tool`.
 
+For a connection that is already `ready`, the builder reads its tools itself with `list_mcp_tools` (name,
+description, argument names, and `registered_as` when a registered tool already wraps it). It uses registered tools as
+they are and proposes the rest with `propose_tool`. For an `mcp-streamable-http` tool the server is the source of
+truth: the remote tool name must exist on the connection, the input schema is the server's own (whatever the model
+wrote is replaced), the connection is stored by id, and a tool that is already registered is refused with a pointer
+to its ref. A connection that is not ready lists nothing until an admin finishes signing in.
+
 ## Suggesting what is available, and adding MCP servers
 
 `workspace_overview` also lists the library's MCP servers, skills, agents and commands, the gateway's MCP

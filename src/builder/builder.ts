@@ -18,7 +18,7 @@ import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
 import { renderAttachments, type AttachmentInput } from './attachments.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
-import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
+import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, connectionTools, listConnectionTools, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
 import { workflowAssets } from '../server/assets.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
@@ -249,6 +249,12 @@ const TOOLS: ModelTool[] = [
     },
   },
   {
+    name: 'list_mcp_tools',
+    description:
+      'The tools a ready gateway MCP connection (see gateway_mcp_connections) offers right now, read from the server itself: name, description, argument names, and `registered_as` when a registered tool already wraps it. Call it whenever the person wants a workflow to use a connected MCP server such as jira. Use the registered ones as they are; propose the others with propose_tool. Never invent tools for a connected server.',
+    input_schema: { type: 'object', properties: { connection: { type: 'string', description: 'The connection name from gateway_mcp_connections.' } }, required: ['connection'], additionalProperties: false },
+  },
+  {
     name: 'propose_tool',
     description:
       'Propose registering one tool (an MCP tool on a stdio server, a registered remote Streamable HTTP MCP connection, or an HTTP call) that workflows can then call through the gateway. The server checks it; errors come back for you to fix. Nothing is registered until the person confirms with the admin role. Never put a secret value in the spec: name the credential and tell the person to set it on the Secrets page.',
@@ -334,8 +340,25 @@ const EFFECTS = ['read', 'write-idempotent', 'write-dedupable', 'write-unsafe'];
 
 /** Checks a proposed tool spec the way registration will, and reports what the person must set up. Throws a repairable message. */
 export async function checkToolProposal(ctx: AppContext, workspaceId: string, raw: unknown): Promise<{ spec: ToolSpec; ref: string; exists: boolean; credential?: { name: string; set: boolean } }> {
-  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const o = { ...(raw && typeof raw === 'object' ? raw : {}) } as Record<string, any>;
   const errors: string[] = [];
+  // A tool on a connected MCP server is described by the server, not by the model: the connection must be
+  // ready, the remote tool must exist, and its input schema is the server's own.
+  if (o.transport?.kind === 'mcp-streamable-http' && typeof o.transport.connection === 'string' && typeof o.transport.tool === 'string') {
+    try {
+      const { connection, tools } = await connectionTools(ctx, workspaceId, o.transport.connection);
+      const found = tools.find((t) => t.name === o.transport.tool);
+      if (!found) throw new Error(`'${connection.name}' does not offer a tool named '${o.transport.tool}'; call list_mcp_tools. It offers: ${tools.map((t) => t.name).join(', ')}`);
+      if (found.registered_as) throw new Error(`'${o.transport.tool}' is already registered as ${found.registered_as}; use that ref in the workflow instead of registering it again`);
+      // The gateway addresses a connection by id; the tool name and schemas come from the server.
+      o.transport = { kind: 'mcp-streamable-http', connection: connection.id, tool: found.name };
+      o.input_schema = found.input_schema;
+      o.output_schema ??= { type: 'object' };
+      if (typeof o.description !== 'string' || !o.description.trim()) o.description = found.description || found.name;
+    } catch (e) {
+      throw new Error(`The tool spec is not valid yet. Fix these and propose it again:\n- ${(e as Error).message}`);
+    }
+  }
   if (typeof o.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(o.id)) errors.push('id must be lower-case letters, digits, dots, dashes, e.g. acme.lookup-customer');
   if (!Number.isInteger(o.version) || o.version < 1) errors.push('version must be an integer from 1');
   if (typeof o.description !== 'string' || !o.description.trim()) errors.push('description is required');
@@ -748,6 +771,8 @@ export async function builderTurn(
           }));
           answer(u.id, 'The questions are shown to the person. Their answers follow in the next message.');
           event = { kind: 'questions', tool_use_id: u.id, ...(input.intro ? { intro: String(input.intro) } : {}), questions };
+        } else if (u.name === 'list_mcp_tools') {
+          answer(u.id, JSON.stringify(await listConnectionTools(ctx, workspaceId, String(input.connection ?? '')), null, 1));
         } else if (u.name === 'propose_tool') {
           const r = await checkToolProposal(ctx, workspaceId, input.tool);
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);

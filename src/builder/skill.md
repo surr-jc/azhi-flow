@@ -289,7 +289,8 @@ and tell the person what fits and what you would use. Cover each of these that a
 - `library_mcp_servers`: MCP servers for harness agents (OpenCode agent steps). Only `published`
   ones can be used; a `draft` needs publishing first. `needs` names environment variables the
   person sets where the worker runs.
-- `gateway_mcp_connections`: hosted MCP servers an admin connected to the gateway.
+- `gateway_mcp_connections`: hosted MCP servers an admin connected to the gateway. Their tools come
+  from `list_mcp_tools`; registered ones are also in `tools`. Prefer them over anything you would invent.
 - `library_skills`, `library_agents`, `library_commands`: reusable harness assets.
 - `harness_tools`: OpenCode's built-in read-only tools (`read`, `grep`, `glob`, `skill`) a profile may allow.
 - `executors`, `datasets`, `examples`, `workflows`: other building blocks.
@@ -339,8 +340,22 @@ and the shape of its input and output.
   credential_env?: <env var the server reads its token from>}` or `{kind: http, method, url,
   headers?}`. One registered tool is one MCP tool; propose each tool you need.
 - A hosted MCP server is reached through a gateway connection: `{kind: mcp-streamable-http,
-  connection: <id from gateway_mcp_connections>, tool}`. When no connection exists, propose one
+  connection: <name from gateway_mcp_connections>, tool}`. When no connection exists, propose one
   with `propose_mcp_connection` (below); until it is connected offer the plain `http` transport.
+- **A connection that is `ready` already has its tools; use them, never write your own.** When the
+  person wants a workflow to use a connected server (for example `jira`), call `list_mcp_tools`
+  with the connection name. It reads the server's real tool list. For each tool you need:
+  - `registered_as` is set: it is already registered, so use that ref in the workflow
+    (`tool: <ref>`, or `tools: [<ref>]` on an agent). Do not propose it again.
+  - Not registered: call `propose_tool` with `transport: {kind: mcp-streamable-http,
+    connection, tool: <exact name from list_mcp_tools>}`, an `id` of `<connection>_<tool>` (lower
+    case, as the Toolbox names them), `version: 1`, a `description`, and an `effect`. The server
+    fills in the real input schema, so leave `input_schema` out. An unknown tool name is rejected.
+    Choose `effect` from the tool's description: `read` for lookups and searches, `write-dedupable`
+    for creates and comments, `write-idempotent` for updates, `write-unsafe` for deletes and transitions.
+  Propose only the tools the workflow uses, one `propose_tool` each in the same turn. Never use the
+  `http` transport or an `mcp-stdio` command for a server that has a ready connection. If the
+  connection is not `ready`, say an admin must finish signing in on the Toolbox page first.
 
 ### Connecting a hosted MCP server
 
@@ -348,7 +363,7 @@ and the shape of its input and output.
 sign-in (`auth_kind: oauth`, the default) Azhi finds the sign-in details itself and registers its
 own client; an admin approves access in a pop-up when they confirm. Never ask for a client ID,
 client secret or token. Use `auth_kind: none` only when the server needs no sign-in. After the
-person has connected it, its tools are discovered on the Tools page; then propose each tool you
+person has connected it, call `list_mcp_tools` to see its tools; then propose each one you
 need with `propose_tool`. This is for the gateway (tool steps and model agents); a server for
 harness agents goes in the library with `propose_mcp_server`.
 - Name a `credential` (a secret such as `acme-api-token`) when it needs a token. **Never ask for
