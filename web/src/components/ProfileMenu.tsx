@@ -90,9 +90,12 @@ function QuotaUsage() {
           <div className="quota-head"><strong>{p.title}</strong>{p.plan ? <span className="badge">{p.plan}</span> : null}</div>
           {p.meters.map((m) => (
             <div key={m.label} className="quota-meter">
-              <span className="quota-label">{m.label}</span>
+              <div className="quota-line">
+                <span className="quota-label">{m.label}</span>
+                <span className="muted small">{m.used_percent === null ? '—' : `${m.used_percent}% used`}</span>
+              </div>
               <span className="us-track" role="img" aria-label={m.used_percent === null ? 'usage unknown' : `${m.used_percent}% used`}><i style={{ width: `${m.used_percent ?? 0}%` }} /></span>
-              <span className="muted small">{m.used_percent === null ? '—' : `${m.used_percent}%`}{m.detail ? ` · ${m.detail}` : ''}{m.resets_at ? ` · resets ${new Date(m.resets_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}</span>
+              {m.detail || m.resets_at ? <span className="muted small">{[m.detail, m.resets_at ? `resets ${new Date(m.resets_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : null].filter(Boolean).join(' · ')}</span> : null}
             </div>
           ))}
           {p.message ? <span className="muted small">{p.message}</span> : null}
