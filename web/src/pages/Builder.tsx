@@ -324,7 +324,7 @@ export function WorkflowBuilder() {
           <section className="panel chat" aria-label="Conversation">
             <div className="sr-only" role="status">{send.isPending ? 'The builder is working' : send.isSuccess ? 'The builder replied' : ''}</div>
             <div className="chat-log" ref={log} onScroll={onScroll} tabIndex={0} aria-label="Conversation messages">
-              {!state.messages.length ? (
+              {!state.messages.length && !send.isPending ? (
                 <div className="chat-empty">
                   <p className="muted">What should the workflow do? A sentence or two is enough. Pick an example to edit, or write your own below.</p>
                   <div className="starters">
@@ -351,6 +351,8 @@ export function WorkflowBuilder() {
               {state.messages.map((m, i) => (
                 <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} registered={state.registered ?? {}} onRegistered={markRegistered} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
+              {/* Shown the moment the message is sent; the saved conversation only gains it when the server replies. */}
+              {send.isPending && send.variables ? <div className="bubble user">{splitUser(send.variables).say}</div> : null}
               <WorkingRow pending={send.isPending}>
                 <span>Reading the workspace, drafting and checking with the compiler…</span>
                 <span className="mono">{waited}s</span>
