@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review",
-    "definitionHash": "sha256:4b70e3931d8918221ed5d0bce7f5b78cefafd0e55a7ff18ad8d2674242981107",
+    "definitionHash": "sha256:449b3a13a96bb085ad20052c93061d3cd1472ee3013ca2863c8339a121f6eb3d",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -145,7 +145,7 @@
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -190,7 +190,7 @@
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -235,7 +235,7 @@
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -280,7 +280,7 @@
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
