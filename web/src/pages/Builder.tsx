@@ -421,11 +421,6 @@ export function WorkflowBuilder() {
                   onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                 />
                 <div className="composer-foot">
-                  <div className="row attach-actions">
-                    <input ref={picker} type="file" multiple hidden accept={ACCEPT} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
-                    <button type="button" className="small-btn attach-btn" disabled={send.isPending || read.isPending || files.length >= MAX_FILES} title={`Attach up to ${MAX_FILES} files (text, CSV, JSON, YAML, SQL, code, PDF, DOCX, XLSX; 10 MB each)`} onClick={() => picker.current?.click()}><Icon name="plus" size={13} />Attach files</button>
-                    <button type="button" className="small-btn attach-btn" disabled={send.isPending} title="Tell the builder which tools, MCP servers, skills or datasets to use" onClick={() => setPicking(true)}><Icon name="tool" size={13} />Tools{pins.length ? ` (${pins.length})` : ''}</button>
-                  </div>
                   <div className="model-ctx">
                     <ModelMenu
                       providers={status.data.providers}
@@ -436,6 +431,11 @@ export function WorkflowBuilder() {
                       purpose="building workflows"
                     />
                     <ContextMenu turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} />
+                  </div>
+                  <div className="row attach-actions">
+                    <input ref={picker} type="file" multiple hidden accept={ACCEPT} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending || read.isPending || files.length >= MAX_FILES} title={`Attach up to ${MAX_FILES} files (text, CSV, JSON, YAML, SQL, code, PDF, DOCX, XLSX; 10 MB each)`} onClick={() => picker.current?.click()}><Icon name="plus" size={13} />Attach files</button>
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending} title="Tell the builder which tools, MCP servers, skills or datasets to use" onClick={() => setPicking(true)}><Icon name="tool" size={13} />Tools{pins.length ? ` (${pins.length})` : ''}</button>
                   </div>
                   <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
                 </div>

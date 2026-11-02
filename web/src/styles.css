@@ -717,7 +717,7 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .composer-box:focus-within { border-color: var(--accent); }
 .composer-box textarea { resize: none; min-height: 56px; max-height: 200px; border: 0; background: transparent; box-shadow: none; padding: 12px; outline: none; }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; }
-.composer-send { display: inline-flex; align-items: center; gap: 6px; }
+.composer-send { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .model-menu { position: relative; min-width: 0; }
 .model-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--idle-bg); color: var(--ink); font-weight: 500; font-size: calc(13px * var(--fs, 1)); cursor: pointer; }
 .model-pill:hover, .model-pill[aria-expanded="true"] { background: var(--panel); }
