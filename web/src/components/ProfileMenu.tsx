@@ -78,13 +78,13 @@ function Avatar({ id, size }: { id?: string; size: number }) {
  * is signed in, shortcuts to what needs them, the display preferences that used to sit loose in the bar,
  * and sign out. Escape or a click outside closes it, Tab out of it closes it, and focus returns to the button.
  */
-export function ProfileMenu({ me, approvals, alerts }: { me?: Me; approvals: number; alerts: number }) {
+export function ProfileMenu({ me, approvals }: { me?: Me; approvals: number }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const waiting = approvals + alerts;
+  const waiting = approvals;
 
   useEffect(() => {
     if (!open) return;
@@ -139,10 +139,6 @@ export function ProfileMenu({ me, approvals, alerts }: { me?: Me; approvals: num
           <Link to="/ui/approvals" className="profile-row" onClick={close}>
             <Icon name="approval" size={16} /><span className="profile-grow">Approvals</span>
             {approvals ? <span className="count">{approvals}</span> : null}
-          </Link>
-          <Link to="/ui/alerts" className="profile-row" onClick={close}>
-            <Icon name="alert" size={16} /><span className="profile-grow">Critical alerts</span>
-            {alerts ? <span className="count">{alerts}</span> : null}
           </Link>
           <div className="profile-sep" />
           <div className="profile-pref"><span className="muted small">Theme</span><ThemeSwitch /></div>

@@ -159,9 +159,8 @@ function Shell() {
             </nav>
           ) : <span className="topbar-title">{current?.label ?? 'Azhi Flow'}</span>}
           <span className="top-right">
-            {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
             <ApprovalsBell count={counts.approvals} />
-            <ProfileMenu me={me.data} approvals={counts.approvals} alerts={critical} />
+            <ProfileMenu me={me.data} approvals={counts.approvals} />
           </span>
         </header>
         <main className={`content${/^\/ui\/workflows\/(?!new$|upload$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
