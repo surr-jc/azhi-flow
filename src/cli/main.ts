@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -516,6 +517,68 @@ copilot
     }
   });
 
+const opencodeAuthFile = () => join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
+
+/** The github-copilot sign-ins in OpenCode's auth.json, as candidates for /v1/copilot/import. */
+function opencodeCandidates(file: string): Array<{ name: string; auth: string }> {
+  const candidates: Array<{ name: string; auth: string }> = [];
+  if (!existsSync(file)) {
+    console.error(dim(`no OpenCode sign-in file at ${file}`));
+    return candidates;
+  }
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
+      const e = j[k];
+      const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
+      candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
+      // Some OpenCode versions send the entry's `access` token rather than `refresh`.
+      if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
+    }
+  } catch {
+    console.error(dim(`${file} is not JSON; skipped`));
+  }
+  return candidates;
+}
+
+copilot
+  .command('sync')
+  .description('Keep the Copilot sign-in in step with OpenCode: re-imports from its auth.json whenever the sign-in there changes (once, or with --watch for as long as it runs)')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--watch', 'keep running and import again each time OpenCode signs in')
+  .option('--interval <seconds>', 'how often to look at the file with --watch', '5')
+  .action(async (opts: { file?: string; secret: string; watch?: boolean; interval: string }) => {
+    const file = opts.file ?? opencodeAuthFile();
+    // Only a fingerprint of the sign-in is kept in memory, to tell when OpenCode has written a new one.
+    let last = '';
+    const syncOnce = async (): Promise<boolean> => {
+      const candidates = opencodeCandidates(file);
+      if (!candidates.length) return false;
+      const fingerprint = createHash('sha256').update(candidates.map((c) => c.auth).join('\n')).digest('hex');
+      if (fingerprint === last) return true;
+      const r = await client().post<{ version?: number; from: string | null; tried: Array<{ name: string; ok: boolean; message: string }> }>('/v1/copilot/import', { secret: opts.secret, candidates });
+      if (!r.from) {
+        for (const t of r.tried) console.error(`  ${red('failed')} ${t.name}: ${t.message}`);
+        console.error(red('OpenCode\'s sign-in is not accepted by GitHub Copilot, so the saved one is unchanged. Sign in again with: opencode auth login'));
+        return false;
+      }
+      last = fingerprint;
+      console.log(`${green('synced')} ${r.from}; saved as secret ${opts.secret} (version ${r.version})`);
+      return true;
+    };
+    const ok = await syncOnce().catch((e) => (console.error(red((e as Error).message)), false));
+    if (!opts.watch) {
+      if (!ok) process.exitCode = 1;
+      return;
+    }
+    const every = Math.max(1, Number(opts.interval) || 5) * 1000;
+    console.log(dim(`watching ${file} every ${every / 1000}s; Ctrl+C to stop`));
+    // A failed round (server down, token rejected) is reported and tried again at the next change or tick.
+    setInterval(() => void syncOnce().catch((e) => console.error(red((e as Error).message))), every);
+    await new Promise(() => {});
+  });
+
 copilot
   .command('import')
   .description('Reuse a GitHub Copilot sign-in this machine already has (OpenCode\'s auth.json, GITHUB_TOKEN, the gh tool): tries each and keeps the one Copilot accepts; nothing is printed')
@@ -523,24 +586,8 @@ copilot
   .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
   .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
   .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
-    const candidates: Array<{ name: string; auth: string }> = [];
-    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
-    if (existsSync(file)) {
-      try {
-        const j = JSON.parse(readFileSync(file, 'utf8'));
-        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
-          const e = j[k];
-          const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
-          candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
-          // Some OpenCode versions send the entry's `access` token rather than `refresh`.
-          if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
-        }
-      } catch {
-        console.error(dim(`${file} is not JSON; skipped`));
-      }
-    } else {
-      console.error(dim(`no OpenCode sign-in file at ${file}`));
-    }
+    const file = opts.file ?? opencodeAuthFile();
+    const candidates = opencodeCandidates(file);
     for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
     try {
       const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();
