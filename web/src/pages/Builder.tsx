@@ -63,9 +63,12 @@ interface Proposal {
 }
 /** Tokens the provider reported; null when it did not say (never estimated). */
 interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal; proposals?: ToolProposal[] }; provider: string; model: string; usage: Usage }
-/** One answered turn: what it used and how long it took, kept by the index of its last message. */
-interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
+/** AI Credits at GitHub's published rates (Copilot only); null when the model has no known rate. */
+interface Cost { credits: number; usd: number }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal; proposals?: ToolProposal[] }; provider: string; model: string; usage: Usage; cost?: Cost | null; context_tokens?: number | null }
+/** One answered turn: what it used and how long it took, kept by the index of its last message. `context_tokens` is what its last model call sent. */
+interface TurnStat { usage: Usage; provider: string; model: string; ms: number; cost?: Cost | null; context_tokens?: number | null }
+interface CopilotQuotaInfo { ok: boolean; reset_date?: string; quotas: Array<{ name: string; entitlement: number | null; remaining: number | null; used: number | null; percent_remaining: number | null; unlimited: boolean }> }
 /** `registered`: the revision each confirmed tool proposal became, by its tool_use_id. */
 interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; registered?: Record<string, number>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
@@ -179,7 +182,7 @@ export function WorkflowBuilder() {
       setFiles([]);
       setPins([]);
       setState((s) => {
-        const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms } };
+        const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms, cost: r.cost ?? null, context_tokens: r.context_tokens ?? null } };
         const proposals = { ...s.proposals };
         const tools = { ...s.tools };
         const mcps = { ...s.mcps };
@@ -454,7 +457,8 @@ export function WorkflowBuilder() {
  * Session meter above the conversation: tokens the provider reported for every turn so far, the
  * last turn, and how close the conversation is to the size the server accepts. Input counts every
  * lookup round of a turn (each re-sends the context), so it grows faster than the text you see.
- * Cost is not shown: the builder has no price list, and an unknown value is never guessed.
+ * The window size comes from the provider's model list and the cost from GitHub's published Copilot
+ * rates; where either is unknown it says so and is never guessed.
  */
 function ContextMenu({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
   const [open, setOpen] = useState(false);
@@ -472,7 +476,18 @@ function ContextMenu({ turns, provider, model, messages, bytes, pending }: { tur
   const all = USAGE_FIELDS.map((f) => sum(f));
   const grand = all.every((n) => n === null) ? null : (sum('input_tokens') ?? 0) + (sum('output_tokens') ?? 0);
   const lastTokens = last ? (last.usage.input_tokens ?? 0) + (last.usage.output_tokens ?? 0) : null;
-  const fill = Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
+  // The model's real window (Copilot's own model list) against what the last call sent; the server's size limits are the fallback.
+  const lastModel = last?.model ?? model;
+  const catalog = useQuery({ queryKey: ['builder-models', provider], queryFn: () => api<{ models: Array<{ id: string; context_window?: number }> }>(`/v1/builder/models?provider=${encodeURIComponent(provider!)}`), enabled: open && Boolean(provider), staleTime: 600_000, retry: false });
+  const windowSize = catalog.data?.models.find((m) => m.id === lastModel)?.context_window ?? null;
+  const used = last?.context_tokens ?? null;
+  const quota = useQuery({ queryKey: ['copilot-quota'], queryFn: () => api<CopilotQuotaInfo>('/v1/copilot/quota'), enabled: open && provider === 'opencode', staleTime: 60_000, retry: false });
+  const credits = quota.data?.ok ? quota.data.quotas.find((q) => !q.unlimited && q.entitlement !== null) : undefined;
+  const costs = turns.map((t) => t.cost);
+  const known = costs.filter((c): c is Cost => Boolean(c));
+  const spent = known.length ? { credits: known.reduce((a, c) => a + c.credits, 0), usd: known.reduce((a, c) => a + c.usd, 0), partial: known.length < costs.length } : null;
+  const tokenFill = windowSize && used !== null ? used / windowSize : null;
+  const fill = tokenFill ?? Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
   const full = fill >= 0.8;
   const pct = messages ? Math.max(1, Math.round(fill * 100)) : 0;
   const turnsLabel = turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet';
@@ -496,6 +511,7 @@ function ContextMenu({ turns, provider, model, messages, bytes, pending }: { tur
             <span className={full ? 'warn-text' : 'muted'}>{messages ? `${pct}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
           </div>
           <div className="ctx-meter" aria-hidden="true"><span style={{ width: `${Math.min(100, pct)}%` }} /></div>
+          {tokenFill !== null ? <div className="muted small" title={`${exact(used)} of ${exact(windowSize)} tokens; the model's window as ${provider === 'opencode' ? 'Copilot' : 'the provider'} lists it`}>{compact(used)} of {compact(windowSize)} tokens · {compact(Math.max(0, windowSize! - used!))} left</div> : null}
           <div className="muted small">{messages} of {MAX_MESSAGES} messages · {(bytes / 1000).toFixed(0)} of {(MAX_BYTES / 1000).toFixed(0)} KB</div>
           <div className="usage-main">
             <div className="usage-total">
@@ -510,11 +526,16 @@ function ContextMenu({ turns, provider, model, messages, bytes, pending }: { tur
                   <dd>{compact(c.value)}</dd>
                 </div>
               ))}
-              <div title="Cost is not estimated: the builder has no price list for this model">
+              <div title={spent ? `${spent.credits.toFixed(2)} AI Credits at GitHub's published rates for each model${spent.partial ? '; turns on a model without a known rate are not counted' : ''}` : 'No price is known for this provider or model, so none is guessed'}>
                 <dt>Cost</dt>
-                <dd className="muted">unavailable</dd>
+                <dd className={spent ? undefined : 'muted'}>{spent ? `${spent.partial ? '≥ ' : ''}$${spent.usd < 0.01 ? spent.usd.toFixed(4) : spent.usd.toFixed(2)}` : 'unavailable'}</dd>
               </div>
             </dl>
+            {credits ? (
+              <div className="muted small" title={`Your Copilot allowance from GitHub${quota.data?.reset_date ? `; resets ${String(quota.data.reset_date).slice(0, 10)}` : ''}`}>
+                Copilot {credits.name.replace(/_/g, ' ')}: {credits.remaining !== null ? `${compact(credits.remaining)} left of ${compact(credits.entitlement)}` : `${compact(credits.used)} of ${compact(credits.entitlement)} used`}{quota.data?.reset_date ? ` · resets ${String(quota.data.reset_date).slice(0, 10)}` : ''}
+              </div>
+            ) : null}
           </div>
           <div className="usage-foot muted small">
             <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>

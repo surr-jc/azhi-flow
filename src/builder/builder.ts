@@ -721,7 +721,7 @@ export async function builderTurn(
   ctx: AppContext,
   workspaceId: string,
   o: { messages: Message[]; text: string; attachments?: AttachmentInput[]; pinned?: string[]; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
-): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
+): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage; context_tokens: number | null }> {
   const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
   // A workflow read in an earlier turn may have a newer version by now (a saved draft, an edit in the
@@ -736,12 +736,16 @@ export async function builderTurn(
   else messages.push({ role: 'user', content: [{ type: 'text', text }] });
 
   let usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
+  // What the latest call sent: the conversation's size now, unlike `usage`, which sums every round's re-sent context.
+  let context_tokens: number | null = null;
+  const sent = (u: Usage) => (u.input_tokens === null ? null : u.input_tokens + (u.cache_read_tokens ?? 0) + (u.cache_write_tokens ?? 0));
   for (let call = 0; call < MAX_CALLS; call++) {
     const res = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
     usage = addUsage(usage, res.usage);
+    context_tokens = sent(res.usage);
     messages.push({ role: 'assistant', content: res.content.length ? res.content : [{ type: 'text', text: '(no reply)' }] });
     const uses = res.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
+    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage, context_tokens };
 
     const results: Block[] = [];
     let event: BuilderEvent | undefined;
@@ -815,15 +819,16 @@ export async function builderTurn(
     }
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
-    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
+    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal' || event?.kind === 'mcp_connection_proposal') {
       const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
+      context_tokens = sent(res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');
       if (text.length) messages.push({ role: 'assistant', content: text });
-      return { messages, event, provider: info.id, model: info.model, usage };
+      return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     }
   }
   messages.push({ role: 'assistant', content: [{ type: 'text', text: 'I stopped after many steps without a draft. Tell me what to focus on, or say "draft it" and I will propose one with my assumptions.' }] });
-  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
+  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage, context_tokens };
 }
