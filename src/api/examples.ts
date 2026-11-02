@@ -28,7 +28,7 @@ export const examplesDir = () => process.env.AZHI_EXAMPLES_DIR ?? fileURLToPath(
 const ID = /^[a-z0-9][a-z0-9-]*$/;
 const REPO = /^[\w.-]+\/[\w.-]+$/;
 
-interface Example {
+export interface Example {
   id: string;
   name: string;
   description: string;
@@ -45,7 +45,7 @@ function user(req: FastifyRequest) {
   return req.principal;
 }
 
-function loadExample(id: string): Example | undefined {
+export function loadExample(id: string): Example | undefined {
   if (!ID.test(id)) return undefined;
   const dir = join(examplesDir(), id);
   if (!existsSync(join(dir, 'workflow.yaml'))) return undefined;
@@ -59,7 +59,7 @@ function loadExample(id: string): Example | undefined {
 const needsRepos = (t: ToolSpec) => Array.isArray((t.transport as { config?: { repos?: unknown } }).config?.repos);
 
 /** Secrets the example names: its config's list, the tools' credentials, and model keys in profiles. */
-function secretsOf(e: Example): string[] {
+export function secretsOf(e: Example): string[] {
   const names = new Set<string>(e.config.secrets ?? []);
   for (const t of e.config.tools ?? []) if (t.credential) names.add(t.credential);
   return [...names].sort();

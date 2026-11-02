@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApi } from '../src/api/app.js';
 import { bootstrapLocal } from '../src/api/auth.js';
-import { searchDocs } from '../src/assistant/tools.js';
+import { searchDocs, TOOLS } from '../src/assistant/tools.js';
 import { migrate } from '../src/db/migrate.js';
 import { newId } from '../src/lib/ids.js';
 import { newApiToken } from '../src/security/tokens.js';
@@ -157,6 +157,15 @@ describe('assistant', () => {
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]).toMatchObject({ doc: expect.stringMatching(/\.md$/), section: expect.any(String), text: expect.any(String) });
     expect(searchDocs('')).toEqual([]);
+  });
+
+  it('describes the examples with their tools, skills and harness', async () => {
+    const run = (name: string, args: Record<string, unknown>) => TOOLS.find((t) => t.name === name)!.run({ ctx, interpreterBuild: 'x' } as any, { kind: 'user', workspaceId: ws, userId: 'u', role: 'viewer' } as any, args) as Promise<any>;
+    const [pr] = await run('list_examples', { id: 'pr-review' });
+    expect(pr).toMatchObject({ id: 'pr-review', tools: expect.arrayContaining([expect.objectContaining({ ref: expect.stringMatching(/^github\.get-pull-request@/) })]) });
+    expect(Array.isArray(pr.agents) && Array.isArray(pr.skills) && Array.isArray(pr.harness_tools)).toBe(true);
+    await expect(run('list_examples', { id: 'nope' })).rejects.toThrow(/no example/);
+    expect(Array.isArray(await run('list_assets', {}))).toBe(true);
   });
 
   it('serves the same tools over MCP, as the token holder, without approvals', async () => {

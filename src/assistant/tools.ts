@@ -1,8 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Client } from '@temporalio/client';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
 import { readTranscript } from '../agents/transcript.js';
 import { requireRole, type Principal } from '../api/auth.js';
+import { bundleInventory } from '../api/bundle-inventory.js';
+import { examplesDir, loadExample, secretsOf } from '../api/examples.js';
 import { readWorkflow } from '../builder/builder.js';
 import type { Role } from '../db/schema.js';
 import { toolRef } from '../gateway/types.js';
@@ -12,6 +15,7 @@ import { TERMINAL_STATES } from '../runtime/types.js';
 import { computeAlerts, pendingApprovals } from '../server/alerts.js';
 import { decideApproval } from '../server/approvals.js';
 import { budgetStatus } from '../server/budgets.js';
+import { listAssets } from '../server/assets.js';
 import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { listMcpConnections } from '../server/mcp.js';
@@ -298,12 +302,61 @@ export const TOOLS: AssistantTool[] = [
   },
   {
     name: 'list_tools',
-    description: 'Tools registered with the gateway: ref (id@version), description, effect (read or a kind of write), credential secret name (never its value), trust marks.',
-    input_schema: obj({}),
+    description: 'Tools registered with the gateway: ref (id@version), description, effect (read or a kind of write), transport, credential secret name (never its value), allowed repositories and trust marks. Pass `ref` for one tool in full, with its input and output schemas, timeout, rate limit and role access.',
+    input_schema: obj({ ref: { type: 'string', pattern: '^[A-Za-z0-9_.-]+(@[0-9]+)?$', description: 'A tool id, or id@version.' } }),
     role: 'viewer',
     effect: 'read',
-    async run(d, p) {
-      return (await loadCatalog(d.ctx, p.workspaceId)).list().map((t) => ({ ref: toolRef(t), description: t.description, effect: t.effect, transport: t.transport.kind, credential: t.credential ?? null, output_trusted: t.output_trusted === true, safe_for_tainted: t.safe_for_tainted === true }));
+    async run(d, p, a) {
+      const all = (await loadCatalog(d.ctx, p.workspaceId)).list();
+      const repos = (t: (typeof all)[number]) => ((t.transport as { config?: { repos?: unknown } }).config?.repos as string[] | undefined) ?? null;
+      const brief = (t: (typeof all)[number]) => ({ ref: toolRef(t), description: t.description, effect: t.effect, transport: t.transport.kind, builtin: t.transport.kind === 'builtin' ? t.transport.name : null, source: t.source ?? null, credential: t.credential ?? null, repos: repos(t), output_trusted: t.output_trusted === true, safe_for_tainted: t.safe_for_tainted === true });
+      if (!a.ref) return all.map(brief);
+      const t = all.find((x) => toolRef(x) === a.ref || x.id === a.ref);
+      if (!t) throw new AzhiError(ErrorClass.invalidInput, `no tool '${a.ref}'; list_tools shows what is registered`);
+      return { ...brief(t), revision: t.revision ?? null, input_schema: t.input_schema, output_schema: t.output_schema, timeout: t.timeout ?? null, rate_limit: t.rate_limit ?? null, access_roles: t.access?.roles ?? null, credential_optional: t.credential_optional === true };
+    },
+  },
+  {
+    name: 'list_assets',
+    description: "The workspace's portable harness assets: skills, agents, commands and MCP servers, with kind, slug, name, description and publish state. Definitions are not returned, since they can reference secrets by name.",
+    input_schema: obj({ kind: { enum: ['mcp', 'agent', 'skill', 'command'] } }),
+    role: 'viewer',
+    effect: 'read',
+    async run(d, p, a) {
+      return (await listAssets(d.ctx, p.workspaceId, a.kind)).map((x: any) => ({ id: x.id, kind: x.kind, slug: x.slug, name: x.name, description: x.description ?? null, state: x.status ?? null }));
+    },
+  },
+  {
+    name: 'list_examples',
+    description: 'Installable example workflows shipped with the server: name, description, the gateway tools and secrets each needs, and what its harness brings (agents, skills, commands, MCP servers, built-in tools and which steps use them). Pass `id` for one example.',
+    input_schema: obj({ id: SLUG }),
+    role: 'viewer',
+    effect: 'read',
+    async run(_d, _p, a) {
+      const dir = examplesDir();
+      const ids: string[] = a.id ? [a.id] : existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort() : [];
+      const out = [];
+      for (const id of ids) {
+        const e = loadExample(id);
+        if (!e) {
+          if (a.id) throw new AzhiError(ErrorClass.invalidInput, `no example '${a.id}'; list_examples shows what exists`);
+          continue;
+        }
+        const inv = bundleInventory(join(dir, id), e.nodes);
+        out.push({
+          id,
+          name: e.name,
+          description: e.description,
+          tools: (e.config.tools ?? []).map((t) => ({ ref: `${t.id}@${t.version}`, effect: t.effect })),
+          secrets: secretsOf(e),
+          agents: inv.agents.map((x) => ({ id: x.id, description: x.description, model: x.model, skills: x.skills, tools: x.tools, mcp: x.mcp, steps: x.steps })),
+          skills: inv.skills,
+          commands: inv.commands,
+          mcp: inv.mcp.map(({ name, env_names, agents }) => ({ name, env_names, agents })),
+          harness_tools: inv.harness_tools,
+        });
+      }
+      return out;
     },
   },
   {

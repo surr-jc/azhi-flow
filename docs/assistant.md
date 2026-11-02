@@ -13,6 +13,8 @@ Mac). Ask about this workspace:
 - **Workflows:** "what does this workflow do?", "can I run it right now?" (the run plan's blockers)
 - **Governance:** pending approvals, open alerts, spend and tokens per workflow, schedules,
   budgets, concurrency and harness settings, and the audit log (admins only)
+- **Tools and harness:** registered gateway tools with their schemas and allowed repositories, the
+  workspace's skills, agents, commands and MCP servers, and what each example workflow brings
 - **How-to:** answers drawn from these docs, naming the doc it used
 
 On a run or workflow page the assistant knows which one you are looking at. A chip above the message
