@@ -370,7 +370,9 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   `azhi copilot sync --watch` to import again each time OpenCode signs in; a sign-in Copilot refuses
   leaves the saved one unchanged. The web UI has the same as the **Sync with OpenCode** button next to
   Check sign-in: the server reads `auth.json` on its own machine (so it suits a server running where you
-  use OpenCode). A GitHub CLI sign-in (`gh auth token`) works with Copilot
+  use OpenCode). This also runs by default: the server checks `auth.json` every 30 seconds and, when the
+  sign-in there differs from the saved one and Copilot accepts it, saves it to the local workspace
+  (`ws_default`) only; set `AZHI_COPILOT_SYNC_OPENCODE=0` to turn it off. A GitHub CLI sign-in (`gh auth token`) works with Copilot
   where a token from the OpenCode device flow may be refused; import picks it up (re-import after `gh auth login`). The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
   `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
   whenever your OpenCode signs in again.

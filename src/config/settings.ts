@@ -36,6 +36,8 @@ export function settings() {
     builderModel: process.env.AZHI_BUILDER_MODEL || undefined,
     /** GitHub Copilot model (through OpenCode) for profiles that say `name: default`. */
     copilotModel: process.env.AZHI_COPILOT_MODEL || 'claude-sonnet-5',
+    /** On by default: the local workspace's Copilot sign-in follows OpenCode's auth.json (AZHI_COPILOT_SYNC_OPENCODE=0 turns it off; test runs never read the real file). */
+    copilotSyncOpencode: process.env.AZHI_COPILOT_SYNC_OPENCODE !== '0' && !process.env.VITEST,
     /** Copilot's API is OpenCode's default; set only to point at a stand-in (tests) or a proxy. */
     copilotApiUrl: process.env.AZHI_COPILOT_API_URL || undefined,
     /** With a stand-in Copilot endpoint (tests), the models besides the default it serves; any other model is refused at start. */
