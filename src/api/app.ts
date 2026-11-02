@@ -41,6 +41,7 @@ import { registerExampleRoutes } from './examples.js';
 import { freshChatgptAuth, keepRenewedChatgptAuth, registerChatgptRoutes } from './chatgpt.js';
 import { registerCopilotRoutes } from './copilot.js';
 import { registerSigninRoutes } from './signins.js';
+import { registerQuotaRoutes } from './quota.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
@@ -105,6 +106,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerCopilotRoutes(app, ctx);
   registerChatgptRoutes(app, ctx);
   registerSigninRoutes(app, ctx);
+  registerQuotaRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
   registerMcpRoutes(app, ctx);

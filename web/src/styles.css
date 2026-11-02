@@ -108,6 +108,12 @@ code, .mono { font-family: var(--f-mono); font-size: calc(13px * var(--fs, 1)); 
 .profile-grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .profile-ws { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-sep { height: 1px; margin: 6px 0; background: var(--line); }
+.profile-quota { display: grid; gap: 10px; padding: 4px 8px; }
+.quota-prov { display: grid; gap: 4px; }
+.quota-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.quota-meter { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; align-items: center; }
+.quota-meter > :last-child { grid-column: 1 / -1; }
+.quota-label { font-size: 0.85em; text-transform: capitalize; }
 .profile-pref { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 8px; min-height: 44px; }
 @media (prefers-reduced-motion: no-preference) { .profile-panel { animation: si-in var(--dur-150) var(--ease-out); } }
 .subnav { display: flex; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; overflow-x: auto; scrollbar-width: none; max-width: 100%; }

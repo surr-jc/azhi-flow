@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { applyTheme, getTheme, setToken, type Me, type Theme } from '../api';
+import { useQuery } from '@tanstack/react-query';
+import { api, applyTheme, getTheme, setToken, type Me, type Theme } from '../api';
 import { Icon } from '../icons';
 import { Link } from '../router';
 
@@ -73,6 +74,34 @@ function Avatar({ id, size }: { id?: string; size: number }) {
   );
 }
 
+interface QuotaMeter { label: string; used_percent: number | null; detail: string | null; resets_at: string | null }
+interface ProviderQuota { id: string; title: string; status: 'ok' | 'not_signed_in' | 'unavailable'; plan: string | null; message: string | null; meters: QuotaMeter[] }
+
+/** What is left of each provider's allowance (Copilot, ChatGPT plan, Anthropic), asked only while the panel is open. */
+function QuotaUsage() {
+  const q = useQuery({ queryKey: ['quota'], queryFn: () => api<{ providers: ProviderQuota[] }>('/v1/quota'), retry: false, staleTime: 60_000 });
+  // A viewer cannot read quotas: show nothing rather than an error in the account panel.
+  if (q.isError) return null;
+  return (
+    <div className="profile-quota">
+      <span className="muted small">Quota usage</span>
+      {!q.data ? <span className="muted small">Loading…</span> : q.data.providers.map((p) => (
+        <div key={p.id} className="quota-prov">
+          <div className="quota-head"><strong>{p.title}</strong>{p.plan ? <span className="badge">{p.plan}</span> : null}</div>
+          {p.meters.map((m) => (
+            <div key={m.label} className="quota-meter">
+              <span className="quota-label">{m.label}</span>
+              <span className="us-track" role="img" aria-label={m.used_percent === null ? 'usage unknown' : `${m.used_percent}% used`}><i style={{ width: `${m.used_percent ?? 0}%` }} /></span>
+              <span className="muted small">{m.used_percent === null ? '—' : `${m.used_percent}%`}{m.detail ? ` · ${m.detail}` : ''}{m.resets_at ? ` · resets ${new Date(m.resets_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}</span>
+            </div>
+          ))}
+          {p.message ? <span className="muted small">{p.message}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * The account control at the end of the top bar. A button opens a small panel (not a modal) with who
  * is signed in, shortcuts to what needs them, the display preferences that used to sit loose in the bar,
@@ -140,6 +169,8 @@ export function ProfileMenu({ me, approvals }: { me?: Me; approvals: number }) {
             <Icon name="approval" size={16} /><span className="profile-grow">Approvals</span>
             {approvals ? <span className="count">{approvals}</span> : null}
           </Link>
+          <div className="profile-sep" />
+          <QuotaUsage />
           <div className="profile-sep" />
           <div className="profile-pref"><span className="muted small">Theme</span><ThemeSwitch /></div>
           <div className="profile-pref"><span className="muted small">Text size</span><TextSizeSwitch /></div>
