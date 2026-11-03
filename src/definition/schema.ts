@@ -169,6 +169,7 @@ export const workflowSchema = {
             repo: { $ref: '#/$defs/value' },
             ref: { $ref: '#/$defs/value' },
             base_ref: { $ref: '#/$defs/value' },
+            merge_ref: { $ref: '#/$defs/value' },
             from: { $ref: '#/$defs/value' },
             host: { type: 'string', pattern: '^https?://' },
             credential: { type: 'string' },

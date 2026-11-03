@@ -171,6 +171,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             repo: String(resolveValue(ws.repo, s) ?? ''),
             ref: String(resolveValue(ws.ref, s) ?? ''),
             ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
+            ...(ws.merge_ref !== undefined ? { mergeRef: String(resolveValue(ws.merge_ref, s) ?? '') } : {}),
             ...(ws.credential ? { credential: ws.credential } : {}),
             ...(ws.depth ? { depth: ws.depth } : {}),
             ...(ws.mode === 'write' ? { mode: 'write' as const } : {}),
@@ -202,7 +203,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       });
       await noteWithheld(node.id, prep.withheld);
       // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
-      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
+      // A worker without merge support would ignore merge_ref and hand on the bare head with no conflicts in it.
+      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(workspace?.mergeRef ? ['workspace_merge'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
       const queue = await selectWorker(node.id, executor, 1, needs.length ? needs : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({

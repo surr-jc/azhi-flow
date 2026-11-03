@@ -16,9 +16,12 @@ export interface WorkerCapabilities {
   features?: WorkerFeature[];
 }
 
-/** `workspace_continuation`: a workspace can start from an earlier step's change (`workspace.from`). */
-export type WorkerFeature = 'workspace_continuation' | 'opencode_1' | 'opencode_2';
-export const WORKER_FEATURES: WorkerFeature[] = ['workspace_continuation'];
+/**
+ * `workspace_continuation`: a workspace can start from an earlier step's change (`workspace.from`).
+ * `workspace_merge`: a workspace can merge a second ref into the checked-out one (`workspace.merge_ref`).
+ */
+export type WorkerFeature = 'workspace_continuation' | 'workspace_merge' | 'opencode_1' | 'opencode_2';
+export const WORKER_FEATURES: WorkerFeature[] = ['workspace_continuation', 'workspace_merge'];
 
 function tryRun(cmd: string, args: string[]): string | undefined {
   try {

@@ -300,6 +300,10 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
     base_sha: String(pr.base?.sha ?? ''),
     head_ref: String(pr.head?.ref ?? ''),
     head_sha: String(pr.head?.sha ?? ''),
+    // A deleted fork has no head repo: it counts as a fork, so nothing is ever pushed on its behalf.
+    head_repo: String(pr.head?.repo?.full_name ?? ''),
+    head_is_fork: !pr.head?.repo || String(pr.head.repo.full_name ?? '').toLowerCase() !== String(pr.base?.repo?.full_name ?? '').toLowerCase(),
+    maintainer_can_modify: Boolean(pr.maintainer_can_modify),
     additions: Number(pr.additions ?? 0),
     deletions: Number(pr.deletions ?? 0),
     changed_files: files.map((f: any) => ({ path: String(f.filename), status: String(f.status), additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0) })),
