@@ -1,0 +1,308 @@
+# Resolve the merge conflicts of a pull request, with checks before anything is pushed.
+# The base branch is merged into a checkout of the pull request on a worker. Plain rules settle the easy hunks
+# (identical edits, one-sided edits, whitespace, import and changelog additions); an agent resolves the rest; the
+# project's tests run on the base, on the pull request and on the result, and a script compares them; an
+# independent reviewer and a refuter on another model challenge the result; one stronger second attempt follows
+# if it is rejected. After a person approves, the result goes to a new azhi/ branch and a pull request into the
+# pull request's own branch. Nothing is pushed to the contributor's branch, merged, or force-pushed.
+# The test command is in `test:` of the base_run step (repeated by reference): change it there.
+schema_version: "2.0"
+id: pr-conflict-resolver
+name: Pull request conflict resolver
+description: Merges the base branch into a pull request, resolves the conflicts with rules and an agent, checks the result with tests and an independent review, and after approval opens a pull request with the resolution.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, for example acme/payments"}
+    pr: {type: integer, title: Pull request number}
+    resolve_draft: {type: boolean, default: false, title: Resolve a draft pull request too (off by default)}
+  required: [repo, pr]
+config:
+  # A verified finding of critical or major severity blocks the resolution only when the refuter confirmed it with
+  # at least this confidence (0 to 100).
+  min_confidence: 80
+nodes:
+  - id: pr
+    type: tool
+    description: Read the pull request, its refs and whether GitHub sees conflicts.
+    tool: github.get-pull-request@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
+  - id: eligible
+    type: condition
+    description: Resolve only an open pull request from this repository that GitHub reports as conflicting (mergeable_state dirty). A fork, a draft (unless resolve_draft), a clean or an unknown one is skipped, and nothing is spent.
+    expression: "nodes.pr.output.state == 'open' && nodes.pr.output.mergeable_state == 'dirty' && !nodes.pr.output.head_is_fork && (!nodes.pr.output.draft || (has(inputs.resolve_draft) && inputs.resolve_draft)) ? 'ok' : 'skip'"
+    routes: {ok: [merge_attempt, base_run, head_run], skip: [skip_report]}
+    default: skip
+  - id: skip_report
+    type: report
+    description: Say why the pull request was skipped.
+    template: templates/skip.md
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr}, 'reason': nodes.pr.output.state != 'open' ? 'the pull request is not open' : (nodes.pr.output.head_is_fork ? 'it comes from a fork, which this workflow does not resolve' : (nodes.pr.output.mergeable_state != 'dirty' ? 'GitHub does not report merge conflicts (mergeable_state is ' + nodes.pr.output.mergeable_state + '; unknown means GitHub had not computed it yet, try again)' : 'it is a draft (set resolve_draft to include drafts)'))}"
+
+  - id: merge_attempt
+    type: agent
+    description: Merge the base branch into the pull request's head on the worker (nothing is committed). Conflicts stay in the files as markers and the step reports which paths conflict. A do-nothing agent; the worker does the work.
+    executor: opencode
+    profile: noop@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      merge_ref: {cel: "'refs/heads/' + nodes.pr.output.base_ref"}
+      credential: github-read-token
+      mode: write
+    input: {map: "{'repository': inputs.repo}"}
+    output_schema: schemas/note.json
+    timeout: 20m
+    budget: {max_tool_calls: 0}
+  - id: base_run
+    type: agent
+    description: Run the test command on the untouched base branch (the first of three snapshots). A do-nothing agent.
+    executor: opencode
+    profile: noop@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/heads/' + nodes.pr.output.base_ref"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test: &test
+        command: npm ci && npm test
+        timeout: 20m
+        attempts: 1
+    input: {map: "{'repository': inputs.repo}"}
+    output_schema: schemas/note.json
+    timeout: 30m
+    budget: {max_tool_calls: 0}
+  - id: head_run
+    type: agent
+    description: Run the same test command on the pull request alone, before the merge (the second snapshot). A do-nothing agent.
+    executor: opencode
+    profile: noop@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      mode: write
+      test: *test
+    input: {map: "{'repository': inputs.repo}"}
+    output_schema: schemas/note.json
+    timeout: 30m
+    budget: {max_tool_calls: 0}
+
+  - id: triage
+    type: script
+    description: Settle the easy hunks by rule (no model) and say what is left. A delete-against-edit conflict, a binary file or a lock file is set aside for a person.
+    runtime: python
+    entrypoint: scripts/triage.py
+    input:
+      map: "{'change': nodes.merge_attempt.output.workspace, 'pr': {'repo': inputs.repo, 'number': inputs.pr, 'url': nodes.pr.output.url, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref, 'head_sha': nodes.pr.output.head_sha}}"
+    output_schema: schemas/triage.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: triage_gate
+    type: condition
+    description: Go on only when no conflict is set aside for a person.
+    expression: "size(nodes.triage.output.blocked) > 0 ? 'blocked' : 'go'"
+    routes: {go: [resolve_1], blocked: []}
+    default: blocked
+
+  - id: resolve_1
+    type: agent
+    description: Resolve the hunks the rules left, in a checkout that already has the rules' work (first attempt). The worker then runs the tests on the result.
+    executor: opencode
+    profile: conflict-resolver@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.triage.output.change}
+      mode: write
+      test: *test
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved}"
+    output_schema: schemas/resolution.json
+    timeout: 45m
+    budget: {max_tool_calls: 40}
+  - id: compare_1
+    type: script
+    description: Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.
+    runtime: python
+    entrypoint: scripts/compare.py
+    input:
+      map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_1.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_1.output.workspace.files}"
+    output_schema: schemas/compare.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: review_1
+    type: agent
+    description: An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).
+    executor: opencode
+    profile: conflict-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.resolve_1.output.workspace}
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_1.output.summary, 'resolutions': nodes.resolve_1.output.resolutions, 'unresolved': nodes.resolve_1.output.unresolved}, 'check': nodes.compare_1.output, 'diff': nodes.resolve_1.output.workspace.diff, 'diff_truncated': nodes.resolve_1.output.workspace.diff_truncated}"
+    output_schema: schemas/review.json
+    timeout: 20m
+    budget: {max_tool_calls: 15}
+  - id: refute_1
+    type: agent
+    description: Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).
+    executor: opencode
+    profile: conflict-refuter@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.resolve_1.output.workspace}
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_1.output.workspace.diff, 'findings': nodes.review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+    output_schema: schemas/verification.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+  - id: gate_1
+    type: condition
+    description: Accept the first attempt when the check passed or is inconclusive, nobody was told to do something else by the text it read, nothing is left unresolved and no critical or major finding was confirmed. Otherwise one stronger second attempt, unless an agent reported an injection (then it stops here).
+    expression: "nodes.compare_1.output.ok && !nodes.review_1.output.prompt_injection_detected && !nodes.resolve_1.output.prompt_injection_detected && size(nodes.resolve_1.output.unresolved) == 0 && !nodes.review_1.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.refute_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence)) ? 'ok' : (nodes.review_1.output.prompt_injection_detected || nodes.resolve_1.output.prompt_injection_detected ? 'stop' : 'retry')"
+    routes: {ok: [], stop: [], retry: [resolve_2]}
+    default: retry
+
+  - id: resolve_2
+    type: agent
+    description: The second and last attempt, on a stronger model, starting from the first attempt's result and told why it was rejected.
+    executor: opencode
+    profile: conflict-resolver@2
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.resolve_1.output.workspace}
+      mode: write
+      test: *test
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': {'summary': nodes.resolve_1.output.summary, 'unresolved': nodes.resolve_1.output.unresolved, 'check': nodes.compare_1.output, 'findings': nodes.review_1.output.findings, 'verification': nodes.refute_1.output.checks}}"
+    output_schema: schemas/resolution.json
+    timeout: 45m
+    budget: {max_tool_calls: 40}
+  - id: compare_2
+    type: script
+    description: The same comparison for the second attempt.
+    runtime: python
+    entrypoint: scripts/compare.py
+    input:
+      map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_2.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_2.output.workspace.files}"
+    output_schema: schemas/compare.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: review_2
+    type: agent
+    description: The independent review of the second attempt.
+    executor: opencode
+    profile: conflict-reviewer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.resolve_2.output.workspace}
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_2.output.summary, 'resolutions': nodes.resolve_2.output.resolutions, 'unresolved': nodes.resolve_2.output.unresolved}, 'check': nodes.compare_2.output, 'diff': nodes.resolve_2.output.workspace.diff, 'diff_truncated': nodes.resolve_2.output.workspace.diff_truncated}"
+    output_schema: schemas/review.json
+    timeout: 20m
+    budget: {max_tool_calls: 15}
+  - id: refute_2
+    type: agent
+    description: Try to refute the second review's critical and major findings.
+    executor: opencode
+    profile: conflict-refuter@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      credential: github-read-token
+      depth: 1
+      from: {ref: nodes.resolve_2.output.workspace}
+    input:
+      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_2.output.workspace.diff, 'findings': nodes.review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+    output_schema: schemas/verification.json
+    timeout: 25m
+    budget: {max_tool_calls: 10}
+
+  - id: finalize
+    type: script
+    description: Take the last attempt that ran, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.
+    runtime: python
+    entrypoint: scripts/finalize.py
+    merge: any
+    input:
+      map: "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': [{'resolution': has(nodes.resolve_1) ? nodes.resolve_1.output : null, 'compare': has(nodes.compare_1) ? nodes.compare_1.output : null, 'review': has(nodes.review_1) ? nodes.review_1.output : null, 'checks': has(nodes.refute_1) ? nodes.refute_1.output.checks : []}, {'resolution': has(nodes.resolve_2) ? nodes.resolve_2.output : null, 'compare': has(nodes.compare_2) ? nodes.compare_2.output : null, 'review': has(nodes.review_2) ? nodes.review_2.output : null, 'checks': has(nodes.refute_2) ? nodes.refute_2.output.checks : []}]}"
+    output_schema: schemas/finalize.json
+    limits: {time: 2m, memory_mb: 512}
+  - id: ship_gate
+    type: condition
+    description: Ask for approval only when no blocker stands; otherwise tell the pull request's author why it was not resolved.
+    expression: "nodes.finalize.output.ship ? 'ship' : 'stop'"
+    routes: {ship: [release_approval], stop: [give_up]}
+    default: stop
+
+  - id: release_approval
+    type: approval
+    description: The release owner approves the exact resolution, its checks and its reviews before a branch is pushed.
+    role: admin
+    message:
+      cel: "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '')"
+    payload:
+      map: "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.resolve_1.output.workspace.diff}"
+    expires_in: 24h
+    on_expiry: reject
+  - id: push_branch
+    type: tool
+    description: Commit the resolution onto the base branch's tip as an azhi/ branch (Git Data API). The branch is the base plus the pull request's changes, resolved; nothing the contributor owns is touched.
+    tool: github.push-branch@1
+    depends_on: [release_approval]
+    arguments:
+      repo: {ref: inputs.repo}
+      branch: {ref: nodes.finalize.output.branch}
+      base_sha: {ref: nodes.finalize.output.base_sha}
+      message: {ref: nodes.finalize.output.commit_message}
+      files: {ref: nodes.finalize.output.files}
+    guard: "args.repo == inputs.repo && args.branch == nodes.finalize.output.branch && args.base_sha == nodes.triage.output.pr.base_tip"
+  - id: open_pr
+    type: tool
+    description: Open a pull request from that branch into the contributor's own branch (a draft when anything is in doubt), or return the one already open.
+    tool: github.create-pull-request@1
+    arguments:
+      repo: {ref: inputs.repo}
+      head: {ref: nodes.push_branch.output.branch}
+      base: {ref: nodes.pr.output.head_ref}
+      title: {ref: nodes.finalize.output.pr_title}
+      body: {cel: "nodes.finalize.output.pr_body + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '.\\n\\n_Opened by Azhi Flow (pr-conflict-resolver) after a person approved this resolution._'"}
+      draft: {ref: nodes.finalize.output.draft}
+    guard: "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch && args.base == nodes.pr.output.head_ref"
+  - id: announce
+    type: tool
+    description: Tell the original pull request where the resolution is.
+    tool: github.comment-on-pr@1
+    arguments:
+      repo: {ref: inputs.repo}
+      number: {ref: inputs.pr}
+      body: {cel: "nodes.finalize.output.comment + '\\n\\nResolution pull request: ' + nodes.open_pr.output.url"}
+    guard: "args.repo == inputs.repo && args.number == inputs.pr"
+
+  - id: give_up
+    type: tool
+    description: Post why the conflicts were not resolved automatically on the pull request, so a person can take over. Nothing is pushed.
+    tool: github.comment-on-pr@1
+    arguments:
+      repo: {ref: inputs.repo}
+      number: {ref: inputs.pr}
+      body: {ref: nodes.finalize.output.comment}
+    guard: "args.repo == inputs.repo && args.number == inputs.pr"

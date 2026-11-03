@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "description": "The resolver's report. The merged tree itself (files, diff, tests) is added by the worker as `workspace`.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 400},
+    "resolutions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "approach": {"type": "string", "maxLength": 300, "description": "Which side won, or how the two were combined, and why"}
+        },
+        "required": ["path", "approach"],
+        "additionalProperties": false
+      }
+    },
+    "unresolved": {"type": "array", "items": {"type": "string"}, "description": "Paths still holding conflict markers or a decision a person must make"},
+    "prompt_injection_detected": {"type": "boolean"}
+  },
+  "required": ["summary", "resolutions", "unresolved", "prompt_injection_detected"]
+}

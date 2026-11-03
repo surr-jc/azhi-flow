@@ -1,0 +1,12 @@
+# A do-nothing step. The merge and the test runs happen in the worker's checkout around it: this step only
+# submits, so the checkout (and its test run) is collected as the step's `workspace`.
+model: {provider: github-copilot, name: default, credential: github-copilot-token}
+max_output_tokens: 300
+instructions: |
+  You change nothing. Submit the output at once.
+harness:
+  opencode:
+    agent: harness/agents/noop.md
+    command: harness/commands/noop.md
+    skills: []
+    tools: [skill]

@@ -1,0 +1,132 @@
+# Admin configuration for the PR conflict resolver: `azhi apply examples/pr-conflict-resolver/azhi.config.yaml`.
+# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise add
+#    api_url: https://<host>/api/v3 to every tool and set `host` on the workflow's workspaces
+#    (`azhi example install pr-conflict-resolver --api-url ...` does both).
+# 2. Secrets (values never go in a package or run state). Either token may instead be the GitHub CLI login:
+#    `azhi github login --secret github-read-token --secret github-write-token`.
+#    github-read-token     fine-grained token, read-only "Contents" and "Pull requests"; used to read the pull
+#                          request and to clone the repository on the worker
+#    github-write-token    fine-grained token with "Contents: write" and "Pull requests: write"; used only by the
+#                          steps after a person approved: push the resolution branch, open its pull request and
+#                          comment. No agent step holds it.
+#    github-copilot-token  your GitHub Copilot sign-in; the agents run on Copilot models through OpenCode
+#                          (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+# 3. The tools fall back to `gh api` when the API call cannot be made (cli_fallback: login): a certificate or proxy
+#    problem Node cannot get past, or a token GitHub rejects. Set it to off to use the API only.
+tools:
+  - id: github.get-pull-request
+    version: 1
+    description: One pull request with its refs, mergeability and changed files (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.pull-request, config: {repos: [OWNER/REPO], cli_fallback: login}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        draft: {type: boolean}
+        mergeable: {type: [boolean, 'null']}
+        mergeable_state: {type: string}
+        url: {type: string}
+        base_ref: {type: string}
+        base_sha: {type: string}
+        head_ref: {type: string}
+        head_sha: {type: string}
+        head_repo: {type: string}
+        head_is_fork: {type: boolean}
+        maintainer_can_modify: {type: boolean}
+        additions: {type: integer}
+        deletions: {type: integer}
+        changed_files:
+          type: array
+          items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
+  - id: github.push-branch
+    version: 1
+    description: Commit a change onto a base commit as an azhi/ branch (GitHub Git Data API); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.push-branch, config: {repos: [OWNER/REPO], branch_prefix: azhi/, cli_fallback: login}}
+    timeout: 120s
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        branch: {type: string, maxLength: 250}
+        base_sha: {type: string}
+        message: {type: string, maxLength: 5000}
+        files:
+          type: array
+          maxItems: 300
+          items:
+            type: object
+            properties:
+              path: {type: string}
+              status: {enum: [added, modified, deleted]}
+              mode: {enum: ["100644", "100755"]}
+              content: {type: string}
+              encoding: {enum: [utf-8, base64]}
+            required: [path, status]
+      required: [repo, branch, base_sha, message, files]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        branch: {type: string}
+        commit_sha: {type: string}
+        base_sha: {type: string}
+        files: {type: integer}
+        created: {type: boolean}
+        url: {type: string}
+        commit_url: {type: string}
+      required: [repo, branch, commit_sha, url]
+  - id: github.create-pull-request
+    version: 1
+    description: Open a pull request from an azhi/ branch, or return the one already open for it (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.create-pull-request, config: {repos: [OWNER/REPO], branch_prefix: azhi/, cli_fallback: login}}
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        head: {type: string}
+        base: {type: string}
+        title: {type: string}
+        body: {type: string}
+        draft: {type: boolean}
+      required: [repo, head, title, body]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        url: {type: string}
+        head: {type: string}
+        base: {type: string}
+        draft: {type: boolean}
+        created: {type: boolean}
+      required: [repo, number, url, head]
+  - id: github.comment-on-pr
+    version: 1
+    description: Post the outcome on a pull request, or edit the one it posted before (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-conflict-resolver, cli_fallback: login}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
+secrets:
+  - github-read-token
+  - github-write-token
+  - github-copilot-token

@@ -19,6 +19,7 @@ npx azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...
 | `ci-digest` | CI digest to Slack; the smallest end-to-end example | none (no model) |
 | [`ai-sdlc-v2`](/examples/ai-sdlc-v2/) | GitHub issue → readiness check → plan → build → independent review and verification → approval → draft PR | OpenCode |
 | `pr-review` | Four read-only reviewers in fresh checkouts, a verifier on a different model family, triage by script, one sticky PR comment | OpenCode (Copilot models) |
+| `pr-conflict-resolver` | Merges the base into a conflicting PR, settles easy hunks by rule, resolves the rest with an agent, compares tests on base, PR and result, independent review, approval, then a PR with the resolution into the PR's branch | OpenCode (Copilot models) |
 | `issue-investigation` | Evidence-backed root-cause analysis with a challenger; an approval gates the comment | OpenCode |
 | `issue-splitter` / `issue-splitter-jira` | Sizes a ticket against the code; if too big, splits into ordered, linked sub-issues after approval | agent |
 | `doubler`, `caller`, `loop-demo` | Tiny fixtures for subworkflows and loops | none |
