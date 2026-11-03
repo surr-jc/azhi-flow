@@ -36,8 +36,8 @@ export function registerMcpRoutes(app: FastifyInstance, ctx: AppContext) {
     const row = await getMcpConnection(ctx, p.workspaceId, id);
     const used = (await loadCatalog(ctx, p.workspaceId)).list().filter((t) => t.revision !== undefined && [id, row.name].includes((t.transport as { connection?: string }).connection ?? '')).length;
     if (used) throw new AzhiError(ErrorClass.invalidInput, `${used} registered action${used === 1 ? ' uses' : 's use'} this connection; unregister ${used === 1 ? 'it' : 'them'} first, then delete the connection`);
-    await ctx.pool.query(`DELETE FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [p.workspaceId, id]);
-    await audit(ctx, p.workspaceId, p.userId, 'mcp.connection_deleted', { connection: id, name: row.name });
+    await ctx.pool.query(`DELETE FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [p.workspaceId, row.id]);
+    await audit(ctx, p.workspaceId, p.userId, 'mcp.connection_deleted', { connection: row.id, name: row.name });
     return { ok: true };
   });
   app.post('/v1/mcp/connections/:id/oauth/start', async (req) => {
