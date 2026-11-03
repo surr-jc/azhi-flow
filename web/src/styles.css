@@ -936,8 +936,8 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .wf-card.with-rows .wf-head { min-width: 0; flex-direction: row; gap: 8px; font-size: calc(14px * var(--fs, 1)); }
 .wf-card.with-rows .wf-glyph { width: 24px; height: 24px; }
 .wf-rows { margin: 2px 0 0; display: flex; flex-direction: column; }
-.wf-rows > div { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 8px; height: 18px; align-items: center; }
-.wf-rows dt { color: var(--muted); font-size: calc(13px * var(--fs, 1)); }
+.wf-rows > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; height: 18px; align-items: center; }
+.wf-rows dt { color: var(--muted); font-size: calc(13px * var(--fs, 1)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-rows dd { margin: 0; font-size: calc(13px * var(--fs, 1)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-rows dd.tone-ok { color: var(--accent); font-weight: 600; }
 .wf-rows dd.tone-warn { color: var(--warn); font-weight: 600; }
