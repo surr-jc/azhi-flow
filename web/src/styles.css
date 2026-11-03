@@ -110,7 +110,11 @@ code, .mono { font-family: var(--f-mono); font-size: calc(13px * var(--fs, 1)); 
 .profile-sep { height: 1px; margin: 6px 0; background: var(--line); }
 .profile-quota { display: grid; gap: 14px; padding: 4px 8px; min-width: 0; }
 .quota-prov { display: grid; gap: 6px; min-width: 0; }
-.quota-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.quota-head { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; min-height: 32px; }
+.quota-head::-webkit-details-marker { display: none; }
+.quota-caret { flex: none; transition: transform var(--dur-150, 150ms); transform: rotate(-90deg); }
+.quota-prov[open] .quota-caret { transform: none; }
+@media (prefers-reduced-motion: reduce) { .quota-caret { transition: none; } }
 .quota-meter { display: grid; gap: 4px; min-width: 0; }
 .quota-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .quota-label { text-transform: capitalize; }

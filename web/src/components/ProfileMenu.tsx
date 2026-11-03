@@ -77,6 +77,12 @@ function Avatar({ id, size }: { id?: string; size: number }) {
 interface QuotaMeter { label: string; used_percent: number | null; detail: string | null; resets_at: string | null }
 interface ProviderQuota { id: string; title: string; status: 'ok' | 'not_signed_in' | 'unavailable'; plan: string | null; message: string | null; meters: QuotaMeter[] }
 
+/** The fullest meter of a provider, shown on its collapsed row; null when no meter has a known percent. */
+const top = (p: ProviderQuota): number | null => {
+  const known = p.meters.map((m) => m.used_percent).filter((v): v is number => v !== null);
+  return known.length ? Math.max(...known) : null;
+};
+
 /** What is left of each provider's allowance (Copilot, ChatGPT plan, Anthropic), asked only while the panel is open. */
 function QuotaUsage() {
   const q = useQuery({ queryKey: ['quota'], queryFn: () => api<{ providers: ProviderQuota[] }>('/v1/quota'), retry: false, staleTime: 60_000 });
@@ -86,8 +92,13 @@ function QuotaUsage() {
     <div className="profile-quota">
       <span className="muted small">Quota usage</span>
       {!q.data ? <span className="muted small">Loading…</span> : q.data.providers.map((p) => (
-        <div key={p.id} className="quota-prov">
-          <div className="quota-head"><strong>{p.title}</strong>{p.plan ? <span className="badge">{p.plan}</span> : null}</div>
+        <details key={p.id} className="quota-prov">
+          <summary className="quota-head">
+            <Icon name="chevron-down" size={14} className="quota-caret" />
+            <strong className="profile-grow">{p.title}</strong>
+            {p.plan ? <span className="badge">{p.plan}</span> : null}
+            <span className="muted small">{p.status === 'ok' ? (top(p) === null ? '—' : `${top(p)}%`) : p.status === 'not_signed_in' ? 'Not signed in' : 'Unavailable'}</span>
+          </summary>
           {p.meters.map((m) => (
             <div key={m.label} className="quota-meter">
               <div className="quota-line">
@@ -99,7 +110,7 @@ function QuotaUsage() {
             </div>
           ))}
           {p.message ? <span className="muted small">{p.message}</span> : null}
-        </div>
+        </details>
       ))}
     </div>
   );

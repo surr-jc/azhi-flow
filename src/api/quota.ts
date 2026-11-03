@@ -73,7 +73,8 @@ async function copilot(ctx: AppContext, workspaceId: string): Promise<ProviderQu
     message: metered.length ? null : 'No metered allowance on this plan.',
     meters: metered.map((x) => ({
       label: x.name.replace(/_/g, ' '),
-      used_percent: x.entitlement ? pct((100 * (x.used ?? 0)) / x.entitlement) : x.percent_remaining !== null ? pct(100 - x.percent_remaining) : null,
+      // An allowance of 0 has no share to be used (Copilot reports 0 of 0 for plans without it): unknown, not 100%.
+      used_percent: x.entitlement ? pct((100 * (x.used ?? 0)) / x.entitlement) : x.entitlement === 0 ? null : x.percent_remaining !== null ? pct(100 - x.percent_remaining) : null,
       detail: x.used !== null && x.entitlement !== null ? `${x.used} of ${x.entitlement}` : null,
       resets_at: iso(q.reset_date),
     })),
