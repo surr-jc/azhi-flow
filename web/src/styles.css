@@ -118,6 +118,8 @@ code, .mono { font-family: var(--f-mono); font-size: calc(13px * var(--fs, 1)); 
 .quota-meter { display: grid; gap: 4px; min-width: 0; }
 .quota-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .quota-label { text-transform: capitalize; }
+.quota-body { display: grid; gap: 10px; min-width: 0; padding: 4px 0 4px 22px; }
+.quota-msg { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .quota-prov .muted { overflow-wrap: anywhere; }
 .profile-pref { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 8px; min-height: 44px; }
 @media (prefers-reduced-motion: no-preference) { .profile-panel { animation: si-in var(--dur-150) var(--ease-out); } }

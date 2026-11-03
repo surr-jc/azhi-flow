@@ -99,6 +99,7 @@ function QuotaUsage() {
             {p.plan ? <span className="badge">{p.plan}</span> : null}
             <span className="muted small">{p.status === 'ok' ? (top(p) === null ? '—' : `${top(p)}%`) : p.status === 'not_signed_in' ? 'Not signed in' : 'Unavailable'}</span>
           </summary>
+          <div className="quota-body">
           {p.meters.map((m) => (
             <div key={m.label} className="quota-meter">
               <div className="quota-line">
@@ -109,7 +110,8 @@ function QuotaUsage() {
               {m.detail || m.resets_at ? <span className="muted small">{[m.detail, m.resets_at ? `resets ${new Date(m.resets_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : null].filter(Boolean).join(' · ')}</span> : null}
             </div>
           ))}
-          {p.message ? <span className="muted small">{p.message}</span> : null}
+          {p.message ? <p className="muted small quota-msg">{p.message}</p> : null}
+          </div>
         </details>
       ))}
     </div>
