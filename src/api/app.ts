@@ -48,6 +48,7 @@ import { isAuthPath, registerTeamRoutes } from './team.js';
 import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
 import { registerAssetRoutes } from './assets.js';
+import { registerBundleRoutes } from './bundle.js';
 import { registerConnectionRoutes } from './connections.js';
 import { registerToolboxRoutes } from './toolbox.js';
 
@@ -111,6 +112,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerSlackRoutes(app, ctx, temporal);
   registerMcpRoutes(app, ctx);
   registerAssetRoutes(app, ctx);
+  registerBundleRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
   registerToolboxRoutes(app, ctx);
   registerAssistantRoutes(app, { ctx, temporal, interpreterBuild });

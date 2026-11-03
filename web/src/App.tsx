@@ -24,6 +24,7 @@ import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
 import { UploadPackage } from './pages/Upload';
+import { ImportBundle } from './pages/ImportBundle';
 import { WorkflowBuilder } from './pages/Builder';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
@@ -163,7 +164,7 @@ function Shell() {
             <ProfileMenu me={me.data} approvals={counts.approvals} />
           </span>
         </header>
-        <main className={`content${/^\/ui\/workflows\/(?!new$|upload$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
+        <main className={`content${/^\/ui\/workflows\/(?!new$|upload$|import$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
           {parent ? <Link to={parent.to} className="back-link"><Icon name="chev" size={14} className="back-ico" />Back to {parent.label}</Link> : null}
           <Page path={path} />
         </main>
@@ -184,6 +185,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/toolbox') return <Toolbox />;
   if (path === '/ui/library' || path === '/ui/assets') return <Assets />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
+  if (path === '/ui/workflows/import') return <ImportBundle />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
   if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<div className="page-loading"><LogoTraceLoader size={56} /></div>}><WorkflowEditor slug={m.slug!} /></Suspense>;

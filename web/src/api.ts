@@ -52,6 +52,30 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   return body as T;
 }
 
+/** Sends a file as the raw request body (a workflow bundle zip) and reads the JSON answer. */
+export async function apiUpload<T = any>(path: string, file: Blob, type = 'application/zip'): Promise<T> {
+  const res = await fetch(path, { method: 'POST', headers: { authorization: `Bearer ${token()}`, 'content-type': type }, body: file });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(body.message ?? `HTTP ${res.status}`, res.status, body.details);
+  return body as T;
+}
+
+/** Fetches a file with the token and saves it under the name the server suggests. */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, { headers: { authorization: `Bearer ${token()}` } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(body.message ?? `HTTP ${res.status}`, res.status, body.details);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export const isAuthError = (e: unknown) => e instanceof ApiError && (e.status === 401 || (e.status === 403 && /token/i.test(e.message)));
 
 export const RANK: Record<string, number> = { viewer: 0, operator: 1, author: 2, admin: 3, owner: 4 };
