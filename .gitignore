@@ -88,3 +88,6 @@ site/wiki-dist/
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-package.json
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-exports.json
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-package.json
+
+# graphify (local code knowledge graph)
+graphify-out/
