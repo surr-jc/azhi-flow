@@ -114,6 +114,7 @@ const DOCS = [
   'docs/github-data.md',
   'docs/sdlc.md',
   'docs/pr-review.md',
+  'docs/pr-conflict-resolver.md',
   'docs/issue-investigation.md',
   'docs/issue-splitter.md',
   'docs/positioning.md',

@@ -148,7 +148,7 @@ connection with `propose_tool` instead.
 
 ## Shared contexts, input caps and continuing a change
 
-The skill teaches three opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
+The skill teaches four opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
 
 - **Shared contexts** (`contexts:` and `context: [name]` on agent, script and report steps) for the same
   input values written once. The skill says when to use one, that the step's input must then be an object,
@@ -156,6 +156,10 @@ The skill teaches three opt-in features of the workflow format ([docs/context-sh
   `merge: any` step. When it patches an existing workflow it keeps `contexts:` and each step's `context:`.
 - **`context_budget`** on an agent step, to cap the bytes of input that reach the model.
 - **`workspace.from`** on an OpenCode step, to start its checkout from an earlier step's change.
+- **`workspace.merge_ref`** on an OpenCode step, to merge a second ref into its checkout with the conflicts left as
+  markers, and the patterns of the [PR conflict resolver](pr-conflict-resolver.md) for workflows that change a
+  repository: worker steps without a model, rules before the agent, one test command compared on the base, the
+  change and the result, read-only agents with writes only after an approval, and unrolled retries.
 
 A draft's notes to the model include the compiler's warnings (`context_may_skip`, `context_taints`,
 `unused_context`) and one line per step that takes keys from a context. The draft panel lists those steps

@@ -140,7 +140,9 @@ CEL has `now`, `duration('24h')`, `timestamp(...)`, `size()`, `.filter()`, `.map
   a repository checkout; `mode: write` returns the change as `output.workspace`), where
   `from: {ref: nodes.<step>.output.workspace}` starts the checkout from an earlier write-mode
   step's change, for review, verify and fix steps that must see that step's files (never together
-  with `base_ref`), optional
+  with `base_ref`), `merge_ref` merges a second ref into the checkout (see "Repository change
+  workflows"), and `test: {command, timeout, attempts}` (write mode) runs a literal shell command
+  on the result, optional
   `executor: opencode | claude-agent-sdk` (default is the built-in model agent; only use
   another executor when the person asks for a coding harness on a repository checkout).
 - `retrieve`: `datasets: [name@tag]`, `query: <value>`, `top_k: 5`: excerpts with citations.
@@ -240,6 +242,29 @@ limits. If the person says "just draft it", use your recommendation and say so.
   or none (`context_input_shape`); `context` is not allowed on `merge: any` steps
   (`context_on_merge`) or on subworkflows. Warnings to act on: `context_may_skip`,
   `context_taints`, `unused_context`.
+
+## Repository change workflows
+
+For merge, conflict, fix-a-PR or change-and-test requests, `read_example pr-conflict-resolver` and follow it:
+
+- **Worker steps without a model.** A step that needs only the worker (a merge, a test run) is an `agent`
+  with a do-nothing profile, `budget: {max_tool_calls: 0}` and a `workspace`; the change and `tests` come back
+  as `output.workspace`. `workspace.merge_ref` merges a second ref in (`git merge --no-commit`): conflicts stay as
+  markers and `output.workspace.merge.conflicts` lists each path and kind. It needs full history (no `depth`,
+  `base_ref` or `from`) and a worker with `workspace_merge`.
+- **Rules before the model.** A script settles what rules can (identical or one-sided edits, whitespace,
+  additions); the agent gets only the rest. Set aside, with the reason, what it cannot do safely (deletions,
+  lock files, binaries).
+- **Differential tests.** `workspace.test.command` is one literal string, not a `{ref}`: write it once with a
+  YAML anchor (`&test`, then `*test`) and run it on the base, the change and the result; a script compares. A
+  failure on neither parent is a regression; a run that cannot be compared is `inconclusive`, never a pass, and
+  only opens a draft.
+- **Credentials.** Agents clone with a read token. Only tool steps after an `approval` hold a write token, each
+  with a `guard` pinning repo and branch. Never write to the contributor's branch: push an `azhi/` branch and
+  open a PR into it. GitHub tools take `cli_fallback` (API first, `gh api` second); copy it from the example.
+- **Retries.** An agent cannot be a loop body: unroll attempt 1 and 2 (the second on a stronger profile, told why
+  the first failed), join with a `merge: any` finalize script that reads `has(nodes.x)`, then a gate condition.
+- **Check the result** with a reviewer and a refuter on different models before the approval.
 
 ## Sharing context between steps
 
