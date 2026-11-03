@@ -25,3 +25,20 @@ action ledger and as-of times apply), and the token is a workspace secret that n
 package or run state. `team` is accepted but not used to filter; put one team's repositories in the
 config, or register one tool revision per team. "Failed tests" are failed job names, not individual
 test cases, because Actions does not expose test results without parsing logs or artifacts.
+
+## Falling back to the GitHub CLI
+
+Every GitHub tool calls the REST API first. A tool registration can add `cli_fallback` to its `config` so a
+failed call is tried once more through `gh api` on the server's machine:
+
+| Value | `gh api` is tried after | Acts as |
+|---|---|---|
+| `off` (default) | nothing | n/a |
+| `network` | a refused connection or a certificate failure (a read also after a reset) | the same token; only gh's network stack differs (it uses the Windows certificate store and system proxy, Node does not) |
+| `login` | the above, and a 401 or an SSO 403, or no token being set | gh's own login in those last cases, which may be a broader identity than the token |
+
+A write is never sent twice: a reset or timeout after it may have been sent is left to the action ledger's
+lookup, and a 404, a rate limit or a 5xx is final. The egress rules are checked before either path, and the
+server setting `AZHI_GH_FALLBACK=off` turns the fallback off everywhere. When gh is missing or signed out, the
+original error is reported with the reason appended. A fallback call writes one `azhi: GitHub ... went through the
+GitHub CLI` line to the server's stderr.

@@ -1,6 +1,7 @@
 import { ErrorClass } from '../../lib/errors.js';
 import { checkEgress } from '../egress.js';
 import { SendError } from '../ledger.js';
+import { ghApi } from '../../server/gh-cli.js';
 
 /**
  * Read-only GitHub tools for the flagship workflow (`builtin` transports `github.ci-runs`,
@@ -25,6 +26,13 @@ export interface GithubConfig {
   sticky?: string;
   /** How the merge tool merges: `merge`, `squash` (default) or `rebase`. */
   merge_method?: string;
+  /**
+   * When the API call fails, try it once more through `gh api`. `network`: only after a connection or certificate
+   * failure, with the same token (gh uses the Windows certificate store and system proxy; Node does not). `login`:
+   * also after a rejected or missing token, as gh's own login, which may be a broader identity. Default `off`.
+   * Writes are retried only where nothing can have been applied. The server's AZHI_GH_FALLBACK=off turns it off.
+   */
+  cli_fallback?: 'off' | 'network' | 'login';
 }
 
 const MAX_PAGES = 3;
@@ -39,38 +47,137 @@ async function get(cfg: GithubConfig, token: string | undefined, path: string, t
   return request(cfg, token, 'GET', path, undefined, timeoutMs);
 }
 
+/** Why a call did not get an answer it can use. Decides whether the GitHub CLI may try it (see `fallbackFor`). */
+export type FailureKind = 'connect' | 'tls' | 'reset' | 'timeout' | 'auth' | 'no-token' | 'http';
+
+const CONNECT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+const TLS_CODES = new Set(['UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID']);
+
+/** Node's fetch hides the real reason in `cause.code`; a timeout or abort is named on the error itself. */
+function fetchFailureKind(err: unknown): FailureKind {
+  const e = err as { name?: string; code?: unknown; cause?: { code?: unknown } };
+  if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return 'timeout';
+  const code = String(e?.cause?.code ?? e?.code ?? '');
+  if (CONNECT_CODES.has(code)) return 'connect';
+  if (TLS_CODES.has(code) || code.startsWith('ERR_TLS')) return 'tls';
+  // Anything else (a reset, a closed socket, an unknown code) may have happened after the request was sent.
+  return 'reset';
+}
+
+/** A 401, or a 403 that asks for SSO, is rejected by GitHub before it applies anything; any other answer is final. */
+function httpFailureKind(status: number, header: (name: string) => string | null): FailureKind {
+  if (status === 401) return 'auth';
+  if (status === 403 && header('x-github-sso') && header('x-ratelimit-remaining') !== '0') return 'auth';
+  return 'http';
+}
+
+type FallbackMode = 'off' | 'network' | 'login';
+
+function fallbackMode(cfg: GithubConfig): FallbackMode {
+  if (process.env.AZHI_GH_FALLBACK === 'off') return 'off';
+  const mode = cfg.cli_fallback ?? 'off';
+  if (mode !== 'off' && mode !== 'network' && mode !== 'login') throw new SendError(`cli_fallback must be off, network or login, got '${String(mode).slice(0, 40)}'`, true, ErrorClass.invalidInput);
+  return mode;
+}
+
+/**
+ * May the GitHub CLI try this call after the API failed? Never when the failure leaves a write possibly applied
+ * (a reset or timeout on anything but a read), and never for a definite answer (404, a rate limit, a 5xx): the
+ * ledger's lookup, or the caller's own retry, handles those. A connection or certificate failure sent nothing;
+ * a 401 or SSO 403 changed nothing; both are safe for writes.
+ */
+export function fallbackFor(method: string, kind: FailureKind, mode: FallbackMode): boolean {
+  if (mode === 'off') return false;
+  switch (kind) {
+    case 'connect':
+    case 'tls':
+      return true;
+    case 'reset':
+      return method === 'GET';
+    case 'auth':
+    case 'no-token':
+      return mode === 'login';
+    default:
+      return false;
+  }
+}
+
+/** The error for a non-2xx answer, the same whether Node or `gh` got it. */
+function httpError(cfg: GithubConfig, status: number, header: (name: string) => string | null, text: string): SendError {
+  const limited = status === 429 || (status === 403 && header('x-ratelimit-remaining') === '0');
+  const definite = status >= 400 && status < 500 && status !== 408 && !limited;
+  const cls = status === 401 || (status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
+  const sso = header('x-github-sso');
+  const hint =
+    status === 404
+      ? ` (GitHub answers 404 when the pull request or repository does not exist, and also when this token cannot see the repository: check the number, then that the token's resource owner is the organization and that it is approved and SSO-authorized. Test it with: curl -H "Authorization: Bearer $TOKEN" ${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}/repos/OWNER/REPO)`
+      : status === 403 && sso
+        ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
+        : '';
+  return new SendError(`GitHub HTTP ${status}: ${text.slice(0, 200)}${hint}`, definite, cls);
+}
+
+/** The host name `gh --hostname` takes for this API address. */
+function ghHost(cfg: GithubConfig): string {
+  const u = new URL(cfg.api_url ?? 'https://api.github.com');
+  return u.hostname === 'api.github.com' ? 'github.com' : u.host;
+}
+
+interface Reply {
+  status: number;
+  ok: boolean;
+  header(name: string): string | null;
+  text: string;
+}
+
 async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body: unknown, timeoutMs: number): Promise<any> {
-  if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
+  const mode = fallbackMode(cfg);
+  if (!token && mode !== 'login') throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
+  // First for both paths: a host the egress rules block is never reached through gh either.
   await checkEgress(url);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    // A POST whose response was lost may have landed: not definite, so the ledger looks it up.
-    throw new SendError(`GitHub request failed: ${(err as Error).message}`, false);
+  let reply: Reply | undefined;
+  let kind: FailureKind | undefined;
+  let netError: Error | undefined;
+  if (!token) kind = 'no-token';
+  else {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      reply = { status: res.status, ok: res.ok, header: (n) => res.headers.get(n), text: await res.text() };
+      if (!reply.ok) kind = httpFailureKind(reply.status, reply.header);
+    } catch (err) {
+      netError = err as Error;
+      kind = fetchFailureKind(err);
+    }
   }
-  const text = await res.text();
-  if (!res.ok) {
-    const limited = res.status === 429 || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0');
-    const definite = res.status >= 400 && res.status < 500 && res.status !== 408 && !limited;
-    const cls = res.status === 401 || (res.status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
-    const sso = res.headers.get('x-github-sso');
-    const hint =
-      res.status === 404
-        ? ` (GitHub answers 404 when the pull request or repository does not exist, and also when this token cannot see the repository: check the number, then that the token's resource owner is the organization and that it is approved and SSO-authorized. Test it with: curl -H "Authorization: Bearer $TOKEN" ${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}/repos/OWNER/REPO)`
-        : res.status === 403 && sso
-          ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
-          : '';
-    throw new SendError(`GitHub HTTP ${res.status}: ${text.slice(0, 200)}${hint}`, definite, cls);
+  let note = '';
+  if (kind && fallbackFor(method, kind, mode)) {
+    try {
+      // After a network failure gh uses the same token (only its network stack differs); after a rejected or missing token, its own login.
+      const r = await ghApi({ host: ghHost(cfg), method, path, body, token: kind === 'auth' || kind === 'no-token' ? undefined : token, timeoutMs });
+      reply = { status: r.status, ok: r.status >= 200 && r.status < 300, header: r.header, text: r.text };
+      netError = undefined;
+      process.stderr.write(`azhi: GitHub ${method} ${path.split('?')[0]} went through the GitHub CLI (API ${kind})\n`);
+    } catch (err) {
+      note = ` (gh fallback unavailable: ${(err as Error).message})`;
+    }
+  }
+  // A POST whose response was lost may have landed: not definite, so the ledger looks it up.
+  if (!reply) {
+    if (netError) throw new SendError(`GitHub request failed: ${netError.message}${note}`, false);
+    throw new SendError(`the GitHub tools need a token credential${note}`, true, ErrorClass.authorization);
+  }
+  if (!reply.ok) {
+    const e = httpError(cfg, reply.status, reply.header, reply.text);
+    throw note ? new SendError(`${e.message}${note}`, e.definite, e.errorClass) : e;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(reply.text);
   } catch {
     throw new SendError('GitHub returned a response that is not JSON', false);
   }
