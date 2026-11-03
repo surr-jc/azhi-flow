@@ -473,11 +473,12 @@ button.linkish { background: none; border: 0; padding: 0; color: var(--accent); 
 .ed-item .bub { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--tint, var(--idle-bg)); color: var(--ink-t, var(--muted)); }
 .ed-item b { display: block; font-size: calc(14px * var(--fs, 1)); line-height: 1.25; overflow-wrap: anywhere; }
 .ed-item .d { display: block; color: var(--muted); font-size: calc(13px * var(--fs, 1)); line-height: 1.25; }
-.ed-below { max-width: 1240px; margin: 0 auto; padding: 8px 24px 0; }
+.ed-below { margin: 0 12px; padding: 8px 0 12px; }
 @media (max-width: 900px) {
   .ed-shell { grid-template-columns: minmax(0, 1fr); height: auto; }
   .ed-stage { height: 70dvh; margin: 0 8px; }
   .ed-panel { margin: 12px 8px 0; min-height: 360px; }
+  .ed-below { margin: 0 8px; }
 }
 .ed-side .panel { max-height: none; }
 .ed-side .form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 20px; margin-bottom: 12px; }
