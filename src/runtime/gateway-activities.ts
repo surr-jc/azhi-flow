@@ -174,7 +174,9 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         if (!bytes) throw new AzhiError(ErrorClass.internal, `the stored output of ${id} is missing from the artifact store`);
         nodes[id] = { output: JSON.parse(bytes.toString('utf8')) };
       }
-      const out = resolveValue(input.value as Value, { ...input.scope, nodes } as ValueScope) ?? null;
+      // A stored `args` (large tool arguments) is opened here, as toolNode does, so a guard sees the real call.
+      const args = 'args' in input.scope ? materialise(ctx, input.scope.args) : undefined;
+      const out = resolveValue(input.value as Value, { ...input.scope, nodes, ...(args !== undefined ? { args } : {}) } as ValueScope) ?? null;
       return byteSize(out) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, input.workspaceId, out) : out;
     },
 

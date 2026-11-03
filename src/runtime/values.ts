@@ -29,7 +29,7 @@ export function resolveRef(ref: string, scope: ValueScope): unknown {
   return current;
 }
 
-const isHandle = (v: unknown) => Boolean(v && typeof v === 'object' && '$artifact' in (v as object));
+export const isHandle = (v: unknown) => Boolean(v && typeof v === 'object' && '$artifact' in (v as object));
 
 /**
  * Nodes whose output is stored as an artifact and that a CEL expression in `value` reads into

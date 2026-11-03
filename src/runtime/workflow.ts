@@ -27,7 +27,7 @@ import { parseDuration } from '../lib/duration.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
-import { artifactReads, resolveValue, type ValueScope } from './values.js';
+import { artifactReads, isHandle, resolveValue, type ValueScope } from './values.js';
 import { withheldBefore } from './withheld.js';
 import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
@@ -110,9 +110,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   const asOf: Record<string, string> = {};
   const scope = (): ValueScope => ({ inputs: input.inputs, nodes: outputs, config: plan.config, now: snapshot.reference_time, run: { id: runId, attempt: workflowInfo().attempt } });
   // CEL cannot read inside an output stored as an artifact, so such a value is resolved by an activity next to the store.
+  // The same holds for `args` (a guard's view of the call) when the resolved arguments were themselves stored.
   const resolve = async (node: PlanNode, value: Value | undefined, s: ValueScope): Promise<unknown> => {
     const reads = artifactReads(value, s.nodes);
-    if (!reads.length) return resolveValue(value, s);
+    if (!reads.length && !isHandle(s.args)) return resolveValue(value, s);
     const named = new Set([...JSON.stringify(value).matchAll(/\bnodes\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!));
     const nodes = Object.fromEntries(Object.entries(s.nodes).filter(([id]) => named.has(id)));
     return (await gateway(node).resolveValue({ workspaceId, value, scope: { ...s, nodes }, reads })) ?? undefined;

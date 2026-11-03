@@ -2,7 +2,9 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { gatewayActivities } from '../src/runtime/gateway-activities.js';
 import { artifactReads } from '../src/runtime/values.js';
+import { createContext, type AppContext } from '../src/server/context.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 /**
@@ -22,6 +24,25 @@ describe('which stored outputs a value reads into', () => {
     expect(artifactReads({ map: "{'change': nodes.big.output}" }, nodes)).toEqual([]);
     expect(artifactReads({ map: "{'a': nodes.small.output.a}" }, nodes)).toEqual([]);
     expect(artifactReads({ ref: 'nodes.big.output.summary' }, nodes)).toEqual([]);
+  });
+});
+
+describe('a guard on a call whose arguments are stored', () => {
+  let ctx: AppContext;
+  let args: unknown;
+  beforeAll(async () => {
+    ctx = createContext({ databaseUrl: 'pglite://memory', dataDir: mkdtempSync(join(tmpdir(), 'azhi-guard-')) });
+    const stored = ctx.artifacts.put(JSON.stringify({ repo: 'o/r', branch: 'azhi/DCURE-1', files: ['x'.repeat(300_000)] }));
+    args = { $artifact: { hash: stored.hash, size: stored.size, media_type: 'application/json' } };
+  });
+  const guard = (cel: string) =>
+    gatewayActivities(ctx).resolveValue({ workspaceId: 'ws', value: { cel }, scope: { inputs: { repo: 'o/r' }, nodes: {}, args }, reads: [] });
+
+  it('evaluates against the real arguments, not the handle', async () => {
+    expect(await guard("args.repo == inputs.repo && args.branch == 'azhi/DCURE-1'")).toBe(true);
+  });
+  it('still rejects a wrong branch', async () => {
+    expect(await guard("args.branch == 'azhi/OTHER'")).toBe(false);
   });
 });
 
