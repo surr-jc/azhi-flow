@@ -6,6 +6,7 @@ import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
 import { Formatted, Markdown, plainText } from '../components/Rich';
+import { ResumeDialog } from '../components/ResumeDialog';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
 import { AgentActivityPanel, useTranscript, type TranscriptEntry } from './AgentActivity';
@@ -74,10 +75,7 @@ export function RunPage({ id }: { id: string }) {
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
 
-  const resume = useMutation({
-    mutationFn: () => api<{ run_id: string }>(`/v1/runs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: {} }),
-    onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
-  });
+  const [resuming, setResuming] = useState(false);
 
   if (detail.error) return <ErrorNote error={detail.error} />;
   if (!detail.data) return <Loading variant="page" />;
@@ -107,13 +105,14 @@ export function RunPage({ id }: { id: string }) {
           operator ? (
             <>
               {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={async () => (await ask({ title: `Cancel run ${r.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && cancel.mutate()}>Cancel run</button> : null}
-              {!open && !d.run.test && ['failed', 'cancelled', 'expired'].includes(r.state) ? <button className="primary" disabled={resume.isPending} onClick={() => resume.mutate()} title="Start a new run that keeps every step that already succeeded and runs the rest">Resume</button> : null}
+              {!open && !d.run.test && ['failed', 'cancelled', 'expired'].includes(r.state) ? <button className="primary" onClick={() => setResuming(true)} title="Start a new run that keeps every step that already succeeded and runs the rest, on this version or a fixed one">Resume</button> : null}
               {!open && !d.run.snapshot?.test_node ? <button disabled={rerun.isPending} onClick={() => rerun.mutate()} title="Start a new run of the same version with the same inputs">Run again</button> : null}
             </>
           ) : null
         }
       />
-      <ErrorNote error={cancel.error ?? rerun.error ?? resume.error} />
+      {resuming ? <ResumeDialog runId={r.id} workflow={r.workflow} current={r.workflow_version} onClose={() => setResuming(false)} onStarted={(rid) => navigate(`/ui/runs/${encodeURIComponent(rid)}`)} /> : null}
+      <ErrorNote error={cancel.error ?? rerun.error} />
       {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
       {version.data?.plan?.nodes ? (

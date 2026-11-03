@@ -8,6 +8,7 @@ import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
+import { checkResume } from '../plan/resume-check.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog, loadToolRevision } from './catalog.js';
 import { resolveVersion } from './workflows.js';
@@ -149,28 +150,52 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
  * that happened (a pushed branch, a message) is not repeated. A step is carried only if every step it
  * depends on is carried too; `fromNode` also reruns that step and everything after it.
  */
-export async function resumeRun(ctx: AppContext, workspaceId: string, runId: string, actor: string, interpreterBuild: string, opts: { fromNode?: string } = {}) {
+export async function resumeRun(ctx: AppContext, workspaceId: string, runId: string, actor: string, interpreterBuild: string, opts: { fromNode?: string; version?: string; dryRun?: boolean } = {}) {
   const old = (await ctx.pool.query(`SELECT state, inputs, snapshot, test, workflow_version_id FROM runs WHERE id=$1 AND workspace_id=$2`, [runId, workspaceId])).rows[0];
   if (!old) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} not found`);
   if (!['failed', 'delivery_failed', 'cancelled', 'expired'].includes(old.state)) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} is ${old.state}: only a failed, cancelled or expired run can be resumed`);
   if (old.test) throw new AzhiError(ErrorClass.invalidInput, 'a test run cannot be resumed');
-  const version = await resolveVersion(ctx, workspaceId, old.workflow_version_id);
-  if (!version) throw new AzhiError(ErrorClass.invalidInput, `workflow version ${old.workflow_version_id} no longer exists`);
+  const oldVersion = await resolveVersion(ctx, workspaceId, old.workflow_version_id);
+  if (!oldVersion) throw new AzhiError(ErrorClass.invalidInput, `workflow version ${old.workflow_version_id} no longer exists`);
+
+  // Without `version` the run continues on the version it ran; `latest` is the newest version saved, a number or `slug@n` another one.
+  let version = oldVersion;
+  if (opts.version) {
+    const ref = opts.version === 'latest'
+      ? `${oldVersion.slug}@${(await ctx.pool.query(`SELECT MAX(version) AS v FROM workflow_versions WHERE workflow_id=$1`, [oldVersion.workflow_id])).rows[0].v}`
+      : /^\d+$/.test(opts.version) ? `${oldVersion.slug}@${opts.version}` : opts.version;
+    const target = await resolveVersion(ctx, workspaceId, ref);
+    if (!target) throw new AzhiError(ErrorClass.invalidInput, `workflow version ${opts.version} not found`);
+    if (target.workflow_id !== oldVersion.workflow_id) throw new AzhiError(ErrorClass.invalidInput, `${ref} is a different workflow; a run can only resume on a version of ${oldVersion.slug}`);
+    version = target;
+  }
   const nodes = version.plan.nodes;
   if (opts.fromNode && !nodes.some((n) => n.id === opts.fromNode)) throw new AzhiError(ErrorClass.invalidInput, `the workflow has no step ${opts.fromNode}`);
-  const done = new Set(
-    (await ctx.pool.query(`SELECT DISTINCT node_id FROM node_attempts WHERE run_id=$1 AND workspace_id=$2 AND state='succeeded'`, [runId, workspaceId])).rows.map((r) => r.node_id as string),
-  );
-  const oldSkipped = new Set((await ctx.pool.query(`SELECT DISTINCT node_id FROM node_attempts WHERE run_id=$1 AND workspace_id=$2 AND state='skipped'`, [runId, workspaceId])).rows.map((r) => r.node_id as string));
-  // The plan lists a step after the steps it depends on.
-  const again = new Set<string>(opts.fromNode ? [opts.fromNode] : []);
-  const carried = new Set<string>();
-  for (const n of nodes) {
-    if (n.deps.some((d) => again.has(d))) again.add(n.id);
-    if (done.has(n.id) && !again.has(n.id) && n.deps.every((d) => carried.has(d) || oldSkipped.has(d))) carried.add(n.id);
+
+  const ended = new Map<string, Set<string>>();
+  for (const r of (await ctx.pool.query(`SELECT DISTINCT node_id, state FROM node_attempts WHERE run_id=$1 AND workspace_id=$2`, [runId, workspaceId])).rows) {
+    if (!ended.has(r.state)) ended.set(r.state, new Set());
+    ended.get(r.state)!.add(r.node_id as string);
   }
+  const schema = version.plan.inputsSchema;
+  const validate = schema ? ajv.compile(schema) : undefined;
+  const check = checkResume({
+    oldPlan: oldVersion.plan,
+    oldManifest: oldVersion.manifest,
+    newPlan: version.plan,
+    newManifest: version.manifest,
+    succeeded: ended.get('succeeded') ?? new Set(),
+    skipped: ended.get('skipped') ?? new Set(),
+    failed: ended.get('failed') ?? new Set(),
+    ...(opts.fromNode ? { fromNode: opts.fromNode } : {}),
+    ...(validate && !validate(old.inputs) ? { inputsProblem: ajv.errorsText(validate.errors) } : {}),
+  });
+  const info = { id: version.id, workflow: version.slug, version: version.version, from_version: oldVersion.version };
+  if (opts.dryRun) return { runId: undefined, carried: check.carried, rerun: check.rerun, check, version: info };
+  if (!check.possible) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} cannot resume on ${version.slug}@${version.version}: ${check.reason}`, { check });
+
   const snapshot = old.snapshot as RunSnapshot;
-  const resume = { from_run: runId, nodes: [...carried] };
+  const resume = { from_run: runId, nodes: check.carried };
   const r = await createRun(ctx, workspaceId, {
     version,
     inputs: old.inputs as Record<string, unknown>,
@@ -181,7 +206,7 @@ export async function resumeRun(ctx: AppContext, workspaceId: string, runId: str
     resume,
     ...(snapshot.model_defaults_chosen && snapshot.model_defaults ? { modelDefaults: snapshot.model_defaults } : {}),
   });
-  return { runId: r.runId, carried: resume.nodes, rerun: nodes.map((n) => n.id).filter((id) => !carried.has(id)) };
+  return { runId: r.runId, carried: check.carried, rerun: check.rerun, check, version: info };
 }
 
 export async function requestCancel(ctx: AppContext, workspaceId: string, runId: string, actor: string) {

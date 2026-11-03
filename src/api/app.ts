@@ -354,9 +354,12 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/runs/:id/resume', async (req, reply) => {
     const p = user(req);
     requireRole(p, 'operator');
-    const b = z.object({ from_node: z.string().optional() }).parse(req.body ?? {});
-    const r = await resumeRun(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId, interpreterBuild, { fromNode: b.from_node });
-    return reply.status(202).send({ run_id: r.runId, carried: r.carried, rerun: r.rerun });
+    // `version` (`latest`, a number, `slug@n`) continues the run on a fixed version of its workflow if that is not too different;
+    // `dry_run` answers what would be kept without starting anything.
+    const b = z.object({ from_node: z.string().optional(), version: z.union([z.string(), z.number().int().positive()]).transform(String).optional(), dry_run: z.boolean().optional() }).parse(req.body ?? {});
+    const r = await resumeRun(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId, interpreterBuild, { fromNode: b.from_node, version: b.version, dryRun: b.dry_run });
+    if (b.dry_run) return { version: r.version, ...r.check };
+    return reply.status(202).send({ run_id: r.runId, carried: r.carried, rerun: r.rerun, version: r.version, warnings: r.check.warnings });
   });
 
   // Knowledge datasets (spec section 11)

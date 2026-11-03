@@ -24,6 +24,7 @@ import { publisherKey, signForUpload } from './signing-client.js';
 import { signPackage } from '../security/signing.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
+import type { ResumeCheck } from '../plan/resume-check.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
 
 const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0');
@@ -261,9 +262,22 @@ program
   .description('Continue a failed, cancelled or expired run as a new run: steps that succeeded are not repeated')
   .argument('<run-id>')
   .option('--from <node>', 'also rerun this step and everything after it')
-  .action(async (runId: string, opts: { from?: string }) => {
-    const r = await client().post<{ run_id: string; carried: string[]; rerun: string[] }>(`/v1/runs/${runId}/resume`, opts.from ? { from_node: opts.from } : {});
-    console.log(`run ${bold(r.run_id)} queued: ${r.carried.length} step(s) carried over from ${runId}, ${r.rerun.length} to run`);
+  .option('--version <n|latest>', 'continue on this version of the workflow (after fixing a step); refused if it differs too much from the run')
+  .option('--check', 'show what would be kept and rerun, without starting a run')
+  .action(async (runId: string, opts: { from?: string; version?: string; check?: boolean }) => {
+    const body = { ...(opts.from ? { from_node: opts.from } : {}), ...(opts.version ? { version: opts.version } : {}) };
+    if (opts.check) {
+      const c = await client().post<ResumeCheckReply>(`/v1/runs/${runId}/resume`, { ...body, dry_run: true });
+      console.log(`${c.version.workflow}@${c.version.from_version} -> @${c.version.version}`);
+      table([['STEP', 'CHANGE', 'WAS', 'THEN'], ...c.steps.map((s) => [s.id, s.change, s.was, s.action + (s.reason ? ` (${s.reason})` : '')])]);
+      for (const w of c.warnings) console.log(`warning: ${w}`);
+      console.log(c.possible ? `can resume: ${c.carried.length} step(s) kept, ${c.rerun.length} to run${c.deviation === null ? '' : `, deviation ${Math.round(c.deviation * 100)}%`}` : `cannot resume: ${c.reason}`);
+      if (!c.possible) process.exitCode = 1;
+      return;
+    }
+    const r = await client().post<{ run_id: string; carried: string[]; rerun: string[]; version: { workflow: string; version: number; from_version: number }; warnings?: string[] }>(`/v1/runs/${runId}/resume`, body);
+    console.log(`run ${bold(r.run_id)} queued on ${r.version.workflow}@${r.version.version}: ${r.carried.length} step(s) carried over from ${runId}, ${r.rerun.length} to run`);
+    for (const w of r.warnings ?? []) console.log(`warning: ${w}`);
   });
 
 program
@@ -339,6 +353,8 @@ program
   });
 
 const example = program.command('example').description('Set up the example workflows that ship with the server');
+
+type ResumeCheckReply = ResumeCheck & { version: { workflow: string; version: number; from_version: number } };
 
 interface ExampleNeeds {
   id: string;
