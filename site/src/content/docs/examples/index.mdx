@@ -18,6 +18,7 @@ npx azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...
 | `quality-report` (the flagship) | Weekly report: tools and a Python script compute metrics; an agent explains them with numbered citations; Slack post gated by a CEL guard. **Its tools return fixture data** | model agent |
 | `ci-digest` | CI digest to Slack; the smallest end-to-end example | none (no model) |
 | [`ai-sdlc-v2`](/examples/ai-sdlc-v2/) | GitHub issue → readiness check → plan → build → independent review and verification → approval → draft PR | OpenCode |
+| `openspec-flow` | Spec-driven delivery on [OpenSpec](https://github.com/Fission-AI/OpenSpec): GitHub issue → change folder (proposal, delta specs, tasks) → spec check and review → spec approval → build with tests → verify against the specs → release approval → checked archive into `openspec/specs/` → PR | OpenCode |
 | `pr-review` | Four read-only reviewers in fresh checkouts, a verifier on a different model family, triage by script, one sticky PR comment | OpenCode (Copilot models) |
 | `pr-conflict-resolver` | Merges the base into a conflicting PR, settles easy hunks by rule, resolves the rest with an agent, compares tests on base, PR and result, independent review, approval, then a PR with the resolution into the PR's branch | OpenCode (Copilot models) |
 | `issue-investigation` | Evidence-backed root-cause analysis with a challenger; an approval gates the comment | OpenCode |

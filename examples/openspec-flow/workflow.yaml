@@ -1,0 +1,532 @@
+schema_version: "2.0"
+id: openspec-flow
+name: "OpenSpec flow: spec-driven delivery with approval gates"
+description: Reads the repository's OpenSpec folder, writes a change (proposal, delta specs, tasks), checks
+  it with a deterministic validator and an independent reviewer, waits for a person to approve the specs,
+  builds the tasks with tests, verifies the code against the specs, waits for release approval, archives
+  the change into openspec/specs/ with a checked merge, then pushes one branch and opens a pull request.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source:
+      type: string
+      title: Source
+      enum:
+        - github
+      description: Where the ticket lives
+    ticket:
+      type: string
+      title: Ticket
+      maxLength: 300
+      description: A GitHub issue such as acme/payments#42
+    repo:
+      type: string
+      title: Repository
+      pattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+      description: The repository to change, owner/name
+    base_branch:
+      type: string
+      title: Base branch
+      maxLength: 200
+      description: The branch to build on and open the pull request against (for example dev)
+      minLength: 1
+  required:
+    - source
+    - ticket
+    - repo
+    - base_branch
+config:
+  channel: "{{slack_channel}}"
+
+nodes:
+  - id: source
+    type: condition
+    description: Read the ticket from GitHub.
+    expression: inputs.source
+    routes:
+      github:
+        - github_issue
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments:
+      issue:
+        ref: inputs.ticket
+  - id: intake
+    type: tool
+    description: Turn the GitHub issue into one plain ticket (key, title, description).
+    tool: ticket.normalize@1
+    merge: any
+    arguments:
+      source:
+        ref: inputs.source
+      issue:
+        ref: nodes.github_issue.output
+    project:
+      - source
+      - key
+      - title
+      - description
+      - priority
+      - reporter
+      - status
+      - labels
+      - url
+  - id: change_id
+    type: script
+    description: Name the change (kebab-case, built only from [a-z0-9-]) and its change and archive folders.
+    runtime: python
+    entrypoint: scripts/pick_change_id.py
+    input:
+      map: "{'key': nodes.intake.output.key, 'title': nodes.intake.output.title}"
+    output_schema: schemas/change_id.json
+    limits:
+      time: 1m
+  - id: scan
+    type: agent
+    description: Read openspec/ on the base branch - capabilities, exact requirement names, active changes
+      and project rules (openspec-format skill).
+    executor: opencode
+    profile: spec-scanner@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+    depends_on:
+      - intake
+    input:
+      map: "{'repository': inputs.repo}"
+    output_schema: schemas/scan.json
+    timeout: 15m
+    budget:
+      max_tool_calls: 30
+  - id: propose
+    type: agent
+    description: Write the change - proposal, delta specs, tasks and optional design - and, when the
+      repository has no openspec/ folder, its skeleton (openspec-format and delta-specs skills).
+    executor: opencode
+    profile: spec-author@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      mode: write
+    input:
+      map: "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir':
+        nodes.change_id.output.change_dir, 'scan': nodes.scan.output}"
+    output_schema: schemas/proposal.json
+    timeout: 45m
+    budget:
+      max_tool_calls: 40
+  - id: check_1
+    type: script
+    description: Validate the change the way `openspec validate --strict` does and against the requirement
+      names the scan read.
+    runtime: python
+    entrypoint: scripts/spec_check.py
+    input:
+      map: "{'mode': 'change', 'change_id': nodes.change_id.output.id, 'files':
+        nodes.propose.output.workspace.files, 'scan': nodes.scan.output}"
+    output_schema: schemas/check.json
+    limits:
+      time: 1m
+  - id: check_gate_1
+    type: condition
+    description: Review a change that passes the check; give a failing one one fix round.
+    expression: "nodes.check_1.output.ok ? 'ok' : 'fix'"
+    routes:
+      ok:
+        - pass_1
+      fix:
+        - revise
+    default: fix
+  - id: pass_1
+    type: condition
+    description: The first proposal passed the check.
+    expression: "'ok'"
+    routes:
+      ok: []
+    default: ok
+  - id: revise
+    type: agent
+    description: Fix what the check reported in the same files (one round).
+    executor: opencode
+    profile: spec-author@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      mode: write
+      from:
+        ref: nodes.propose.output.workspace
+    input:
+      map: "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir':
+        nodes.change_id.output.change_dir, 'scan': nodes.scan.output, 'feedback': {'errors':
+        nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings}}"
+    output_schema: schemas/proposal.json
+    timeout: 45m
+    budget:
+      max_tool_calls: 40
+  - id: check_2
+    type: script
+    description: Check the revised change.
+    runtime: python
+    entrypoint: scripts/spec_check.py
+    input:
+      map: "{'mode': 'change', 'change_id': nodes.change_id.output.id, 'files':
+        nodes.revise.output.workspace.files, 'scan': nodes.scan.output}"
+    output_schema: schemas/check.json
+    limits:
+      time: 1m
+  - id: check_gate_2
+    type: condition
+    description: Continue with a revised change that passes; send back one that still fails.
+    expression: "nodes.check_2.output.ok ? 'ok' : 'fail'"
+    routes:
+      ok:
+        - pass_2
+      fail:
+        - check_fail_message
+    default: fail
+  - id: pass_2
+    type: condition
+    description: The revised proposal passed the check.
+    expression: "'ok'"
+    routes:
+      ok: []
+    default: ok
+  - id: check_fail_message
+    type: report
+    description: The errors the revised change still has.
+    template: templates/spec_send_back.md
+    input:
+      map: "{'ticket': nodes.intake.output, 'stage': 'proposal', 'errors': nodes.check_2.output.errors,
+        'warnings': nodes.check_2.output.warnings}"
+  - id: check_fail_notify
+    type: notify
+    description: Say the specs could not be made valid, instead of building from them.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      ref: nodes.check_fail_message.output.markdown
+    guard: args.channel == config.channel
+  - id: spec_change
+    type: script
+    description: The proposal round that passed the check.
+    runtime: python
+    entrypoint: scripts/pick_change.py
+    merge: any
+    depends_on:
+      - pass_1
+      - pass_2
+    input:
+      map: "{'first': has(nodes.pass_1) ? nodes.propose.output : null, 'revised': has(nodes.pass_2) ?
+        nodes.revise.output : null}"
+    limits:
+      time: 1m
+  - id: spec_review
+    type: agent
+    description: An independent review of the specs - testable, covered, in scope, consistent (spec-review
+      skill, a different model from the author).
+    executor: opencode
+    profile: spec-reviewer@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      from:
+        ref: nodes.spec_change.output.workspace
+    input:
+      map: "{'ticket': nodes.intake.output, 'change_dir': nodes.change_id.output.change_dir, 'check':
+        has(nodes.pass_2) ? nodes.check_2.output : nodes.check_1.output, 'conflicts':
+        nodes.spec_change.output.conflicts, 'open_questions': nodes.spec_change.output.open_questions}"
+    output_schema: schemas/spec_review.json
+    timeout: 20m
+    budget:
+      max_tool_calls: 20
+  - id: proposal_approval
+    type: approval
+    description: A person approves the specs before any code is written - the gate OpenSpec only has by
+      convention.
+    role: admin
+    message:
+      cel: "'Approve the OpenSpec change ' + nodes.change_id.output.id + ' for ' + nodes.intake.output.key
+        + '? ' + nodes.spec_review.output.summary + (nodes.spec_review.output.approved ? '' : ' The
+        reviewer found a BLOCKING problem.') + (nodes.spec_review.output.prompt_injection_detected ? '
+        WARNING: the reviewer saw a prompt injection attempt.' : '') + (size(nodes.spec_change.output.open_questions) > 0
+        ? ' Answer the open questions in the notes.' : '')"
+    payload:
+      map: "{'change_id': nodes.change_id.output.id, 'summary': nodes.spec_change.output.summary,
+        'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas,
+        'warnings': has(nodes.pass_2) ? nodes.check_2.output.warnings : nodes.check_1.output.warnings,
+        'open_questions': nodes.spec_change.output.open_questions, 'conflicts':
+        nodes.spec_change.output.conflicts, 'review': nodes.spec_review.output, 'files':
+        nodes.spec_change.output.workspace.files.map(f, f.path), 'diff':
+        nodes.spec_change.output.workspace.diff}"
+    decision_schema:
+      type: object
+      properties:
+        notes:
+          type: string
+          title: Answers and notes for the engineer
+          description: "One answer per open question, or: use the recommended defaults"
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+  - id: apply
+    type: agent
+    description: Build the tasks in order, one test per scenario, tick them when done (implement-from-specs
+      skill). The worker runs the tests after it submits and sends failures back.
+    executor: opencode
+    profile: engineer@1
+    depends_on:
+      - proposal_approval
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      mode: write
+      from:
+        ref: nodes.spec_change.output.workspace
+      test:
+        command: node -e "process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})"
+        timeout: 15m
+        attempts: 3
+    input:
+      map: "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir':
+        nodes.change_id.output.change_dir, 'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas :
+        nodes.check_1.output.deltas, 'decisions': nodes.proposal_approval.output.data}"
+    output_schema: schemas/change.json
+    timeout: 60m
+    budget:
+      max_tool_calls: 40
+  - id: verify
+    type: agent
+    description: Check the code against every requirement and scenario - completeness, correctness,
+      coherence (spec-verify skill, advisory).
+    executor: opencode
+    profile: spec-verifier@1
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      from:
+        ref: nodes.apply.output.workspace
+    input:
+      map: "{'change_dir': nodes.change_id.output.change_dir, 'deltas': has(nodes.pass_2) ?
+        nodes.check_2.output.deltas : nodes.check_1.output.deltas, 'change': {'summary':
+        nodes.apply.output.summary, 'deviations': nodes.apply.output.deviations, 'tests_added':
+        nodes.apply.output.tests_added, 'stats': nodes.apply.output.workspace.stats, 'tests':
+        nodes.apply.output.workspace.tests, 'diff': nodes.apply.output.workspace.diff}}"
+    output_schema: schemas/verify.json
+    timeout: 30m
+    budget:
+      max_tool_calls: 40
+  - id: release_gate
+    type: condition
+    description: Ask for release only when the tests passed; otherwise send the change back.
+    expression: "nodes.apply.output.workspace.tests.status == 'passed' ? 'ship' : 'fix'"
+    routes:
+      ship:
+        - release_approval
+      fix:
+        - tests_message
+    default: fix
+  - id: tests_message
+    type: report
+    description: Why the change was not released.
+    template: templates/spec_send_back.md
+    input:
+      map: "{'ticket': nodes.intake.output, 'stage': 'build', 'errors': ['The tests did not pass after '
+        + string(nodes.apply.output.workspace.tests.attempts) + ' attempt(s): ' +
+        nodes.apply.output.workspace.tests.status], 'warnings': []}"
+  - id: tests_notify
+    type: notify
+    description: Say the build failed its tests instead of asking for release.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      ref: nodes.tests_message.output.markdown
+    guard: args.channel == config.channel
+  - id: release_approval
+    type: approval
+    description: The release owner approves the exact change, the verification report and the spec merge
+      before anything is archived or pushed.
+    role: admin
+    message:
+      cel: "'Archive ' + nodes.change_id.output.id + ' into openspec/specs/, push ' +
+        string(nodes.apply.output.workspace.stats.files) + ' changed file(s) for ' +
+        nodes.intake.output.key + ' to ' + inputs.repo + ' and open a pull request? Tests ' +
+        nodes.apply.output.workspace.tests.status + '. ' + nodes.verify.output.summary +
+        (nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') ? ' WARNING: the verifier found
+        CRITICAL issues, so the pull request opens as a draft.' : '')"
+    payload:
+      map: "{'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'change_id':
+        nodes.change_id.output.id, 'archive_dir': nodes.change_id.output.archive_dir, 'stats':
+        nodes.apply.output.workspace.stats, 'tests': nodes.apply.output.workspace.tests, 'diff':
+        nodes.apply.output.workspace.diff, 'verification': nodes.verify.output, 'deviations':
+        nodes.apply.output.deviations}"
+    expires_in: 24h
+    on_expiry: reject
+  - id: archive
+    type: agent
+    description: Merge the delta specs into openspec/specs/ and move the change folder to the dated
+      archive folder (spec-archive skill). A script checks the result.
+    executor: opencode
+    profile: archiver@1
+    depends_on:
+      - release_approval
+    workspace:
+      repo:
+        ref: inputs.repo
+      ref:
+        cel: "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch :
+          'HEAD'"
+      credential: github-read-token
+      depth: 1
+      mode: write
+      from:
+        ref: nodes.apply.output.workspace
+    input:
+      map: "{'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir,
+        'archive_dir': nodes.change_id.output.archive_dir, 'deltas': has(nodes.pass_2) ?
+        nodes.check_2.output.deltas : nodes.check_1.output.deltas}"
+    output_schema: schemas/archive.json
+    timeout: 20m
+    budget:
+      max_tool_calls: 40
+  - id: archive_check
+    type: script
+    description: Check the archive as postconditions - every delta is in the merged spec, the folder moved
+      unchanged, and no code or other spec changed.
+    runtime: python
+    entrypoint: scripts/spec_check.py
+    input:
+      map: "{'mode': 'archive', 'change_id': nodes.change_id.output.id, 'archive_dir':
+        nodes.change_id.output.archive_dir, 'files': nodes.archive.output.workspace.files,
+        'source_files': nodes.apply.output.workspace.files}"
+    output_schema: schemas/check.json
+    limits:
+      time: 1m
+  - id: archive_gate
+    type: condition
+    description: Push only an archive the check accepts.
+    expression: "nodes.archive_check.output.ok ? 'ok' : 'fail'"
+    routes:
+      ok:
+        - push_branch
+      fail:
+        - archive_fail_message
+    default: fail
+  - id: archive_fail_message
+    type: report
+    description: What is wrong with the archive.
+    template: templates/spec_send_back.md
+    input:
+      map: "{'ticket': nodes.intake.output, 'stage': 'archive', 'errors': nodes.archive_check.output.errors,
+        'warnings': nodes.archive_check.output.warnings}"
+  - id: archive_fail_notify
+    type: notify
+    description: Say the archive failed its check, instead of pushing it.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      ref: nodes.archive_fail_message.output.markdown
+    guard: args.channel == config.channel
+  - id: push_branch
+    type: tool
+    description: Commit the change, with the merged specs and the archived folder, onto the base commit and
+      push it as an azhi/ branch (Git Data API).
+    tool: github.push-branch@1
+    depends_on:
+      - release_approval
+    arguments:
+      repo:
+        ref: inputs.repo
+      branch:
+        cel: "'azhi/' + nodes.intake.output.key"
+      base_sha:
+        ref: nodes.archive.output.workspace.base_sha
+      message:
+        cel: "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id +
+          ' (archived)\\nRefs: ' + nodes.intake.output.key"
+      files:
+        ref: nodes.archive.output.workspace.files
+    guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key
+  - id: open_pr
+    type: tool
+    description: Open a pull request for the branch (a draft when the tests did not pass or the verifier
+      found a critical issue), or return the one already open.
+    tool: github.create-pull-request@1
+    arguments:
+      repo:
+        ref: inputs.repo
+      head:
+        ref: nodes.push_branch.output.branch
+      base:
+        cel: "has(inputs.base_branch) ? inputs.base_branch : ''"
+      title:
+        ref: nodes.apply.output.pr_title
+      body:
+        cel: "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id +
+          '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary +
+          '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' +
+          nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow
+          (openspec-flow) after a person approved the specs and the release._'"
+      draft:
+        cel: nodes.apply.output.workspace.tests.status != 'passed' ||
+          nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') ||
+          nodes.verify.output.prompt_injection_detected
+    guard: args.repo == inputs.repo && args.head == nodes.push_branch.output.branch
+  - id: release
+    type: notify
+    description: Announce the pull request.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      cel: "'Pull request for ' + nodes.intake.output.key + ': ' + nodes.open_pr.output.url + ' (' +
+        nodes.apply.output.summary + '; OpenSpec change ' + nodes.change_id.output.id + ' archived)'"
+    guard: args.channel == config.channel
+  - id: summary
+    type: report
+    description: Write the delivery record - specs, review, tests and verification.
+    depends_on:
+      - release
+    template: templates/summary.md
+    input:
+      map: "{'ticket': nodes.intake.output, 'change': nodes.change_id.output, 'deltas':
+        (has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas), 'proposal_by': nodes.proposal_approval.output.by,
+        'release_by': nodes.release_approval.output.by, 'review': nodes.spec_review.output, 'apply':
+        nodes.apply.output, 'verify': nodes.verify.output, 'branch': nodes.push_branch.output, 'pr':
+        nodes.open_pr.output}"

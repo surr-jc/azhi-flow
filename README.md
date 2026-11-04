@@ -101,7 +101,9 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
   with the project's tests, has an independent reviewer and a verifier challenge it with one fix round,
   and after a person approves the release pushes an `azhi/` branch and opens a pull request that says how
   much was verified. `azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...`. See
-  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). The earlier delivery workflows
+  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). A spec-first variant,
+  `examples/openspec-flow`, runs the OpenSpec lifecycle (propose, approve the specs, build, verify, approve the
+  release, archive) with a deterministic spec check and a checked archive; see [docs/openspec-flow.md](docs/openspec-flow.md). The earlier delivery workflows
   (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
   `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
   [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.

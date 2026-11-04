@@ -81,6 +81,7 @@ const META: Record<string, { category: string; steps: number; works_with: string
   'pr-review': { category: 'Code review', steps: 12, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'pr-conflict-resolver': { category: 'Code review', steps: 24, works_with: ['GitHub', 'OpenCode'] },
   'ai-sdlc-v2': { category: 'Delivery', steps: 46, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'openspec-flow': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter-jira': { category: 'Delivery', steps: 34, works_with: ['Jira', 'GitHub', 'Slack', 'OpenCode'] },
   'ai-sdlc-factory-plan': { category: 'Delivery', steps: 24, works_with: ['GitHub', 'Jira', 'OpenCode'] },

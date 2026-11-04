@@ -117,6 +117,7 @@ const DOCS = [
   'docs/pr-conflict-resolver.md',
   'docs/issue-investigation.md',
   'docs/issue-splitter.md',
+  'docs/openspec-flow.md',
   'docs/positioning.md',
 ];
 interface DocSection { doc: string; heading: string; text: string }

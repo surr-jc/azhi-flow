@@ -1,0 +1,1833 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.propose.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "revise",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "untyped_output",
+      "message": "script 'spec_change' declares no output_schema; downstream refs are not type-checked",
+      "node": "spec_change"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.spec_change.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "spec_review",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.spec_change.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "apply",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.apply.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "verify",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.apply.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "archive",
+      "path": "workspace.from"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "openspec-flow",
+    "definitionHash": "sha256:325685b95ee1175c4fbd73280efaed33aae917566271d314528d8629eff4179b",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "title": "Source",
+          "enum": [
+            "github"
+          ],
+          "description": "Where the ticket lives"
+        },
+        "ticket": {
+          "type": "string",
+          "title": "Ticket",
+          "maxLength": 300,
+          "description": "A GitHub issue such as acme/payments#42"
+        },
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The repository to change, owner/name"
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "maxLength": 200,
+          "description": "The branch to build on and open the pull request against (for example dev)",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "source",
+        "ticket",
+        "repo",
+        "base_branch"
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}"
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source",
+          "type": "condition",
+          "description": "Read the ticket from GitHub.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "github_issue"
+            ]
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the GitHub issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "github"
+        }
+      },
+      {
+        "id": "intake",
+        "type": "tool",
+        "deps": [
+          "github_issue"
+        ],
+        "dataDeps": [
+          "github_issue"
+        ],
+        "def": {
+          "id": "intake",
+          "type": "tool",
+          "description": "Turn the GitHub issue into one plain ticket (key, title, description).",
+          "tool": "ticket.normalize@1",
+          "merge": "any",
+          "arguments": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "issue": {
+              "ref": "nodes.github_issue.output"
+            }
+          },
+          "project": [
+            "source",
+            "key",
+            "title",
+            "description",
+            "priority",
+            "reporter",
+            "status",
+            "labels",
+            "url"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "change_id",
+        "type": "script",
+        "deps": [
+          "intake"
+        ],
+        "dataDeps": [
+          "intake"
+        ],
+        "def": {
+          "id": "change_id",
+          "type": "script",
+          "description": "Name the change (kebab-case, built only from [a-z0-9-]) and its change and archive folders.",
+          "runtime": "python",
+          "entrypoint": "scripts/pick_change_id.py",
+          "input": {
+            "map": "{'key': nodes.intake.output.key, 'title': nodes.intake.output.title}"
+          },
+          "output_schema": "schemas/change_id.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "scan",
+        "type": "agent",
+        "deps": [
+          "intake"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "scan",
+          "type": "agent",
+          "description": "Read openspec/ on the base branch - capabilities, exact requirement names, active changes and project rules (openspec-format skill).",
+          "executor": "opencode",
+          "profile": "spec-scanner@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "depends_on": [
+            "intake"
+          ],
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/scan.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 30
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "propose",
+        "type": "agent",
+        "deps": [
+          "change_id",
+          "intake",
+          "scan"
+        ],
+        "dataDeps": [
+          "change_id",
+          "intake",
+          "scan"
+        ],
+        "def": {
+          "id": "propose",
+          "type": "agent",
+          "description": "Write the change - proposal, delta specs, tasks and optional design - and, when the repository has no openspec/ folder, its skeleton (openspec-format and delta-specs skills).",
+          "executor": "opencode",
+          "profile": "spec-author@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write"
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'scan': nodes.scan.output}"
+          },
+          "output_schema": "schemas/proposal.json",
+          "timeout": "45m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 2700000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "check_1",
+        "type": "script",
+        "deps": [
+          "change_id",
+          "propose",
+          "scan"
+        ],
+        "dataDeps": [
+          "change_id",
+          "propose",
+          "scan"
+        ],
+        "def": {
+          "id": "check_1",
+          "type": "script",
+          "description": "Validate the change the way `openspec validate --strict` does and against the requirement names the scan read.",
+          "runtime": "python",
+          "entrypoint": "scripts/spec_check.py",
+          "input": {
+            "map": "{'mode': 'change', 'change_id': nodes.change_id.output.id, 'files': nodes.propose.output.workspace.files, 'scan': nodes.scan.output}"
+          },
+          "output_schema": "schemas/check.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "check_gate_1",
+        "type": "condition",
+        "deps": [
+          "check_1"
+        ],
+        "dataDeps": [
+          "check_1"
+        ],
+        "def": {
+          "id": "check_gate_1",
+          "type": "condition",
+          "description": "Review a change that passes the check; give a failing one one fix round.",
+          "expression": "nodes.check_1.output.ok ? 'ok' : 'fix'",
+          "routes": {
+            "ok": [
+              "pass_1"
+            ],
+            "fix": [
+              "revise"
+            ]
+          },
+          "default": "fix"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "pass_1",
+        "type": "condition",
+        "deps": [
+          "check_gate_1"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "pass_1",
+          "type": "condition",
+          "description": "The first proposal passed the check.",
+          "expression": "'ok'",
+          "routes": {
+            "ok": []
+          },
+          "default": "ok"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "check_gate_1",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "revise",
+        "type": "agent",
+        "deps": [
+          "change_id",
+          "check_1",
+          "check_gate_1",
+          "intake",
+          "propose",
+          "scan"
+        ],
+        "dataDeps": [
+          "change_id",
+          "check_1",
+          "intake",
+          "propose",
+          "scan"
+        ],
+        "def": {
+          "id": "revise",
+          "type": "agent",
+          "description": "Fix what the check reported in the same files (one round).",
+          "executor": "opencode",
+          "profile": "spec-author@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "from": {
+              "ref": "nodes.propose.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'scan': nodes.scan.output, 'feedback': {'errors': nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings}}"
+          },
+          "output_schema": "schemas/proposal.json",
+          "timeout": "45m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 2700000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "check_gate_1",
+          "route": "fix"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "check_2",
+        "type": "script",
+        "deps": [
+          "change_id",
+          "revise",
+          "scan"
+        ],
+        "dataDeps": [
+          "change_id",
+          "revise",
+          "scan"
+        ],
+        "def": {
+          "id": "check_2",
+          "type": "script",
+          "description": "Check the revised change.",
+          "runtime": "python",
+          "entrypoint": "scripts/spec_check.py",
+          "input": {
+            "map": "{'mode': 'change', 'change_id': nodes.change_id.output.id, 'files': nodes.revise.output.workspace.files, 'scan': nodes.scan.output}"
+          },
+          "output_schema": "schemas/check.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "check_gate_2",
+        "type": "condition",
+        "deps": [
+          "check_2"
+        ],
+        "dataDeps": [
+          "check_2"
+        ],
+        "def": {
+          "id": "check_gate_2",
+          "type": "condition",
+          "description": "Continue with a revised change that passes; send back one that still fails.",
+          "expression": "nodes.check_2.output.ok ? 'ok' : 'fail'",
+          "routes": {
+            "ok": [
+              "pass_2"
+            ],
+            "fail": [
+              "check_fail_message"
+            ]
+          },
+          "default": "fail"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "pass_2",
+        "type": "condition",
+        "deps": [
+          "check_gate_2"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "pass_2",
+          "type": "condition",
+          "description": "The revised proposal passed the check.",
+          "expression": "'ok'",
+          "routes": {
+            "ok": []
+          },
+          "default": "ok"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "check_gate_2",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "check_fail_message",
+        "type": "report",
+        "deps": [
+          "check_2",
+          "check_gate_2",
+          "intake"
+        ],
+        "dataDeps": [
+          "check_2",
+          "intake"
+        ],
+        "def": {
+          "id": "check_fail_message",
+          "type": "report",
+          "description": "The errors the revised change still has.",
+          "template": "templates/spec_send_back.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'stage': 'proposal', 'errors': nodes.check_2.output.errors, 'warnings': nodes.check_2.output.warnings}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "check_gate_2",
+          "route": "fail"
+        }
+      },
+      {
+        "id": "check_fail_notify",
+        "type": "notify",
+        "deps": [
+          "check_fail_message"
+        ],
+        "dataDeps": [
+          "check_fail_message"
+        ],
+        "def": {
+          "id": "check_fail_notify",
+          "type": "notify",
+          "description": "Say the specs could not be made valid, instead of building from them.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.check_fail_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "spec_change",
+        "type": "script",
+        "deps": [
+          "pass_1",
+          "pass_2",
+          "propose",
+          "revise"
+        ],
+        "dataDeps": [
+          "pass_1",
+          "pass_2",
+          "propose",
+          "revise"
+        ],
+        "def": {
+          "id": "spec_change",
+          "type": "script",
+          "description": "The proposal round that passed the check.",
+          "runtime": "python",
+          "entrypoint": "scripts/pick_change.py",
+          "merge": "any",
+          "depends_on": [
+            "pass_1",
+            "pass_2"
+          ],
+          "input": {
+            "map": "{'first': has(nodes.pass_1) ? nodes.propose.output : null, 'revised': has(nodes.pass_2) ? nodes.revise.output : null}"
+          },
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "spec_review",
+        "type": "agent",
+        "deps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "spec_change"
+        ],
+        "dataDeps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "spec_change"
+        ],
+        "def": {
+          "id": "spec_review",
+          "type": "agent",
+          "description": "An independent review of the specs - testable, covered, in scope, consistent (spec-review skill, a different model from the author).",
+          "executor": "opencode",
+          "profile": "spec-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.spec_change.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'change_dir': nodes.change_id.output.change_dir, 'check': has(nodes.pass_2) ? nodes.check_2.output : nodes.check_1.output, 'conflicts': nodes.spec_change.output.conflicts, 'open_questions': nodes.spec_change.output.open_questions}"
+          },
+          "output_schema": "schemas/spec_review.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 20
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "proposal_approval",
+        "type": "approval",
+        "deps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "spec_change",
+          "spec_review"
+        ],
+        "dataDeps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "spec_change",
+          "spec_review"
+        ],
+        "def": {
+          "id": "proposal_approval",
+          "type": "approval",
+          "description": "A person approves the specs before any code is written - the gate OpenSpec only has by convention.",
+          "role": "admin",
+          "message": {
+            "cel": "'Approve the OpenSpec change ' + nodes.change_id.output.id + ' for ' + nodes.intake.output.key + '? ' + nodes.spec_review.output.summary + (nodes.spec_review.output.approved ? '' : ' The reviewer found a BLOCKING problem.') + (nodes.spec_review.output.prompt_injection_detected ? ' WARNING: the reviewer saw a prompt injection attempt.' : '') + (size(nodes.spec_change.output.open_questions) > 0 ? ' Answer the open questions in the notes.' : '')"
+          },
+          "payload": {
+            "map": "{'change_id': nodes.change_id.output.id, 'summary': nodes.spec_change.output.summary, 'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas, 'warnings': has(nodes.pass_2) ? nodes.check_2.output.warnings : nodes.check_1.output.warnings, 'open_questions': nodes.spec_change.output.open_questions, 'conflicts': nodes.spec_change.output.conflicts, 'review': nodes.spec_review.output, 'files': nodes.spec_change.output.workspace.files.map(f, f.path), 'diff': nodes.spec_change.output.workspace.diff}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "notes": {
+                "type": "string",
+                "title": "Answers and notes for the engineer",
+                "description": "One answer per open question, or: use the recommended defaults"
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "apply",
+        "type": "agent",
+        "deps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "proposal_approval",
+          "spec_change"
+        ],
+        "dataDeps": [
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "pass_2",
+          "proposal_approval",
+          "spec_change"
+        ],
+        "def": {
+          "id": "apply",
+          "type": "agent",
+          "description": "Build the tasks in order, one test per scenario, tick them when done (implement-from-specs skill). The worker runs the tests after it submits and sends failures back.",
+          "executor": "opencode",
+          "profile": "engineer@1",
+          "depends_on": [
+            "proposal_approval"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "from": {
+              "ref": "nodes.spec_change.output.workspace"
+            },
+            "test": {
+              "command": "node -e \"process.env.AZHI_TEST_DATABASE_URL='pglite://';require('child_process').execSync('npm ci && npm run typecheck && npx vitest run',{stdio:'inherit',env:process.env})\"",
+              "timeout": "15m",
+              "attempts": 3
+            }
+          },
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas, 'decisions': nodes.proposal_approval.output.data}"
+          },
+          "output_schema": "schemas/change.json",
+          "timeout": "60m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "verify",
+        "type": "agent",
+        "deps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "pass_2"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "pass_2"
+        ],
+        "def": {
+          "id": "verify",
+          "type": "agent",
+          "description": "Check the code against every requirement and scenario - completeness, correctness, coherence (spec-verify skill, advisory).",
+          "executor": "opencode",
+          "profile": "spec-verifier@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.apply.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'change_dir': nodes.change_id.output.change_dir, 'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas, 'change': {'summary': nodes.apply.output.summary, 'deviations': nodes.apply.output.deviations, 'tests_added': nodes.apply.output.tests_added, 'stats': nodes.apply.output.workspace.stats, 'tests': nodes.apply.output.workspace.tests, 'diff': nodes.apply.output.workspace.diff}}"
+          },
+          "output_schema": "schemas/verify.json",
+          "timeout": "30m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 1800000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "release_gate",
+        "type": "condition",
+        "deps": [
+          "apply"
+        ],
+        "dataDeps": [
+          "apply"
+        ],
+        "def": {
+          "id": "release_gate",
+          "type": "condition",
+          "description": "Ask for release only when the tests passed; otherwise send the change back.",
+          "expression": "nodes.apply.output.workspace.tests.status == 'passed' ? 'ship' : 'fix'",
+          "routes": {
+            "ship": [
+              "release_approval"
+            ],
+            "fix": [
+              "tests_message"
+            ]
+          },
+          "default": "fix"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "tests_message",
+        "type": "report",
+        "deps": [
+          "apply",
+          "intake",
+          "release_gate"
+        ],
+        "dataDeps": [
+          "apply",
+          "intake"
+        ],
+        "def": {
+          "id": "tests_message",
+          "type": "report",
+          "description": "Why the change was not released.",
+          "template": "templates/spec_send_back.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'stage': 'build', 'errors': ['The tests did not pass after ' + string(nodes.apply.output.workspace.tests.attempts) + ' attempt(s): ' + nodes.apply.output.workspace.tests.status], 'warnings': []}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "release_gate",
+          "route": "fix"
+        }
+      },
+      {
+        "id": "tests_notify",
+        "type": "notify",
+        "deps": [
+          "tests_message"
+        ],
+        "dataDeps": [
+          "tests_message"
+        ],
+        "def": {
+          "id": "tests_notify",
+          "type": "notify",
+          "description": "Say the build failed its tests instead of asking for release.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.tests_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release_approval",
+        "type": "approval",
+        "deps": [
+          "apply",
+          "change_id",
+          "intake",
+          "release_gate",
+          "verify"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "intake",
+          "verify"
+        ],
+        "def": {
+          "id": "release_approval",
+          "type": "approval",
+          "description": "The release owner approves the exact change, the verification report and the spec merge before anything is archived or pushed.",
+          "role": "admin",
+          "message": {
+            "cel": "'Archive ' + nodes.change_id.output.id + ' into openspec/specs/, push ' + string(nodes.apply.output.workspace.stats.files) + ' changed file(s) for ' + nodes.intake.output.key + ' to ' + inputs.repo + ' and open a pull request? Tests ' + nodes.apply.output.workspace.tests.status + '. ' + nodes.verify.output.summary + (nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') ? ' WARNING: the verifier found CRITICAL issues, so the pull request opens as a draft.' : '')"
+          },
+          "payload": {
+            "map": "{'repository': inputs.repo, 'branch': 'azhi/' + nodes.intake.output.key, 'change_id': nodes.change_id.output.id, 'archive_dir': nodes.change_id.output.archive_dir, 'stats': nodes.apply.output.workspace.stats, 'tests': nodes.apply.output.workspace.tests, 'diff': nodes.apply.output.workspace.diff, 'verification': nodes.verify.output, 'deviations': nodes.apply.output.deviations}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "release_gate",
+          "route": "ship"
+        }
+      },
+      {
+        "id": "archive",
+        "type": "agent",
+        "deps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "pass_2",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "pass_2"
+        ],
+        "def": {
+          "id": "archive",
+          "type": "agent",
+          "description": "Merge the delta specs into openspec/specs/ and move the change folder to the dated archive folder (spec-archive skill). A script checks the result.",
+          "executor": "opencode",
+          "profile": "archiver@1",
+          "depends_on": [
+            "release_approval"
+          ],
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "from": {
+              "ref": "nodes.apply.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'archive_dir': nodes.change_id.output.archive_dir, 'deltas': has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas}"
+          },
+          "output_schema": "schemas/archive.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "archive_check",
+        "type": "script",
+        "deps": [
+          "apply",
+          "archive",
+          "change_id"
+        ],
+        "dataDeps": [
+          "apply",
+          "archive",
+          "change_id"
+        ],
+        "def": {
+          "id": "archive_check",
+          "type": "script",
+          "description": "Check the archive as postconditions - every delta is in the merged spec, the folder moved unchanged, and no code or other spec changed.",
+          "runtime": "python",
+          "entrypoint": "scripts/spec_check.py",
+          "input": {
+            "map": "{'mode': 'archive', 'change_id': nodes.change_id.output.id, 'archive_dir': nodes.change_id.output.archive_dir, 'files': nodes.archive.output.workspace.files, 'source_files': nodes.apply.output.workspace.files}"
+          },
+          "output_schema": "schemas/check.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "archive_gate",
+        "type": "condition",
+        "deps": [
+          "archive_check"
+        ],
+        "dataDeps": [
+          "archive_check"
+        ],
+        "def": {
+          "id": "archive_gate",
+          "type": "condition",
+          "description": "Push only an archive the check accepts.",
+          "expression": "nodes.archive_check.output.ok ? 'ok' : 'fail'",
+          "routes": {
+            "ok": [
+              "push_branch"
+            ],
+            "fail": [
+              "archive_fail_message"
+            ]
+          },
+          "default": "fail"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "archive_fail_message",
+        "type": "report",
+        "deps": [
+          "archive_check",
+          "archive_gate",
+          "intake"
+        ],
+        "dataDeps": [
+          "archive_check",
+          "intake"
+        ],
+        "def": {
+          "id": "archive_fail_message",
+          "type": "report",
+          "description": "What is wrong with the archive.",
+          "template": "templates/spec_send_back.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'stage': 'archive', 'errors': nodes.archive_check.output.errors, 'warnings': nodes.archive_check.output.warnings}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "archive_gate",
+          "route": "fail"
+        }
+      },
+      {
+        "id": "archive_fail_notify",
+        "type": "notify",
+        "deps": [
+          "archive_fail_message"
+        ],
+        "dataDeps": [
+          "archive_fail_message"
+        ],
+        "def": {
+          "id": "archive_fail_notify",
+          "type": "notify",
+          "description": "Say the archive failed its check, instead of pushing it.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.archive_fail_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "push_branch",
+        "type": "tool",
+        "deps": [
+          "apply",
+          "archive",
+          "archive_gate",
+          "change_id",
+          "intake",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "apply",
+          "archive",
+          "change_id",
+          "intake"
+        ],
+        "def": {
+          "id": "push_branch",
+          "type": "tool",
+          "description": "Commit the change, with the merged specs and the archived folder, onto the base commit and push it as an azhi/ branch (Git Data API).",
+          "tool": "github.push-branch@1",
+          "depends_on": [
+            "release_approval"
+          ],
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "branch": {
+              "cel": "'azhi/' + nodes.intake.output.key"
+            },
+            "base_sha": {
+              "ref": "nodes.archive.output.workspace.base_sha"
+            },
+            "message": {
+              "cel": "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id + ' (archived)\\nRefs: ' + nodes.intake.output.key"
+            },
+            "files": {
+              "ref": "nodes.archive.output.workspace.files"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "archive_gate",
+          "route": "ok"
+        }
+      },
+      {
+        "id": "open_pr",
+        "type": "tool",
+        "deps": [
+          "apply",
+          "change_id",
+          "intake",
+          "push_branch",
+          "release_approval",
+          "verify"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "intake",
+          "push_branch",
+          "release_approval",
+          "verify"
+        ],
+        "def": {
+          "id": "open_pr",
+          "type": "tool",
+          "description": "Open a pull request for the branch (a draft when the tests did not pass or the verifier found a critical issue), or return the one already open.",
+          "tool": "github.create-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "head": {
+              "ref": "nodes.push_branch.output.branch"
+            },
+            "base": {
+              "cel": "has(inputs.base_branch) ? inputs.base_branch : ''"
+            },
+            "title": {
+              "ref": "nodes.apply.output.pr_title"
+            },
+            "body": {
+              "cel": "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id + '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (openspec-flow) after a person approved the specs and the release._'"
+            },
+            "draft": {
+              "cel": "nodes.apply.output.workspace.tests.status != 'passed' || nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') || nodes.verify.output.prompt_injection_detected"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release",
+        "type": "notify",
+        "deps": [
+          "apply",
+          "change_id",
+          "intake",
+          "open_pr"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "intake",
+          "open_pr"
+        ],
+        "def": {
+          "id": "release",
+          "type": "notify",
+          "description": "Announce the pull request.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "cel": "'Pull request for ' + nodes.intake.output.key + ': ' + nodes.open_pr.output.url + ' (' + nodes.apply.output.summary + '; OpenSpec change ' + nodes.change_id.output.id + ' archived)'"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "summary",
+        "type": "report",
+        "deps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "open_pr",
+          "pass_2",
+          "proposal_approval",
+          "push_branch",
+          "release",
+          "release_approval",
+          "spec_review",
+          "verify"
+        ],
+        "dataDeps": [
+          "apply",
+          "change_id",
+          "check_1",
+          "check_2",
+          "intake",
+          "open_pr",
+          "pass_2",
+          "proposal_approval",
+          "push_branch",
+          "release_approval",
+          "spec_review",
+          "verify"
+        ],
+        "def": {
+          "id": "summary",
+          "type": "report",
+          "description": "Write the delivery record - specs, review, tests and verification.",
+          "depends_on": [
+            "release"
+          ],
+          "template": "templates/summary.md",
+          "input": {
+            "map": "{'ticket': nodes.intake.output, 'change': nodes.change_id.output, 'deltas': (has(nodes.pass_2) ? nodes.check_2.output.deltas : nodes.check_1.output.deltas), 'proposal_by': nodes.proposal_approval.output.by, 'release_by': nodes.release_approval.output.by, 'review': nodes.spec_review.output, 'apply': nodes.apply.output, 'verify': nodes.verify.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "scan": "output of tainted agent scan",
+        "propose": "output of tainted agent propose",
+        "check_1": "output of tainted agent propose",
+        "check_gate_1": "output of tainted agent propose",
+        "revise": "output of tainted agent revise",
+        "check_2": "output of tainted agent revise",
+        "check_gate_2": "output of tainted agent revise",
+        "check_fail_message": "output of tainted agent revise",
+        "check_fail_notify": "output of tainted agent revise",
+        "spec_change": "output of tainted agent propose",
+        "spec_review": "output of tainted agent spec_review",
+        "apply": "output of tainted agent apply",
+        "verify": "output of tainted agent verify",
+        "release_gate": "output of tainted agent apply",
+        "tests_message": "output of tainted agent apply",
+        "tests_notify": "output of tainted agent apply",
+        "archive": "output of tainted agent archive",
+        "archive_check": "output of tainted agent apply",
+        "archive_gate": "output of tainted agent apply",
+        "archive_fail_message": "output of tainted agent apply",
+        "archive_fail_notify": "output of tainted agent apply",
+        "push_branch": "output of tainted agent apply",
+        "open_pr": "output of tainted agent apply",
+        "release": "output of tainted agent apply",
+        "summary": "output of tainted agent apply"
+      },
+      "tainted": {
+        "scan": "reads a cloned repository (its files are untrusted)",
+        "propose": "reads a cloned repository (its files are untrusted)",
+        "revise": "reads a cloned repository (its files are untrusted)",
+        "spec_review": "reads a cloned repository (its files are untrusted)",
+        "apply": "reads a cloned repository (its files are untrusted)",
+        "verify": "reads a cloned repository (its files are untrusted)",
+        "archive": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "scan",
+          "write": "check_fail_notify",
+          "path": [
+            "scan",
+            "check_2",
+            "check_fail_message",
+            "check_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
+          "write": "release",
+          "path": [
+            "scan",
+            "…",
+            "proposal_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "scan",
+          "write": "archive_fail_notify",
+          "path": [
+            "scan",
+            "…",
+            "proposal_approval",
+            "…",
+            "archive_fail_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "scan",
+          "write": "tests_notify",
+          "path": [
+            "scan",
+            "…",
+            "proposal_approval",
+            "…",
+            "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "release",
+          "path": [
+            "propose",
+            "…",
+            "proposal_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "archive_fail_notify",
+          "path": [
+            "propose",
+            "…",
+            "proposal_approval",
+            "…",
+            "archive_fail_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "tests_notify",
+          "path": [
+            "propose",
+            "…",
+            "proposal_approval",
+            "…",
+            "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "revise",
+          "write": "check_fail_notify",
+          "path": [
+            "revise",
+            "check_2",
+            "check_fail_message",
+            "check_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "release",
+          "path": [
+            "revise",
+            "…",
+            "proposal_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "revise",
+          "write": "archive_fail_notify",
+          "path": [
+            "revise",
+            "…",
+            "proposal_approval",
+            "…",
+            "archive_fail_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "revise",
+          "write": "tests_notify",
+          "path": [
+            "revise",
+            "…",
+            "proposal_approval",
+            "…",
+            "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "spec_review",
+          "write": "release",
+          "path": [
+            "spec_review",
+            "…",
+            "proposal_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "spec_review",
+          "write": "archive_fail_notify",
+          "path": [
+            "spec_review",
+            "…",
+            "proposal_approval",
+            "…",
+            "archive_fail_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "spec_review",
+          "write": "tests_notify",
+          "path": [
+            "spec_review",
+            "…",
+            "proposal_approval",
+            "…",
+            "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "apply",
+          "write": "release",
+          "path": [
+            "apply",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "apply",
+          "write": "tests_notify",
+          "path": [
+            "apply",
+            "tests_message",
+            "tests_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "apply",
+          "write": "archive_fail_notify",
+          "path": [
+            "apply",
+            "archive_check",
+            "archive_fail_message",
+            "archive_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "apply",
+          "write": "release",
+          "path": [
+            "apply",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "verify",
+          "write": "release",
+          "path": [
+            "verify",
+            "open_pr",
+            "release"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "verify",
+          "write": "release",
+          "path": [
+            "verify",
+            "…",
+            "release_approval",
+            "…",
+            "release"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "archive",
+          "write": "archive_fail_notify",
+          "path": [
+            "archive",
+            "archive_check",
+            "archive_fail_message",
+            "archive_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "archive",
+          "write": "release",
+          "path": [
+            "archive",
+            "push_branch",
+            "open_pr",
+            "release"
+          ],
+          "gate": "guard"
+        }
+      ]
+    }
+  }
+}
