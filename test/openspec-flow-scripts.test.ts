@@ -16,7 +16,7 @@ const file = (path: string, content: string, status = 'added') => ({ path, statu
 const req = (name: string, extra = '') => `### Requirement: ${name}\nThe system SHALL ${name.toLowerCase()}.\n\n#### Scenario: ${name} works\n- **WHEN** it is asked\n- **THEN** it ${extra || 'answers'}\n`;
 const WHY = '## Why\nCarts cannot take a discount code, so shoppers leave at checkout and support gets the requests.\n\n## What Changes\n- Add a discount code field\n';
 const TASKS = '## 1. Cart\n- [x] 1.1 Add the field\n';
-const scan = { has_openspec: true, capabilities: [{ name: 'cart', requirements: ['Totals', 'Old Name', 'Gift Wrap'] }], active_changes: [], rules: [] };
+const scan = { has_openspec: true, has_config: true, has_specs: true, capabilities: [{ name: 'cart', requirements: ['Totals', 'Old Name', 'Gift Wrap'] }], active_changes: [], rules: [] };
 
 const change = (id: string, delta: string, extra: ReturnType<typeof file>[] = []) => [
   file(`openspec/changes/${id}/proposal.md`, WHY),
@@ -79,6 +79,27 @@ describe('OpenSpec flow: spec_check.py, change mode', () => {
     expect(e).toMatch(/Why` is \d+ characters/);
     expect(e).toMatch(/tasks\.md is missing/);
     expect(e).toMatch(/src\/cart\.ts: the proposal may only write/);
+  });
+
+  it('rejects a modified config, deletions, and says where the files went when proposal.md is missing', () => {
+    const files = [
+      file('openspec/config.yaml', 'context: x', 'modified'),
+      file('openspec/changes/other-folder/proposal.md', WHY),
+      file('openspec/changes/other-folder/tasks.md', TASKS),
+      file('openspec/changes/other-folder/specs/cart/spec.md', `## ADDED Requirements
+${req('Discount Code')}`),
+      { path: 'openspec/specs/cart/spec.md', status: 'deleted' },
+    ];
+    const e = check(files).errors.join('\n');
+    expect(e).toMatch(/openspec\/config\.yaml already exists in the repository: do not modify it/);
+    expect(e).toMatch(/proposal\.md is missing \(the step wrote: .*other-folder\/proposal\.md/);
+    expect(e).toMatch(/must not delete files/);
+  });
+
+  it('accepts a new config.yaml and keeps dotted paths intact', () => {
+    const files = [...change('add-discount', `## ADDED Requirements
+${req('Discount Code')}`), file('openspec/config.yaml', 'context: x'), file('./openspec/specs/.gitkeep', '')];
+    expect(check(files).errors).toEqual([]);
   });
 
   it('requires at least one delta spec', () => {
@@ -155,9 +176,10 @@ describe('OpenSpec flow: spec_check.py, archive mode', () => {
 });
 
 describe('OpenSpec flow: pick_change.py', () => {
-  it('prefers the revised round and fails when none ran', () => {
-    expect(run('pick_change.py', { first: { a: 1 }, revised: { a: 2 } })).toEqual({ a: 2 });
-    expect(run('pick_change.py', { first: { a: 1 }, revised: null })).toEqual({ a: 1 });
-    expect(() => run('pick_change.py', { first: null, revised: null })).toThrow();
+  it('prefers the revised round and reports found: false when none passed', () => {
+    expect(run('pick_change.py', { first: { a: 1 }, revised: { a: 2 } })).toEqual({ a: 2, found: true });
+    expect(run('pick_change.py', { first: { a: 1 }, revised: null })).toEqual({ a: 1, found: true });
+    // No round passed: report it instead of failing, so no retry is attempted on an outcome that cannot change.
+    expect(run('pick_change.py', { first: null, revised: null })).toEqual({ found: false });
   });
 });

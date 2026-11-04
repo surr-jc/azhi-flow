@@ -240,6 +240,15 @@ nodes:
         nodes.revise.output : null}"
     limits:
       time: 1m
+  - id: have_change
+    type: condition
+    description: Review only when a round passed the check; otherwise the run has already said why it stopped.
+    expression: "nodes.spec_change.output.found ? 'ok' : 'none'"
+    routes:
+      ok:
+        - spec_review
+      none: []
+    default: none
   - id: spec_review
     type: agent
     description: An independent review of the specs - testable, covered, in scope, consistent (spec-review

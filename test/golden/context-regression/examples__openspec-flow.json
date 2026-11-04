@@ -52,7 +52,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "openspec-flow",
-    "definitionHash": "sha256:325685b95ee1175c4fbd73280efaed33aae917566271d314528d8629eff4179b",
+    "definitionHash": "sha256:25124c8f1165efd6bc232bc5498acb7fcbfdfb3ed725fb9401d35229b117370c",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -679,12 +679,46 @@
         "maxAttempts": 3
       },
       {
+        "id": "have_change",
+        "type": "condition",
+        "deps": [
+          "spec_change"
+        ],
+        "dataDeps": [
+          "spec_change"
+        ],
+        "def": {
+          "id": "have_change",
+          "type": "condition",
+          "description": "Review only when a round passed the check; otherwise the run has already said why it stopped.",
+          "expression": "nodes.spec_change.output.found ? 'ok' : 'none'",
+          "routes": {
+            "ok": [
+              "spec_review"
+            ],
+            "none": []
+          },
+          "default": "none"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
         "id": "spec_review",
         "type": "agent",
         "deps": [
           "change_id",
           "check_1",
           "check_2",
+          "have_change",
           "intake",
           "pass_2",
           "spec_change"
@@ -727,6 +761,10 @@
         },
         "timeoutMs": 1200000,
         "maxAttempts": 3,
+        "route": {
+          "condition": "have_change",
+          "route": "ok"
+        },
         "agentTools": []
       },
       {
@@ -1549,6 +1587,7 @@
         "check_fail_message": "output of tainted agent revise",
         "check_fail_notify": "output of tainted agent revise",
         "spec_change": "output of tainted agent propose",
+        "have_change": "output of tainted agent propose",
         "spec_review": "output of tainted agent spec_review",
         "apply": "output of tainted agent apply",
         "verify": "output of tainted agent verify",

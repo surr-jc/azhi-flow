@@ -35,7 +35,10 @@ MAX_DELTAS = 10
 
 
 def norm_path(p):
-    return str(p).replace("\\", "/").lstrip("./")
+    p = str(p).replace("\\", "/")
+    while p.startswith("./") or p.startswith("/"):
+        p = p[2:] if p.startswith("./") else p[1:]
+    return p
 
 
 def norm_text(t):
@@ -135,16 +138,25 @@ def mode_change(data):
     prefix = f"openspec/changes/{cid}/"
     files = [f for f in data.get("files") or [] if f.get("status") != "deleted"]
     by_path = {norm_path(f["path"]): f.get("content") or "" for f in files}
+    status = {norm_path(f["path"]): f.get("status") for f in files}
     msgs = []
     # The proposal stage may write the change folder and, when the repository had none, the openspec/ skeleton.
+    # It may only add those two files: an existing config is the project's, never the author's to overwrite.
     allowed_extra = {"openspec/config.yaml", "openspec/specs/.gitkeep"}
     for p in by_path:
-        if not p.startswith(prefix) and p not in allowed_extra:
+        if p in allowed_extra:
+            if status[p] != "added":
+                msgs.append(("error", f"{p} already exists in the repository: do not modify it"))
+        elif not p.startswith(prefix):
             msgs.append(("error", f"{p}: the proposal may only write {prefix}, openspec/config.yaml and openspec/specs/.gitkeep"))
+    for f in data.get("files") or []:
+        if f.get("status") == "deleted":
+            msgs.append(("error", f"{norm_path(f['path'])}: the proposal must not delete files"))
 
     proposal = by_path.get(prefix + "proposal.md")
     if proposal is None:
-        msgs.append(("error", f"{prefix}proposal.md is missing"))
+        seen = ", ".join(sorted(by_path)[:8]) or "no files"
+        msgs.append(("error", f"{prefix}proposal.md is missing (the step wrote: {seen}); put every file of the change under {prefix}"))
     else:
         why = re.search(r"^## Why[ \t]*\n(.*?)(?=^## |\Z)", proposal, re.M | re.S)
         n = len(why.group(1).strip()) if why else 0

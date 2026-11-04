@@ -257,4 +257,4 @@ secrets:
   - slack-bot-token
   - github-read-token
   - github-write-token
-  - openai-chatgpt-auth
+  - github-copilot-token
