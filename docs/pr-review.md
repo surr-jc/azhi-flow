@@ -395,7 +395,7 @@ For a GitHub step:
 
 ## What is verified
 
-`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 and its real
+`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.19.5 and its real
 `github-copilot` provider pointed at a scripted Copilot stand-in (`AZHI_COPILOT_API_URL`; no
 subscription, no network), a stand-in for GitHub's device flow, a local git host
 (`git http-backend` behind a token check) and a stand-in GitHub API. It checks:

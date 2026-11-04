@@ -97,7 +97,7 @@ export function installDcp(env: NodeJS.ProcessEnv = process.env): void {
  * platform binary is about 250 MB): `azhi setup --opencode2` installs this exact version into the tools folder.
  */
 export const OPENCODE2_PACKAGE = '@opencode/cli';
-export const OPENCODE2_VERSION = '2.1.4';
+export const OPENCODE2_VERSION = '2.2.5';
 
 export function opencode2Dir(env: NodeJS.ProcessEnv = process.env): string {
   return join(toolsDir(env), 'opencode2');
