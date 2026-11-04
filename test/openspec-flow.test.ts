@@ -32,6 +32,13 @@ describe('OpenSpec flow example: definition', () => {
     expect(byId.get('push_branch').depends_on).toContain('release_approval');
   });
 
+  it('restarts the fix round from a clean checkout and gives the pick step an explicit contract', () => {
+    const byId = new Map(def.nodes.map((n) => [n.id, n as any]));
+    // A continuation would carry the first attempt's bad edit of an existing file into the fix round.
+    expect(byId.get('revise').workspace.from).toBeUndefined();
+    expect(byId.get('spec_change').output_schema).toBe('schemas/spec_change.json');
+  });
+
   it('is offered by the examples API and lets no agent hold a write credential', () => {
     const example = loadExample('openspec-flow');
     expect(example?.workflow.id).toBe('openspec-flow');

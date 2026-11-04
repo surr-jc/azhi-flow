@@ -9,19 +9,6 @@
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.propose.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "revise",
-      "path": "workspace.from"
-    },
-    {
-      "severity": "warning",
-      "code": "untyped_output",
-      "message": "script 'spec_change' declares no output_schema; downstream refs are not type-checked",
-      "node": "spec_change"
-    },
-    {
-      "severity": "warning",
-      "code": "workspace_from_untyped",
       "message": "workspace.from 'nodes.spec_change.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
       "node": "spec_review",
       "path": "workspace.from"
@@ -52,7 +39,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "openspec-flow",
-    "definitionHash": "sha256:25124c8f1165efd6bc232bc5498acb7fcbfdfb3ed725fb9401d35229b117370c",
+    "definitionHash": "sha256:b52e446986c0f0487345d1b0ac289bc795484b9ff4e1f1f4001763bf5c6c8752",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -414,7 +401,7 @@
         "def": {
           "id": "revise",
           "type": "agent",
-          "description": "Fix what the check reported in the same files (one round).",
+          "description": "Write the change again from a clean checkout, using the first attempt's files as a draft and fixing what the check reported (one round).",
           "executor": "opencode",
           "profile": "spec-author@1",
           "workspace": {
@@ -426,13 +413,10 @@
             },
             "credential": "github-read-token",
             "depth": 1,
-            "mode": "write",
-            "from": {
-              "ref": "nodes.propose.output.workspace"
-            }
+            "mode": "write"
           },
           "input": {
-            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'scan': nodes.scan.output, 'feedback': {'errors': nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings}}"
+            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'scan': nodes.scan.output, 'feedback': {'errors': nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings, 'previous_files': nodes.propose.output.workspace.files.filter(f, f.status != 'deleted' && f.path != 'openspec/config.yaml').map(f, {'path': f.path, 'content': f.content})}}"
           },
           "output_schema": "schemas/proposal.json",
           "timeout": "45m",
@@ -671,6 +655,7 @@
           "input": {
             "map": "{'first': has(nodes.pass_1) ? nodes.propose.output : null, 'revised': has(nodes.pass_2) ? nodes.revise.output : null}"
           },
+          "output_schema": "schemas/spec_change.json",
           "limits": {
             "time": "1m"
           }

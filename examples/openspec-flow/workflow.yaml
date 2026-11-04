@@ -160,7 +160,8 @@ nodes:
     default: ok
   - id: revise
     type: agent
-    description: Fix what the check reported in the same files (one round).
+    description: Write the change again from a clean checkout, using the first attempt's files as a draft
+      and fixing what the check reported (one round).
     executor: opencode
     profile: spec-author@1
     workspace:
@@ -172,12 +173,12 @@ nodes:
       credential: github-read-token
       depth: 1
       mode: write
-      from:
-        ref: nodes.propose.output.workspace
     input:
       map: "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir':
         nodes.change_id.output.change_dir, 'scan': nodes.scan.output, 'feedback': {'errors':
-        nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings}}"
+        nodes.check_1.output.errors, 'warnings': nodes.check_1.output.warnings, 'previous_files':
+        nodes.propose.output.workspace.files.filter(f, f.status != 'deleted' && f.path !=
+        'openspec/config.yaml').map(f, {'path': f.path, 'content': f.content})}}"
     output_schema: schemas/proposal.json
     timeout: 45m
     budget:
@@ -238,6 +239,7 @@ nodes:
     input:
       map: "{'first': has(nodes.pass_1) ? nodes.propose.output : null, 'revised': has(nodes.pass_2) ?
         nodes.revise.output : null}"
+    output_schema: schemas/spec_change.json
     limits:
       time: 1m
   - id: have_change
