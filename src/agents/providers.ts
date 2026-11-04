@@ -241,7 +241,7 @@ export function openaiProvider(o: OpenAIOptions): ModelProvider {
       // Copilot's Claude models can split one answer over several choices (text in one, tool calls in another).
       const choices = (body.choices ?? []) as any[];
       const choice = choices[0];
-      if (!choice) throw new AzhiError(ErrorClass.transient, `${id} returned no choices`);
+      if (!choice) throw new AzhiError(ErrorClass.transient, `${id} returned no choices for ${req.model} (max ${req.maxTokens} output tokens, ${req.tools.length} tools): ${raw.slice(0, 300)}`);
       const content: Block[] = [];
       for (const ch of choices) if (typeof ch.message?.content === 'string' && ch.message.content) content.push({ type: 'text', text: ch.message.content });
       for (const c of choices.flatMap((ch) => ch.message?.tool_calls ?? [])) {
