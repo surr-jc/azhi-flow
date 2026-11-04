@@ -34,6 +34,21 @@ describe('OpenCode 2 setup', () => {
     expect(opencode2Binary({ ...env, AZHI_OPENCODE2_BIN: '/opt/opencode2' }, 'linux', 'x64')).toBe('/opt/opencode2');
   });
 
+  it('skips the cli package placeholder an install without scripts leaves in bin', () => {
+    const tools = mkdtempSync(join(tmpdir(), 'azhi-tools-'));
+    const env = { AZHI_TOOLS_DIR: tools, PATH: '' };
+    const put = (name: string) => {
+      const dir = join(opencode2Dir(env), 'node_modules', '@opencode', name, 'bin');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'opencode.exe'), '');
+      return join(dir, 'opencode.exe');
+    };
+    const placeholder = put('cli');
+    expect(opencode2Binary(env, 'win32', 'x64')).toBe(placeholder);
+    const real = put('cli-windows-x64');
+    expect(opencode2Binary(env, 'win32', 'x64')).toBe(real);
+  });
+
   it("gives OpenCode 2 DCP's package folder (it loads plugins only from a folder)", () => {
     const tools = mkdtempSync(join(tmpdir(), 'azhi-tools-'));
     const root = join(tools, 'dcp', 'node_modules', ...DCP_PACKAGE.split('/'));
