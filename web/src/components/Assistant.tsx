@@ -180,7 +180,7 @@ export function Assistant() {
   if (path === '/ui/workflows/new') return null;
   const toBuilder = (h: Handoff) => {
     const prompt = h.workflow ? `Change the existing workflow ${h.workflow}: ${h.prompt}` : h.prompt;
-    navigate(`/ui/workflows/new?prompt=${encodeURIComponent(prompt.slice(0, 2200))}`);
+    navigate(`/ui/workflows/new?prompt=${encodeURIComponent(prompt)}`);
   };
   const results = new Map<string, Extract<Block, { type: 'tool_result' }>>();
   for (const m of state.messages) for (const b of m.content) if (b.type === 'tool_result') results.set(b.tool_use_id, b);
