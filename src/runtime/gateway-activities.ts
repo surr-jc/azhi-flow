@@ -7,6 +7,7 @@ import type { HarnessResult } from '../worker/harness-activity.js';
 import { retrieve } from '../knowledge/datasets.js';
 import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import { asArtifact, callTool } from '../gateway/gateway.js';
+import { notificationBlocks } from '../gateway/tools/slack-format.js';
 import { byteSize } from '../lib/json.js';
 import { signRunToken } from '../security/tokens.js';
 import type { AppContext } from '../server/context.js';
@@ -137,13 +138,15 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         if (input.mock) return { action_id: 'mock', delivered: false, receipt: { mocked: true } };
         const hb = setInterval(() => Context.current().heartbeat(), 5000);
         try {
+          const workflow = (await ctx.pool.query(`SELECT w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id WHERE r.id=$1`, [input.runId])).rows[0]?.slug ?? 'workflow';
+          const blocks = notificationBlocks({ workflow, runId: input.runId, nodeId: input.nodeId, text: input.text, baseUrl: ctx.settings.publicUrl });
           const r = await callTool(ctx, {
             workspaceId: input.workspaceId,
             runId: input.runId,
             nodeId: input.nodeId,
             attempt: Context.current().info.attempt,
             tool: SLACK_TOOL,
-            args: { channel: input.destination, text: input.text },
+            args: { channel: input.destination, text: `${workflow} (${input.nodeId}): ${input.text}`.slice(0, 3000), blocks },
             allowed: [SLACK_TOOL],
           });
           return { action_id: r.action!.id, delivered: true, receipt: r.output as object };

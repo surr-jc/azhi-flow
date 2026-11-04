@@ -4,6 +4,7 @@ import type { ExecutionPlan } from '../compiler/plan.js';
 import type { Role } from '../db/schema.js';
 import type { ApprovalNode } from '../definition/types.js';
 import { postMessage } from '../gateway/tools/slack.js';
+import { clip, escapeMrkdwn, runLink } from '../gateway/tools/slack-format.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { TERMINAL_STATES } from '../runtime/types.js';
 import { requireRole, type Principal } from '../api/auth.js';
@@ -53,27 +54,75 @@ export async function approvalSettings(ctx: AppContext, workspaceId: string): Pr
 }
 
 const text = (v: unknown) => (v === null || v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-/** The Slack message for a waiting approval: what is asked, who may decide, and the two buttons. */
+/** The Slack message for a waiting approval: what is asked, who may decide, and the Approve, Reject and Comment buttons. */
 export function approvalBlocks(a: { runId: string; nodeId: string; workflow: string; message: unknown; payload: unknown; role: string; expires_at: string; baseUrl: string; context_withheld?: string[] }) {
   const value = JSON.stringify({ run: a.runId, node: a.nodeId });
-  const link = `${a.baseUrl.replace(/\/$/, '')}/ui/runs/${encodeURIComponent(a.runId)}`;
+  const link = runLink(a.baseUrl, a.runId);
   const payload = text(a.payload);
   return [
-    { type: 'section', text: { type: 'mrkdwn', text: `:raised_hand: *Approval needed* on *${a.workflow}* (${a.nodeId})\n${clip(text(a.message) || 'Approve this step?', 2500)}` } },
-    ...(payload ? [{ type: 'section', text: { type: 'mrkdwn', text: `\`\`\`${clip(payload, 2500)}\`\`\`` } }] : []),
+    { type: 'header', text: { type: 'plain_text', text: clip(`Approval needed: ${a.workflow}`, 150) } },
+    { type: 'section', text: { type: 'mrkdwn', text: clip(text(a.message) || 'Approve this step?', 2900) } },
+    {
+      type: 'section',
+      fields: [
+        { type: 'mrkdwn', text: `*Workflow*
+${escapeMrkdwn(a.workflow)}` },
+        { type: 'mrkdwn', text: `*Step*
+\`${escapeMrkdwn(a.nodeId)}\`` },
+        { type: 'mrkdwn', text: `*Who can decide*
+${escapeMrkdwn(a.role)} or higher` },
+        { type: 'mrkdwn', text: `*Expires*
+${slackDate(a.expires_at)}` },
+        { type: 'mrkdwn', text: `*Run*
+<${link}|${escapeMrkdwn(clip(a.runId, 40))}>` },
+      ],
+    },
+    ...(payload ? [{ type: 'section', text: { type: 'mrkdwn', text: `*Details*
+\`\`\`${clip(payload, 2800)}\`\`\`` } }] : []),
     ...(a.context_withheld?.length ? [{ type: 'section', text: { type: 'mrkdwn', text: `:warning: *An agent before this step was not sent:* ${clip(a.context_withheld.map((f) => `\`${f}\``).join(', '), 1500)} (over its input cap). It could not read ${a.context_withheld.length === 1 ? 'it' : 'them'}, so check what it decided without.` } }] : []),
-    { type: 'context', elements: [{ type: 'mrkdwn', text: `Role ${a.role} or higher decides. Expires ${a.expires_at}. <${link}|Open in mission control>` }] },
     {
       type: 'actions',
       block_id: 'azhi_approval',
       elements: [
         { type: 'button', action_id: 'approve', text: { type: 'plain_text', text: 'Approve' }, style: 'primary', value },
         { type: 'button', action_id: 'reject', text: { type: 'plain_text', text: 'Reject' }, style: 'danger', value },
+        { type: 'button', action_id: 'comment', text: { type: 'plain_text', text: 'Comment' }, value },
+        { type: 'button', action_id: 'open', text: { type: 'plain_text', text: 'Open in mission control' }, url: link },
       ],
     },
   ];
+}
+
+/** Slack renders this in the viewer's own time zone; the ISO text is the fallback. */
+function slackDate(iso: string): string {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? `<!date^${Math.floor(t / 1000)}^{date_short_pretty} at {time}|${iso}>` : escapeMrkdwn(iso);
+}
+
+/**
+ * The message after a decision: the original layout without its buttons, and a status line saying
+ * who decided what. Falls back to the status line alone when Slack sent no original blocks.
+ */
+export function decidedBlocks(original: unknown, status: string): unknown[] {
+  const kept = Array.isArray(original) ? (original as Array<{ type?: string }>).filter((b) => b.type !== 'actions') : [];
+  return [...kept, { type: 'section', text: { type: 'mrkdwn', text: status } }];
+}
+
+/** The modal opened by the Comment button: one free-text box. */
+export function commentModal(a: { run: string; node: string; intro: string }) {
+  return {
+    type: 'modal',
+    callback_id: 'azhi_approval_comment',
+    private_metadata: JSON.stringify({ run: a.run, node: a.node }),
+    title: plain('Comment', 24),
+    submit: plain('Post comment', 24),
+    close: plain('Cancel', 24),
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: clip(a.intro, 2900) } },
+      { type: 'input', block_id: 'comment', label: plain('Your comment', 2000), element: { type: 'plain_text_input', action_id: 'text', multiline: true, max_length: 2000 } },
+    ],
+  };
 }
 
 /**
@@ -90,7 +139,7 @@ export async function postApprovalToSlack(ctx: AppContext, workspaceId: string, 
     if (!token) throw new Error("the secret 'slack-bot-token' is not set");
     const workflow = (await ctx.pool.query(`SELECT w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id WHERE r.id=$1`, [runId])).rows[0]?.slug ?? 'workflow';
     const blocks = approvalBlocks({ runId, nodeId, workflow, ...request, baseUrl: ctx.settings.publicUrl });
-    const r = await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel: s.slack_channel, text: `Approval needed on ${workflow} (${nodeId})`, blocks, dedupeKey: `approval:${runId}:${nodeId}` });
+    const r = await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel: s.slack_channel, text: `Approval needed on ${workflow} (${nodeId}): ${clip(text(request.message) || 'Approve this step?', 300)}`, blocks, dedupeKey: `approval:${runId}:${nodeId}` });
     await ctx.pool.query(`UPDATE approval_messages SET ts=$3, channel=$4 WHERE run_id=$1 AND node_id=$2`, [runId, nodeId, r.ts, r.channel]);
   } catch (e) {
     await audit(ctx, workspaceId, null, 'approval.slack_failed', { run: runId, node: nodeId, error: (e as Error).message });
