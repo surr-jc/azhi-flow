@@ -821,11 +821,17 @@ export async function builderTurn(
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
     if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal' || event?.kind === 'mcp_connection_proposal') {
-      const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
-      usage = addUsage(usage, res2.usage);
-      context_tokens = sent(res2.usage);
-      const text = res2.content.filter((b) => b.type === 'text');
-      if (text.length) messages.push({ role: 'assistant', content: text });
+      // No tools here: the draft is already made, and a model that starts another long tool call is cut off at the cap
+      // and Copilot answers with no choices. The summary is a courtesy, so a failure must not lose the proposal.
+      try {
+        const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: [], maxTokens: 2000, signal: o.signal });
+        usage = addUsage(usage, res2.usage);
+        context_tokens = sent(res2.usage);
+        const text = res2.content.filter((b) => b.type === 'text');
+        if (text.length) messages.push({ role: 'assistant', content: text });
+      } catch (e) {
+        if (o.signal?.aborted) throw e;
+      }
       return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     }
   }
