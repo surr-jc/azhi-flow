@@ -45,7 +45,7 @@ const OPEN_BUILDER: ModelTool = {
   input_schema: {
     type: 'object',
     properties: {
-      prompt: { type: 'string', maxLength: 480, description: 'What the person wants, in their words, as the first message to the builder.' },
+      prompt: { type: 'string', maxLength: 2000, description: 'What the person wants, in their words, as the first message to the builder.' },
       workflow: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,99}$', description: 'The slug of the workflow to change; leave out for a new one.' },
     },
     required: ['prompt'],
@@ -131,7 +131,7 @@ export async function assistantTurn(
           if (!allowed(p, 'author')) throw new AzhiError(ErrorClass.authorization, `building workflows needs the author role (the person is ${p.role})`);
           const input = u.input as { prompt?: unknown; workflow?: unknown };
           const workflow = typeof input.workflow === 'string' && /^[a-z0-9][a-z0-9-]{0,99}$/.test(input.workflow) ? input.workflow : undefined;
-          const prompt = String(input.prompt ?? '').trim().slice(0, 480);
+          const prompt = String(input.prompt ?? '').trim().slice(0, 2000);
           if (!prompt) throw new AzhiError(ErrorClass.invalidInput, 'prompt is required');
           answer(u.id, 'The person now sees a button that opens the workflow builder with this request. Tell them in one sentence.');
           event = { kind: 'build_handoff', handoff: { prompt, ...(workflow ? { workflow } : {}) } };

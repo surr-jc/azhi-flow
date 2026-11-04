@@ -130,7 +130,7 @@ export function WorkflowBuilder() {
   };
   // `?prompt=` pre-fills the composer (the Toolbox uses it); it is never sent until the person does.
   const route = useRoute();
-  const [draft, setDraft] = useState(() => route.search.get('prompt')?.slice(0, 500) ?? '');
+  const [draft, setDraft] = useState(() => route.search.get('prompt')?.slice(0, 2200) ?? '');
   const log = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   useEffect(() => store(state), [state]);
