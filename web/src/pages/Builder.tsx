@@ -9,6 +9,7 @@ import { Markdown } from '../components/Rich';
 import { Icon } from '../icons';
 import { ACCEPT, AttachChips, MAX_FILES, readFiles, ToolPicker, type Attached, type Pin } from '../components/Attachments';
 import { BrandMark } from '../brand';
+import { BUILDER_HANDOFF_KEY } from '../components/Assistant';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
 import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from '../components/ModelMenu';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
@@ -128,9 +129,23 @@ export function WorkflowBuilder() {
     setChoiceState(c);
     storeChoice(CHOICE_KEY, c);
   };
-  // `?prompt=` pre-fills the composer (the Toolbox uses it); it is never sent until the person does.
+  // The assistant's hand-off (from storage) and `?prompt=` (the Toolbox) pre-fill the composer; neither is sent until the person does.
   const route = useRoute();
-  const [draft, setDraft] = useState(() => route.search.get('prompt') ?? '');
+  const [draft, setDraft] = useState(() => {
+    try {
+      return sessionStorage.getItem(BUILDER_HANDOFF_KEY) ?? route.search.get('prompt') ?? '';
+    } catch {
+      return route.search.get('prompt') ?? '';
+    }
+  });
+  // Cleared after mount (not while reading) so a repeated initialiser still sees it, and a reload does not refill it.
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(BUILDER_HANDOFF_KEY);
+    } catch {
+      /* nothing to clear */
+    }
+  }, []);
   const log = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   useEffect(() => store(state), [state]);

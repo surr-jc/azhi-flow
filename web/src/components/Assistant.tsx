@@ -33,6 +33,8 @@ interface PageContext { kind: 'run' | 'workflow' | 'dataset' | 'connection' | 'p
 
 const KEY = 'azhi-assistant';
 const CHOICE_KEY = 'azhi-assistant-model';
+/** Where the assistant leaves a request for the builder page to pre-fill (read once, never in the URL). */
+export const BUILDER_HANDOFF_KEY = 'azhi-builder-handoff';
 const MAX_TEXT = 8000;
 const EMPTY: Saved = { messages: [], proposals: {}, outcomes: {} };
 
@@ -180,7 +182,13 @@ export function Assistant() {
   if (path === '/ui/workflows/new') return null;
   const toBuilder = (h: Handoff) => {
     const prompt = h.workflow ? `Change the existing workflow ${h.workflow}: ${h.prompt}` : h.prompt;
-    navigate(`/ui/workflows/new?prompt=${encodeURIComponent(prompt)}`);
+    // Kept out of the URL so its length is unbounded; the builder reads it once and it travels in the chat request body.
+    try {
+      sessionStorage.setItem(BUILDER_HANDOFF_KEY, prompt);
+    } catch {
+      /* storage blocked: the builder opens with an empty composer */
+    }
+    navigate('/ui/workflows/new');
   };
   const results = new Map<string, Extract<Block, { type: 'tool_result' }>>();
   for (const m of state.messages) for (const b of m.content) if (b.type === 'tool_result') results.set(b.tool_use_id, b);
