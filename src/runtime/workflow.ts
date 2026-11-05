@@ -590,7 +590,9 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     for (const id of snapshot.resume?.nodes ?? []) {
       const node = plan.nodes.find((n) => n.id === id);
       if (!node) continue;
-      const output = await gateway(node).carryNode({ workspaceId, runId, fromRun: snapshot.resume!.from_run, nodeId: id });
+      const stored = await gateway(node).carryNode({ workspaceId, runId, fromRun: snapshot.resume!.from_run, nodeId: id });
+      // A tool step's stored attempt is the whole activity result ({ output, observation }); later steps read just its output.
+      const output = node.type === 'tool' && stored && typeof stored === 'object' && 'output' in stored ? (stored as { output: unknown }).output : stored;
       outputs[id] = { output };
       const route = node.type === 'condition' ? (output as { route?: string } | null)?.route : undefined;
       status.nodes[id] = { status: 'succeeded', ...(route ? { route } : {}) };
