@@ -116,6 +116,7 @@ export function useMe() {
 function Shell() {
   const { path } = useRoute();
   const me = useMe();
+  const githubCli = useQuery({ queryKey: ['github-cli-login'], queryFn: () => api<{ host: string; login: string | null; scopes: string[] }>('/v1/github/cli-login'), retry: false, staleTime: 0 });
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<unknown[]>('/v1/approvals'), refetchInterval: 5_000 });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => api<Alert[]>('/v1/alerts'), refetchInterval: 15_000 });
   const critical = alerts.data?.filter((a) => a.level === 'critical').length ?? 0;
@@ -160,6 +161,8 @@ function Shell() {
             </nav>
           ) : <span className="topbar-title">{current?.label ?? 'Azhi Flow'}</span>}
           <span className="top-right">
+            {githubCli.isSuccess ? <span className="github-cli-profile" aria-label="GitHub CLI profile"><span className="github-cli-login">GitHub: {githubCli.data.login ?? 'unknown'}</span><span className="github-cli-scopes">Scopes: {githubCli.data.scopes.length ? githubCli.data.scopes.join(', ') : 'none'}</span></span> : null}
+            {githubCli.isError ? <span className="github-cli-error" role="alert">GitHub CLI: {(githubCli.error as Error).message}</span> : null}
             <ApprovalsBell count={counts.approvals} />
             <ProfileMenu me={me.data} approvals={counts.approvals} />
           </span>
@@ -215,4 +218,3 @@ function DatasetRoute({ name }: { name: string }) {
   const me = useMe();
   return <DatasetPage name={name} canEdit={atLeast(me.data?.role, 'author')} />;
 }
-
