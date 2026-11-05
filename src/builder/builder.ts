@@ -4,6 +4,7 @@ import { parse } from 'yaml';
 import { anthropicProvider, openaiProvider, responsesProvider, PROVIDER_DEFAULTS, type Block, type Message, type ModelProvider, type ModelTool, type Usage } from '../agents/providers.js';
 import { chatgptAuth } from '../agents/chatgpt-auth.js';
 import { freshChatgptAuth } from '../api/chatgpt.js';
+import { toolbox } from '../api/toolbox.js';
 import { copilotApi, copilotSignIn, OPENCODE_USER_AGENT } from '../api/copilot.js';
 import { examplesDir } from '../api/examples.js';
 import type { Diagnostic } from '../definition/load.js';
@@ -15,8 +16,9 @@ import { loadCatalog, registerTool } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile, stagePackage } from '../server/packages.js';
 import { resolveSecret } from '../server/secrets.js';
+import { renderAttachments, type AttachmentInput } from './attachments.js';
 import { builderModels, copilotEndpoint, defaultBuilderModel } from './models.js';
-import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
+import { addProposedMcp, checkMcpConnectionProposal, checkMcpProposal, findIntegrations, integrationsOverview, connectionTools, listConnectionTools, type BuilderMcpConnectionProposal, type BuilderMcpProposal } from './integrations.js';
 import { workflowAssets } from '../server/assets.js';
 import { checkPackage, getVersion, type VersionRow } from '../server/workflows.js';
 
@@ -81,7 +83,7 @@ export type BuilderEvent =
   | { kind: 'text' }
   | { kind: 'mcp_proposal'; proposal: BuilderMcpProposal }
   | { kind: 'mcp_connection_proposal'; proposal: BuilderMcpConnectionProposal }
-  | { kind: 'tool_proposal'; proposal: BuilderToolProposal }
+  | { kind: 'tool_proposal'; proposal: BuilderToolProposal; proposals?: BuilderToolProposal[] }
   | { kind: 'questions'; tool_use_id: string; intro?: string; questions: BuilderQuestion[] }
   | { kind: 'proposal'; proposal: BuilderProposal };
 
@@ -132,7 +134,7 @@ export async function builderProviders(ctx: AppContext, workspaceId: string): Pr
   return { providers: out, default: preferred?.id as BuilderProviderId | undefined };
 }
 
-async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId, model?: string): Promise<{ provider: ModelProvider; info: BuilderProviderInfo & { id: BuilderProviderId; model: string } }> {
+export async function providerFor(ctx: AppContext, workspaceId: string, wanted?: BuilderProviderId, model?: string): Promise<{ provider: ModelProvider; info: BuilderProviderInfo & { id: BuilderProviderId; model: string } }> {
   const { providers, default: def } = await builderProviders(ctx, workspaceId);
   const id = wanted ?? def;
   const info = providers.find((p) => p.id === id);
@@ -247,6 +249,12 @@ const TOOLS: ModelTool[] = [
     },
   },
   {
+    name: 'list_mcp_tools',
+    description:
+      'The tools a ready gateway MCP connection (see gateway_mcp_connections) offers right now, read from the server itself: name, description, argument names, and `registered_as` when a registered tool already wraps it. Call it whenever the person wants a workflow to use a connected MCP server such as jira. Use the registered ones as they are; propose the others with propose_tool. Never invent tools for a connected server.',
+    input_schema: { type: 'object', properties: { connection: { type: 'string', description: 'The connection name from gateway_mcp_connections.' } }, required: ['connection'], additionalProperties: false },
+  },
+  {
     name: 'propose_tool',
     description:
       'Propose registering one tool (an MCP tool on a stdio server, a registered remote Streamable HTTP MCP connection, or an HTTP call) that workflows can then call through the gateway. The server checks it; errors come back for you to fix. Nothing is registered until the person confirms with the admin role. Never put a secret value in the spec: name the credential and tell the person to set it on the Secrets page.',
@@ -332,8 +340,25 @@ const EFFECTS = ['read', 'write-idempotent', 'write-dedupable', 'write-unsafe'];
 
 /** Checks a proposed tool spec the way registration will, and reports what the person must set up. Throws a repairable message. */
 export async function checkToolProposal(ctx: AppContext, workspaceId: string, raw: unknown): Promise<{ spec: ToolSpec; ref: string; exists: boolean; credential?: { name: string; set: boolean } }> {
-  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  const o = { ...(raw && typeof raw === 'object' ? raw : {}) } as Record<string, any>;
   const errors: string[] = [];
+  // A tool on a connected MCP server is described by the server, not by the model: the connection must be
+  // ready, the remote tool must exist, and its input schema is the server's own.
+  if (o.transport?.kind === 'mcp-streamable-http' && typeof o.transport.connection === 'string' && typeof o.transport.tool === 'string') {
+    try {
+      const { connection, tools } = await connectionTools(ctx, workspaceId, o.transport.connection);
+      const found = tools.find((t) => t.name === o.transport.tool);
+      if (!found) throw new Error(`'${connection.name}' does not offer a tool named '${o.transport.tool}'; call list_mcp_tools. It offers: ${tools.map((t) => t.name).join(', ')}`);
+      if (found.registered_as) throw new Error(`'${o.transport.tool}' is already registered as ${found.registered_as}; use that ref in the workflow instead of registering it again`);
+      // The gateway addresses a connection by id; the tool name and schemas come from the server.
+      o.transport = { kind: 'mcp-streamable-http', connection: connection.id, tool: found.name };
+      o.input_schema = found.input_schema;
+      o.output_schema ??= { type: 'object' };
+      if (typeof o.description !== 'string' || !o.description.trim()) o.description = found.description || found.name;
+    } catch (e) {
+      throw new Error(`The tool spec is not valid yet. Fix these and propose it again:\n- ${(e as Error).message}`);
+    }
+  }
   if (typeof o.id !== 'string' || !/^[a-z0-9][a-z0-9._-]*$/.test(o.id)) errors.push('id must be lower-case letters, digits, dots, dashes, e.g. acme.lookup-customer');
   if (!Number.isInteger(o.version) || o.version < 1) errors.push('version must be an integer from 1');
   if (typeof o.description !== 'string' || !o.description.trim()) errors.push('description is required');
@@ -675,14 +700,28 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 });
 
 /**
+ * Items the person pinned in the composer (toolbox ids: apps, MCP servers, skills, roles, datasets).
+ * Each id is looked up in the workspace toolbox; unknown ids are dropped. Only the toolbox's own
+ * names and summaries reach the model, never the pinned string itself.
+ */
+export async function pinnedNote(ctx: AppContext, workspaceId: string, ids: string[]): Promise<string> {
+  if (!ids.length) return '';
+  const items = new Map((await toolbox(ctx, workspaceId, false)).map((i) => [i.id, i]));
+  const picked = [...new Set(ids)].slice(0, 20).flatMap((id) => items.get(id) ?? []);
+  if (!picked.length) return '';
+  const lines = picked.map((i) => `- ${i.name} (${i.kind}, ${i.status}${i.changes_things ? ', changes things' : ''}): ${i.summary}`);
+  return `The person pinned these workspace items for this workflow. Use them where they fit (look each up with get_tool, workspace_overview or read_example) and say so if one cannot be used:\n${lines.join('\n')}`;
+}
+
+/**
  * One person message: appends it to the transcript and runs the model until it asks questions,
  * proposes a compiling draft, or answers in text.
  */
 export async function builderTurn(
   ctx: AppContext,
   workspaceId: string,
-  o: { messages: Message[]; text: string; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
-): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
+  o: { messages: Message[]; text: string; attachments?: AttachmentInput[]; pinned?: string[]; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
+): Promise<{ messages: Message[]; event: BuilderEvent; provider: BuilderProviderId; model: string; usage: Usage; context_tokens: number | null }> {
   const { provider, info } = await providerFor(ctx, workspaceId, o.provider, o.model);
   const messages = structuredClone(o.messages);
   // A workflow read in an earlier turn may have a newer version by now (a saved draft, an edit in the
@@ -691,17 +730,22 @@ export async function builderTurn(
   for (const m of messages) for (const b of m.content) if (b.type === 'tool_use' && (b.name === 'read_workflow' || b.name === 'read_workflow_file') && !versionOf((b.input as any)?.version)) reads.add(b.id);
   for (const m of messages) for (const b of m.content) if (b.type === 'tool_result' && reads.has(b.tool_use_id)) b.content = 'Stale: read from an earlier turn, and the workflow may have changed since. Call read_workflow again before changing it.';
   // After tool results the transcript ends on a user message; the person's words join it.
+  const text = [o.text, await pinnedNote(ctx, workspaceId, o.pinned ?? []), renderAttachments(o.attachments ?? [])].filter(Boolean).join('\n\n');
   const last = messages.at(-1);
-  if (last?.role === 'user') last.content.push({ type: 'text', text: o.text });
-  else messages.push({ role: 'user', content: [{ type: 'text', text: o.text }] });
+  if (last?.role === 'user') last.content.push({ type: 'text', text });
+  else messages.push({ role: 'user', content: [{ type: 'text', text }] });
 
   let usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
+  // What the latest call sent: the conversation's size now, unlike `usage`, which sums every round's re-sent context.
+  let context_tokens: number | null = null;
+  const sent = (u: Usage) => (u.input_tokens === null ? null : u.input_tokens + (u.cache_read_tokens ?? 0) + (u.cache_write_tokens ?? 0));
   for (let call = 0; call < MAX_CALLS; call++) {
     const res = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
     usage = addUsage(usage, res.usage);
+    context_tokens = sent(res.usage);
     messages.push({ role: 'assistant', content: res.content.length ? res.content : [{ type: 'text', text: '(no reply)' }] });
     const uses = res.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
+    if (!uses.length) return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage, context_tokens };
 
     const results: Block[] = [];
     let event: BuilderEvent | undefined;
@@ -731,10 +775,14 @@ export async function builderTurn(
           }));
           answer(u.id, 'The questions are shown to the person. Their answers follow in the next message.');
           event = { kind: 'questions', tool_use_id: u.id, ...(input.intro ? { intro: String(input.intro) } : {}), questions };
+        } else if (u.name === 'list_mcp_tools') {
+          answer(u.id, JSON.stringify(await listConnectionTools(ctx, workspaceId, String(input.connection ?? '')), null, 1));
         } else if (u.name === 'propose_tool') {
           const r = await checkToolProposal(ctx, workspaceId, input.tool);
           answer(u.id, `The tool spec is valid. The person now sees ${r.ref} with a Register button${r.credential && !r.credential.set ? `; secret '${r.credential.name}' is not set yet, tell them to set it on the Secrets page` : ''}${r.exists ? '; this adds a new revision of an existing tool, and workflow versions keep their old revision until a new version is published' : ''}. Summarise in a few plain sentences, and say a workflow can only use it after it is registered.`);
-          event = { kind: 'tool_proposal', proposal: { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists } };
+          const proposal = { tool_use_id: u.id, ref: r.ref, summary: String(input.summary ?? ''), spec: r.spec, ...(r.credential ? { credential: r.credential } : {}), exists: r.exists };
+          // Several tools proposed in one turn all reach the person, not just the last.
+          event = { kind: 'tool_proposal', proposal, proposals: [...(event?.kind === 'tool_proposal' ? event.proposals ?? [event.proposal] : []), proposal] };
         } else if (u.name === 'find_integrations') {
           answer(u.id, JSON.stringify(await findIntegrations(ctx, workspaceId, input), null, 1));
         } else if (u.name === 'propose_mcp_server') {
@@ -771,15 +819,22 @@ export async function builderTurn(
     }
     messages.push({ role: 'user', content: results });
     // Questions end the turn at once; a compiled proposal gets one more call for the summary.
-    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage };
+    if (event?.kind === 'questions') return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     if (event?.kind === 'proposal' || event?.kind === 'tool_proposal' || event?.kind === 'mcp_proposal' || event?.kind === 'mcp_connection_proposal') {
-      const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: TOOLS, maxTokens: 2000, signal: o.signal });
-      usage = addUsage(usage, res2.usage);
-      const text = res2.content.filter((b) => b.type === 'text');
-      if (text.length) messages.push({ role: 'assistant', content: text });
-      return { messages, event, provider: info.id, model: info.model, usage };
+      // No tools here: the draft is already made, and a model that starts another long tool call is cut off at the cap
+      // and Copilot answers with no choices. The summary is a courtesy, so a failure must not lose the proposal.
+      try {
+        const res2 = await provider.complete({ model: info.model, system: system(info), messages, tools: [], maxTokens: 2000, signal: o.signal });
+        usage = addUsage(usage, res2.usage);
+        context_tokens = sent(res2.usage);
+        const text = res2.content.filter((b) => b.type === 'text');
+        if (text.length) messages.push({ role: 'assistant', content: text });
+      } catch (e) {
+        if (o.signal?.aborted) throw e;
+      }
+      return { messages, event, provider: info.id, model: info.model, usage, context_tokens };
     }
   }
   messages.push({ role: 'assistant', content: [{ type: 'text', text: 'I stopped after many steps without a draft. Tell me what to focus on, or say "draft it" and I will propose one with my assumptions.' }] });
-  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage };
+  return { messages, event: { kind: 'text' }, provider: info.id, model: info.model, usage, context_tokens };
 }

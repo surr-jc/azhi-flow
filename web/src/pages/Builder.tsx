@@ -4,8 +4,14 @@ import { api, type WorkflowSummary } from '../api';
 import { Link, useRoute } from '../router';
 import { signVersion } from '../signing';
 import { Badge, ErrorNote, Loading, PageHead, Panel } from '../ui';
+import { WorkingRow } from '../components/WorkingRow';
 import { Markdown } from '../components/Rich';
+import { Icon } from '../icons';
+import { ACCEPT, AttachChips, MAX_FILES, readFiles, ToolPicker, type Attached, type Pin } from '../components/Attachments';
+import { BrandMark } from '../brand';
+import { BUILDER_HANDOFF_KEY } from '../components/Assistant';
 import { closeSignIn, McpStatusBadge, openSignInWindow, pointSignIn, useMcpConnection, type McpStatus } from '../components/McpSignIn';
+import { loadChoice, ModelMenu, storeChoice, type Choice, type ProviderInfo } from '../components/ModelMenu';
 import { WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
 
 /**
@@ -56,17 +62,19 @@ interface Proposal {
   blockers: Array<{ code: string; message: string; node?: string }>;
   new_version_of?: string;
 }
-interface ProviderInfo { id: 'anthropic' | 'openai' | 'opencode' | 'chatgpt'; label: string; ready: boolean; model?: string; reason?: string }
-interface ModelList { provider: string; models: Array<{ id: string; label: string }>; recommended?: { id: string; reason: string }; source: 'live' | 'built-in'; note?: string }
-interface Choice { provider?: string; model?: string }
 /** Tokens the provider reported; null when it did not say (never estimated). */
 interface Usage { input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; reasoning_tokens: number | null }
-interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal }; provider: string; model: string; usage: Usage }
-/** One answered turn: what it used and how long it took, kept by the index of its last message. */
-interface TurnStat { usage: Usage; provider: string; model: string; ms: number }
-interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
+/** AI Credits at GitHub's published rates (Copilot only); null when the model has no known rate. */
+interface Cost { credits: number; usd: number }
+interface Turn { messages: Message[]; event: { kind: string; proposal?: Proposal | ToolProposal | McpProposal | McpConnectionProposal; proposals?: ToolProposal[] }; provider: string; model: string; usage: Usage; cost?: Cost | null; context_tokens?: number | null }
+/** One answered turn: what it used and how long it took, kept by the index of its last message. `context_tokens` is what its last model call sent. */
+interface TurnStat { usage: Usage; provider: string; model: string; ms: number; cost?: Cost | null; context_tokens?: number | null }
+interface CopilotQuotaInfo { ok: boolean; reset_date?: string; quotas: Array<{ name: string; entitlement: number | null; remaining: number | null; used: number | null; percent_remaining: number | null; unlimited: boolean }> }
+/** `registered`: the revision each confirmed tool proposal became, by its tool_use_id. */
+interface Saved { messages: Message[]; proposals: Record<string, Proposal>; tools?: Record<string, ToolProposal>; registered?: Record<string, number>; mcps?: Record<string, McpProposal>; conns?: Record<string, McpConnectionProposal>; shown?: string; stats?: Record<number, TurnStat> }
 
 const KEY = 'azhi-builder';
+const CHOICE_KEY = 'azhi-builder-model';
 // The server refuses a longer conversation (src/api/builder.ts), so the size meter counts toward these.
 const MAX_MESSAGES = 400;
 const MAX_BYTES = 2_000_000;
@@ -81,24 +89,7 @@ function total(stats: TurnStat[], f: keyof Usage): number | null {
 const compact = (n: number | null) => (n === null ? '—' : n >= 1_000_000 ? `${(n / 1e6).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const exact = (n: number | null) => (n === null ? 'not reported' : n.toLocaleString());
 const seconds = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`);
-const CHOICE_KEY = 'azhi-builder-model';
-const OTHER = '__other__';
 
-/** The provider and model last picked in this browser. */
-function loadChoice(): Choice {
-  try {
-    return JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}') ?? {};
-  } catch {
-    return {};
-  }
-}
-function storeChoice(c: Choice) {
-  try {
-    localStorage.setItem(CHOICE_KEY, JSON.stringify(c));
-  } catch {
-    /* remembered for this page only */
-  }
-}
 const STARTERS = [
   'Every Monday, post a summary of last week’s failing CI runs to our team Slack channel.',
   'When I give it a GitHub issue, draft requirements and a design, and ask me to approve before anything is posted.',
@@ -133,14 +124,28 @@ function store(s: Saved) {
 export function WorkflowBuilder() {
   const status = useQuery({ queryKey: ['builder'], queryFn: () => api<{ providers: ProviderInfo[]; default?: string }>('/v1/builder') });
   const [state, setState] = useState<Saved>(load);
-  const [choice, setChoiceState] = useState<Choice>(loadChoice);
+  const [choice, setChoiceState] = useState<Choice>(() => loadChoice(CHOICE_KEY));
   const setChoice = (c: Choice) => {
     setChoiceState(c);
-    storeChoice(c);
+    storeChoice(CHOICE_KEY, c);
   };
-  // `?prompt=` pre-fills the composer (the Toolbox uses it); it is never sent until the person does.
+  // The assistant's hand-off (from storage) and `?prompt=` (the Toolbox) pre-fill the composer; neither is sent until the person does.
   const route = useRoute();
-  const [draft, setDraft] = useState(() => route.search.get('prompt')?.slice(0, 500) ?? '');
+  const [draft, setDraft] = useState(() => {
+    try {
+      return sessionStorage.getItem(BUILDER_HANDOFF_KEY) ?? route.search.get('prompt') ?? '';
+    } catch {
+      return route.search.get('prompt') ?? '';
+    }
+  });
+  // Cleared after mount (not while reading) so a repeated initialiser still sees it, and a reload does not refill it.
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(BUILDER_HANDOFF_KEY);
+    } catch {
+      /* nothing to clear */
+    }
+  }, []);
   const log = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   useEffect(() => store(state), [state]);
@@ -151,16 +156,48 @@ export function WorkflowBuilder() {
   const model = choice.provider === using ? choice.model : undefined;
   // Stop only ends the wait in this tab; the server may still finish the turn, and nothing is added to the conversation.
   const abort = useRef<AbortController | null>(null);
+  // Files and pinned items wait here until the message is sent; they are not kept in the saved conversation except as the text the model read.
+  const [files, setFiles] = useState<Attached[]>([]);
+  const [pins, setPins] = useState<Pin[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [savedAs, setSavedAs] = useState<Record<string, string>>({});
+  const picker = useRef<HTMLInputElement>(null);
+  const read = useMutation({
+    mutationFn: (picked: File[]) => readFiles(picked.slice(0, Math.max(0, MAX_FILES - files.length))),
+    onSuccess: (r) => setFiles((f) => [...f, ...r].slice(0, MAX_FILES)),
+  });
+  const addFiles = (list: FileList | File[] | null) => {
+    const picked = list ? [...list] : [];
+    if (picked.length && !read.isPending && files.length < MAX_FILES) read.mutate(picked);
+  };
+  const save = useMutation({
+    mutationFn: async (f: Attached) => {
+      // Never reuse a name: creating a dataset again would reset an existing dataset's trust and access.
+      const taken = new Set((await api<Array<{ name: string }>>('/v1/datasets')).map((d) => d.name));
+      const base = `chat-${f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'file'}`;
+      let name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+      await api('/v1/datasets', { method: 'POST', body: { name } });
+      await api(`/v1/datasets/${encodeURIComponent(name)}/documents`, { method: 'POST', body: { documents: [{ path: `${name}.txt`, content: f.text }] } });
+      return { id: f.id, name };
+    },
+    onSuccess: ({ id, name }) => setSavedAs((m) => ({ ...m, [id]: name })),
+  });
+  const usable = files.filter((f) => f.kind !== 'unsupported');
   const send = useMutation({
     mutationFn: async (text: string) => {
       const t0 = performance.now();
       abort.current = new AbortController();
-      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, provider: using, model }, signal: abort.current.signal });
+      const attachments = usable.map(({ name, kind, text: t, truncated }) => ({ name, kind, text: t, truncated }));
+      const r = await api<Turn>('/v1/builder/chat', { method: 'POST', body: { messages: state.messages, text, attachments, pinned: pins.map((p) => p.id), provider: using, model }, signal: abort.current.signal });
       return { r, ms: Math.round(performance.now() - t0) };
     },
     onSuccess: ({ r, ms }) => {
+      setFiles([]);
+      setPins([]);
       setState((s) => {
-        const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms } };
+        const stats = { ...s.stats, [r.messages.length - 1]: { usage: r.usage, provider: r.provider, model: r.model, ms, cost: r.cost ?? null, context_tokens: r.context_tokens ?? null } };
         const proposals = { ...s.proposals };
         const tools = { ...s.tools };
         const mcps = { ...s.mcps };
@@ -170,14 +207,22 @@ export function WorkflowBuilder() {
           proposals[r.event.proposal.tool_use_id] = r.event.proposal as Proposal;
           shown = r.event.proposal.tool_use_id;
         }
-        if (r.event.kind === 'tool_proposal' && r.event.proposal) tools[r.event.proposal.tool_use_id] = r.event.proposal as ToolProposal;
+        if (r.event.kind === 'tool_proposal' && r.event.proposal) {
+          for (const t of (r.event.proposals ?? [r.event.proposal]) as ToolProposal[]) tools[t.tool_use_id] = t;
+        }
         if (r.event.kind === 'mcp_proposal' && r.event.proposal) mcps[r.event.proposal.tool_use_id] = r.event.proposal as McpProposal;
         if (r.event.kind === 'mcp_connection_proposal' && r.event.proposal) conns[r.event.proposal.tool_use_id] = r.event.proposal as McpConnectionProposal;
-        return { messages: r.messages, proposals, tools, mcps, conns, shown, stats };
+        return { ...s, messages: r.messages, proposals, tools, mcps, conns, shown, stats };
       });
-      setDraft('');
+    },
+    // A failed or stopped turn puts the typed message back, unless something new was typed meanwhile.
+    onError: () => {
+      const d = sent.current;
+      if (d) setDraft((x) => x || d);
     },
   });
+  // The composer clears on submit; this keeps what it held so a failed turn can restore it.
+  const sent = useRef('');
   // Follow the newest message only while the reader is at the bottom; otherwise offer a jump so reading is not interrupted.
   const [away, setAway] = useState(false);
   const toBottom = () => {
@@ -208,6 +253,8 @@ export function WorkflowBuilder() {
   const submit = (text: string) => {
     const t = text.trim();
     if (!t || send.isPending) return;
+    sent.current = text === draft ? draft : '';
+    if (text === draft) setDraft('');
     send.mutate(t);
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -243,10 +290,28 @@ export function WorkflowBuilder() {
     return answered ? undefined : (lastAssistant.content.find((b) => b.type === 'tool_use' && b.name === 'ask_user') as Extract<Block, { type: 'tool_use' }>).id;
   }, [state.messages]);
 
+  // Tools the builder proposed and nobody registered yet: the newest proposal for each ref.
+  const unregistered = useMemo(() => {
+    const byRef = new Map<string, ToolProposal>();
+    for (const t of Object.values(state.tools ?? {})) byRef.set(t.ref, t);
+    return [...byRef.values()].filter((t) => state.registered?.[t.tool_use_id] === undefined);
+  }, [state.tools, state.registered]);
+  const markRegistered = (id: string, revision: number) => setState((s) => ({ ...s, registered: { ...s.registered, [id]: revision } }));
+  // After a turn ends with tools still waiting, ask once in a dialog; "Not now" leaves the bar below to reopen it.
+  const [asking, setAsking] = useState(false);
+  const offered = useRef(new Set(unregistered.map((t) => t.tool_use_id)));
+  useEffect(() => {
+    if (send.isPending) return;
+    const fresh = unregistered.filter((t) => !offered.current.has(t.tool_use_id));
+    if (!fresh.length) return;
+    fresh.forEach((t) => offered.current.add(t.tool_use_id));
+    setAsking(true);
+  }, [unregistered, send.isPending]);
+
   const shown = state.shown ? state.proposals[state.shown] : undefined;
   const latest = Object.values(state.proposals).at(-1);
   if (status.error) return <ErrorNote error={status.error} />;
-  if (!status.data) return <Loading />;
+  if (!status.data) return <Loading variant="page" />;
   return (
     <>
       <PageHead
@@ -266,18 +331,6 @@ export function WorkflowBuilder() {
           ) : undefined
         }
       />
-      {status.data.providers.length ? (
-        <details className="model-fold">
-          <summary>Model: {status.data.providers.find((p) => p.id === using)?.label ?? 'none'} · {model ?? status.data.providers.find((p) => p.id === using)?.model ?? 'default'}</summary>
-          <ModelPicker
-            providers={status.data.providers}
-            provider={using}
-            model={model}
-            serverDefault={status.data.providers.find((p) => p.id === using)?.model}
-            onChange={setChoice}
-          />
-        </details>
-      ) : null}
       {!ready.length ? (
         <Panel>
           <p>The builder uses this workspace’s model provider, and none is set up yet.</p>
@@ -287,10 +340,9 @@ export function WorkflowBuilder() {
       ) : (
         <div className={`builder ${shown ? 'with-draft' : ''}`}>
           <section className="panel chat" aria-label="Conversation">
-            {state.messages.length || send.isPending ? <UsageBar turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} /> : null}
             <div className="sr-only" role="status">{send.isPending ? 'The builder is working' : send.isSuccess ? 'The builder replied' : ''}</div>
             <div className="chat-log" ref={log} onScroll={onScroll} tabIndex={0} aria-label="Conversation messages">
-              {!state.messages.length ? (
+              {!state.messages.length && !send.isPending ? (
                 <div className="chat-empty">
                   <p className="muted">What should the workflow do? A sentence or two is enough. Pick an example to edit, or write your own below.</p>
                   <div className="starters">
@@ -315,19 +367,34 @@ export function WorkflowBuilder() {
                 </div>
               ) : null}
               {state.messages.map((m, i) => (
-                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
+                <MessageView key={i} m={m} proposals={state.proposals} tools={state.tools ?? {}} registered={state.registered ?? {}} onRegistered={markRegistered} mcps={state.mcps ?? {}} conns={state.conns ?? {}} openAsk={lastAsk} busy={send.isPending} onAnswer={submit} onShow={(id) => setState((s) => ({ ...s, shown: id }))} shown={state.shown} stat={state.stats?.[i]} />
               ))}
-              {send.isPending ? (
-                <div className="pending">
-                  <span className="dots" aria-hidden="true" />
-                  <span>Reading the workspace, drafting and checking with the compiler…</span>
-                  <span className="mono">{waited}s</span>
-                  <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>
-                </div>
-              ) : null}
+              {/* Shown the moment the message is sent; the saved conversation only gains it when the server replies. */}
+              {send.isPending && send.variables ? <div className="bubble user">{splitUser(send.variables).say}</div> : null}
+              <WorkingRow pending={send.isPending}>
+                <span>Reading the workspace, drafting and checking with the compiler…</span>
+                <span className="mono">{waited}s</span>
+                <button type="button" className="small-btn" title="Stops waiting in this tab. The server may still finish the turn." onClick={() => abort.current?.abort()}>Stop</button>
+              </WorkingRow>
               {send.error && (send.error as Error).name === 'AbortError' ? <div className="chat-note muted small">Stopped. Nothing was added to the conversation; send it again to retry.</div> : <ErrorNote error={send.error} />}
             </div>
             {away ? <button type="button" className="jump" onClick={toBottom}>New message ↓</button> : null}
+            {unregistered.length > 0 && !asking ? (
+              <div className="draft-bar warn">
+                <span><strong>{unregistered.length} tool{unregistered.length === 1 ? '' : 's'}</strong> <span className="muted small">to register before the builder can draft with {unregistered.length === 1 ? 'it' : 'them'}</span></span>
+                <button type="button" onClick={() => setAsking(true)}>Register…</button>
+              </div>
+            ) : null}
+            {asking && unregistered.length ? (
+              <RegisterDialog
+                tools={unregistered}
+                busy={send.isPending}
+                onRegistered={markRegistered}
+                onClose={() => setAsking(false)}
+                onContinue={(text) => { setAsking(false); submit(text); }}
+              />
+            ) : null}
+            {picking ? <ToolPicker picked={pins} onDone={setPins} onClose={() => setPicking(false)} /> : null}
             {latest && state.shown !== latest.tool_use_id ? (
               <div className="draft-bar">
                 <span><strong>{latest.name ?? latest.id}</strong> <Badge tone={latest.blockers.length ? 'bad' : 'ok'}>{latest.blockers.length ? 'blocked' : 'compiles'}</Badge> <span className="muted small">{latest.nodes.length} step{latest.nodes.length === 1 ? '' : 's'}</span></span>
@@ -335,13 +402,27 @@ export function WorkflowBuilder() {
               </div>
             ) : null}
             <form className="composer" onSubmit={(e: FormEvent) => { e.preventDefault(); submit(draft); }}>
-              {state.messages.length > 1 && !send.isPending ? (
-                <div className="chips">
-                  <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}>Draft it</button>
-                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}>Explain the draft</button> : null}
+              <AttachChips files={files} pins={pins} onRemoveFile={(id) => setFiles((f) => f.filter((x) => x.id !== id))} onRemovePin={(id) => setPins((p) => p.filter((x) => x.id !== id))} onSave={(f) => save.mutate(f)} saved={savedAs} />
+              {read.isPending ? <div className="muted small" role="status">Reading the files…</div> : null}
+              <ErrorNote error={read.error ?? save.error} />
+              {usable.length && !send.isPending ? (
+                <div className="chips suggest" aria-label="Attachment suggestions">
+                  <button type="button" className="chip-btn" onClick={() => submit('Read the attached files and draft a workflow from them. Ask me about anything that is unclear or cut off.')}><Icon name="report" size={13} />Draft from my attachments</button>
                 </div>
               ) : null}
-              <div className="composer-row">
+              {state.messages.length > 1 && !send.isPending ? (
+                <div className="chips suggest" aria-label="Suggestions">
+                  <button type="button" className="chip-btn" onClick={() => submit('Use your recommendations for anything open and draft it now.')}><Icon name="play" size={13} />Draft it</button>
+                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Explain what this draft does and what I still need to set up.')}><Icon name="chat" size={13} />Explain the draft</button> : null}
+                  {latest ? <button type="button" className="chip-btn" onClick={() => submit('Check this draft for gaps: failure paths with no handling, approvals with no timeout, and steps that could act twice. Suggest fixes; do not change it yet.')}><Icon name="search" size={13} />Check for gaps</button> : null}
+                </div>
+              ) : null}
+              <div
+                className={`composer-box ${dragging ? 'drop' : ''}`}
+                onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+              >
                 <textarea
                   ref={composer}
                   rows={2}
@@ -352,8 +433,27 @@ export function WorkflowBuilder() {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onKey}
+                  onPaste={(e) => { if (e.clipboardData.files.length) { e.preventDefault(); addFiles(e.clipboardData.files); } }}
                 />
-                <button type="submit" className="primary" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}>Send</button>
+                <div className="composer-foot">
+                  <div className="model-ctx">
+                    <ModelMenu
+                      providers={status.data.providers}
+                      provider={using}
+                      model={model}
+                      onChange={setChoice}
+                      modelsUrl="/v1/builder/models"
+                      purpose="building workflows"
+                    />
+                    <ContextMenu turns={turns} provider={using} model={model ?? status.data.providers.find((p) => p.id === using)?.model} messages={state.messages.length} bytes={bytes} pending={send.isPending} />
+                  </div>
+                  <div className="row attach-actions">
+                    <input ref={picker} type="file" multiple hidden accept={ACCEPT} onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending || read.isPending || files.length >= MAX_FILES} title={`Attach up to ${MAX_FILES} files (text, CSV, JSON, YAML, SQL, code, PDF, DOCX, XLSX; 10 MB each)`} onClick={() => picker.current?.click()}><Icon name="plus" size={13} />Attach files</button>
+                    <button type="button" className="small-btn attach-btn" disabled={send.isPending} title="Tell the builder which tools, MCP servers, skills or datasets to use" onClick={() => setPicking(true)}><Icon name="tool" size={13} />Tools{pins.length ? ` (${pins.length})` : ''}</button>
+                  </div>
+                  <button type="submit" className="primary composer-send" disabled={!draft.trim() || send.isPending} aria-busy={send.isPending}><Icon name="notify" size={14} />Send</button>
+                </div>
               </div>
               <div id="composer-meta" className="composer-meta muted">
                 <span><kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line</span>
@@ -372,55 +472,93 @@ export function WorkflowBuilder() {
  * Session meter above the conversation: tokens the provider reported for every turn so far, the
  * last turn, and how close the conversation is to the size the server accepts. Input counts every
  * lookup round of a turn (each re-sends the context), so it grows faster than the text you see.
- * Cost is not shown: the builder has no price list, and an unknown value is never guessed.
+ * The window size comes from the provider's model list and the cost from GitHub's published Copilot
+ * rates; where either is unknown it says so and is never guessed.
  */
-function UsageBar({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
+function ContextMenu({ turns, provider, model, messages, bytes, pending }: { turns: TurnStat[]; provider?: string; model?: string; messages: number; bytes: number; pending: boolean }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
   const last = turns[turns.length - 1];
   const sum = (f: keyof Usage) => total(turns, f);
   const all = USAGE_FIELDS.map((f) => sum(f));
   const grand = all.every((n) => n === null) ? null : (sum('input_tokens') ?? 0) + (sum('output_tokens') ?? 0);
   const lastTokens = last ? (last.usage.input_tokens ?? 0) + (last.usage.output_tokens ?? 0) : null;
-  const fill = Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
+  // The model's real window (Copilot's own model list) against what the last call sent; the server's size limits are the fallback.
+  const lastModel = last?.model ?? model;
+  const catalog = useQuery({ queryKey: ['builder-models', provider], queryFn: () => api<{ models: Array<{ id: string; context_window?: number }> }>(`/v1/builder/models?provider=${encodeURIComponent(provider!)}`), enabled: open && Boolean(provider), staleTime: 600_000, retry: false });
+  const windowSize = catalog.data?.models.find((m) => m.id === lastModel)?.context_window ?? null;
+  const used = last?.context_tokens ?? null;
+  const quota = useQuery({ queryKey: ['copilot-quota'], queryFn: () => api<CopilotQuotaInfo>('/v1/copilot/quota'), enabled: open && provider === 'opencode', staleTime: 60_000, retry: false });
+  const credits = quota.data?.ok ? quota.data.quotas.find((q) => !q.unlimited && q.entitlement !== null) : undefined;
+  const costs = turns.map((t) => t.cost);
+  const known = costs.filter((c): c is Cost => Boolean(c));
+  const spent = known.length ? { credits: known.reduce((a, c) => a + c.credits, 0), usd: known.reduce((a, c) => a + c.usd, 0), partial: known.length < costs.length } : null;
+  const tokenFill = windowSize && used !== null ? used / windowSize : null;
+  const fill = tokenFill ?? Math.max(messages / MAX_MESSAGES, bytes / MAX_BYTES);
   const full = fill >= 0.8;
+  const pct = messages ? Math.max(1, Math.round(fill * 100)) : 0;
+  const turnsLabel = turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet';
   const cells: Array<{ label: string; value: number | null; hint: string }> = [
     { label: 'Input', value: sum('input_tokens'), hint: 'Tokens sent to the model across all turns, including each lookup round' },
     { label: 'Output', value: sum('output_tokens'), hint: 'Tokens the model wrote across all turns' },
     { label: 'Cached', value: sum('cache_read_tokens'), hint: 'Input tokens served from the provider’s prompt cache' },
   ];
   return (
-    <details className="usage" aria-label="Session usage">
-      <summary>
-        <span><strong>{compact(grand)}</strong> tokens · {turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
-        <span className={full ? 'warn-text' : 'muted'}>{messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
-      </summary>
-      <div className="usage-main">
-        <div className="usage-total">
-          <span className="usage-label">Session tokens</span>
-          <strong className="usage-value" title={exact(grand)}>{compact(grand)}</strong>
-          <span className="muted small">{turns.length ? `${turns.length} turn${turns.length === 1 ? '' : 's'}` : pending ? 'first turn running' : 'no turns yet'}</span>
-        </div>
-        <dl className="usage-cells">
-          {cells.map((c) => (
-            <div key={c.label} title={`${c.hint}. ${exact(c.value)}`}>
-              <dt>{c.label}</dt>
-              <dd>{compact(c.value)}</dd>
-            </div>
-          ))}
-          <div title="Cost is not estimated: the builder has no price list for this model">
-            <dt>Cost</dt>
-            <dd className="muted">unavailable</dd>
+    <div className="ctx-wrap" ref={wrap}>
+      <button type="button" className={`ctx-btn${full ? ' warn' : ''}`} aria-label={`Context: ${messages ? `${pct}% full` : 'empty'}`} aria-expanded={open} aria-haspopup="dialog" title="Context window" onClick={() => setOpen((o) => !o)}>
+        <svg className="ctx-ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle className="ctx-track" cx="10" cy="10" r="8" />
+          <circle className="ctx-fill" cx="10" cy="10" r="8" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - Math.min(100, pct)} />
+        </svg>
+      </button>
+      {open ? (
+        <div className="ctx-pop" role="dialog" aria-label="Context window">
+          <div className="ctx-head">
+            <span className="ctx-title">Context window</span>
+            <span className={full ? 'warn-text' : 'muted'}>{messages ? `${pct}% full` : 'empty'}{full ? ' · start over soon' : ''}</span>
           </div>
-        </dl>
-      </div>
-      <div className="usage-foot muted small">
-        <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>
-        {last ? <span title={`Input ${exact(last.usage.input_tokens)}, output ${exact(last.usage.output_tokens)}`}>Last turn {compact(lastTokens)} tokens · {seconds(last.ms)}</span> : null}
-        <span className={full ? 'warn-text' : ''} title={`${messages} of ${MAX_MESSAGES} messages; ${(bytes / 1000).toFixed(0)} KB of ${(MAX_BYTES / 1000).toFixed(0)} KB`}>
-          Conversation {messages ? `${Math.max(1, Math.round(fill * 100))}% full` : 'empty'}
-          {full ? ' · start over soon' : ''}
-        </span>
-      </div>
-    </details>
+          <div className="ctx-meter" aria-hidden="true"><span style={{ width: `${Math.min(100, pct)}%` }} /></div>
+          {tokenFill !== null ? <div className="muted small" title={`${exact(used)} of ${exact(windowSize)} tokens; the model's window as ${provider === 'opencode' ? 'Copilot' : 'the provider'} lists it`}>{compact(used)} of {compact(windowSize)} tokens · {compact(Math.max(0, windowSize! - used!))} left</div> : null}
+          <div className="muted small">{messages} of {MAX_MESSAGES} messages · {(bytes / 1000).toFixed(0)} of {(MAX_BYTES / 1000).toFixed(0)} KB</div>
+          <div className="usage-main">
+            <div className="usage-total">
+              <span className="usage-label">Session tokens</span>
+              <strong className="usage-value" title={exact(grand)}>{compact(grand)}</strong>
+              <span className="muted small">{turnsLabel}</span>
+            </div>
+            <dl className="usage-cells">
+              {cells.map((c) => (
+                <div key={c.label} title={`${c.hint}. ${exact(c.value)}`}>
+                  <dt>{c.label}</dt>
+                  <dd>{compact(c.value)}</dd>
+                </div>
+              ))}
+              <div title={spent ? `${spent.credits.toFixed(2)} AI Credits at GitHub's published rates for each model${spent.partial ? '; turns on a model without a known rate are not counted' : ''}` : 'No price is known for this provider or model, so none is guessed'}>
+                <dt>Cost</dt>
+                <dd className={spent ? undefined : 'muted'}>{spent ? `${spent.partial ? '≥ ' : ''}$${spent.usd < 0.01 ? spent.usd.toFixed(4) : spent.usd.toFixed(2)}` : 'unavailable'}</dd>
+              </div>
+            </dl>
+            {credits ? (
+              <div className="muted small" title={`Your Copilot allowance from GitHub${quota.data?.reset_date ? `; resets ${String(quota.data.reset_date).slice(0, 10)}` : ''}`}>
+                Copilot {credits.name.replace(/_/g, ' ')}: {credits.remaining !== null ? `${compact(credits.remaining)} left of ${compact(credits.entitlement)}` : `${compact(credits.used)} of ${compact(credits.entitlement)} used`}{quota.data?.reset_date ? ` · resets ${String(quota.data.reset_date).slice(0, 10)}` : ''}
+              </div>
+            ) : null}
+          </div>
+          <div className="usage-foot muted small">
+            <span className="mono" title="Provider and model used for the next turn">{provider ?? '—'}{model ? ` · ${model}` : ''}</span>
+            {last ? <span title={`Input ${exact(last.usage.input_tokens)}, output ${exact(last.usage.output_tokens)}`}>Last turn {compact(lastTokens)} tokens · {seconds(last.ms)}</span> : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -434,11 +572,29 @@ function TurnMeta({ s }: { s: TurnStat }) {
   );
 }
 
-function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
+/**
+ * A sent message carries attached file text and pinned items after what the person typed (see
+ * src/builder/attachments.ts and pinnedNote in builder.ts). The bubble shows the words and chips, not the file text.
+ */
+function splitUser(text: string): { say: string; files: string[]; pinned: string[] } {
+  const cut = [text.indexOf('\n\nThe person pinned these workspace items'), text.indexOf('\n\nThe person attached ')].filter((i) => i >= 0);
+  if (!cut.length) return { say: text, files: [], pinned: [] };
+  const rest = text.slice(Math.min(...cut));
+  const pinnedBlock = rest.match(/pinned these workspace items[^\n]*\n((?:- [^\n]*\n?)+)/)?.[1] ?? '';
+  return {
+    say: text.slice(0, Math.min(...cut)),
+    files: [...rest.matchAll(/<attachment name="([^"]*)"/g)].map((m) => m[1]!),
+    pinned: pinnedBlock.split('\n').filter(Boolean).map((l) => l.replace(/^- /, '').replace(/ \(.*$/, '')),
+  };
+}
+
+function MessageView({ m, proposals, tools, registered, onRegistered, mcps, conns, openAsk, busy, onAnswer, onShow, shown, stat }: {
   m: Message;
   stat?: TurnStat;
   proposals: Record<string, Proposal>;
   tools: Record<string, ToolProposal>;
+  registered: Record<string, number>;
+  onRegistered: (id: string, revision: number) => void;
   mcps: Record<string, McpProposal>;
   conns: Record<string, McpConnectionProposal>;
   openAsk?: string;
@@ -449,11 +605,22 @@ function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer
 }) {
   if (m.role === 'user') {
     const text = m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
-    return text ? <div className="bubble user">{text}</div> : null;
+    const { say, files, pinned } = splitUser(text);
+    return text ? (
+      <div className="bubble user">
+        {say}
+        {files.length || pinned.length ? (
+          <ul className="attach-chips" aria-label="Attached">
+            {files.map((n, i) => <li key={`f${i}`} className="attach-chip"><Icon name="report" size={13} /><span className="attach-name">{n}</span></li>)}
+            {pinned.map((n, i) => <li key={`p${i}`} className="attach-chip"><Icon name="tool" size={13} /><span className="attach-name">{n}</span></li>)}
+          </ul>
+        ) : null}
+      </div>
+    ) : null;
   }
-  // Consecutive lookup notes collapse into one line so a long turn reads as its replies, not its tool calls.
-  const items: Array<{ note: boolean; node: ReactNode }> = [];
-  const push = (note: boolean, node: ReactNode) => items.push({ note, node });
+  // Consecutive lookup notes collapse into one run log so a long turn reads as its replies, not its tool calls.
+  const items: Array<{ note: boolean; node: ReactNode; retry?: boolean }> = [];
+  const push = (note: boolean, node: ReactNode, retry?: boolean) => items.push({ note, node, retry });
   const grouped = () => {
     const out: ReactNode[] = [];
     for (let i = 0; i < items.length; ) {
@@ -461,12 +628,24 @@ function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer
       let j = i;
       while (j < items.length && items[j]!.note) j++;
       const run = items.slice(i, j);
-      out.push(run.length === 1 ? run[0]!.node : (
-        <details key={`l${i}`} className="lookups">
-          <summary>Looked at {run.length} things</summary>
-          {run.map((r) => r.node)}
-        </details>
-      ));
+      const retries = run.filter((r) => r.retry).length;
+      out.push(
+        <details key={`l${i}`} className="run-log">
+          <summary>
+            <Icon name="chev" size={14} className="run-chev" />
+            <strong>{run.length === 1 ? '1 step' : `${run.length} steps`}</strong>
+            <span className="muted">{retries ? `· ${retries} fixed after the compiler` : '· workspace lookups'}</span>
+          </summary>
+          <ol className="run-steps">
+            {run.map((r, k) => (
+              <li key={k} className={r.retry ? 'retry' : ''}>
+                <span className="run-dot" aria-hidden="true"><Icon name={r.retry ? 'undo' : 'check'} size={11} /></span>
+                {r.node}
+              </li>
+            ))}
+          </ol>
+        </details>,
+      );
       i = j;
     }
     return out;
@@ -477,39 +656,48 @@ function MessageView({ m, proposals, tools, mcps, conns, openAsk, busy, onAnswer
         if (b.name === 'ask_user') return void push(false, <Questions key={i} intro={b.input.intro} questions={b.input.questions ?? []} open={b.id === openAsk} busy={busy} onAnswer={onAnswer} />);
         if (b.name === 'propose_tool') {
           const t = tools[b.id];
-          return void (t ? push(false, <ToolCard key={i} t={t} />) : push(true, <div key={i} className="chat-note muted small">Drafted a tool spec the server sent back; fixing it…</div>));
+          return void (t ? push(false, <ToolCard key={i} t={t} registered={registered[b.id]} onRegistered={(rev) => onRegistered(b.id, rev)} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted a tool spec the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_mcp_server') {
           const t = mcps[b.id];
-          return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP server the server sent back; fixing it…</div>));
+          return void (t ? push(false, <McpCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted an MCP server the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_mcp_connection') {
           const t = conns[b.id];
-          return void (t ? push(false, <McpConnectionCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <div key={i} className="chat-note muted small">Drafted an MCP connection the server sent back; fixing it…</div>));
+          return void (t ? push(false, <McpConnectionCard key={i} t={t} busy={busy} onAnswer={onAnswer} />) : push(true, <span key={i}>Drafted an MCP connection the server sent back; fixing it</span>, true));
         }
         if (b.name === 'propose_workflow') {
           const p = proposals[b.id];
-          if (!p) return void push(true, <div key={i} className="chat-note muted small">Drafted a version the compiler sent back; fixing it…</div>);
+          if (!p) return void push(true, <span key={i}>Drafted a version the compiler sent back; fixing it</span>, true);
+          const on = shown === b.id;
           return void push(false, (
-            <div key={i} className="draft-card">
-              <div>
-                <strong>{p.name ?? p.id}</strong> <Badge tone="ok">compiles</Badge>
-                {p.missing.length ? <Badge tone="warn">{p.missing.length} to set up</Badge> : null}
-                <div className="muted small">{p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {Object.keys(p.files).length} files</div>
-              </div>
-              <button type="button" onClick={() => onShow(b.id)} disabled={shown === b.id}>{shown === b.id ? 'Shown' : 'View draft'}</button>
-            </div>
+            <button key={i} type="button" className={`draft-tile ${on ? 'on' : ''}`} onClick={() => onShow(b.id)} aria-pressed={on}>
+              <span className="draft-tile-icon" aria-hidden="true"><Icon name="check" size={18} /></span>
+              <span className="draft-tile-text">
+                <strong>{p.name ?? p.id}</strong>
+                <span className="muted small">
+                  Compiles · {p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {Object.keys(p.files).length} files
+                  {p.missing.length ? <> · <span className="warn-text">{p.missing.length} to set up</span></> : null}
+                </span>
+              </span>
+              <span className="draft-tile-go">{on ? 'Reviewing' : 'Review'}<Icon name="chev" size={14} /></span>
+            </button>
           ));
         }
         const label = LOOKUPS[b.name];
         const what = b.input.ref ?? b.input.id ?? b.input.slug;
-        if (label) push(true, <div key={i} className="chat-note muted small">{label}{what ? <> <code>{String(what)}</code></> : null}</div>);
+        if (label) push(true, <span key={i}>{label}{what ? <> <code>{String(what)}</code></> : null}</span>);
   });
+  const body = grouped();
+  if (!body.length && !stat) return null;
   return (
-    <>
-      {grouped()}
-      {stat ? <TurnMeta s={stat} /> : null}
-    </>
+    <div className="agent-turn">
+      <span className="agent-av" aria-hidden="true"><BrandMark size={28} /></span>
+      <div className="agent-body">
+        {body}
+        {stat ? <TurnMeta s={stat} /> : null}
+      </div>
+    </div>
   );
 }
 
@@ -527,25 +715,95 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/** A tool the builder proposes: an admin confirms to register it (a new revision when it exists). */
-function ToolCard({ t }: { t: ToolProposal }) {
+type Registered = { ref: string; revision: number; changed: boolean };
+const registerTool = (t: ToolProposal) => api<Registered>('/v1/builder/register-tool', { method: 'POST', body: { tool: t.spec } });
+const continueText = (done: Registered[]) => `I registered ${done.map((r) => `${r.ref} (revision ${r.revision})`).join(', ')}. Continue.`;
+
+/** One proposed tool: what it runs and which secret it needs. */
+function ToolFacts({ t }: { t: ToolProposal }) {
+  const tr = t.spec.transport ?? {};
+  return (
+    <>
+      <strong className="mono">{t.ref}</strong> <Badge tone="ok">{t.spec.effect}</Badge> {t.exists ? <Badge tone="warn">new revision</Badge> : null}
+      <div className="muted small">{tr.kind === 'mcp-stdio' ? `MCP: ${(tr.command ?? []).join(' ')} → ${tr.tool}` : tr.kind === 'mcp-streamable-http' ? `MCP connection ${tr.connection} → ${tr.tool}` : `${tr.method} ${tr.url}`}</div>
+      {t.credential ? <div className="muted small">Secret <code>{t.credential.name}</code>: {t.credential.set ? 'set' : 'not set yet (Secrets page)'}</div> : null}
+    </>
+  );
+}
+
+/** A tool the builder proposes: an admin confirms to register it (a new revision when it exists), then continues the chat. */
+function ToolCard({ t, registered, onRegistered, busy, onAnswer }: { t: ToolProposal; registered?: number; onRegistered: (revision: number) => void; busy: boolean; onAnswer: (text: string) => void }) {
   const qc = useQueryClient();
   const reg = useMutation({
-    mutationFn: () => api<{ ref: string; revision: number; changed: boolean }>('/v1/builder/register-tool', { method: 'POST', body: { tool: t.spec } }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+    mutationFn: () => registerTool(t),
+    onSuccess: (r) => {
+      onRegistered(r.revision);
+      void qc.invalidateQueries({ queryKey: ['tools'] });
+    },
   });
-  const tr = t.spec.transport ?? {};
+  const revision = reg.data?.revision ?? registered;
   return (
     <div className="draft-card">
       <div>
-        <strong className="mono">{t.ref}</strong> <Badge tone="ok">{t.spec.effect}</Badge> {t.exists ? <Badge tone="warn">new revision</Badge> : null}
-        <div className="muted small">{tr.kind === 'mcp-stdio' ? `MCP: ${(tr.command ?? []).join(' ')} → ${tr.tool}` : `${tr.method} ${tr.url}`}</div>
-        {t.credential ? <div className="muted small">Secret <code>{t.credential.name}</code>: {t.credential.set ? 'set' : 'not set yet (Secrets page)'}</div> : null}
-        {reg.data ? <div className="ok-note" role="status">{reg.data.changed ? `Registered revision ${reg.data.revision}.` : `Already registered (revision ${reg.data.revision}).`}</div> : null}
+        <ToolFacts t={t} />
+        {revision !== undefined ? <div className="ok-note" role="status">{reg.data && !reg.data.changed ? `Already registered (revision ${revision}).` : `Registered revision ${revision}.`}</div> : null}
         {reg.error ? <ErrorNote error={reg.error} /> : null}
       </div>
-      <button type="button" className="primary" disabled={reg.isPending || Boolean(reg.data)} onClick={() => reg.mutate()}>{reg.data ? 'Registered' : 'Register tool'}</button>
+      {revision !== undefined
+        ? <button type="button" className="primary" disabled={busy} onClick={() => onAnswer(continueText([{ ref: t.ref, revision, changed: true }]))}>Continue</button>
+        : <button type="button" className="primary" disabled={reg.isPending} onClick={() => reg.mutate()}>Register tool</button>}
     </div>
+  );
+}
+
+/**
+ * Asks to register the tools the builder is waiting on, without scrolling back to their cards.
+ * Registering adds them to the workspace catalog (admin only); it publishes nothing, and nothing
+ * checks the command or URL works until a run calls the tool.
+ */
+function RegisterDialog({ tools, busy, onRegistered, onClose, onContinue }: { tools: ToolProposal[]; busy: boolean; onRegistered: (id: string, revision: number) => void; onClose: () => void; onContinue: (text: string) => void }) {
+  const qc = useQueryClient();
+  const ref = useRef<HTMLDialogElement>(null);
+  const primary = useRef<HTMLButtonElement>(null);
+  // showModal focuses the first button; the confirming one is the likely answer.
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+    primary.current?.focus();
+  }, []);
+  // One at a time, so a refused spec stops the rest and those already registered stay registered.
+  // They are recorded only at the end: recording one empties the waiting list, which closes this dialog.
+  const reg = useMutation({
+    mutationFn: async () => {
+      const done: Array<[ToolProposal, Registered]> = [];
+      try {
+        for (const t of tools) done.push([t, await registerTool(t)]);
+      } catch (e) {
+        done.forEach(([t, r]) => onRegistered(t.tool_use_id, r.revision));
+        throw e;
+      }
+      return done;
+    },
+    onSuccess: (done) => {
+      done.forEach(([t, r]) => onRegistered(t.tool_use_id, r.revision));
+      onContinue(continueText(done.map(([, r]) => r)));
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['tools'] }),
+  });
+  const n = tools.length;
+  return (
+    <dialog ref={ref} className="dialog" aria-labelledby="register-title" onClose={onClose}>
+      <h2 id="register-title">Register {n === 1 ? 'this tool' : `${n} tools`} to continue</h2>
+      <p className="muted small">The builder cannot compile a workflow that uses an unregistered tool. Registering adds {n === 1 ? 'it' : 'them'} to this workspace (admins only) and publishes nothing. Azhi does not check that the command or URL works; a run that calls {n === 1 ? 'it' : 'one'} fails if it does not.</p>
+      <ul className="dialog-list">
+        {tools.map((t) => <li key={t.tool_use_id} className="draft-card"><div><ToolFacts t={t} />{t.summary ? <div className="small">{t.summary}</div> : null}</div></li>)}
+      </ul>
+      <ErrorNote error={reg.error} />
+      <div className="row dialog-actions">
+        <button type="button" onClick={() => ref.current?.close()} disabled={reg.isPending}>Not now</button>
+        <button ref={primary} type="button" className="primary" disabled={reg.isPending || busy} aria-busy={reg.isPending} onClick={() => reg.mutate()}>{reg.isPending ? 'Registering…' : 'Register and continue'}</button>
+      </div>
+    </dialog>
   );
 }
 
@@ -618,23 +876,40 @@ function Questions({ intro, questions, open, busy, onAnswer }: { intro?: string;
   const answerOf = (q: Question) => [...(picked[q.id] ?? []), ...(other[q.id]?.trim() ? [other[q.id]!.trim()] : [])].join('; ');
   const answered = questions.filter((q) => answerOf(q));
   const send = () => onAnswer(questions.map((q) => `${q.question}\n→ ${answerOf(q) || '(no preference, use your recommendation)'}`).join('\n\n'));
+  // With focus on one question's options, its number keys pick an option (never while typing).
+  const onKeys = (q: Question) => (e: KeyboardEvent<HTMLDivElement>) => {
+    const n = Number(e.key);
+    const o = q.options?.[n - 1];
+    if (!o || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    toggle(q, o);
+  };
   const Root = open ? 'div' : 'details';
   return (
     <Root className={`questions ${open ? '' : 'closed'}`}>
       {open ? null : <summary>The builder asked {questions.length} question{questions.length === 1 ? '' : 's'}</summary>}
       {intro ? <p className="q-intro">{intro}</p> : null}
       <ol>
-        {questions.map((q) => (
+        {questions.map((q, qi) => (
           <li key={q.id}>
+            {open && questions.length > 1 ? <div className="q-count muted">Question {qi + 1} of {questions.length}</div> : null}
             <div className="q-text">{q.question}</div>
             {q.why ? <div className="muted small">{q.why}</div> : null}
             {open ? (
               <>
                 {q.options?.length ? (
-                  <div className="q-options" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question}>
-                    {q.options.map((o) => {
+                  <div className="q-options" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question} onKeyDown={onKeys(q)}>
+                    {q.options.map((o, oi) => {
                       const on = (picked[q.id] ?? []).includes(o);
-                      return <button key={o} type="button" className={`option ${on ? 'on' : ''}`} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => toggle(q, o)}>{o}</button>;
+                      // The builder marks its pick "(recommended)" in the option text; it shows as a tag instead.
+                      const rec = /\s*\(recommended\)\s*$/i.test(o);
+                      return (
+                        <button key={o} type="button" className={`option ${on ? 'on' : ''}`} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => toggle(q, o)}>
+                          <kbd className="option-key" aria-hidden="true">{oi + 1}</kbd>
+                          <span className="option-text">{rec ? o.replace(/\s*\(recommended\)\s*$/i, '') : o}</span>
+                          {rec ? <span className="option-rec">Recommended</span> : null}
+                        </button>
+                      );
                     })}
                   </div>
                 ) : null}
@@ -679,18 +954,19 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
   });
   return (
     <section className="panel draft" aria-label="Draft workflow">
-      <header className="panel-head">
-        <h2>{p.name ?? p.id} <span className="muted small mono">{p.id}</span></h2>
+      <header className="panel-head draft-head">
+        <div>
+          <div className="draft-eyebrow">Review draft{p.new_version_of ? ` · new version of ${p.new_version_of}` : ''}</div>
+          <h2>{p.name ?? p.id} <span className="muted small mono">{p.id}</span></h2>
+        </div>
         <button type="button" className="link small" onClick={onClose}>Hide</button>
       </header>
-      <dl className="draft-facts">
-        <div><dt>Status</dt><dd><Badge tone={p.blockers.length ? 'bad' : 'ok'}>{p.blockers.length ? 'blocked' : 'compiles'}</Badge></dd></div>
-        <div><dt>Steps</dt><dd>{p.nodes.length}</dd></div>
-        <div><dt>Files</dt><dd>{paths.length}</dd></div>
-        <div><dt>To set up</dt><dd>{p.missing.length}</dd></div>
-        <div><dt>Warnings</dt><dd>{p.warnings.length}</dd></div>
-        {shared.length ? <div><dt>Shared context</dt><dd>{[...new Set(shared.map((s) => s.bundle))].join(', ')}</dd></div> : null}
-      </dl>
+      <ul className="draft-checks" aria-label="Checks">
+        <li className={p.blockers.length ? 'bad' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.blockers.length ? 'alert' : 'check'} size={11} /></span>{p.blockers.length ? `Blocked by ${p.blockers.length} problem${p.blockers.length === 1 ? '' : 's'}` : 'Compiles'} · {p.nodes.length} step{p.nodes.length === 1 ? '' : 's'} · {paths.length} file{paths.length === 1 ? '' : 's'}</li>
+        <li className={p.missing.length ? 'warn' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.missing.length ? 'alert' : 'check'} size={11} /></span>{p.missing.length ? `${p.missing.length} thing${p.missing.length === 1 ? '' : 's'} to set up before it can run` : 'Nothing to set up'}</li>
+        <li className={p.warnings.length ? 'warn' : 'ok'}><span className="run-dot" aria-hidden="true"><Icon name={p.warnings.length ? 'alert' : 'check'} size={11} /></span>{p.warnings.length ? `${p.warnings.length} warning${p.warnings.length === 1 ? '' : 's'}` : 'No warnings'}</li>
+        {shared.length ? <li className="ok"><span className="run-dot" aria-hidden="true"><Icon name="flow" size={11} /></span>Shared context: {[...new Set(shared.map((s) => s.bundle))].join(', ')}</li> : null}
+      </ul>
       {p.summary ? <p className="draft-summary">{p.summary}</p> : null}
       {shared.length ? (
         <ul className="muted small draft-context" aria-label="Shared context">
@@ -709,7 +985,7 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       {p.warnings.length ? (
         <ul className="muted small draft-warnings">{p.warnings.map((w, i) => <li key={i}>{w.node ? `${w.node}: ` : ''}{w.message}</li>)}</ul>
       ) : null}
-      <div className="tabs" role="tablist">
+      <div className="tabs seg-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === 'graph'} onClick={() => setTab('graph')}>Steps</button>
         <button type="button" role="tab" aria-selected={tab === 'files'} onClick={() => setTab('files')}>Files ({paths.length})</button>
       </div>
@@ -730,82 +1006,5 @@ function DraftPanel({ p, onClose }: { p: Proposal; onClose: () => void }) {
       <ErrorNote error={save.error} />
       {save.data && !save.data.ok ? <div className="error" role="alert">Not saved: {save.data.errors?.join('; ')}</div> : null}
     </section>
-  );
-}
-
-/**
- * Provider and model for the builder: every provider Azhi knows (those not usable here are shown
- * disabled, with why), the provider's own model list with one recommended for building
- * workflows, and "Other" for an id the list does not show. The choice is remembered.
- */
-function ModelPicker({ providers, provider, model, serverDefault, onChange }: {
-  providers: ProviderInfo[];
-  provider?: string;
-  model?: string;
-  serverDefault?: string;
-  onChange: (c: Choice) => void;
-}) {
-  const list = useQuery({
-    queryKey: ['builder-models', provider],
-    queryFn: () => api<ModelList>(`/v1/builder/models?provider=${encodeURIComponent(provider!)}`),
-    enabled: Boolean(provider),
-    staleTime: 5 * 60_000,
-  });
-  const models = list.data?.models ?? [];
-  const recommended = list.data?.recommended;
-  // No pick yet: the recommended model, else what the server would use.
-  const current = model ?? recommended?.id ?? serverDefault;
-  const listed = models.some((m) => m.id === current);
-  const [typing, setTyping] = useState(false);
-  const other = typing || (Boolean(current) && !listed && models.length > 0) || (!models.length && !list.isLoading);
-  const [custom, setCustom] = useState('');
-  useEffect(() => setCustom(current && !listed ? current : ''), [current, listed]);
-  // The model's name, as the provider's own picker shows it; the id is the option's tooltip.
-  const label = (m: { id: string; label: string }) => `${m.label}${m.id === recommended?.id ? ' · Recommended' : ''}`;
-  const pickedReason = current === recommended?.id ? recommended?.reason : undefined;
-  return (
-    <div className="model-picker" aria-label="Model for the builder" role="group">
-      <label>
-        <span className="muted small">Provider</span>
-        <select aria-label="Provider" value={provider ?? ''} onChange={(e) => { setTyping(false); onChange({ provider: e.target.value }); }}>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id} disabled={!p.ready} title={p.reason}>
-              {p.label}{p.ready ? '' : ' (not available)'}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="muted small">Model</span>
-        <select
-          aria-label="Model"
-          value={other ? OTHER : (current ?? '')}
-          disabled={!provider || list.isLoading}
-          onChange={(e) => {
-            if (e.target.value === OTHER) setTyping(true);
-            else {
-              setTyping(false);
-              onChange({ provider, model: e.target.value });
-            }
-          }}
-        >
-          {list.isLoading ? <option value={current ?? ''}>Loading models…</option> : null}
-          {models.map((m) => <option key={m.id} value={m.id} title={m.id}>{label(m)}</option>)}
-          <option value={OTHER}>Other model id…</option>
-        </select>
-      </label>
-      {other ? (
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (custom.trim()) { onChange({ provider, model: custom.trim() }); setTyping(false); } }}>
-          <input type="text" aria-label="Model id" placeholder="model id, for example gpt-5" value={custom} onChange={(e) => setCustom(e.target.value)} />
-          <button type="submit" disabled={!custom.trim()}>Use</button>
-        </form>
-      ) : null}
-      <div className="model-note muted small">
-        {pickedReason ? <>Recommended for building workflows: {pickedReason}</> : recommended ? <>Recommended: {recommended.id}. {recommended.reason}</> : null}
-        {list.data?.note ? <> {list.data.note}.</> : list.data?.source === 'built-in' ? ' Showing the built-in list.' : null}
-        {providers.filter((p) => !p.ready).map((p) => <span key={p.id} className="block">{p.label} is not available: {p.reason}.</span>)}
-      </div>
-      <ErrorNote error={list.error} />
-    </div>
   );
 }

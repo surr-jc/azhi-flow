@@ -4,8 +4,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Role } from '../db/schema.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { approvalAsk, approvalModal, approvalSettings, decideApproval, formFields, modalData } from '../server/approvals.js';
-import { openView } from '../gateway/tools/slack.js';
+import { approvalAsk, approvalModal, approvalSettings, commentModal, decideApproval, decidedBlocks, formFields, modalData } from '../server/approvals.js';
+import { openView, postMessage } from '../gateway/tools/slack.js';
+import { clip, escapeMrkdwn } from '../gateway/tools/slack-format.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
@@ -32,6 +33,8 @@ interface BlockAction {
   actions?: Array<{ action_id: string; value?: string }>;
   response_url?: string;
   trigger_id?: string;
+  /** The approval message the button sits on, so its layout can be kept when it is replaced. */
+  message?: { blocks?: unknown[] };
   /** A submitted modal (`view_submission`): the metadata we put on it and the values typed. */
   view?: { callback_id?: string; private_metadata?: string; state?: { values?: Record<string, Record<string, any>> } };
 }
@@ -85,10 +88,11 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
         return reply.status(400).send({ error: 'invalid_input', message: 'no Slack payload' });
       }
       const submitted = payload.type === 'view_submission' && payload.view?.callback_id === 'azhi_approval_form';
+      const commented = payload.type === 'view_submission' && payload.view?.callback_id === 'azhi_approval_comment';
       const action = payload.actions?.[0];
       let target: { run: string; node: string; response_url?: string };
       try {
-        target = z.object({ run: z.string(), node: z.string(), response_url: z.string().optional() }).parse(JSON.parse(submitted ? (payload.view?.private_metadata ?? '') : (action?.value ?? '')));
+        target = z.object({ run: z.string(), node: z.string(), response_url: z.string().optional() }).parse(JSON.parse(submitted || commented ? (payload.view?.private_metadata ?? '') : (action?.value ?? '')));
       } catch {
         return reply.status(200).send();
       }
@@ -106,6 +110,34 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
       const link = `${ctx.settings.publicUrl.replace(/\/$/, '')}/ui/runs/${encodeURIComponent(target.run)}`;
       const responseUrl = submitted ? target.response_url : payload.response_url;
       const principal = linked ? ({ kind: 'user', workspaceId: ws, userId: linked.id, role: linked.role } as const) : undefined;
+
+      // A submitted comment: posted under the approval message and kept in the audit log. It decides nothing.
+      if (commented) {
+        const refuse = (message: string) => reply.status(200).send({ response_action: 'errors', errors: { comment: message } });
+        if (!principal) return refuse('Your Slack user is not linked to Azhi Flow. An admin can link it on the Users page.');
+        const note = String(payload.view?.state?.values?.comment?.text?.value ?? '').trim();
+        if (!note) return refuse('Write a comment first.');
+        const row = (await ctx.pool.query(`SELECT channel, ts FROM approval_messages WHERE run_id=$1 AND node_id=$2`, [target.run, target.node])).rows[0] as { channel: string; ts: string | null } | undefined;
+        const token = await resolveSecret(ctx, ws, 'slack-bot-token');
+        if (!row?.ts || !token) return refuse(`This comment cannot be posted to Slack. Comment in mission control: ${link}`);
+        try {
+          await postMessage(
+            { token: token.value, apiUrl: ctx.settings.slackApiUrl },
+            {
+              channel: row.channel,
+              threadTs: row.ts,
+              text: `Comment from <@${slackUser}> on ${target.node}: ${clip(note, 300)}`,
+              blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `:speech_balloon: *Comment from <@${slackUser}>*
+${escapeMrkdwn(clip(note, 2800))}` } }],
+              dedupeKey: `approval-comment:${target.run}:${target.node}:${Date.now()}`,
+            },
+          );
+        } catch (e) {
+          return refuse((e as Error).message);
+        }
+        await audit(ctx, ws, principal.userId, 'approval.commented', { run: target.run, node: target.node, via: 'slack', comment: clip(note, 2000) });
+        return reply.status(200).send();
+      }
 
       // A submitted answer form: validate it like the web form does, then record the approval.
       if (submitted) {
@@ -127,12 +159,26 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
         } catch (e) {
           return refuse((e as Error).message);
         }
-        await respond(responseUrl, { replace_original: true, text: `:white_check_mark: Approved by <@${slackUser}> with their answers (${target.node} on ${target.run}).` });
+        await respond(responseUrl, { replace_original: true, text: `Approved by <@${slackUser}> (${target.node} on ${target.run}).`, blocks: decidedBlocks(undefined, `:white_check_mark: *Approved* by <@${slackUser}> with their answers.`) });
         return reply.status(200).send();
       }
 
       if (!principal) {
         await respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text: `Your Slack user is not linked to Azhi Flow, so this was not recorded. An admin can link it on the Users page, or decide in mission control: ${link}` });
+        return reply.status(200).send();
+      }
+      // Comment opens a modal and decides nothing.
+      if (action!.action_id === 'comment') {
+        try {
+          if (!payload.trigger_id) throw new Error('Slack sent no trigger to open the form');
+          const token = await resolveSecret(ctx, ws, 'slack-bot-token');
+          if (!token) throw new Error("the secret 'slack-bot-token' is not set");
+          const ask = await approvalAsk(ctx, target.run, target.node);
+          const intro = [ask?.message || `Comment on ${target.node}`, `<${link}|Open the run in mission control>`].join(String.fromCharCode(10));
+          await openView({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { trigger_id: payload.trigger_id, view: commentModal({ run: target.run, node: target.node, intro }) });
+        } catch (e) {
+          await respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text: `Not posted: ${(e as Error).message}. You can comment in mission control: ${link}` });
+        }
         return reply.status(200).send();
       }
       const decision = action!.action_id === 'approve' ? 'approved' : 'rejected';
@@ -162,7 +208,8 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
         await decideApproval(ctx, temporal, principal, target.run, { node: target.node, decision, data: {} }, 'slack');
         await respond(responseUrl, {
           replace_original: true,
-          text: `${decision === 'approved' ? ':white_check_mark: Approved' : ':x: Rejected'} by <@${slackUser}> (${target.node} on ${target.run}).`,
+          text: `${decision === 'approved' ? 'Approved' : 'Rejected'} by <@${slackUser}> (${target.node} on ${target.run}).`,
+          blocks: decidedBlocks(payload.message?.blocks, `${decision === 'approved' ? ':white_check_mark: *Approved*' : ':x: *Rejected*'} by <@${slackUser}>`),
         });
       } catch (e) {
         await say(`Not recorded: ${(e as Error).message}. You can decide in mission control: ${link}`);

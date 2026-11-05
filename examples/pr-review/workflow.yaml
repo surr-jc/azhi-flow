@@ -58,7 +58,7 @@ nodes:
     input: {map: "{'pr': nodes.pr.output}"}
     output_schema: schemas/findings.json
     timeout: 15m
-    budget: {max_tool_calls: 10}
+    budget: {max_tool_calls: 15}
 
   - id: security
     type: agent
@@ -69,7 +69,7 @@ nodes:
     input: {map: "{'pr': nodes.pr.output}"}
     output_schema: schemas/findings.json
     timeout: 15m
-    budget: {max_tool_calls: 10}
+    budget: {max_tool_calls: 15}
 
   - id: tests
     type: agent
@@ -80,7 +80,7 @@ nodes:
     input: {map: "{'pr': nodes.pr.output}"}
     output_schema: schemas/findings.json
     timeout: 15m
-    budget: {max_tool_calls: 10}
+    budget: {max_tool_calls: 15}
 
   - id: quality
     type: agent
@@ -91,7 +91,7 @@ nodes:
     input: {map: "{'pr': nodes.pr.output}"}
     output_schema: schemas/findings.json
     timeout: 15m
-    budget: {max_tool_calls: 10}
+    budget: {max_tool_calls: 15}
 
   - id: verify
     type: agent

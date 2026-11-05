@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { Message } from '../agents/providers.js';
+import { copilotCredits, copilotRate } from '../agents/copilot-pricing.js';
+import type { Message, Usage } from '../agents/providers.js';
+import { extractFile, LIMITS } from '../builder/attachments.js';
 import { addProposedMcp, builderProviders, builderTurn, checkProposal, registerProposedTool } from '../builder/builder.js';
 import { checkMcpProposal } from '../builder/integrations.js';
 import { builderModels } from '../builder/models.js';
@@ -30,7 +32,25 @@ const chat = z.object({
   model: z.string().min(1).max(160).optional(),
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.array(block) })).max(400),
   text: z.string().min(1).max(100_000),
+  attachments: z.array(z.object({
+    name: z.string().max(200),
+    kind: z.enum(['text', 'spreadsheet', 'document', 'pdf', 'unsupported']),
+    text: z.string().max(LIMITS.fileChars),
+    truncated: z.boolean().optional(),
+  })).max(LIMITS.files).optional(),
+  pinned: z.array(z.string().max(200)).max(20).optional(),
 });
+const upload = z.object({
+  files: z.array(z.object({ name: z.string().min(1).max(200), data: z.string().max(Math.ceil(LIMITS.fileBytes * 4 / 3) + 8) })).min(1).max(LIMITS.files),
+});
+
+/** AI Credits a Copilot turn used at GitHub's published rates; null for other providers or a model without a known rate (never guessed). */
+function turnCost(ctx: AppContext, provider: string, model: string, usage: Usage): { credits: number; usd: number } | null {
+  if (provider !== 'opencode') return null;
+  const rate = copilotRate(model, undefined, ctx.settings);
+  const c = rate ? copilotCredits(usage, rate, ctx.settings.copilotCreditUsd) : null;
+  return c ? { credits: c.credits, usd: c.cost } : null;
+}
 
 export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/builder', async (req) => {
@@ -52,9 +72,19 @@ export function registerBuilderRoutes(app: FastifyInstance, ctx: AppContext) {
     requireRole(p, 'author');
     const b = chat.parse(req.body);
     if (JSON.stringify(b.messages).length > 2_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
-    const r = await builderTurn(ctx, p.workspaceId, { messages: b.messages as Message[], text: b.text, provider: b.provider, model: b.model });
-    await audit(ctx, p.workspaceId, p.userId, 'builder.turn', { provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
-    return r;
+    const r = await builderTurn(ctx, p.workspaceId, { messages: b.messages as Message[], text: b.text, attachments: b.attachments, pinned: b.pinned, provider: b.provider, model: b.model });
+    await audit(ctx, p.workspaceId, p.userId, 'builder.turn', { provider: r.provider, model: r.model, event: r.event.kind, attachments: b.attachments?.length ?? 0, pinned: b.pinned?.length ?? 0, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
+    return { ...r, cost: turnCost(ctx, r.provider, r.model, r.usage) };
+  });
+
+  // Reads attached files into plain text for the chat. Nothing is stored; the browser sends the text back with the message.
+  app.post('/v1/builder/attachments', async (req) => {
+    const p = user(req);
+    requireRole(p, 'author');
+    const b = upload.parse(req.body);
+    const files = await Promise.all(b.files.map((f) => extractFile(f.name, Buffer.from(f.data, 'base64'))));
+    await audit(ctx, p.workspaceId, p.userId, 'builder.attachments', { files: files.map((f) => ({ name: f.name, kind: f.kind, chars: f.chars, truncated: f.truncated })) });
+    return { files };
   });
 
   // Registers a tool the builder proposed, once an admin confirms it; checked again as at proposal time.

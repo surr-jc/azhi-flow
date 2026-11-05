@@ -168,6 +168,21 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           detail: `starts from the change step ${producer} made: the worker fetches that change's own base commit (not the step's ref, which may have moved on), checks every path, applies the files and commits them locally. The files are untrusted data from an agent; nothing is pushed`,
         });
       }
+      if (ws.merge_ref !== undefined) {
+        const merging = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_merge'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker supports workspace merge', mark: 'unverified', detail: 'no worker online' }
+            : merging.length
+              ? { name: 'worker supports workspace merge', mark: 'native', detail: merging.map((w) => w.name).join(', ') }
+              : { name: 'worker supports workspace merge', mark: 'unsupported', detail: 'no online OpenCode worker has a build with workspace merge; upgrade the worker' },
+        );
+        np.coverage.push({
+          action: 'merges a ref into the checkout',
+          enforcement: 'harness',
+          detail: 'git merge --no-commit on the worker, with git hooks off and no host git config; conflicts stay in the tree as markers and the merge is never committed or pushed',
+        });
+      }
       if (ws.mode === 'write') {
         np.coverage.push({
           action: 'edits in the checkout',

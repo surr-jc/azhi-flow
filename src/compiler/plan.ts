@@ -100,6 +100,14 @@ export const WORKSPACE_CHANGE_SCHEMA: JsonSchema = {
     diff: { type: 'string' },
     diff_truncated: { type: 'boolean' },
     step_limit_reached: { type: 'boolean' },
+    merge: {
+      type: 'object',
+      properties: {
+        base_sha: { type: 'string' },
+        head_sha: { type: 'string' },
+        conflicts: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, kind: { type: 'string' } } } },
+      },
+    },
     stats: { type: 'object', properties: { files: { type: 'integer' }, additions: { type: 'integer' }, deletions: { type: 'integer' } } },
     tests: {
       type: 'object',

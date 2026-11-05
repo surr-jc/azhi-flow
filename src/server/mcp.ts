@@ -51,7 +51,8 @@ export async function listMcpConnections(ctx: AppContext, workspaceId: string) {
   return rows.map(publicConnection);
 }
 export async function getMcpConnection(ctx: AppContext, workspaceId: string, id: string): Promise<Row> {
-  const r = await ctx.pool.query(`SELECT * FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [workspaceId, id]);
+  // Registered actions may name a connection by id or by name; an exact id match wins over a name that happens to equal it.
+  const r = await ctx.pool.query(`SELECT * FROM mcp_connections WHERE workspace_id=$1 AND (id=$2 OR name=$2) ORDER BY (id=$2) DESC LIMIT 1`, [workspaceId, id]);
   if (!r.rows[0]) throw new AzhiError(ErrorClass.invalidInput, 'MCP connection not found');
   return r.rows[0] as Row;
 }
@@ -118,7 +119,7 @@ export async function beginMcpOAuth(ctx: AppContext, workspaceId: string, id: st
   await checkEgress(r.oauth_authorization_url);
   const state = randomBytes(24).toString('base64url');
   const { url, codeVerifier } = await buildAuthorizationUrl(endpoints(ctx, r), redirectUriFor(ctx.settings.publicUrl), state);
-  await ctx.pool.query(`UPDATE mcp_connections SET oauth_state=$3, oauth_verifier=$4, oauth_state_expires_at=$5, status='authorizing', last_error=NULL, updated_at=now() WHERE workspace_id=$1 AND id=$2`, [workspaceId, id, state, encryptSecret(ctx.secretKey, codeVerifier), new Date(Date.now() + STATE_TTL_MS)]);
+  await ctx.pool.query(`UPDATE mcp_connections SET oauth_state=$3, oauth_verifier=$4, oauth_state_expires_at=$5, status='authorizing', last_error=NULL, updated_at=now() WHERE workspace_id=$1 AND id=$2`, [workspaceId, r.id, state, encryptSecret(ctx.secretKey, codeVerifier), new Date(Date.now() + STATE_TTL_MS)]);
   await audit(ctx, workspaceId, actor, 'mcp.oauth_started', { connection: id });
   return { authorization_url: url };
 }
@@ -241,7 +242,11 @@ export async function discoverMcpTools(ctx: AppContext, workspaceId: string, id:
 export async function callRemoteMcpTool(ctx: AppContext, workspaceId: string, connection: string, tool: string, args: Record<string, unknown>) {
   const r = await getMcpConnection(ctx, workspaceId, connection); const session = await initialized(ctx, r); const reply = await rpcSession(ctx, r, session, 'tools/call', { name: tool, arguments: args });
   if (reply.error || reply.result?.isError) throw new AzhiError(ErrorClass.invalidInput, `remote MCP tool error: ${reply.error?.message ?? textContent(reply.result).slice(0, 200)}`);
-  if (reply.result?.structuredContent !== undefined) return reply.result.structuredContent;
-  const text = textContent(reply.result); try { return JSON.parse(text); } catch { return text; }
+  // MCP tools default to an object output schema, so every result is returned as an object.
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  if (reply.result?.structuredContent !== undefined) { const s = reply.result.structuredContent; return isObject(s) ? s : { result: s }; }
+  const text = textContent(reply.result);
+  let parsed: unknown; try { parsed = JSON.parse(text); } catch { return { text }; }
+  return isObject(parsed) ? parsed : { result: parsed };
 }
 function textContent(result: any) { return (result?.content ?? []).filter((x: any) => x?.type === 'text').map((x: any) => x.text ?? '').join(''); }

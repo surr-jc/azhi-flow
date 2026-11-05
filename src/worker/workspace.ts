@@ -21,6 +21,13 @@ export interface WorkspaceSpec {
   repo: string;
   ref: string;
   baseRef?: string;
+  /**
+   * A ref merged into `ref` (`git merge --no-commit`) before the step starts, for example the base branch into a
+   * pull request's head. Conflicts are left in the tree as markers. Needs the full history, so not combined with
+   * `depth`, `baseRef` or `continuation`. The change a write-mode step hands on is then measured from this ref's
+   * tip, so it is the pull request's own change plus the resolutions, however far the base has moved.
+   */
+  mergeRef?: string;
   credential?: string;
   depth?: number;
   /** `write`: the agent may edit the checkout, and its git metadata is kept outside it. */
@@ -34,10 +41,19 @@ export interface WorkspaceSpec {
   continuation?: Continuation;
 }
 
+/** What a `mergeRef` merge found: the tip that was merged in, the head it was merged into, and the unmerged paths. */
+export interface MergeInfo {
+  base_sha: string;
+  head_sha: string;
+  conflicts: Array<{ path: string; kind: 'both_modified' | 'both_added' | 'deleted_by_us' | 'deleted_by_them' | 'added_by_us' | 'added_by_them' }>;
+}
+
 export interface Checkout {
   dir: string;
+  /** The commit changes are measured from: the checked-out ref, or the merged ref's tip when `mergeRef` is set. */
   head: string;
   base?: string;
+  merge?: MergeInfo;
   /** Write mode: the git directory, outside the checkout so the agent's edits cannot reach it. */
   gitDir?: string;
 }
@@ -80,6 +96,10 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     if (spec.baseRef !== undefined) throw invalid('a workspace cannot continue from an earlier change and also set base_ref');
     validateContinuation(spec.continuation);
   }
+  if (spec.mergeRef !== undefined) {
+    if (!REF.test(spec.mergeRef)) throw invalid(`workspace merge_ref '${spec.mergeRef}' is not a plain git ref`);
+    if (spec.continuation || spec.baseRef !== undefined || spec.depth) throw invalid('a workspace that merges a ref (merge_ref) needs the full history, so it cannot also set base_ref or depth, or continue from an earlier change');
+  }
   const dir = join(o.root, 'repo');
   mkdirSync(dir);
   const base = { ...isolatedGitEnv(o.home), GIT_ALLOW_PROTOCOL: new URL(url).protocol.replace(':', '') };
@@ -103,7 +123,7 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   await git(['config', 'core.symlinks', 'false'], { ...base, ...config(always) });
   const auth: Array<[string, string]> = o.token ? [[`http.${new URL(url).origin}/.extraHeader`, `Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`]] : [];
   // A continuation starts from the commit its change was made against, however far the branch has moved since.
-  const refspecs = [`+${spec.continuation?.baseSha ?? spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : [])];
+  const refspecs = [`+${spec.continuation?.baseSha ?? spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : []), ...(spec.mergeRef ? [`+${spec.mergeRef}:refs/azhi/merge`] : [])];
   // A transfer under 1 KB/s for 60 s is stalled, not slow: fail it as transient so the retry starts now, not after the step timeout.
   const stall: Array<[string, string]> = [['http.lowSpeedLimit', '1000'], ['http.lowSpeedTime', '60']];
   // Fetch by URL: no remote is configured, so neither the URL nor the header is written to .git/config.
@@ -115,6 +135,30 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   // diff: stop here rather than let agents review an empty change.
   if (baseSha && (baseSha === head || (await git(['merge-base', '--is-ancestor', head, baseSha], { ...base, ...config(always) }).then(() => true, () => false)))) {
     throw ApplicationFailure.create({ type: ErrorClass.invalidInput, nonRetryable: true, message: `workspace ref ${spec.ref} (${head.slice(0, 12)}) is already contained in base_ref ${spec.baseRef}, so there is no change to work on; was the pull request merged?` });
+  }
+  let merge: MergeInfo | undefined;
+  if (spec.mergeRef) {
+    const mergeSha = await git(['rev-parse', 'refs/azhi/merge'], { ...base, ...config(always) });
+    if (mergeSha === head || (await git(['merge-base', '--is-ancestor', mergeSha, head], { ...base, ...config(always) }).then(() => true, () => false))) {
+      throw invalid(`workspace ref ${spec.ref} (${head.slice(0, 12)}) already contains merge_ref ${spec.mergeRef}, so there is nothing to merge`);
+    }
+    const identity = { GIT_AUTHOR_NAME: 'azhi', GIT_AUTHOR_EMAIL: 'azhi@localhost', GIT_COMMITTER_NAME: 'azhi', GIT_COMMITTER_EMAIL: 'azhi@localhost' };
+    const local = { ...base, ...config([...always, ['merge.conflictStyle', 'diff3'], ['core.quotePath', 'false']]), ...identity };
+    // Conflicts make git exit 1 and are expected; they show as unmerged index entries. Any other failure has none.
+    let mergeError: unknown;
+    await git(['merge', '--no-commit', '--no-ff', '--no-verify', 'refs/azhi/merge'], local).catch((e) => {
+      mergeError = e;
+    });
+    const stages = new Map<string, Set<number>>();
+    for (const rec of (await git(['ls-files', '-u', '-z'], local)).split('\0')) {
+      const m = /^\d+ [0-9a-f]+ ([123])\t(.+)$/s.exec(rec);
+      if (m) stages.set(m[2]!, (stages.get(m[2]!) ?? new Set()).add(Number(m[1])));
+    }
+    if (mergeError && !stages.size) throw invalid(`git could not merge ${spec.mergeRef} into ${spec.ref}: ${(mergeError as Error).message}`);
+    // Stage 1 is the common ancestor, 2 the checked-out ref ("ours"), 3 the merged ref ("theirs").
+    const kind = (s: Set<number>): MergeInfo['conflicts'][number]['kind'] =>
+      s.has(1) ? (s.has(2) && s.has(3) ? 'both_modified' : s.has(3) ? 'deleted_by_us' : 'deleted_by_them') : s.has(2) && s.has(3) ? 'both_added' : s.has(2) ? 'added_by_us' : 'added_by_them';
+    merge = { base_sha: mergeSha, head_sha: head, conflicts: [...stages].map(([path, s]) => ({ path, kind: kind(s) })).sort((a, b) => a.path.localeCompare(b.path)) };
   }
   if (spec.continuation) {
     const { baseSha: from, files } = spec.continuation;
@@ -134,12 +178,14 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     renameSync(join(dir, '.git'), gitDir);
     return { dir, head, gitDir, base: from };
   }
-  if (spec.mode !== 'write') return { dir, head, ...(baseSha ? { base: baseSha } : {}) };
+  // After a merge, changes are measured from the merged ref's tip (see `mergeRef`).
+  const start = merge ? { head: merge.base_sha, merge } : { head };
+  if (spec.mode !== 'write') return { dir, ...start, ...(baseSha ? { base: baseSha } : {}) };
   // An agent that may write files must not be able to write git's own files (hooks, config, filters run
   // commands): the git directory moves out of the folder it edits.
   const gitDir = join(o.root, 'git');
   renameSync(join(dir, '.git'), gitDir);
-  return { dir, head, gitDir, ...(baseSha ? { base: baseSha } : {}) };
+  return { dir, ...start, gitDir, ...(baseSha ? { base: baseSha } : {}) };
 }
 
 /** Changed files Azhi hands on (and the most it will carry in a step's output). */
@@ -156,6 +202,8 @@ export interface WorkspaceChange {
   tests: { status: 'passed' | 'failed' | 'not_run'; command: string; exit_code: number | null; attempts: number; output: string };
   /** True when the agent hit its step limit and was asked to wrap up, so the change may be unfinished. */
   step_limit_reached?: boolean;
+  /** Set when the checkout was a `mergeRef` merge: what was merged and which paths conflicted. */
+  merge?: MergeInfo;
 }
 
 /**
@@ -241,6 +289,7 @@ export async function collectChange(c: Checkout, home: string, tree: string, met
     stats: { files: files.length, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) },
     tests: meta.tests,
     ...(meta.stepLimitReached ? { step_limit_reached: true } : {}),
+    ...(c.merge ? { merge: c.merge } : {}),
   };
 }
 

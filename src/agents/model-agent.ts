@@ -178,7 +178,7 @@ async function providerFor(ctx: AppContext, workspaceId: string, profile: AgentP
 }
 
 /** Replaces artifact handles and deferred refs in the agent input with their content. */
-function materialise(ctx: AppContext, v: unknown): unknown {
+export function materialise(ctx: AppContext, v: unknown): unknown {
   if (Array.isArray(v)) return v.map((x) => materialise(ctx, x));
   if (!v || typeof v !== 'object') return v;
   const o = v as Record<string, any>;

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, registerTool } from '../server/catalog.js';
+import { audit, loadCatalog, registerTool } from '../server/catalog.js';
 import { beginMcpOAuth, createMcpConnection, discoverMcpTools, failMcpOAuth, finishMcpOAuth, getMcpConnection, listMcpConnections, publicConnection } from '../server/mcp.js';
 import type { AppContext } from '../server/context.js';
 import { requireRole } from './auth.js';
@@ -29,15 +29,15 @@ export function registerMcpRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/v1/mcp/connections/:id', async (req) => {
     const p = user(req); requireRole(p, 'admin'); return publicConnection(await getMcpConnection(ctx, p.workspaceId, (req.params as { id: string }).id));
   });
-  // A connection whose actions are registered stays: registered tools are pinned by runs and cannot be removed.
+  // A connection whose actions are still registered stays; unregister them first (runs that pinned them keep their revision).
   app.delete('/v1/mcp/connections/:id', async (req) => {
     const p = user(req); requireRole(p, 'admin');
     const id = (req.params as { id: string }).id;
     const row = await getMcpConnection(ctx, p.workspaceId, id);
-    const used = (await ctx.pool.query(`SELECT count(DISTINCT tool_id)::int AS n FROM tools WHERE workspace_id=$1 AND spec->'transport'->>'connection' IN ($2,$3)`, [p.workspaceId, id, row.name])).rows[0]?.n ?? 0;
-    if (used) throw new AzhiError(ErrorClass.invalidInput, `${used} registered action${used === 1 ? ' uses' : 's use'} this connection; runs may have pinned ${used === 1 ? 'it' : 'them'}, so it cannot be removed`);
-    await ctx.pool.query(`DELETE FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [p.workspaceId, id]);
-    await audit(ctx, p.workspaceId, p.userId, 'mcp.connection_deleted', { connection: id, name: row.name });
+    const used = (await loadCatalog(ctx, p.workspaceId)).list().filter((t) => t.revision !== undefined && [id, row.name].includes((t.transport as { connection?: string }).connection ?? '')).length;
+    if (used) throw new AzhiError(ErrorClass.invalidInput, `${used} registered action${used === 1 ? ' uses' : 's use'} this connection; unregister ${used === 1 ? 'it' : 'them'} first, then delete the connection`);
+    await ctx.pool.query(`DELETE FROM mcp_connections WHERE workspace_id=$1 AND id=$2`, [p.workspaceId, row.id]);
+    await audit(ctx, p.workspaceId, p.userId, 'mcp.connection_deleted', { connection: row.id, name: row.name });
     return { ok: true };
   });
   app.post('/v1/mcp/connections/:id/oauth/start', async (req) => {

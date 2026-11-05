@@ -29,7 +29,7 @@ access, and once with a real Anthropic key (`ANTHROPIC_API_KEY`, `AZHI_ANTHROPIC
 | Flagship package | `examples/quality-report`, `azhi init` | CI runs, flaky tests and incidents (fixture tools) → metrics script → cited analysis → report → guarded Slack post |
 | Citations and as-of times | `src/runtime/report.ts`, `gateway-activities.ts` | The agent may only cite excerpt IDs it was shown; the report numbers them and adds per-source as-of lines |
 | Crash suite | `test/crash-suite.test.ts`, `AZHI_FAULT` | Kills the gateway at `planned`, `dispatched` and after the send; one message every time |
-| OpenCode adapter | `src/worker/harness-activity.ts`, `src/agents/gateway-mcp.ts` | Pinned `opencode-ai` 1.18.34 on the worker; built-in tools off and permissions denied; the gateway bridged as a stdio MCP server; conformance suite `test/opencode.test.ts` |
+| OpenCode adapter | `src/worker/harness-activity.ts`, `src/agents/gateway-mcp.ts` | Pinned `opencode-ai` 1.19.5 on the worker; built-in tools off and permissions denied; the gateway bridged as a stdio MCP server; conformance suite `test/opencode.test.ts` |
 | Executor comparison | `bench/`, `npm run compare` | 30 scripted fixtures in six scenarios through both executors, one Markdown + JSON report |
 | Web run page | `src/web/`, `/ui/runs/:id`, `azhi open` | Read-only: graph, timeline, action ledger, policy coverage, context manifest, usage; follows the run over SSE and resumes from the last event ID |
 | Run plan per run | `run.planned` event | The page shows the coverage the run had when it was created, not today's |

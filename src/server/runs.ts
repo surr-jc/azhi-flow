@@ -8,8 +8,10 @@ import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
+import { checkResume } from '../plan/resume-check.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog, loadToolRevision } from './catalog.js';
+import { resolveVersion } from './workflows.js';
 import { runRepos } from './repo-slots.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { contentHash } from '../lib/hash.js';
@@ -35,6 +37,8 @@ export interface CreateRunOptions {
   parent?: NonNullable<RunSnapshot['parent']>;
   /** Provider and model chosen for this run, for steps whose profile says `name: default`; overrides the workflow's model_defaults. */
   modelDefaults?: NonNullable<RunSnapshot['model_defaults']>;
+  /** Resumes an earlier run: its succeeded steps are carried over and not run again. */
+  resume?: NonNullable<RunSnapshot['resume']>;
 }
 
 /**
@@ -116,6 +120,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     ...(modelDefaults ? { model_defaults: modelDefaults } : {}),
     ...(o.modelDefaults?.provider ? { model_defaults_chosen: true } : {}),
     ...(runExecutors && Object.keys(runExecutors).length ? { run_executors: runExecutors } : {}),
+    ...(o.resume ? { resume: o.resume } : {}),
     ...(o.occurrenceId ? { occurrence_id: o.occurrenceId } : {}),
     ...(o.parent ? { parent: o.parent } : {}),
   };
@@ -129,7 +134,7 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
       const existing = (await c.query(`SELECT id FROM runs WHERE occurrence_id=$1`, [o.occurrenceId])).rows[0].id as string;
       return { runId: existing, created: false };
     }
-    await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger })]);
+    await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.queued',$3)`, [workspaceId, runId, JSON.stringify({ state: 'queued', trigger: o.trigger, ...(o.resume ? { resumed_from: o.resume.from_run, carried: o.resume.nodes.length } : {}) })]);
     await c.query(`INSERT INTO run_events(workspace_id, run_id, kind, data) VALUES ($1,$2,'run.planned',$3)`, [workspaceId, runId, JSON.stringify(plan)]);
     if (!o.parent) {
       await c.query(`INSERT INTO outbox(workspace_id, kind, payload) VALUES ($1,'run.start',$2)`, [workspaceId, JSON.stringify({ run_id: runId })]);
@@ -137,6 +142,71 @@ export async function createRun(ctx: AppContext, workspaceId: string, o: CreateR
     }
     return { runId, created: true };
   });
+}
+
+/**
+ * Starts a new run of the same version, with the same inputs and reference time, that does not repeat the
+ * steps which already succeeded in a finished run: they are carried over with their outputs, so a write
+ * that happened (a pushed branch, a message) is not repeated. A step is carried only if every step it
+ * depends on is carried too; `fromNode` also reruns that step and everything after it.
+ */
+export async function resumeRun(ctx: AppContext, workspaceId: string, runId: string, actor: string, interpreterBuild: string, opts: { fromNode?: string; version?: string; dryRun?: boolean } = {}) {
+  const old = (await ctx.pool.query(`SELECT state, inputs, snapshot, test, workflow_version_id FROM runs WHERE id=$1 AND workspace_id=$2`, [runId, workspaceId])).rows[0];
+  if (!old) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} not found`);
+  if (!['failed', 'delivery_failed', 'cancelled', 'expired'].includes(old.state)) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} is ${old.state}: only a failed, cancelled or expired run can be resumed`);
+  if (old.test) throw new AzhiError(ErrorClass.invalidInput, 'a test run cannot be resumed');
+  const oldVersion = await resolveVersion(ctx, workspaceId, old.workflow_version_id);
+  if (!oldVersion) throw new AzhiError(ErrorClass.invalidInput, `workflow version ${old.workflow_version_id} no longer exists`);
+
+  // Without `version` the run continues on the version it ran; `latest` is the newest version saved, a number or `slug@n` another one.
+  let version = oldVersion;
+  if (opts.version) {
+    const ref = opts.version === 'latest'
+      ? `${oldVersion.slug}@${(await ctx.pool.query(`SELECT MAX(version) AS v FROM workflow_versions WHERE workflow_id=$1`, [oldVersion.workflow_id])).rows[0].v}`
+      : /^\d+$/.test(opts.version) ? `${oldVersion.slug}@${opts.version}` : opts.version;
+    const target = await resolveVersion(ctx, workspaceId, ref);
+    if (!target) throw new AzhiError(ErrorClass.invalidInput, `workflow version ${opts.version} not found`);
+    if (target.workflow_id !== oldVersion.workflow_id) throw new AzhiError(ErrorClass.invalidInput, `${ref} is a different workflow; a run can only resume on a version of ${oldVersion.slug}`);
+    version = target;
+  }
+  const nodes = version.plan.nodes;
+  if (opts.fromNode && !nodes.some((n) => n.id === opts.fromNode)) throw new AzhiError(ErrorClass.invalidInput, `the workflow has no step ${opts.fromNode}`);
+
+  const ended = new Map<string, Set<string>>();
+  for (const r of (await ctx.pool.query(`SELECT DISTINCT node_id, state FROM node_attempts WHERE run_id=$1 AND workspace_id=$2`, [runId, workspaceId])).rows) {
+    if (!ended.has(r.state)) ended.set(r.state, new Set());
+    ended.get(r.state)!.add(r.node_id as string);
+  }
+  const schema = version.plan.inputsSchema;
+  const validate = schema ? ajv.compile(schema) : undefined;
+  const check = checkResume({
+    oldPlan: oldVersion.plan,
+    oldManifest: oldVersion.manifest,
+    newPlan: version.plan,
+    newManifest: version.manifest,
+    succeeded: ended.get('succeeded') ?? new Set(),
+    skipped: ended.get('skipped') ?? new Set(),
+    failed: ended.get('failed') ?? new Set(),
+    ...(opts.fromNode ? { fromNode: opts.fromNode } : {}),
+    ...(validate && !validate(old.inputs) ? { inputsProblem: ajv.errorsText(validate.errors) } : {}),
+  });
+  const info = { id: version.id, workflow: version.slug, version: version.version, from_version: oldVersion.version };
+  if (opts.dryRun) return { runId: undefined, carried: check.carried, rerun: check.rerun, check, version: info };
+  if (!check.possible) throw new AzhiError(ErrorClass.invalidInput, `run ${runId} cannot resume on ${version.slug}@${version.version}: ${check.reason}`, { check });
+
+  const snapshot = old.snapshot as RunSnapshot;
+  const resume = { from_run: runId, nodes: check.carried };
+  const r = await createRun(ctx, workspaceId, {
+    version,
+    inputs: old.inputs as Record<string, unknown>,
+    trigger: 'api',
+    createdBy: actor,
+    referenceTime: new Date(snapshot.reference_time),
+    interpreterBuild,
+    resume,
+    ...(snapshot.model_defaults_chosen && snapshot.model_defaults ? { modelDefaults: snapshot.model_defaults } : {}),
+  });
+  return { runId: r.runId, carried: check.carried, rerun: check.rerun, check, version: info };
 }
 
 export async function requestCancel(ctx: AppContext, workspaceId: string, runId: string, actor: string) {
@@ -194,6 +264,26 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
     attempts: attempts.rows,
     actions: actions.rows.map((a) => ({ ...a, transitions: transitions.rows.filter((t) => t.action_id === a.id) })),
   };
+}
+
+/** Runs newest first; `q` is text found in the run's inputs, or the start of its id. */
+export async function listRuns(
+  ctx: AppContext,
+  workspaceId: string,
+  q: { limit: number; state?: string[]; workflow?: string; before?: string; since?: string; q?: string; top_level?: boolean },
+) {
+  const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return (
+    await ctx.pool.query(
+      `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
+       JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
+       WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
+         AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
+         AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
+       ORDER BY r.created_at DESC LIMIT $2`,
+      [workspaceId, q.limit, q.state?.length ? q.state : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === true],
+    )
+  ).rows;
 }
 
 export async function runEvents(ctx: AppContext, workspaceId: string, runId: string, after = 0, limit = 500) {

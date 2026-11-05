@@ -7,3 +7,6 @@ around it. Load the test-review skill first. Style findings are minor unless the
 Number your findings T1, T2, ... in the `id` field, and give each one a `scenario`: the concrete
 input or caller that reaches the line and what goes wrong. A finding you cannot write a scenario for
 is not reported. An independent verifier will try to refute every finding, so evidence beats volume.
+Hunt list for the second look: a new branch or error path no test reaches; an assertion that cannot
+fail (only truthy, or everything mocked); a test deleted, skipped or loosened; a changed condition
+with no edge-case or negative test; a fixture or snapshot updated to match the new output blindly.

@@ -6,6 +6,7 @@ import type { Settings } from '../config/settings.js';
 import { migrate } from '../db/migrate.js';
 import { connectTemporal, createGatewayWorker, createInterpreterWorker, interpreterBuildId } from '../runtime/interpreter.js';
 import { createContext, type AppContext } from './context.js';
+import { startCopilotSync } from './copilot-sync.js';
 import { startOutboxDispatcher } from './outbox.js';
 import { startScheduler } from './scheduler.js';
 import { startAlertNotifier } from './alerts.js';
@@ -66,6 +67,10 @@ export async function startServer(opts: { roles?: ServerRole[]; settings?: Parti
     const app = buildApi({ ctx, temporal: client, interpreterBuild: build });
     url = await app.listen({ host: ctx.settings.host, port: ctx.settings.port });
     stops.unshift(() => app.close());
+    if (ctx.settings.copilotSyncOpencode) {
+      const sync = startCopilotSync(ctx, log);
+      stops.unshift(() => sync.stop());
+    }
   }
   if (roles.includes('scheduler')) {
     scheduler = startScheduler(ctx, build, log);

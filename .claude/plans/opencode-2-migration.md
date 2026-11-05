@@ -199,3 +199,17 @@ loop, write-mode scoping, disabling the title call, bundled skills staying out o
 
 **Still unverified:** Copilot model list per plan and a real Copilot call; a real ChatGPT request and token renewal; error-reference lookup in logs;
 Linux and macOS; behaviour after the next 2.x release.
+
+**Re-checked on 2.2.5 and 1.19.5 (2026-11-04), Windows, no Temporal:** both adapters' flows driven against the real servers with a scripted
+Anthropic endpoint (config, spawn, `serverUrl`, client calls, the real transcript classes). Nothing in the adapters changed.
+- 2.2.5 vs 2.1.4: client method signatures azhi calls are unchanged; no event was removed or renamed (new: `persistent-pty.updated`,
+  `artifact.updated`); `opencode --version` still prints `opencode v2.x.y`; config additions only (`policies` actions, `cache.ttl`,
+  `experimental.*`); `message.list` now also returns `idle` messages (the adapter filters by type); `credential.create` can fail with
+  `InvalidRequestError`, but the sign-in shapes azhi sends are accepted. `effect` moved to 4.0.6 (peer of the client).
+- The MCP-tools race after `connected` is **still there** on 2.2.5 (2 of 8 prompts sent straight after `connected` were offered no
+  tools), so `TOOLS_SETTLE_MS` stays.
+- `@opencode/cli` installs a 229-byte placeholder at `cli/bin/opencode.exe` when scripts are off (also in 2.1.4); `opencode2Binary`
+  now tries the platform packages first.
+- 1.19.5 vs 1.18.34: SDK types are additive (`reasoning_options`); every `OPENCODE_*` variable and config key azhi sets is still accepted;
+  1.19.x stops installing updates automatically and ends session sharing (azhi sets `autoupdate: false`, `share: 'disabled'`).
+- Not re-run: the Temporal-backed conformance suite (`test/opencode.test.ts`, also with `AZHI_OPENCODE_MAJOR=2`).

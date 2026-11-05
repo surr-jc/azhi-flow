@@ -1,5 +1,5 @@
 import { Context } from '@temporalio/activity';
-import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
+import { agentBegin, agentTurn, estimateCost, harnessPrepare, loadProfile, materialise, resolveModelName, type AgentBeginInput } from '../agents/model-agent.js';
 import { OPENAI_PRICING_REVISION, openaiCost, openaiRate } from '../agents/openai-pricing.js';
 import { COPILOT_CREDIT_USD, COPILOT_PRICING_REVISION, configuredCopilotRate, copilotCredits, copilotRate, round } from '../agents/copilot-pricing.js';
 import type { AgentProfile } from '../agents/profile.js';
@@ -7,6 +7,7 @@ import type { HarnessResult } from '../worker/harness-activity.js';
 import { retrieve } from '../knowledge/datasets.js';
 import { ARTIFACT_THRESHOLD_BYTES } from '../artifacts/store.js';
 import { asArtifact, callTool } from '../gateway/gateway.js';
+import { notificationBlocks } from '../gateway/tools/slack-format.js';
 import { byteSize } from '../lib/json.js';
 import { signRunToken } from '../security/tokens.js';
 import type { AppContext } from '../server/context.js';
@@ -19,6 +20,8 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import type { GatewayActivities, NotifyNodeInput, RecordRunPatch, ReportNodeInput, ToolNodeInput } from './activity-types.js';
 import { toFailure } from './activity-errors.js';
 import { citationIds, renderReport } from './report.js';
+import { resolveValue, type ValueScope } from './values.js';
+import type { Value } from '../definition/types.js';
 import { TERMINAL_STATES, type NodeError, type RunSnapshot } from './types.js';
 
 /** How many workflows deep a subworkflow may nest; a workflow may not appear twice in its own chain. */
@@ -121,7 +124,8 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         const hb = setInterval(() => Context.current().heartbeat(), 5000);
         try {
           if (input.mock) return { output: null, observation: { source: 'mock', observed_at: new Date().toISOString() } };
-          const r = await callTool(ctx, { ...input, attempt: Context.current().info.attempt });
+          // An argument over the artifact threshold travels as a stored-output handle or reference; the tool takes the content.
+          const r = await callTool(ctx, { ...input, args: materialise(ctx, input.args) as Record<string, unknown>, attempt: Context.current().info.attempt });
           return r as unknown as { output: unknown; observation: { source: string; observed_at: string } & Record<string, unknown>; action?: { id: string; reused: boolean } };
         } finally {
           clearInterval(hb);
@@ -134,13 +138,15 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
         if (input.mock) return { action_id: 'mock', delivered: false, receipt: { mocked: true } };
         const hb = setInterval(() => Context.current().heartbeat(), 5000);
         try {
+          const workflow = (await ctx.pool.query(`SELECT w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id WHERE r.id=$1`, [input.runId])).rows[0]?.slug ?? 'workflow';
+          const blocks = notificationBlocks({ workflow, runId: input.runId, nodeId: input.nodeId, text: input.text, baseUrl: ctx.settings.publicUrl });
           const r = await callTool(ctx, {
             workspaceId: input.workspaceId,
             runId: input.runId,
             nodeId: input.nodeId,
             attempt: Context.current().info.attempt,
             tool: SLACK_TOOL,
-            args: { channel: input.destination, text: input.text },
+            args: { channel: input.destination, text: `${workflow} (${input.nodeId}): ${input.text}`.slice(0, 3000), blocks },
             allowed: [SLACK_TOOL],
           });
           return { action_id: r.action!.id, delivered: true, receipt: r.output as object };
@@ -148,6 +154,33 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           clearInterval(hb);
         }
       });
+    },
+
+    async carryNode(input) {
+      const row = (
+        await ctx.pool.query(`SELECT output FROM node_attempts WHERE run_id=$1 AND workspace_id=$2 AND node_id=$3 AND state='succeeded' ORDER BY attempt DESC LIMIT 1`, [input.fromRun, input.workspaceId, input.nodeId])
+      ).rows[0];
+      if (!row) throw new AzhiError(ErrorClass.internal, `step ${input.nodeId} has no output in run ${input.fromRun} to carry over`);
+      await ctx.pool.query(
+        `INSERT INTO node_attempts(workspace_id, run_id, node_id, attempt, state, ended_at, output) VALUES ($1,$2,$3,1,'succeeded',now(),$4) ON CONFLICT (run_id, node_id, attempt) DO NOTHING`,
+        [input.workspaceId, input.runId, input.nodeId, JSON.stringify(row.output ?? null)],
+      );
+      await ctx.pool.query(`INSERT INTO run_events(workspace_id, run_id, kind, node_id, data) VALUES ($1,$2,'node.succeeded',$3,$4)`, [input.workspaceId, input.runId, input.nodeId, JSON.stringify({ resumed_from: input.fromRun })]);
+      return row.output ?? null;
+    },
+
+    async resolveValue(input) {
+      const nodes = { ...(input.scope.nodes as Record<string, { output?: unknown }>) };
+      for (const id of input.reads) {
+        const handle = (nodes[id]?.output as { $artifact?: { hash: string } } | undefined)?.$artifact;
+        const bytes = handle ? ctx.artifacts.get(handle.hash) : undefined;
+        if (!bytes) throw new AzhiError(ErrorClass.internal, `the stored output of ${id} is missing from the artifact store`);
+        nodes[id] = { output: JSON.parse(bytes.toString('utf8')) };
+      }
+      // A stored `args` (large tool arguments) is opened here, as toolNode does, so a guard sees the real call.
+      const args = 'args' in input.scope ? materialise(ctx, input.scope.args) : undefined;
+      const out = resolveValue(input.value as Value, { ...input.scope, nodes, ...(args !== undefined ? { args } : {}) } as ValueScope) ?? null;
+      return byteSize(out) > ARTIFACT_THRESHOLD_BYTES ? asArtifact(ctx, input.workspaceId, out) : out;
     },
 
     async reportNode(input: ReportNodeInput) {

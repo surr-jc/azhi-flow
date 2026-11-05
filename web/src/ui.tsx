@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { LogoTraceLoader } from './components/LogoTraceLoader';
 import { Popup } from './components/Popup';
 import type { JsonSchema } from './api';
 import { Link } from './router';
@@ -82,14 +83,18 @@ export function Stat({ label, value, hint, tone, to }: { label: string; value: R
   return to ? <Link to={to} className="stat">{body}</Link> : <div className="stat">{body}</div>;
 }
 
-/** Nothing under 100ms (it would only flicker); after that a skeleton the shape of the content that is coming. */
-export function Loading({ lines = 3 }: { lines?: number }) {
+/**
+ * Nothing under 100ms (it would only flicker); after that a skeleton the shape of the content that is coming.
+ * `page` is for a whole view with no shape to mimic yet: the logo traces until the view replaces it.
+ */
+export function Loading({ lines = 3, variant = 'skeleton' }: { lines?: number; variant?: 'page' | 'skeleton' }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
     const t = window.setTimeout(() => setShown(true), 100);
     return () => window.clearTimeout(t);
   }, []);
   if (!shown) return null;
+  if (variant === 'page') return <div className="page-loading"><LogoTraceLoader size={56} /></div>;
   return (
     <div className="skeleton" role="status" aria-busy="true" aria-label="Loading">
       {Array.from({ length: lines }, (_, i) => <i key={i} />)}

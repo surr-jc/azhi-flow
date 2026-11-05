@@ -42,6 +42,8 @@ export interface ToolSpec {
   safe_for_tainted?: boolean;
   /** Fields of a response that identify the source system, used for as-of records. */
   source?: string;
+  /** Set on the last revision of a tool an admin unregistered: new workflows no longer find it, pinned revisions still resolve. */
+  retired?: boolean;
 }
 
 export function toolRef(spec: Pick<ToolSpec, 'id' | 'version'>): string {

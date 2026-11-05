@@ -1,7 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { api, ApiError, applyTheme, atLeast, getTheme, getToken, setToken, type Alert, type Me, type Theme } from './api';
+import { api, ApiError, atLeast, getToken, setToken, type Alert, type Me } from './api';
 import { BrandLogo, BrandMark } from './brand';
+import { Assistant } from './components/Assistant';
+import { LogoTraceLoader } from './components/LogoTraceLoader';
+import { ApprovalsBell, ProfileMenu } from './components/ProfileMenu';
 import { Icon } from './icons';
 import { Link, match, useRoute } from './router';
 import { Alerts } from './pages/Alerts';
@@ -21,6 +24,7 @@ import { Usage } from './pages/Usage';
 import { Workers } from './pages/Workers';
 import { WorkflowPage, Workflows } from './pages/Workflows';
 import { UploadPackage } from './pages/Upload';
+import { ImportBundle } from './pages/ImportBundle';
 import { WorkflowBuilder } from './pages/Builder';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
@@ -139,10 +143,6 @@ function Shell() {
           );
         })}
         <span className="rail-gap" />
-        <button type="button" className="rail-link" data-tip="Sign out" aria-label="Sign out" onClick={() => { setToken(null); dispatchEvent(new Event('azhi-signed-out')); }}>
-          <Icon name="signout" size={22} />
-          <span className="rail-label">Sign out</span>
-        </button>
       </nav>
       <div className="main">
         <header className="topbar">
@@ -161,18 +161,18 @@ function Shell() {
             </nav>
           ) : <span className="topbar-title">{current?.label ?? 'Azhi Flow'}</span>}
           <span className="top-right">
-            <ThemeSwitch />
-            {critical ? <Link to="/ui/alerts" className="badge s bad">{critical} alert{critical > 1 ? 's' : ''}</Link> : null}
             {githubCli.isSuccess ? <span className="github-cli-profile" aria-label="GitHub CLI profile"><span className="github-cli-login">GitHub: {githubCli.data.login ?? 'unknown'}</span><span className="github-cli-scopes">Scopes: {githubCli.data.scopes.length ? githubCli.data.scopes.join(', ') : 'none'}</span></span> : null}
             {githubCli.isError ? <span className="github-cli-error" role="alert">GitHub CLI: {(githubCli.error as Error).message}</span> : null}
-            {role ? <span className="role-pill">{role}</span> : null}
+            <ApprovalsBell count={counts.approvals} />
+            <ProfileMenu me={me.data} approvals={counts.approvals} />
           </span>
         </header>
-        <main className={`content${/^\/ui\/workflows\/(?!new$|upload$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
+        <main className={`content${/^\/ui\/workflows\/(?!new$|upload$|import$)[^/]+(\/edit)?$/.test(path) ? ' wide' : ''}`}>
           {parent ? <Link to={parent.to} className="back-link"><Icon name="chev" size={14} className="back-ico" />Back to {parent.label}</Link> : null}
           <Page path={path} />
         </main>
       </div>
+      <Assistant />
     </div>
   );
 }
@@ -188,9 +188,10 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/toolbox') return <Toolbox />;
   if (path === '/ui/library' || path === '/ui/assets') return <Assets />;
   if (path === '/ui/workflows/upload') return <UploadPackage />;
+  if (path === '/ui/workflows/import') return <ImportBundle />;
   if (path === '/ui/workflows/new') return <WorkflowBuilder />;
   if ((m = match('/ui/workflows/:slug', path))) return <WorkflowPage slug={m.slug!} />;
-  if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<p className="muted">Loading…</p>}><WorkflowEditor slug={m.slug!} /></Suspense>;
+  if ((m = match('/ui/workflows/:slug/edit', path))) return <Suspense fallback={<div className="page-loading"><LogoTraceLoader size={56} /></div>}><WorkflowEditor slug={m.slug!} /></Suspense>;
   if (path === '/ui/examples' || path.startsWith('/ui/examples/')) return <Examples />;
   if (path === '/ui/schedules') return <Schedules />;
   if (path === '/ui/workers') return <Workers />;
@@ -216,15 +217,4 @@ function Page({ path }: { path: string }): ReactNode {
 function DatasetRoute({ name }: { name: string }) {
   const me = useMe();
   return <DatasetPage name={name} canEdit={atLeast(me.data?.role, 'author')} />;
-}
-
-function ThemeSwitch() {
-  const [theme, setTheme] = useState<Theme>(getTheme());
-  return (
-    <select className="theme-switch" aria-label="Theme" value={theme} onChange={(e) => { const t = e.target.value as Theme; applyTheme(t); setTheme(t); }}>
-      <option value="system">System theme</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
-  );
 }

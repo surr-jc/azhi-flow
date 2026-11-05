@@ -101,7 +101,9 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
   with the project's tests, has an independent reviewer and a verifier challenge it with one fix round,
   and after a person approves the release pushes an `azhi/` branch and opens a pull request that says how
   much was verified. `azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...`. See
-  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). The earlier delivery workflows
+  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). A spec-first variant,
+  `examples/openspec-flow`, runs the OpenSpec lifecycle (propose, approve the specs, build, verify, approve the
+  release, archive) with a deterministic spec check and a checked archive; see [docs/openspec-flow.md](docs/openspec-flow.md). The earlier delivery workflows
   (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
   `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
   [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
@@ -322,6 +324,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi dataset create/add/publish/tag/revoke/search/list` | Knowledge datasets (Markdown and text) |
 | `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
+| `azhi resume <run> [--from <step>] [--version <n\|latest>] [--check]` | Continue a failed, cancelled or expired run as a new run: steps that succeeded are carried over with their outputs and not repeated (a pushed branch or a sent message is not done twice); `--from` also reruns that step and everything after it. `--version` continues on a fixed version of the workflow: steps whose definition or files changed, and what depends on them, run again, the rest keep their output; it is refused when more than half of the steps that had succeeded would run again, or the run's inputs no longer fit. `--check` shows the comparison without starting a run. Mission control: **Resume** on the run page, with a version picker and the same comparison |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
 | `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |

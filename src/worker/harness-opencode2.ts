@@ -28,8 +28,8 @@ import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
 /**
  * The OpenCode 2 harness adapter, used when the worker sets AZHI_OPENCODE_MAJOR=2. Same isolation as the 1.x adapter
  * (harness-activity.ts): a private `opencode serve` per step with a password, an isolated HOME and config folder,
- * every tool denied except the Azhi gateway bridged over stdio MCP. What OpenCode 2 changed (checked against 2.1.4,
- * see .claude/plans/opencode-2-migration.md): the config is `providers` / `mcp.servers` / `permissions`; MCP tools are
+ * every tool denied except the Azhi gateway bridged over stdio MCP. What OpenCode 2 changed (checked against 2.1.4 and
+ * again on 2.2.5, see .claude/plans/opencode-2-migration.md): the config is `providers` / `mcp.servers` / `permissions`; MCP tools are
  * hidden behind Code Mode unless `codemode: false`; a prompt is queued and the turn awaited with `session.wait`;
  * sign-ins go in through the credential API (there is no in-memory auth variable); there is no doom-loop guard, so
  * the agent's `steps` bounds a turn.
@@ -450,7 +450,8 @@ export async function keepRenewedSignIn2(runApi: ApiClient, credential: string, 
 /**
  * In 2.1.4 a server reports `connected` (after its tools/list) a moment before its tools reach new sessions, and no
  * event marks that point: a prompt sent at once was offered no MCP tools in 10 of 12 tries, one sent 100 ms later or
- * more in 0 of 20. The wait is several times that, and a turn that still misses them gets the submit reminder.
+ * more in 0 of 20. 2.2.5 still does it (2 of 8 tries with the prompt straight after `connected`). The wait is several
+ * times that, and a turn that still misses them gets the submit reminder.
  */
 const TOOLS_SETTLE_MS = 500;
 

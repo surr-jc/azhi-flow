@@ -70,7 +70,7 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'tool':
       return { arguments: n.arguments as Value };
     case 'agent':
-      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.from': n.workspace.from } : { input: n.input };
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.merge_ref': n.workspace.merge_ref, 'workspace.from': n.workspace.from } : { input: n.input };
     case 'script':
     case 'subworkflow':
       return { input: n.input };
@@ -365,6 +365,10 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
           } catch {
             err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
           }
+        }
+        if (n.workspace?.merge_ref !== undefined) {
+          const clash = [n.workspace.base_ref !== undefined && 'base_ref', n.workspace.from !== undefined && 'from', n.workspace.depth !== undefined && 'depth'].filter(Boolean);
+          if (clash.length) err('workspace_merge_ref', `workspace.merge_ref needs the full history and starts from the checked-out ref, so it cannot be combined with ${clash.join(', ')}`, n.id, 'workspace.merge_ref');
         }
         const from = n.workspace?.from;
         if (from !== undefined) {

@@ -73,6 +73,10 @@ export interface GatewayActivities {
   toolNode(input: ToolNodeInput): Promise<{ output: unknown; observation: { source: string; observed_at: string } & Record<string, unknown>; action?: { id: string; reused: boolean } }>;
   notifyNode(input: NotifyNodeInput): Promise<{ action_id: string; delivered: boolean; receipt: unknown }>;
   reportNode(input: ReportNodeInput): Promise<unknown>;
+  /** Carries a step that succeeded in an earlier run into a resumed run; returns its output. */
+  carryNode(input: { workspaceId: string; runId: string; fromRun: string; nodeId: string }): Promise<unknown>;
+  /** Resolves a value whose CEL reads into outputs stored as artifacts; a result over the artifact threshold comes back as a handle. */
+  resolveValue(input: { workspaceId: string; value: unknown; scope: Record<string, unknown>; reads: string[] }): Promise<unknown>;
   /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
   checkWorkers(workspaceId: string, packageHash: string, runtime: string, needs?: string[]): Promise<WorkerSelection>;
   issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[], creds?: string[]): Promise<string>;

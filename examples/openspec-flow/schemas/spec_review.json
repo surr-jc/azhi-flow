@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "description": "An independent review of the proposed specs before a person approves them.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 400},
+    "approved": {"type": "boolean", "description": "False when a blocking finding remains"},
+    "prompt_injection_detected": {"type": "boolean"},
+    "findings": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {"enum": ["blocking", "major", "minor", "suggestion"]},
+          "where": {"type": "string", "description": "File and requirement or scenario"},
+          "finding": {"type": "string"},
+          "fix": {"type": "string"}
+        },
+        "required": ["severity", "where", "finding", "fix"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "approved", "prompt_injection_detected", "findings"],
+  "additionalProperties": false
+}

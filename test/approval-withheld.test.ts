@@ -50,7 +50,7 @@ describe('Slack approval message', () => {
     expect(warn).toBeGreaterThan(0);
     expect(blocks[warn]!.text.text).toContain('`critique.draft`, `draft.facts`');
     expect(blocks[warn]!.text.text).toContain('could not read them');
-    expect(blocks[warn + 1]!.type).toBe('context');
+    expect(blocks[warn + 1]!.type).toBe('actions');
     expect(blocks.at(-1)!.type).toBe('actions');
   });
 

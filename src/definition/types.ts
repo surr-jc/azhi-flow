@@ -82,6 +82,12 @@ export interface AgentWorkspace {
   /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
   base_ref?: Value;
   /**
+   * A ref merged into `ref` before the step starts (`git merge --no-commit`), for example `refs/heads/main` into a
+   * pull request's head. Conflicts are left as markers. Needs full history (no `depth`), and cannot be combined
+   * with `base_ref` or `from`. A write-mode step's change is then measured from this ref's tip.
+   */
+  merge_ref?: Value;
+  /**
    * Continue from an earlier change: a plain `{ref: nodes.<id>.output...}` to a workspace change (the `workspace`
    * field of a write-mode step, or anything shaped like it). The worker checks out the change's own `base_sha`
    * and applies its files as a local commit, so this step starts with the earlier files already in place.

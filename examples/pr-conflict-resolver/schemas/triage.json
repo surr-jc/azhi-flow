@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "description": "What the rules settled and what is left. `change` is the merged tree in the shape a later step can continue from.",
+  "properties": {
+    "change": {
+      "type": "object",
+      "properties": {
+        "base_sha": {"type": "string"},
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {"type": "string"},
+              "status": {"enum": ["added", "modified", "deleted"]},
+              "mode": {"enum": ["100644", "100755"]},
+              "content": {"type": "string"},
+              "encoding": {"enum": ["utf-8", "base64"]}
+            },
+            "required": ["path", "status", "mode"]
+          }
+        }
+      },
+      "required": ["base_sha", "files"]
+    },
+    "pr": {"type": "object"},
+    "conflicts": {"type": "integer"},
+    "resolved": {"type": "array", "items": {"type": "object"}},
+    "remaining": {"type": "array", "items": {"type": "object"}},
+    "protected": {"type": "array", "items": {"type": "string"}},
+    "blocked": {"type": "array", "items": {"type": "string"}},
+    "needs_model": {"type": "boolean"}
+  },
+  "required": ["change", "pr", "conflicts", "resolved", "remaining", "protected", "blocked", "needs_model"]
+}

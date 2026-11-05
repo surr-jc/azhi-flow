@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { checkEgress } from './egress.js';
 import { SendError } from './ledger.js';
-import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, factoryQueue, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, mergePullRequest, pullRequest, pushBranch, repoFiles, type GithubConfig } from './tools/github.js';
+import { ciRuns, commentOnPullRequest, createIssue, createPullRequest, factoryQueue, findIssue, findPullRequest, findPullRequestComment, findPush, flakyTests, incidents, issue, issueBlockers, labelIssue, mergePullRequest, pullRequest, pushBranch, repoFiles, reviewComments, type GithubConfig } from './tools/github.js';
 import { findByDedupeKey, postMessage } from './tools/slack.js';
 import { normalizeTicket } from './tools/tickets.js';
 import type { ToolSpec } from './types.js';
@@ -63,6 +63,11 @@ const builtin: Record<string, ToolExecutor> = {
   'github.pull-request': {
     async call(spec, args, ctx) {
       return { value: await pullRequest(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
+    },
+  },
+  'github.review-comments': {
+    async call(spec, args, ctx) {
+      return { value: await reviewComments(githubConfig(spec), args, ctx.credential, ctx.timeoutMs) };
     },
   },
   'github.pr-comment': {

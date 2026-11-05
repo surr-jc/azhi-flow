@@ -13,6 +13,7 @@ import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
 import { Badge, ErrorNote, Loading, Panel } from '../ui';
 import { PlanDock } from '../components/PlanDock';
+import { Popup } from '../components/Popup';
 
 /**
  * The workflow editor: add, connect, change and remove steps on the canvas, checked as you go by
@@ -223,7 +224,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
 
   if (versions.error || base.error) return <ErrorNote error={versions.error ?? base.error} />;
   if (me.data && !atLeast(me.data.role, 'author')) return <p>Editing workflows needs the author role or higher. Your role is {me.data.role}.</p>;
-  if (!def || !base.data) return <Loading />;
+  if (!def || !base.data) return <Loading variant="page" />;
 
   const diagnostics = check.data?.diagnostics ?? [];
   const errors = diagnostics.filter((d) => d.severity === 'error');
@@ -635,22 +636,46 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
-/** Every registered tool to pick from, grouped by system; a value that is not registered stays visible and is flagged. */
+/** Every registered tool to pick from, grouped by system, in a popup with search; a value that is not registered stays visible and is flagged. */
 function ToolSelect({ id, value, onChange }: { id?: string; value: string; onChange: (v: unknown) => void }) {
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
   const list = [...(tools.data ?? [])].sort((a, b) => a.id.localeCompare(b.id));
   const refOf = (t: Tool) => `${t.id}@${t.version}`;
-  const systems = [...new Set(list.map((t) => t.id.split('.')[0]!))];
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? list.filter((t) => `${refOf(t)} ${t.description}`.toLowerCase().includes(needle)) : list;
+  const systems = [...new Set(shown.map((t) => t.id.split('.')[0]!))];
+  const unregistered = Boolean(value) && !list.some((t) => refOf(t) === value);
+  const close = () => { setOpen(false); setQ(''); };
   return (
-    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
-      {!value ? <option value="">Choose a tool…</option> : null}
-      {value && !list.some((t) => refOf(t) === value) ? <option value={value}>{value} (not registered here)</option> : null}
-      {systems.map((s) => (
-        <optgroup key={s} label={s}>
-          {list.filter((t) => t.id.split('.')[0] === s).map((t) => <option key={refOf(t)} value={refOf(t)}>{refOf(t)} · {t.effect === 'read' ? 'read' : 'writes'}{t.description ? ` · ${t.description}` : ''}</option>)}
-        </optgroup>
-      ))}
-    </select>
+    <>
+      <button type="button" id={id} className="tool-trigger" aria-haspopup="dialog" onClick={() => setOpen(true)}>
+        <span className="truncate">{value ? (unregistered ? `${value} (not registered here)` : value) : 'Choose a tool…'}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open ? (
+        <Popup title="Choose a tool" size="narrow" initialFocus="input" onClose={close}>
+          <input type="search" aria-label="Search tools" placeholder="Search tools" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
+          <div className="tool-pick">
+            {tools.isLoading ? <Loading /> : null}
+            {systems.map((s) => (
+              <div key={s} role="group" aria-label={s}>
+                <div className="tool-pick-group muted small">{s}</div>
+                {shown.filter((t) => t.id.split('.')[0] === s).map((t) => (
+                  <button key={refOf(t)} type="button" className={`tool-pick-row${refOf(t) === value ? ' picked' : ''}`} aria-pressed={refOf(t) === value} onClick={() => { onChange(refOf(t)); close(); }}>
+                    <span className="mono">{refOf(t)}</span>
+                    <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect === 'read' ? 'read' : 'writes'}</Badge>
+                    {t.description ? <span className="d muted small">{t.description}</span> : null}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {!tools.isLoading && !shown.length ? <p className="muted small">No tools match.</p> : null}
+          </div>
+        </Popup>
+      ) : null}
+    </>
   );
 }
 

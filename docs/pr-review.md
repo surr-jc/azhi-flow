@@ -365,7 +365,14 @@ The run page and `azhi inspect <run-id>` show each step's error. For OpenCode st
   then `GITHUB_TOKEN`/`GH_TOKEN`, then `gh auth token`), prints which work, and saves the first that
   Copilot accepts (nothing if none does), also trying each entry's `access` token (some OpenCode versions
   send that one); no token is printed. `azhi copilot inspect` shows the shape of the entry (field names,
-  token kind and length, expiry), never a token. A GitHub CLI sign-in (`gh auth token`) works with Copilot
+  token kind and length, expiry), never a token. To use one login for both tools, sign in with
+  `opencode auth login` and run `azhi copilot sync` (once; it imports from OpenCode's file only), or
+  `azhi copilot sync --watch` to import again each time OpenCode signs in; a sign-in Copilot refuses
+  leaves the saved one unchanged. The web UI has the same as the **Sync with OpenCode** button next to
+  Check sign-in: the server reads `auth.json` on its own machine (so it suits a server running where you
+  use OpenCode). This also runs by default: the server checks `auth.json` every 30 seconds and, when the
+  sign-in there differs from the saved one and Copilot accepts it, saves it to the local workspace
+  (`ws_default`) only; set `AZHI_COPILOT_SYNC_OPENCODE=0` to turn it off. A GitHub CLI sign-in (`gh auth token`) works with Copilot
   where a token from the OpenCode device flow may be refused; import picks it up (re-import after `gh auth login`). The web UI takes the pasted file. If your company signs in to its own GitHub address (a name like
   `octo.ghe.com`), `azhi copilot login --enterprise-url octo.ghe.com` signs in there. Import again
   whenever your OpenCode signs in again.
@@ -388,7 +395,7 @@ For a GitHub step:
 
 ## What is verified
 
-`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.18.34 and its real
+`test/pr-review.test.ts` runs the whole workflow with OpenCode 1.19.5 and its real
 `github-copilot` provider pointed at a scripted Copilot stand-in (`AZHI_COPILOT_API_URL`; no
 subscription, no network), a stand-in for GitHub's device flow, a local git host
 (`git http-backend` behind a token check) and a stand-in GitHub API. It checks:

@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -17,11 +18,13 @@ import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
 import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
+import { opencodeAuthFile, opencodeCandidates } from '../lib/opencode-auth.js';
 import { printContext, printInspect } from './inspect.js';
 import { publisherKey, signForUpload } from './signing-client.js';
 import { signPackage } from '../security/signing.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
+import type { ResumeCheck } from '../plan/resume-check.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
 
 const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0');
@@ -255,6 +258,29 @@ program
   });
 
 program
+  .command('resume')
+  .description('Continue a failed, cancelled or expired run as a new run: steps that succeeded are not repeated')
+  .argument('<run-id>')
+  .option('--from <node>', 'also rerun this step and everything after it')
+  .option('--version <n|latest>', 'continue on this version of the workflow (after fixing a step); refused if it differs too much from the run')
+  .option('--check', 'show what would be kept and rerun, without starting a run')
+  .action(async (runId: string, opts: { from?: string; version?: string; check?: boolean }) => {
+    const body = { ...(opts.from ? { from_node: opts.from } : {}), ...(opts.version ? { version: opts.version } : {}) };
+    if (opts.check) {
+      const c = await client().post<ResumeCheckReply>(`/v1/runs/${runId}/resume`, { ...body, dry_run: true });
+      console.log(`${c.version.workflow}@${c.version.from_version} -> @${c.version.version}`);
+      table([['STEP', 'CHANGE', 'WAS', 'THEN'], ...c.steps.map((s) => [s.id, s.change, s.was, s.action + (s.reason ? ` (${s.reason})` : '')])]);
+      for (const w of c.warnings) console.log(`warning: ${w}`);
+      console.log(c.possible ? `can resume: ${c.carried.length} step(s) kept, ${c.rerun.length} to run${c.deviation === null ? '' : `, deviation ${Math.round(c.deviation * 100)}%`}` : `cannot resume: ${c.reason}`);
+      if (!c.possible) process.exitCode = 1;
+      return;
+    }
+    const r = await client().post<{ run_id: string; carried: string[]; rerun: string[]; version: { workflow: string; version: number; from_version: number }; warnings?: string[] }>(`/v1/runs/${runId}/resume`, body);
+    console.log(`run ${bold(r.run_id)} queued on ${r.version.workflow}@${r.version.version}: ${r.carried.length} step(s) carried over from ${runId}, ${r.rerun.length} to run`);
+    for (const w of r.warnings ?? []) console.log(`warning: ${w}`);
+  });
+
+program
   .command('cancel')
   .description('Cancel a run')
   .argument('<run-id>')
@@ -327,6 +353,8 @@ program
   });
 
 const example = program.command('example').description('Set up the example workflows that ship with the server');
+
+type ResumeCheckReply = ResumeCheck & { version: { workflow: string; version: number; from_version: number } };
 
 interface ExampleNeeds {
   id: string;
@@ -506,6 +534,51 @@ copilot
     }
   });
 
+/** OpenCode's github-copilot sign-ins, noting on stderr why there are none. */
+function fileCandidates(file: string) {
+  const r = opencodeCandidates(file);
+  if (r.problem) console.error(dim(r.problem));
+  return r.candidates;
+}
+
+copilot
+  .command('sync')
+  .description('Keep the Copilot sign-in in step with OpenCode: re-imports from its auth.json whenever the sign-in there changes (once, or with --watch for as long as it runs)')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--watch', 'keep running and import again each time OpenCode signs in')
+  .option('--interval <seconds>', 'how often to look at the file with --watch', '5')
+  .action(async (opts: { file?: string; secret: string; watch?: boolean; interval: string }) => {
+    const file = opts.file ?? opencodeAuthFile();
+    // Only a fingerprint of the sign-in is kept in memory, to tell when OpenCode has written a new one.
+    let last = '';
+    const syncOnce = async (): Promise<boolean> => {
+      const candidates = fileCandidates(file);
+      if (!candidates.length) return false;
+      const fingerprint = createHash('sha256').update(candidates.map((c) => c.auth).join('\n')).digest('hex');
+      if (fingerprint === last) return true;
+      const r = await client().post<{ version?: number; from: string | null; tried: Array<{ name: string; ok: boolean; message: string }> }>('/v1/copilot/import', { secret: opts.secret, candidates });
+      if (!r.from) {
+        for (const t of r.tried) console.error(`  ${red('failed')} ${t.name}: ${t.message}`);
+        console.error(red('OpenCode\'s sign-in is not accepted by GitHub Copilot, so the saved one is unchanged. Sign in again with: opencode auth login'));
+        return false;
+      }
+      last = fingerprint;
+      console.log(`${green('synced')} ${r.from}; saved as secret ${opts.secret} (version ${r.version})`);
+      return true;
+    };
+    const ok = await syncOnce().catch((e) => (console.error(red((e as Error).message)), false));
+    if (!opts.watch) {
+      if (!ok) process.exitCode = 1;
+      return;
+    }
+    const every = Math.max(1, Number(opts.interval) || 5) * 1000;
+    console.log(dim(`watching ${file} every ${every / 1000}s; Ctrl+C to stop`));
+    // A failed round (server down, token rejected) is reported and tried again at the next change or tick.
+    setInterval(() => void syncOnce().catch((e) => console.error(red((e as Error).message))), every);
+    await new Promise(() => {});
+  });
+
 copilot
   .command('import')
   .description('Reuse a GitHub Copilot sign-in this machine already has (OpenCode\'s auth.json, GITHUB_TOKEN, the gh tool): tries each and keeps the one Copilot accepts; nothing is printed')
@@ -513,24 +586,8 @@ copilot
   .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
   .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
   .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
-    const candidates: Array<{ name: string; auth: string }> = [];
-    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
-    if (existsSync(file)) {
-      try {
-        const j = JSON.parse(readFileSync(file, 'utf8'));
-        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
-          const e = j[k];
-          const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
-          candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
-          // Some OpenCode versions send the entry's `access` token rather than `refresh`.
-          if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
-        }
-      } catch {
-        console.error(dim(`${file} is not JSON; skipped`));
-      }
-    } else {
-      console.error(dim(`no OpenCode sign-in file at ${file}`));
-    }
+    const file = opts.file ?? opencodeAuthFile();
+    const candidates = fileCandidates(file);
     for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
     try {
       const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();
