@@ -7,6 +7,7 @@ import '@fontsource-variable/inter';
 import './styles.css';
 
 takeTokenFromHash();
+if (/Windows/.test(navigator.userAgent)) document.documentElement.style.setProperty('--fs', '0.85');
 applyTheme(getTheme());
 // With the system theme, the colour follows the operating system as it changes.
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncChromeColor);
