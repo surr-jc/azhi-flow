@@ -29,6 +29,9 @@ export interface LoopExpansion {
 /** Steps that can run in a round. Approvals and writes come later: what a rejection or a repeated write means needs its own rules. */
 const BODY_TYPES = new Set(['script', 'agent', 'tool', 'retrieve', 'condition', 'subworkflow', 'report']);
 const IGNORED_FIELDS = ['merge', 'timeout', 'retry'] as const;
+/** Each round can cost agent runs, and every round's steps are in the plan, so both need a cap a person can read. */
+export const MAX_AGENT_ROUNDS = 5;
+export const MAX_ROUNDS = 20;
 
 export interface RoundScope {
   /** Body step ids and the id each has in this round. */
@@ -253,11 +256,88 @@ function namedByOuterStep(n: NodeDef): Set<string> {
   return ids;
 }
 
+/** The body steps an expression reads, by the same reading as the rewrite, so a name inside a string does not count. */
+function stepsRead(text: string, ids: Map<string, string>): Set<string> {
+  const read = new Set<string>();
+  rewriteCel(text, { ids, state: {}, iteration: 0, touched: (id) => read.add(id) });
+  return read;
+}
+
+/** The conditions in the body that can skip a step: its own route, and those of the steps it waits on. */
+function skipCausesIn(body: NodeDef[], deps: Map<string, Set<string>>) {
+  const byId = new Map(body.map((s) => [s.id, s]));
+  const routeOf = new Map<string, string>();
+  for (const s of body) if (s.type === 'condition') for (const members of Object.values(s.routes)) for (const m of members) routeOf.set(m, s.id);
+  const causes = (id: string, seen = new Set<string>()): Set<string> => {
+    const found = new Set<string>();
+    if (seen.has(id)) return found;
+    seen.add(id);
+    if (routeOf.has(id)) found.add(routeOf.get(id)!);
+    // A step that joins branches runs when any of them did, so waiting on it adds no cause.
+    if (byId.get(id)?.merge !== 'any') for (const d of deps.get(id) ?? []) for (const c of causes(d, seen)) found.add(c);
+    return found;
+  };
+  return causes;
+}
+
+/**
+ * Warnings about how a loop is put together. These are heuristics over the expressions: a rule can be safe in a way
+ * they cannot see, so they warn. At run time the same mistakes fail the run, never pass silently.
+ */
+function loopWarnings(loop: LoopBlockNode, deps: Map<string, Set<string>>): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const warn = (code: string, message: string, path: string) => out.push({ severity: 'warning', code, message, node: loop.id, path });
+  const ids = new Map(loop.body.map((s) => [s.id, s.id]));
+  const byId = new Map(loop.body.map((s) => [s.id, s]));
+  const causes = skipCausesIn(loop.body, deps);
+
+  const rules = loop.exit.map((r) => ({ rule: r, read: stepsRead(r.when, ids) }));
+  const allRead = new Set(rules.flatMap((r) => [...r.read]));
+  const checkedBefore = new Set<string>();
+  rules.forEach(({ rule, read }, i) => {
+    for (const id of read) {
+      const unchecked = [...causes(id)].filter((c) => !read.has(c) && !checkedBefore.has(c));
+      if (unchecked.length && !new RegExp(`\\bhas\\(\\s*nodes\\.${id}\\s*\\)`).test(rule.when)) {
+        warn('loop_exit_may_skip', `exit rule ${i + 1} of loop '${loop.id}' reads '${id}', which condition '${unchecked[0]}' can skip, and the run fails if it did. Check that route first, or use has(nodes.${id})`, `exit[${i}].when`);
+      }
+    }
+    for (const id of read) checkedBefore.add(id);
+  });
+
+  for (const [key, value] of Object.entries(loop.next ?? {})) {
+    const read = new Set<string>();
+    rewriteValue(value, { ids, state: {}, iteration: 0, touched: (id) => read.add(id) });
+    for (const id of read) {
+      const unchecked = [...causes(id)].filter((c) => !allRead.has(c));
+      if (unchecked.length) warn('loop_next_may_skip', `next '${key}' of loop '${loop.id}' reads '${id}', which condition '${unchecked[0]}' can skip. If it does and no exit rule holds, the next round cannot start and the run fails. Add an exit rule for that route`, `next.${key}`);
+    }
+  }
+
+  // A step that changes the checkout should not be the only judge of it. What the worker measured about the change counts as independent.
+  const makers = loop.body.filter((s) => s.type === 'agent' && s.workspace?.mode === 'write');
+  if (makers.length) {
+    const makerIds = new Set(makers.map((m) => m.id));
+    const makerProfiles = new Set(makers.map((m) => (m as { profile: string }).profile));
+    for (const [i, { rule, read }] of rules.entries()) {
+      if (rule.outcome !== 'done') continue;
+      const measured = [...read].some((id) => makerIds.has(id) && new RegExp(`\\bnodes\\.${id}\\.output\\.workspace\\.`).test(rule.when));
+      const others = [...read].filter((id) => !makerIds.has(id));
+      const independent = others.some((id) => {
+        const s = byId.get(id)!;
+        return s.type !== 'agent' || !makerProfiles.has(s.profile);
+      });
+      if (!measured && !independent) warn('loop_self_graded', `exit rule ${i + 1} of loop '${loop.id}' ends the loop as done with nothing independent of the step that made the change. Have a script, the worker's tests or a reviewer on another profile decide`, `exit[${i}].when`);
+    }
+  }
+  return out;
+}
+
 export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
   const origins = new Map<string, LoopOrigin>();
   const diagnostics: Diagnostic[] = [];
   if (!authored.nodes.some(isBlock)) return { def: authored, origins, diagnostics };
   const err = (code: string, message: string, node?: string, path?: string) => diagnostics.push({ severity: 'error', code, message, node, path });
+  const hasErrors = () => diagnostics.some((d) => d.severity === 'error');
 
   const outerIds = new Set(authored.nodes.map((n) => n.id));
   /** Per loop: the first steps of round 1, which take its place on any route that names it. */
@@ -284,6 +364,8 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       reasons[rule.outcome] = rule.reason;
     }
     const body = loop.body ?? [];
+    const cap = body.some((s) => s.type === 'agent') ? MAX_AGENT_ROUNDS : MAX_ROUNDS;
+    if (loop.max_iterations > cap) bad('loop_cap_exceeded', `loop '${loop.id}' asks for ${loop.max_iterations} rounds, and a body ${cap === MAX_AGENT_ROUNDS ? 'with an agent' : 'of steps'} can have at most ${cap}: every round's steps are in the plan${cap === MAX_AGENT_ROUNDS ? ' and each can cost agent runs' : ''}`, 'max_iterations');
     const seen = new Set<string>();
     let bodyOk = true;
     for (const step of body) {
@@ -306,7 +388,8 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       }
     }
     for (const key of Object.keys(loop.next ?? {})) if (!(key in (loop.initial ?? {}))) bad('loop_unknown_state', `next sets 'state.${key}', which initial does not: every state key needs a value for round 1`, `next.${key}`);
-    if (!bodyOk || diagnostics.length) continue;
+    if (!bodyOk || hasErrors()) continue;
+    const bodyDeps = new Map<string, Set<string>>(body.map((s) => [s.id, new Set<string>()]));
 
     const problem = (message: string) => bad('loop_unknown_state', `loop '${loop.id}': ${message}`);
     const idFor = (round: number, step: string) => `${loop.id}_${round}_${step}`;
@@ -328,7 +411,16 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       }
       const stepNodes = body.map((step) => {
         const merged = { ...step, ...(loop.overrides?.[round]?.[step.id] ?? {}) } as NodeDef & { context?: string[] };
-        const stepScope: RoundScope = { ids, state, iteration, touched: () => waiting.add(step.id), problem };
+        const stepScope: RoundScope = {
+          ids,
+          state,
+          iteration,
+          touched: (read) => {
+            waiting.add(step.id);
+            bodyDeps.get(step.id)!.add(read);
+          },
+          problem,
+        };
         // A bundle can read the round's steps and state, so each round has its own copy. An unknown name stays, and is reported where bundles are.
         if (merged.context) {
           merged.context = merged.context.map((name) => {
@@ -364,8 +456,11 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       origins.set(gate.id, { loop: loop.id, round, step: 'gate' });
       gates.push(gate);
       nodes.push(...stepNodes, gate);
+      // Only a route inside the round may skip a step. Any other skip means the round did not really run.
+      const causes = skipCausesIn(body, bodyDeps);
       rounds.push({
         gate: gate.id,
+        required: body.filter((s) => !causes(s.id).size).map((s) => ids.get(s.id)!),
         steps: Object.fromEntries(body.filter((s) => s.type !== 'condition').map((s) => [s.id, { ref: `nodes.${ids.get(s.id)}.output` }])),
       });
       // The next round's state reads this round's steps, and may read the state it replaces.
@@ -396,6 +491,7 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       rounds,
     };
     expanded.set(loop.id, [...nodes, join]);
+    diagnostics.push(...loopWarnings(loop, bodyDeps));
   }
 
   // A step reads a loop through its join, and only through it.
@@ -412,7 +508,7 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       if (owner) err('loop_internal_ref', `step '${raw.id}' reads '${id}', a step inside loop '${owner}'. Read 'nodes.${owner}.output' instead: its 'last' and 'rounds' hold the steps of the rounds that ran`, raw.id);
     }
   }
-  if (diagnostics.length) return { def: authored, origins: new Map(), diagnostics };
+  if (hasErrors()) return { def: authored, origins: new Map(), diagnostics };
 
   const nodes = authored.nodes.flatMap((n) => {
     if (isBlock(n)) return expanded.get(n.id) as NodeDef[];

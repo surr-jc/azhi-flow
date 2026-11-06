@@ -76,7 +76,15 @@ rounds that finished.
 - A `context` in the body gets its own copy per round, so a bundle can read the round's steps and state.
 - `GET /v1/runs/:id` returns `loops`: per round its outcome, fixed reason, step states and usage (null when unknown).
   A failed run has it too. The reason is text the author wrote, never ticket or repository text.
-- Not supported in a body yet: approvals, notifications, `parallel` and nested loops.
+- Not supported in a body yet: approvals, notifications, `parallel`, nested loops, and write tools (as a step or held
+  by an agent), since each round would repeat the write. A write-mode agent is allowed: it changes a checkout, and a
+  tool after the loop pushes it.
+- Rounds are capped at 5 when the body has an agent and 20 otherwise.
+- The compiler warns about `loop_self_graded` (only the step that made the change says it is done; the worker's
+  `workspace.tests` counts as independent), `loop_exit_may_skip` (a rule reads a step its round can skip, with no
+  `has()` or route check first) and `loop_next_may_skip` (`next` reads such a step and no rule ends that route).
+  These are warnings because a rule can be safe in a way the compiler cannot see. At run time the last two fail the
+  run with an error instead of choosing a route.
 
 ## Subworkflow
 

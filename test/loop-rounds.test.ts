@@ -87,11 +87,12 @@ nodes:
 `;
 
 const tool = (id: string, effect: ToolSpec['effect']): ToolSpec => ({ id, version: 1, description: id, effect, transport: { kind: 'builtin', name: 'fixture' }, input_schema: { type: 'object' }, output_schema: { type: 'object' } });
-const catalog = staticCatalog([tool('ci.list-runs', 'read')]);
+const catalog = staticCatalog([tool('ci.list-runs', 'read'), tool('jira.create', 'write-dedupable'), tool('doc.put', 'write-idempotent'), tool('bank.pay', 'write-unsafe')]);
 const files = new Map([
   ['profiles/analyst@1.yaml', Buffer.from('instructions: analyse\n')],
   ['profiles/analyst@2.yaml', Buffer.from('instructions: analyse harder\n')],
   ['schemas/analysis.json', Buffer.from('{"type":"object","properties":{"summary":{"type":"string"},"ok":{"type":"boolean"}}}')],
+  ['g.py', Buffer.from('')],
 ]);
 const compileText = (text: string) => {
   const loaded = loadDefinitionText(text);
@@ -251,6 +252,118 @@ nodes:
     const review = r.plan!.nodes.find((n) => n.id === 'l_2_review')!;
     expect((review.def as { input: unknown }).input).toEqual({ change: { ref: 'nodes.l_2_resolve.output.diff' } });
     expect(review.inputParts).toEqual([{ key: 'change', source: 'context:l_2_round' }]);
+  });
+});
+
+describe('the limits and warnings on a loop', () => {
+  const loopText = (o: { body: string; exit?: string; next?: string; initial?: string; max?: number }) => `schema_version: "2.0"
+id: x
+nodes:
+  - id: l
+    type: loop
+    max_iterations: ${o.max ?? 2}
+    on_max: continue
+${o.initial ? `    initial: ${o.initial}\n` : ''}${o.next ? `    next: ${o.next}\n` : ''}    body:
+${o.body}
+    exit: ${o.exit ?? '[{when: nodes.grade.output.ok, outcome: done}]'}
+`;
+  const grade = '      - {id: grade, type: script, runtime: python, entrypoint: g.py}';
+  const fix = '      - {id: fix, type: agent, executor: opencode, profile: analyst@1, output_schema: schemas/analysis.json, workspace: {repo: o/r, ref: main, mode: write}}';
+  const warnings = (r: { diagnostics: Array<{ severity: string; code: string }> }) => r.diagnostics.filter((d) => d.severity === 'warning').map((d) => d.code).filter((c) => c.startsWith('loop_'));
+  const routed = `      - {id: resolve, type: script, runtime: python, entrypoint: r.py}
+      - {id: choose, type: condition, expression: "'a'", routes: {a: [review], b: []}, default: a}
+      - {id: review, type: script, runtime: python, entrypoint: v.py, input: {ref: nodes.resolve.output}}`;
+
+  describe('writes', () => {
+    for (const t of ['jira.create', 'doc.put', 'bank.pay']) {
+      it(`refuses ${t}, a write tool step in a body, since each round would repeat it`, () => {
+        expect(errors(compileText(loopText({ body: `      - {id: file, type: tool, tool: "${t}@1"}\n${grade}` })))).toContain('loop_body_write:l_1_file');
+      });
+    }
+    it('refuses an agent in a body that holds a write tool', () => {
+      expect(errors(compileText(loopText({ body: `      - {id: a, type: agent, profile: analyst@1, output_schema: schemas/analysis.json, tools: ["jira.create@1"]}\n${grade}` })))).toContain('loop_body_write:l_1_a');
+    });
+    it('accepts a read tool, and an agent with only read tools', () => {
+      expect(errors(compileText(loopText({ body: `      - {id: read, type: tool, tool: "ci.list-runs@1"}\n      - {id: a, type: agent, profile: analyst@1, output_schema: schemas/analysis.json, tools: ["ci.list-runs@1"]}\n${grade}` })))).toEqual([]);
+    });
+    it('accepts a write-mode agent: it changes a checkout, and pushing is a tool after the loop', () => {
+      expect(errors(compileText(loopText({ body: `${fix}\n${grade}` })))).toEqual([]);
+    });
+  });
+
+  describe('the cap on rounds', () => {
+    it('allows 5 rounds with an agent, and refuses 6', () => {
+      expect(errors(compileText(loopText({ body: `${fix}\n${grade}`, max: 5 })))).toEqual([]);
+      expect(errors(compileText(loopText({ body: `${fix}\n${grade}`, max: 6 })))).toEqual(['loop_cap_exceeded:l']);
+    });
+    it('allows 20 rounds with no agent, and refuses 21, so a plan stays readable', () => {
+      expect(errors(compileText(loopText({ body: grade, max: 20 })))).toEqual([]);
+      expect(errors(compileText(loopText({ body: grade, max: 21 })))).toEqual(['loop_cap_exceeded:l']);
+    });
+    it('leaves a single-step loop at its own limit', () => {
+      const r = compile(loadDefinitionText('schema_version: "2.0"\nid: x\nnodes:\n  - {id: l, type: loop, max_iterations: 1000, exit: "true", node: {type: script, runtime: python, entrypoint: a.py}}\n').definition!);
+      expect(errors(r)).toEqual([]);
+    });
+  });
+
+  describe('who grades the work', () => {
+    const self = (exit: string, more = '') => warnings(compileText(loopText({ body: `${fix}${more}`, exit })));
+    it('warns when the only thing that says done is the agent that made the change', () => {
+      expect(self('[{when: nodes.fix.output.ok, outcome: done}]')).toEqual(['loop_self_graded']);
+    });
+    it('warns when done needs nothing at all', () => {
+      expect(self('[{when: "true", outcome: done}]')).toEqual(['loop_self_graded']);
+    });
+    it('does not warn when another step grades it, or the worker ran its tests', () => {
+      expect(self('[{when: nodes.grade.output.ok, outcome: done}]', `\n${grade}`)).toEqual([]);
+      expect(self("[{when: \"nodes.fix.output.workspace.tests.status == 'passed'\", outcome: done}]")).toEqual([]);
+    });
+    it('does not count a maker reading its own words about a stop', () => {
+      expect(self('[{when: nodes.fix.output.ok, outcome: stop}, {when: nodes.grade.output.ok, outcome: done}]', `\n${grade}`)).toEqual([]);
+    });
+    it('warns when the reviewer is the same profile as the maker', () => {
+      const same = '\n      - {id: review, type: agent, profile: analyst@1, output_schema: schemas/analysis.json}';
+      expect(self('[{when: nodes.review.output.ok, outcome: done}]', same)).toEqual(['loop_self_graded']);
+    });
+    it('has nothing to say when no step makes a change', () => {
+      expect(warnings(compileText(loopText({ body: grade })))).toEqual([]);
+    });
+  });
+
+  describe('reading a step its round can skip', () => {
+    const exit = (when: string) => warnings(compile(loadDefinitionText(loopText({ body: routed, exit: `[{when: "${when}", outcome: done}]` })).definition!));
+    it('warns on an exit rule that reads it unprotected, directly or through a step that needs it', () => {
+      expect(exit('nodes.review.output.ok')).toEqual(['loop_exit_may_skip']);
+      const chain = `${routed}\n      - {id: more, type: script, runtime: python, entrypoint: m.py, input: {ref: nodes.review.output}}`;
+      expect(warnings(compile(loadDefinitionText(loopText({ body: chain, exit: '[{when: nodes.more.output.ok, outcome: done}]' })).definition!))).toEqual(['loop_exit_may_skip']);
+    });
+    it('does not warn when has() protects it, or the rule checks its route', () => {
+      expect(exit('has(nodes.review) && nodes.review.output.ok')).toEqual([]);
+      expect(exit("nodes.choose.output.route == 'a' && nodes.review.output.ok")).toEqual([]);
+    });
+    it('does not warn when an earlier rule has already ended that route', () => {
+      const rules = `[{when: "nodes.choose.output.route == 'b'", outcome: no_progress}, {when: nodes.review.output.ok, outcome: done}]`;
+      expect(warnings(compile(loadDefinitionText(loopText({ body: routed, exit: rules })).definition!))).toEqual([]);
+    });
+    it('does not warn about a step that always runs, nor a name inside a string', () => {
+      expect(exit('nodes.resolve.output.ok')).toEqual([]);
+      expect(exit("nodes.resolve.output.note == 'nodes.review.output.ok'")).toEqual([]);
+    });
+    it('warns when next reads it and no rule ends that route, as the next round could not start', () => {
+      const body = { body: routed, initial: '{feedback: null}', next: '{feedback: {ref: nodes.review.output.notes}}' };
+      expect(warnings(compile(loadDefinitionText(loopText({ ...body, exit: '[{when: nodes.resolve.output.ok, outcome: done}]' })).definition!))).toEqual(['loop_next_may_skip']);
+      const ended = `[{when: "nodes.choose.output.route == 'b'", outcome: no_progress}, {when: nodes.resolve.output.ok, outcome: done}]`;
+      expect(warnings(compile(loadDefinitionText(loopText({ ...body, exit: ended })).definition!))).toEqual([]);
+    });
+  });
+
+  it('reports has() on a computed state value as invalid CEL when compiling, not at run time', () => {
+    const r = compile(loadDefinitionText(loopText({ body: '      - {id: grade, type: script, runtime: python, entrypoint: g.py, input: {cel: "has(state.n)"}}', initial: '{n: {cel: "1 + 1"}}' })).definition!);
+    expect(errors(r)).toContain('invalid_cel:l_1_grade');
+  });
+
+  it('has no warnings for the worked example', () => {
+    expect(warnings(compile(loadDefinitionText(workflow('clean')).definition!))).toEqual([]);
   });
 });
 
@@ -421,6 +534,61 @@ describe.skipIf(!up)('multi-step loops at run time', () => {
     expect(joined).toContain('$artifact');
     expect(ok('after').output.seen).toMatchObject({ summary: 'round 2', feedback_seen: 'notes from round 1', count: 2, rounds: 2 });
     expect(ok('after').output.big_len).toBe(big);
+  }, SLOW);
+
+  const skipping = (id: string, rule: string, next = '') => `schema_version: "2.0"
+id: ${id}
+inputs: {type: object, properties: {scenario: {type: string}, big: {type: integer}}}
+nodes:
+  - id: attempt
+    type: loop
+    max_iterations: 2
+    on_max: continue
+    initial: {feedback: null}
+${next}    body:
+      - id: resolve
+        type: script
+        runtime: python
+        entrypoint: scripts/resolve.py
+        retry: {max_attempts: 1}
+        input: {map: "{'round': iteration + 1, 'scenario': inputs.scenario, 'big': inputs.big, 'feedback': state.feedback}"}
+      - {id: choose, type: condition, expression: "'skip'", routes: {run: [review], skip: []}, default: skip}
+      - id: review
+        type: script
+        runtime: python
+        entrypoint: scripts/review.py
+        retry: {max_attempts: 1}
+        input: {map: "{'round': iteration + 1, 'scenario': inputs.scenario, 'summary': nodes.resolve.output.summary}"}
+    exit: [${rule}]
+  - id: after
+    type: script
+    runtime: python
+    entrypoint: scripts/after.py
+    input: {map: "{'outcome': nodes.attempt.output.outcome}"}
+`;
+  const runText = async (text: string, codes: string[]) => {
+    const v = await uploadDir(h.api, pkg(text));
+    expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
+    expect(v.diagnostics.map((x: any) => x.code)).toEqual(expect.arrayContaining(codes));
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: v.version.id, inputs: { scenario: 'accept', big: 0 } });
+    const d = await waitForRun(h.api, run_id, SLOW);
+    return { d, ok: (id: string) => d.attempts.find((a: any) => a.node_id === id && a.state === 'succeeded') };
+  };
+
+  it('a next round that cannot start fails the run, and never reports success with outcome retry', async () => {
+    const { d, ok } = await runText(skipping(`rounds-${++seq}`, "{when: \"inputs.scenario == 'never'\", outcome: done}", '    next: {feedback: {ref: nodes.review.output.notes}}\n'), ['loop_next_may_skip']);
+    expect(d.run.state).toBe('failed');
+    expect(d.run.error.class).toBe('contract_violation');
+    expect(d.run.error.message).toMatch(/round 2 could not start/);
+    expect(ok('attempt_2_resolve')).toBeUndefined();
+    expect(ok('after')).toBeUndefined();
+  }, SLOW);
+
+  it('an exit rule that reads a skipped step fails the run rather than choosing a route', async () => {
+    const { d, ok } = await runText(skipping(`rounds-${++seq}`, '{when: nodes.review.output.ok, outcome: done}'), ['loop_exit_may_skip']);
+    expect(d.run.state).toBe('failed');
+    expect(ok('attempt_1_gate')).toBeUndefined();
+    expect(ok('after')).toBeUndefined();
   }, SLOW);
 
   it('failed in round 2: a resume keeps round 1 and does not repeat it', async () => {

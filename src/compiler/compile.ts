@@ -498,6 +498,15 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
     }
     outputs.set(id, refSchema ?? outputSchema);
 
+    // Each round would repeat a write, and a rejection partway needs rules of its own. Reads and checkouts can repeat.
+    if (loops.origins.has(id)) {
+      const tool = toolInfo as PlanNode['tool'];
+      if (tool && tool.effect !== 'read') err('loop_body_write', `step '${id}' in a loop calls ${tool.ref}, a write tool. Write after the loop, from what its output says`, id, 'tool');
+      for (const t of agentToolsById.get(id) ?? []) {
+        if (t.effect !== 'read') err('loop_body_write', `agent '${id}' in a loop holds ${t.ref}, a write tool, which each round could call again. Write after the loop, from what its output says`, id, 'tools');
+      }
+    }
+
     const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.type === 'approval' && n.expires_in ? n.expires_in : n.timeout;
     let timeoutMs = DEFAULT_TIMEOUTS[n.type];
     if (timeout) {

@@ -413,6 +413,15 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     const final = ran[ran.length - 1];
     if (!final) throw ApplicationFailure.create({ type: 'internal', message: `loop '${node.id}' has no finished round`, nonRetryable: true });
     const outcome = status.nodes[final.gate]!.route!;
+    // A round reads the one before it through `next`. If that read a step the round before skipped, this round's steps are
+    // skipped too: part of it, or none of it, ran. Reporting an outcome for it would hide that.
+    if (outcome === 'retry') {
+      throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}': round ${ran.length + 1} could not start, as a step it reads was skipped in round ${ran.length}`, nonRetryable: true });
+    }
+    ran.forEach((r, i) => {
+      const missing = r.required.find((id) => status.nodes[id]?.status !== 'succeeded');
+      if (missing) throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}': round ${i + 1} could not start: step '${missing}' was skipped, as a step it reads was skipped in round ${i}`, nonRetryable: true });
+    });
     if (outcome === 'exhausted' && (def.on_max ?? 'fail') === 'fail') {
       throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}' used all ${def.rounds.length} rounds without an exit rule holding`, nonRetryable: true });
     }

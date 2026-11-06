@@ -183,7 +183,8 @@ export interface LoopJoinNode extends NodeCommon {
   max_iterations: number;
   on_max?: 'fail' | 'continue';
   reasons: Record<string, string>;
-  rounds: Array<{ gate: string; steps: Record<string, Value> }>;
+  /** `required`: the steps no route inside the round can skip, so a round that ran must have run them. */
+  rounds: Array<{ gate: string; required: string[]; steps: Record<string, Value> }>;
 }
 
 export interface SubworkflowNode extends NodeCommon {

@@ -123,7 +123,9 @@ describe('expanding a loop', () => {
     const join = byId(expandLoops(wf(outer, loop(), after)).def).get('attempt');
     expect(join).toMatchObject({ type: 'loop', merge: 'any', max_iterations: 2, on_max: 'continue', depends_on: ['attempt_1_gate', 'attempt_2_gate'] });
     expect(join.reasons).toEqual({ no_progress: 'The change did not move', stop: 'Prompt injection reported', done: 'Checks passed' });
-    expect(join.rounds[1]).toEqual({ gate: 'attempt_2_gate', steps: { resolve: { ref: 'nodes.attempt_2_resolve.output' }, probe: { ref: 'nodes.attempt_2_probe.output' }, review: { ref: 'nodes.attempt_2_review.output' } } });
+    // The review is on an inner route, so it may be skipped. The others must run in a round that ran.
+    expect(join.rounds[1].required).toEqual(['attempt_2_resolve', 'attempt_2_probe', 'attempt_2_changed']);
+    expect(join.rounds[1]).toEqual({ gate: 'attempt_2_gate', required: join.rounds[1].required, steps: { resolve: { ref: 'nodes.attempt_2_resolve.output' }, probe: { ref: 'nodes.attempt_2_probe.output' }, review: { ref: 'nodes.attempt_2_review.output' } } });
     expect(join.body).toBeUndefined();
     expect(join.exit).toBeUndefined();
   });
