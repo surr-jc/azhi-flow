@@ -30,7 +30,9 @@ readiness  files + ci + open ticket ─ score (rules) ─ scorecard ─ Slack �
 ## The loop, step by step
 
 **1. Plan (`ai-sdlc-factory-plan`).** Give it a ticket (a Jira key, or `owner/name#42`), a goal typed as text, or both.
-An agent (skill `release-prd`) reads the repository on the staging branch and writes the release plan: the problem,
+First a *brainstorm*: an agent (skill `brainstorm-requirements`) reads the repository and prepares up to five questions
+only a person can answer and two or three approaches (one recommended, with the argument against it). A person answers
+and picks an approach (`brainstorm_review`); rejecting stops the run with nothing planned. Then an agent (skill `release-prd`) reads the repository on the staging branch and writes the release plan: the problem,
 goals and non-goals, the **invariants** the product must keep, the **user journeys** a tester walks, the owner (from
 CODEOWNERS, or null when there is none), and up to three **epics**; the first makes the product runnable end to end. A
 person approves the plan and may leave epics out. Each remaining epic then goes through the published

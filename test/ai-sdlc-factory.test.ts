@@ -68,6 +68,18 @@ describe('AI SDLC Factory packages', () => {
     expect(tools.filter((t: any) => t.effect !== 'read').map((t: any) => t.id).sort()).toEqual(['github.label-issue', 'jira.update-labels']);
   });
 
+  it('the release plan is brainstormed with a person before it is planned, and the brainstormer can only read', () => {
+    const pkg = packageFromDirectory('examples/ai-sdlc-factory-plan');
+    const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+    const node = (id: string) => (def.nodes as any[]).find((n) => n.id === id);
+    expect(node('brainstorm_review').type).toBe('approval');
+    expect(node('brainstorm_review').on_expiry).toBe('reject');
+    expect(node('brainstorm_review').decision_schema.required).toEqual(['approach']);
+    // The plan reads the person's decisions, so it cannot run before they answer.
+    expect(JSON.stringify(node('plan_release').input)).toContain('nodes.brainstorm_review.output.data.approach');
+    expect(pkg.readText('profiles/brainstormer@1.yaml')).toMatch(/tools: \[read, grep, glob, skill\]/);
+  });
+
   it('the release plan has no model step after the approval and no merge or close anywhere', () => {
     for (const name of PACKAGES) {
       const tools = parse(readFileSync(`examples/${name}/azhi.config.yaml`, 'utf8')).tools.map((t: any) => t.id);
