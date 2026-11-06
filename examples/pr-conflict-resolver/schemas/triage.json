@@ -5,6 +5,7 @@
     "change": {
       "type": "object",
       "properties": {
+        "repo": {"type": "string"},
         "base_sha": {"type": "string"},
         "files": {
           "type": "array",
@@ -21,7 +22,7 @@
           }
         }
       },
-      "required": ["base_sha", "files"]
+      "required": ["repo", "base_sha", "files"]
     },
     "pr": {"type": "object"},
     "conflicts": {"type": "integer"},

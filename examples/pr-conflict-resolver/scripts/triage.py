@@ -143,7 +143,7 @@ def main():
 
     keep = ("path", "status", "mode", "content", "encoding")
     return {
-        "change": {"base_sha": change["base_sha"], "files": [{k: f[k] for k in keep if k in f} for f in files]},
+        "change": {"repo": change["repo"], "base_sha": change["base_sha"], "files": [{k: f[k] for k in keep if k in f} for f in files]},
         "pr": {**pr, "head_sha": merge.get("head_sha", pr.get("head_sha", "")), "base_tip": merge.get("base_sha", "")},
         "conflicts": len(merge.get("conflicts", [])),
         "resolved": resolved,

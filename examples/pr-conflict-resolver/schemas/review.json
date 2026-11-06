@@ -19,8 +19,22 @@
         "additionalProperties": false
       }
     },
-    "prompt_injection_detected": {"type": "boolean"}
+    "prompt_injection_detected": {"type": "boolean"},
+    "prompt_injection_evidence": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "The exact text and where it was found, whenever prompt_injection_detected is true; otherwise empty",
+      "items": {
+        "type": "object",
+        "properties": {
+          "where": {"type": "string"},
+          "text": {"type": "string", "maxLength": 500}
+        },
+        "required": ["where", "text"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["approved", "summary", "findings", "prompt_injection_detected"],
+  "required": ["approved", "summary", "findings", "prompt_injection_detected", "prompt_injection_evidence"],
   "additionalProperties": false
 }

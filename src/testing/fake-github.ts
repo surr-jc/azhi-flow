@@ -57,6 +57,7 @@ export const BOT_LOGIN = 'azhi-bot';
 /** `comments`: comments that already exist (on issues or pull requests). */
 export async function startFakeGithub(data: FakeGithubData, opts: { token?: string | string[]; host?: string; comments?: Array<FakeComment & { user?: string }>; defaultBranch?: string; refs?: Record<string, { sha: string; message: string }>; repos?: Record<string, { private?: boolean; permissions?: Record<string, boolean> }>; scopes?: string; noSubIssues?: boolean; links?: Array<{ repo: string; parent: number; child: number }>; files?: Record<string, string[]> } = {}) {
   const requests: string[] = [];
+  const faults: Array<{ on: string; status: number; times: number }> = [];
   const git: FakeGitState = { blobs: new Map(), trees: new Map(), commits: new Map(), refs: new Map(), pulls: [] };
   for (const [name, c] of Object.entries(opts.refs ?? {})) {
     git.refs.set(name, c.sha);
@@ -84,6 +85,14 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     if (opts.token && ![opts.token].flat().some((t) => req.headers.authorization === `Bearer ${t}`)) return send(401, { message: 'Bad credentials' });
     const writeTokens = [opts.token].flat().slice(1);
     if (req.method !== 'GET' && writeTokens.length && !writeTokens.some((t) => req.headers.authorization === `Bearer ${t}`)) return send(403, { message: 'Resource not accessible by personal access token' });
+    // A planned failure answers the next `times` requests that start with `on` ("POST /repos/acme/shop/git/blobs") with an empty body.
+    const fault = faults.find((f) => f.times > 0 && `${req.method} ${url.pathname}`.startsWith(f.on));
+    if (fault) {
+      fault.times--;
+      res.statusCode = fault.status;
+      res.setHeader('x-github-request-id', 'FAKE:0001');
+      return res.end();
+    }
     const page = Number(url.searchParams.get('page') ?? 1);
     const per = Number(url.searchParams.get('per_page') ?? 30);
     const slice = <T>(xs: T[]) => xs.slice((page - 1) * per, page * per);
@@ -278,5 +287,5 @@ export async function startFakeGithub(data: FakeGithubData, opts: { token?: stri
     const t = c && git.trees.get(c.tree);
     return Object.fromEntries((t?.tree ?? []).map((e) => [e.path, e.sha === null ? null : (git.blobs.get(e.sha)?.toString('utf8') ?? '')]));
   };
-  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, comments, created, links, merges, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
+  return { url: `http://${opts.host ?? '127.0.0.1'}:${port}`, requests, faults, comments, created, links, merges, issues: data.issues, git, branchFiles, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

@@ -381,9 +381,9 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
             const t = refTypes.get('workspace.from');
             const props = (t as { properties?: Record<string, unknown> } | undefined)?.properties;
             if (!t) warn('workspace_from_untyped', `workspace.from '${plain}' has no declared type, so it is checked when the step runs (it must carry base_sha and files)`, n.id, 'workspace.from');
-            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with base_sha and files)`, n.id, 'workspace.from');
-            else if (props && (!('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
-              err('workspace_from_type', `workspace.from '${plain}' does not carry base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
+            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with repo, base_sha and files)`, n.id, 'workspace.from');
+            else if (props && (!('repo' in props) || !('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
+              err('workspace_from_type', `workspace.from '${plain}' does not carry repo, base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
             }
           }
         }

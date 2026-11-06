@@ -49,7 +49,7 @@ tools:
           items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
   - id: github.push-branch
     version: 1
-    description: Commit a change onto a base commit as an azhi/ branch (GitHub Git Data API); deduplicated by the action ledger
+    description: Commit a change onto a base commit as an azhi/ branch, optionally as a merge with a second parent (GitHub Git Data API); deduplicated by the action ledger
     effect: write-dedupable
     source: github
     credential: github-write-token
@@ -61,6 +61,7 @@ tools:
         repo: {type: string}
         branch: {type: string, maxLength: 250}
         base_sha: {type: string}
+        merge_parent: {type: string}
         message: {type: string, maxLength: 5000}
         files:
           type: array

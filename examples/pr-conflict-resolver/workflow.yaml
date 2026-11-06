@@ -34,7 +34,7 @@ nodes:
     type: condition
     description: Resolve only an open pull request from this repository that GitHub reports as conflicting (mergeable_state dirty). A fork, a draft (unless resolve_draft), a clean or an unknown one is skipped, and nothing is spent.
     expression: "nodes.pr.output.state == 'open' && nodes.pr.output.mergeable_state == 'dirty' && !nodes.pr.output.head_is_fork && (!nodes.pr.output.draft || (has(inputs.resolve_draft) && inputs.resolve_draft)) ? 'ok' : 'skip'"
-    routes: {ok: [merge_attempt, base_run, head_run], skip: [skip_report]}
+    routes: {ok: [merge_attempt], skip: [skip_report]}
     default: skip
   - id: skip_report
     type: report
@@ -58,9 +58,13 @@ nodes:
     output_schema: schemas/note.json
     timeout: 20m
     budget: {max_tool_calls: 0}
+  # The heavy steps run one after another: the full-history fetch of merge_attempt dropped (curl 18, early EOF) while
+  # two test suites ran alongside it, and the test snapshots should not compete for the machine either.
+  # base_run and head_run follow merge_attempt (so they are skipped with it on the skip route) and triage waits for both.
   - id: base_run
     type: agent
     description: Run the test command on the untouched base branch (the first of three snapshots). A do-nothing agent.
+    depends_on: [merge_attempt]
     executor: opencode
     profile: noop@1
     workspace:
@@ -80,6 +84,7 @@ nodes:
   - id: head_run
     type: agent
     description: Run the same test command on the pull request alone, before the merge (the second snapshot). A do-nothing agent.
+    depends_on: [base_run]
     executor: opencode
     profile: noop@1
     workspace:
@@ -99,6 +104,7 @@ nodes:
     description: Settle the easy hunks by rule (no model) and say what is left. A delete-against-edit conflict, a binary file or a lock file is set aside for a person.
     runtime: python
     entrypoint: scripts/triage.py
+    depends_on: [head_run]
     input:
       map: "{'change': nodes.merge_attempt.output.workspace, 'pr': {'repo': inputs.repo, 'number': inputs.pr, 'url': nodes.pr.output.url, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref, 'head_sha': nodes.pr.output.head_sha}}"
     output_schema: schemas/triage.json
@@ -265,16 +271,17 @@ nodes:
     on_expiry: reject
   - id: push_branch
     type: tool
-    description: Commit the resolution onto the base branch's tip as an azhi/ branch (Git Data API). The branch is the base plus the pull request's changes, resolved; nothing the contributor owns is touched.
+    description: Commit the resolution as an azhi/ branch (Git Data API), a merge commit of the base branch's tip and the pull request's head. Its tree is the base plus the pull request's changes, resolved; nothing the contributor owns is touched.
     tool: github.push-branch@1
     depends_on: [release_approval]
     arguments:
       repo: {ref: inputs.repo}
       branch: {ref: nodes.finalize.output.branch}
       base_sha: {ref: nodes.finalize.output.base_sha}
+      merge_parent: {ref: nodes.triage.output.pr.head_sha}
       message: {ref: nodes.finalize.output.commit_message}
       files: {ref: nodes.finalize.output.files}
-    guard: "args.repo == inputs.repo && args.branch == nodes.finalize.output.branch && args.base_sha == nodes.triage.output.pr.base_tip"
+    guard: "args.repo == inputs.repo && args.branch == nodes.finalize.output.branch && args.base_sha == nodes.triage.output.pr.base_tip && args.merge_parent == nodes.triage.output.pr.head_sha"
   - id: open_pr
     type: tool
     description: Open a pull request from that branch into the contributor's own branch (a draft when anything is in doubt), or return the one already open.

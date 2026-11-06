@@ -103,7 +103,7 @@ export function fallbackFor(method: string, kind: FailureKind, mode: FallbackMod
 }
 
 /** The error for a non-2xx answer, the same whether Node or `gh` got it. */
-function httpError(cfg: GithubConfig, status: number, header: (name: string) => string | null, text: string): SendError {
+function httpError(cfg: GithubConfig, status: number, header: (name: string) => string | null, text: string, method = '', path = ''): SendError {
   const limited = status === 429 || (status === 403 && header('x-ratelimit-remaining') === '0');
   const definite = status >= 400 && status < 500 && status !== 408 && !limited;
   const cls = status === 401 || (status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
@@ -114,7 +114,10 @@ function httpError(cfg: GithubConfig, status: number, header: (name: string) => 
       : status === 403 && sso
         ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
         : '';
-  return new SendError(`GitHub HTTP ${status}: ${text.slice(0, 200)}${hint}`, definite, cls);
+  // A 5xx with no body says nothing about which call failed: name it, and the id GitHub support can look up.
+  const id = header('x-github-request-id');
+  const where = status >= 500 && !text.trim() && method ? `(empty response to ${method} ${path.split('?')[0]}${id ? `, request id ${id}` : ''})` : '';
+  return new SendError(`GitHub HTTP ${status}: ${text.slice(0, 200)}${hint}${where}`, definite, cls, status);
 }
 
 /** The host name `gh --hostname` takes for this API address. */
@@ -173,8 +176,8 @@ async function request(cfg: GithubConfig, token: string | undefined, method: 'GE
     throw new SendError(`the GitHub tools need a token credential${note}`, true, ErrorClass.authorization);
   }
   if (!reply.ok) {
-    const e = httpError(cfg, reply.status, reply.header, reply.text);
-    throw note ? new SendError(`${e.message}${note}`, e.definite, e.errorClass) : e;
+    const e = httpError(cfg, reply.status, reply.header, reply.text, method, path);
+    throw note ? new SendError(`${e.message}${note}`, e.definite, e.errorClass, e.status) : e;
   }
   try {
     return JSON.parse(reply.text);
@@ -499,12 +502,28 @@ interface PushFile {
  * write-mode workspace step returns (path, status, mode, content, encoding). The branch is created, or
  * moved when Azhi made its current commit (a re-run after a send-back); a branch someone else made is
  * refused. The commit message carries the ledger action ID as a trailer, which the lookup finds.
+ *
+ * With `merge_parent` (a full commit SHA that must exist in the repository) the commit is a merge of
+ * `[base_sha, merge_parent]` whose tree is `base_sha` plus `files`; the caller supplies the resolved tree.
+ * Only the new commit gets the second parent: the branch is still an `azhi/` branch.
  */
-export async function pushBranch(cfg: GithubConfig, args: { repo?: unknown; branch?: unknown; base_sha?: unknown; message?: unknown; files?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+export async function pushBranch(
+  cfg: GithubConfig,
+  args: { repo?: unknown; branch?: unknown; base_sha?: unknown; message?: unknown; files?: unknown; merge_parent?: unknown },
+  token: string | undefined,
+  key: string,
+  timeoutMs: number,
+  /** Waits between tries of a blob, tree or commit call (tests shorten them). */
+  retryWaitsMs: number[] = GIT_OBJECT_RETRY_WAITS_MS,
+) {
+  const deadline = Date.now() + timeoutMs;
   const repo = argRepo(cfg, args.repo);
   const branch = branchName(cfg, args.branch);
   const base = String(args.base_sha ?? '');
   if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(base)) throw new SendError(`base_sha must be a full commit SHA, got '${base.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  const mergeParent = args.merge_parent === undefined || args.merge_parent === null ? undefined : String(args.merge_parent);
+  if (mergeParent !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(mergeParent)) throw new SendError(`merge_parent must be a full commit SHA, got '${mergeParent.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  if (mergeParent === base) throw new SendError('merge_parent is the same commit as base_sha', true, ErrorClass.invalidInput);
   const files = Array.isArray(args.files) ? (args.files as PushFile[]) : [];
   if (!files.length) throw new SendError('there are no changed files to push', true, ErrorClass.invalidInput);
   if (files.length > MAX_PUSH_FILES) throw new SendError(`at most ${MAX_PUSH_FILES} files per push, got ${files.length}`, true, ErrorClass.invalidInput);
@@ -536,19 +555,45 @@ export async function pushBranch(cfg: GithubConfig, args: { repo?: unknown; bran
     }
   }
   const baseCommit = await get(cfg, token, `/repos/${repo}/git/commits/${base}`, timeoutMs);
+  // A wrong or foreign SHA fails here, before a blob is created, rather than as a 422 on the commit.
+  if (mergeParent && !(await getOrNull(cfg, token, `/repos/${repo}/git/commits/${mergeParent}`, timeoutMs))) {
+    throw new SendError(`merge_parent ${mergeParent.slice(0, 12)} is not a commit in ${repo}`, true, ErrorClass.invalidInput);
+  }
   const tree: Array<Record<string, unknown>> = [];
   for (const e of entries) {
     if ('deleted' in e) tree.push({ path: e.path, mode: '100644', type: 'blob', sha: null });
     else {
-      const blob = await request(cfg, token, 'POST', `/repos/${repo}/git/blobs`, { content: e.content, encoding: e.encoding }, timeoutMs);
+      const blob = await createGitObject(cfg, token, `/repos/${repo}/git/blobs`, { content: e.content, encoding: e.encoding }, deadline, retryWaitsMs);
       tree.push({ path: e.path, mode: e.mode, type: 'blob', sha: String(blob.sha) });
     }
   }
-  const newTree = await request(cfg, token, 'POST', `/repos/${repo}/git/trees`, { base_tree: String(baseCommit.tree?.sha ?? ''), tree }, timeoutMs);
-  const commit = await request(cfg, token, 'POST', `/repos/${repo}/git/commits`, { message, tree: String(newTree.sha), parents: [base] }, timeoutMs);
+  const newTree = await createGitObject(cfg, token, `/repos/${repo}/git/trees`, { base_tree: String(baseCommit.tree?.sha ?? ''), tree }, deadline, retryWaitsMs);
+  const commit = await createGitObject(cfg, token, `/repos/${repo}/git/commits`, { message, tree: String(newTree.sha), parents: mergeParent ? [base, mergeParent] : [base] }, deadline, retryWaitsMs);
+  // The ref is the only write anyone can see, so it is sent once: the ledger decides what a failure there means.
   if (existing) await request(cfg, token, 'PATCH', `/repos/${repo}/git/refs/heads/${branch}`, { sha: String(commit.sha), force: true }, timeoutMs);
   else await request(cfg, token, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: String(commit.sha) }, timeoutMs);
   return pushResult(cfg, repo, branch, commit, base, entries.length, !existing);
+}
+
+const GIT_OBJECT_RETRY_WAITS_MS = [1000, 2000, 4000];
+
+/**
+ * POSTs a blob, tree or commit, and repeats it when GitHub answers 5xx (it does so now and then, and the same
+ * content goes through on the next try). These only create objects no branch points at, and a blob or tree is
+ * content-addressed, so a repeat is harmless; the ref is not retried because it is what makes a push visible.
+ * 4xx, rate limits and network errors are not repeated. The tool's `timeoutMs` is one budget for the whole push,
+ * so a try starts only if its wait fits before `deadline`, and gets the time that is left.
+ */
+async function createGitObject(cfg: GithubConfig, token: string | undefined, path: string, body: unknown, deadline: number, waitsMs: number[]): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await request(cfg, token, 'POST', path, body, Math.max(1, deadline - Date.now()));
+    } catch (err) {
+      const wait = waitsMs[attempt];
+      if (!(err instanceof SendError) || !err.status || err.status < 500 || wait === undefined || Date.now() + wait >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 /** The web address of the repository's host, from a commit's html_url (GitHub Enterprise included). */

@@ -50,6 +50,8 @@ export class SendError extends Error {
     message: string,
     readonly definite: boolean,
     readonly errorClass: ErrorClass = ErrorClass.transient,
+    /** The HTTP status, when the error is an answer from an HTTP service. */
+    readonly status?: number,
   ) {
     super(message);
   }

@@ -80,6 +80,21 @@ export function isolatedGitEnv(home: string): NodeJS.ProcessEnv {
   };
 }
 
+/** What git says when the ref or repository does not exist: asking again cannot help. */
+const PERMANENT_FETCH_FAILURE = /couldn't find remote ref|not our ref|repository '.*' not found|returned error: 404/i;
+
+/** Waits `ms`, or less if the signal aborts. */
+const pause = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done);
+  });
+
 export function workspaceUrl(spec: WorkspaceSpec): string {
   const host = spec.host.replace(/\/+$/, '');
   if (!host.startsWith('https://') && !LOOPBACK.test(`${host}/`)) throw invalid(`workspace host must be https:// (or http:// on loopback), got ${spec.host}`);
@@ -87,7 +102,7 @@ export function workspaceUrl(spec: WorkspaceSpec): string {
   return `${host}/${spec.repo}.git`;
 }
 
-export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; home: string; token?: string; timeoutMs: number; signal?: AbortSignal }): Promise<Checkout> {
+export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; home: string; token?: string; timeoutMs: number; signal?: AbortSignal; /** Waits between fetch attempts (tests shorten them). */ fetchRetryWaitsMs?: number[] }): Promise<Checkout> {
   const url = workspaceUrl(spec);
   for (const [name, ref] of [['ref', spec.ref], ['base_ref', spec.baseRef]] as const) {
     if (ref !== undefined && !REF.test(ref)) throw invalid(`workspace ${name} '${ref}' is not a plain git ref`);
@@ -109,9 +124,9 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   });
   const always: Array<[string, string]> = [['core.hooksPath', '/dev/null'], ['core.symlinks', 'false'], ['credential.helper', ''], ['advice.detachedHead', 'false']];
   const scrub = (s: string) => (o.token ? s.split(o.token).join('***') : s);
-  const git = (args: string[], env: NodeJS.ProcessEnv) =>
+  const git = (args: string[], env: NodeJS.ProcessEnv, timeoutMs = o.timeoutMs) =>
     new Promise<string>((resolve, reject) => {
-      execFile('git', args, { cwd: dir, env, timeout: o.timeoutMs, signal: o.signal, maxBuffer: 1 << 20, windowsHide: true }, (err, stdout, stderr) => {
+      execFile('git', args, { cwd: dir, env, timeout: timeoutMs, signal: o.signal, maxBuffer: 1 << 20, windowsHide: true }, (err, stdout, stderr) => {
         if (!err) return resolve(stdout.trim());
         const denied = /could not read Username|authentication failed|returned error: 40[13]/i.test(stderr);
         reject(ApplicationFailure.create({ type: denied ? ErrorClass.authorization : ErrorClass.transient, message: scrub(`git ${args[0]} failed: ${stderr.trim().slice(-500) || err.message}`), nonRetryable: denied }));
@@ -127,7 +142,25 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   // A transfer under 1 KB/s for 60 s is stalled, not slow: fail it as transient so the retry starts now, not after the step timeout.
   const stall: Array<[string, string]> = [['http.lowSpeedLimit', '1000'], ['http.lowSpeedTime', '60']];
   // Fetch by URL: no remote is configured, so neither the URL nor the header is written to .git/config.
-  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...stall, ...auth]) });
+  const fetchArgs = ['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs];
+  const fetchEnv = { ...base, ...config([...always, ...stall, ...auth]) };
+  // The fetch is retried here, not by the step: a dropped connection (a full-history fetch on a loaded machine) is
+  // common and costs only a repeat of the fetch, while a harness step is never retried because that would run its agent again.
+  // `timeoutMs` is the budget for the fetch as a whole; a missing ref or repository, a refused token and a cancellation are final.
+  const waits = o.fetchRetryWaitsMs ?? [2000, 5000];
+  const deadline = Date.now() + o.timeoutMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await git(fetchArgs, fetchEnv, Math.max(1, deadline - Date.now()));
+      break;
+    } catch (e) {
+      const wait = waits[attempt];
+      const final = e instanceof ApplicationFailure && (e.nonRetryable || PERMANENT_FETCH_FAILURE.test(e.message));
+      if (wait === undefined || final || o.signal?.aborted || deadline - Date.now() <= wait) throw e;
+      await pause(wait, o.signal);
+      if (o.signal?.aborted) throw e;
+    }
+  }
   await git(['checkout', '-q', '--detach', 'refs/azhi/head'], { ...base, ...config(always) });
   const head = await git(['rev-parse', 'HEAD'], { ...base, ...config(always) });
   const baseSha = spec.baseRef ? await git(['rev-parse', 'refs/azhi/base'], { ...base, ...config(always) }) : undefined;

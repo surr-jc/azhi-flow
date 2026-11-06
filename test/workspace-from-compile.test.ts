@@ -46,7 +46,20 @@ describe('workspace.from', () => {
     expect(review.dataDeps).toContain('build');
   });
 
-  it('accepts a producer of another node type when its declared output has base_sha and files', () => {
+  it('accepts a producer of another node type when its declared output has repo, base_sha and files', () => {
+    const select = `  - id: pick
+    type: script
+    runtime: python
+    entrypoint: scripts/pick.py
+    output_schema:
+      type: object
+      properties: {repo: {type: string}, base_sha: {type: string}, files: {type: array}}
+`;
+    const r = codes(wf('      from: {ref: nodes.pick.output}', select));
+    expect(r.codes.filter((c) => c.startsWith('error'))).toEqual([]);
+  });
+
+  it('rejects a producer whose declared output lacks repo, which the worker needs to continue from it', () => {
     const select = `  - id: pick
     type: script
     runtime: python
@@ -55,8 +68,7 @@ describe('workspace.from', () => {
       type: object
       properties: {base_sha: {type: string}, files: {type: array}}
 `;
-    const r = codes(wf('      from: {ref: nodes.pick.output}', select));
-    expect(r.codes.filter((c) => c.startsWith('error'))).toEqual([]);
+    expect(codes(wf('      from: {ref: nodes.pick.output}', select)).codes).toContain('error:workspace_from_type');
   });
 
   it('rejects CEL, a map and a literal: the step it continues from must be a plain ref', () => {

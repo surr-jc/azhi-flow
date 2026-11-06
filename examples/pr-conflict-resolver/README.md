@@ -49,9 +49,10 @@ If a conflict is set aside, or both attempts fail, it comments why on the origin
 
 ## Known limits
 
-- Merge the resolution pull request into the contributor's branch with a **merge commit**.
-- The commit on the `azhi/` branch has one parent (the base tip): GitHub reports the content as clean, but the
-  history does not show a merge. A two-parent merge commit is a follow-up.
+- The commit on the `azhi/` branch is a real merge of the base tip and the pull request's head, so the resolution
+  pull request merges into the contributor's branch without re-raising the conflicts.
+- Merge the resolution pull request into the contributor's branch with a **merge commit**. A squash or rebase drops
+  the base-tip parent, and the contributor's pull request is behind the base, and conflicting, again.
 - Lock files, deleted-against-edited files and binary files are left to a person: the resolver has no shell.
 - Forks are skipped. The tests run the pull request's code (`npm ci` runs install scripts) on the worker.
 - The merge needs the full history of both branches, so it is slow on very large repositories.
