@@ -56,6 +56,22 @@ describe('AI SDLC Factory packages', () => {
     });
   }
 
+  it('every step that creates a ticket waits for a person: it depends, through the plan, on an approval', () => {
+    for (const name of ['ai-sdlc-factory-readiness', 'ai-sdlc-factory-verify']) {
+      const pkg = packageFromDirectory(`examples/${name}`);
+      const tools = parse(readFileSync(`examples/${name}/azhi.config.yaml`, 'utf8')).tools;
+      const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+      const nodes = new Map(compile(def, { pkg, catalog: staticCatalog(tools) }).plan!.nodes.map((n) => [n.id, n]));
+      const upstream = (id: string, seen = new Set<string>()): Set<string> => {
+        for (const d of nodes.get(id)!.deps) if (!seen.has(d)) (seen.add(d), upstream(d, seen));
+        return seen;
+      };
+      const writers = [...nodes.values()].filter((n) => /create-issue/.test(String((n.def as any).tool ?? '')));
+      expect(writers.length, name).toBeGreaterThan(0);
+      for (const w of writers) expect([...upstream(w.id)].some((d) => nodes.get(d)!.type === 'approval'), `${name}: ${w.id} runs without waiting for an approval`).toBe(true);
+    }
+  });
+
   it('the lap writes only labels, each on the ticket it picked', () => {
     const pkg = packageFromDirectory('examples/ai-sdlc-factory');
     const tools = parse(readFileSync('examples/ai-sdlc-factory/azhi.config.yaml', 'utf8')).tools;

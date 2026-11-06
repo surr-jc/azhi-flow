@@ -93,8 +93,9 @@ nodes:
 
   - id: create_fix
     type: tool
-    description: Create the fix issue, labelled so the next lap picks it up first.
+    description: Create the fix issue, labelled so the next lap picks it up first. Runs only after a person approved it (a rejected or skipped approval skips this step).
     tool: github.create-issue@1
+    depends_on: [fix_approval]
     arguments:
       repo: {ref: inputs.repo}
       title: {ref: nodes.verdict.output.ticket.title}

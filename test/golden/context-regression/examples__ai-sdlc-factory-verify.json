@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory-verify",
-    "definitionHash": "sha256:f2f1a17da4fb068b8ce6bd29d37f1c0ae30461bc5bb3fd9ee3604c0e079ccf83",
+    "definitionHash": "sha256:51cbb1810b4d957be167bcc8f3abe642dc21ce0a95717f68a1ac35741da744c5",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -318,6 +318,7 @@
         "id": "create_fix",
         "type": "tool",
         "deps": [
+          "fix_approval",
           "verdict"
         ],
         "dataDeps": [
@@ -326,8 +327,11 @@
         "def": {
           "id": "create_fix",
           "type": "tool",
-          "description": "Create the fix issue, labelled so the next lap picks it up first.",
+          "description": "Create the fix issue, labelled so the next lap picks it up first. Runs only after a person approved it (a rejected or skipped approval skips this step).",
           "tool": "github.create-issue@1",
+          "depends_on": [
+            "fix_approval"
+          ],
           "arguments": {
             "repo": {
               "ref": "inputs.repo"

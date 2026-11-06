@@ -135,7 +135,8 @@ nodes:
 
   - id: fix_tracker
     type: condition
-    description: Create the ticket in the chosen tracker.
+    description: Create the ticket in the chosen tracker. Depends on the approval, so nothing is created before a person approves, or when the approval is skipped or rejected.
+    depends_on: [fix_approval]
     expression: inputs.source
     routes: {github: [create_fix_github], jira: [create_fix_jira]}
     default: github
