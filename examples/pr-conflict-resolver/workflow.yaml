@@ -113,143 +113,100 @@ nodes:
     type: condition
     description: Go on only when no conflict is set aside for a person.
     expression: "size(nodes.triage.output.blocked) > 0 ? 'blocked' : 'go'"
-    routes: {go: [resolve_1], blocked: []}
+    routes: {go: [attempt], blocked: []}
     default: blocked
 
-  - id: resolve_1
-    type: agent
-    description: Resolve the hunks the rules left, in a checkout that already has the rules' work (first attempt). The worker then runs the tests on the result.
-    executor: opencode
-    profile: conflict-resolver@1
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.triage.output.change}
-      mode: write
-      test: *test
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved}"
-    output_schema: schemas/resolution.json
-    timeout: 45m
-    budget: {max_tool_calls: 40}
-  - id: compare_1
-    type: script
-    description: Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.
-    runtime: python
-    entrypoint: scripts/compare.py
-    input:
-      map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_1.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_1.output.workspace.files}"
-    output_schema: schemas/compare.json
-    limits: {time: 2m, memory_mb: 512}
-  - id: review_1
-    type: agent
-    description: An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).
-    executor: opencode
-    profile: conflict-reviewer@1
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.resolve_1.output.workspace}
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_1.output.summary, 'resolutions': nodes.resolve_1.output.resolutions, 'unresolved': nodes.resolve_1.output.unresolved}, 'check': nodes.compare_1.output, 'diff': nodes.resolve_1.output.workspace.diff, 'diff_truncated': nodes.resolve_1.output.workspace.diff_truncated}"
-    output_schema: schemas/review.json
-    timeout: 20m
-    budget: {max_tool_calls: 15}
-  - id: refute_1
-    type: agent
-    description: Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).
-    executor: opencode
-    profile: conflict-refuter@1
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.resolve_1.output.workspace}
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_1.output.workspace.diff, 'findings': nodes.review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
-    output_schema: schemas/verification.json
-    timeout: 25m
-    budget: {max_tool_calls: 10}
-  - id: gate_1
-    type: condition
-    description: Accept the first attempt when the check passed or is inconclusive, nobody was told to do something else by the text it read, nothing is left unresolved and no critical or major finding was confirmed. Otherwise one stronger second attempt, unless an agent reported an injection (then it stops here).
-    expression: "nodes.compare_1.output.ok && !nodes.review_1.output.prompt_injection_detected && !nodes.resolve_1.output.prompt_injection_detected && size(nodes.resolve_1.output.unresolved) == 0 && !nodes.review_1.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.refute_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence)) ? 'ok' : (nodes.review_1.output.prompt_injection_detected || nodes.resolve_1.output.prompt_injection_detected ? 'stop' : 'retry')"
-    routes: {ok: [], stop: [], retry: [resolve_2]}
-    default: retry
-
-  - id: resolve_2
-    type: agent
-    description: The second and last attempt, on a stronger model, starting from the first attempt's result and told why it was rejected.
-    executor: opencode
-    profile: conflict-resolver@2
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.resolve_1.output.workspace}
-      mode: write
-      test: *test
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': {'summary': nodes.resolve_1.output.summary, 'unresolved': nodes.resolve_1.output.unresolved, 'check': nodes.compare_1.output, 'findings': nodes.review_1.output.findings, 'verification': nodes.refute_1.output.checks}}"
-    output_schema: schemas/resolution.json
-    timeout: 45m
-    budget: {max_tool_calls: 40}
-  - id: compare_2
-    type: script
-    description: The same comparison for the second attempt.
-    runtime: python
-    entrypoint: scripts/compare.py
-    input:
-      map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_2.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_2.output.workspace.files}"
-    output_schema: schemas/compare.json
-    limits: {time: 2m, memory_mb: 512}
-  - id: review_2
-    type: agent
-    description: The independent review of the second attempt.
-    executor: opencode
-    profile: conflict-reviewer@1
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.resolve_2.output.workspace}
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_2.output.summary, 'resolutions': nodes.resolve_2.output.resolutions, 'unresolved': nodes.resolve_2.output.unresolved}, 'check': nodes.compare_2.output, 'diff': nodes.resolve_2.output.workspace.diff, 'diff_truncated': nodes.resolve_2.output.workspace.diff_truncated}"
-    output_schema: schemas/review.json
-    timeout: 20m
-    budget: {max_tool_calls: 15}
-  - id: refute_2
-    type: agent
-    description: Try to refute the second review's critical and major findings.
-    executor: opencode
-    profile: conflict-refuter@1
-    workspace:
-      repo: {ref: inputs.repo}
-      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
-      credential: github-read-token
-      depth: 1
-      from: {ref: nodes.resolve_2.output.workspace}
-    input:
-      map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_2.output.workspace.diff, 'findings': nodes.review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
-    output_schema: schemas/verification.json
-    timeout: 25m
-    budget: {max_tool_calls: 10}
+  # One attempt, and one stronger one if it is rejected. The second starts from the first attempt's result and is told why
+  # it was rejected. Each round's steps are written out when the workflow is compiled (attempt_1_resolve, attempt_2_resolve).
+  - id: attempt
+    type: loop
+    description: Resolve the hunks the rules left, then check, review and try to refute the result. A rejected first attempt gets one more, on a stronger model.
+    max_iterations: 2
+    on_max: continue
+    initial:
+      change: {ref: nodes.triage.output.change}
+      rejected: null
+    body:
+      - id: resolve
+        type: agent
+        description: Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.
+        executor: opencode
+        profile: conflict-resolver@1
+        workspace:
+          repo: {ref: inputs.repo}
+          ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+          credential: github-read-token
+          depth: 1
+          from: {ref: state.change}
+          mode: write
+          test: *test
+        input:
+          map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': state.rejected}"
+        output_schema: schemas/resolution.json
+        timeout: 45m
+        budget: {max_tool_calls: 40}
+      - id: compare
+        type: script
+        description: Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.
+        runtime: python
+        entrypoint: scripts/compare.py
+        input:
+          map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve.output.workspace.files}"
+        output_schema: schemas/compare.json
+        limits: {time: 2m, memory_mb: 512}
+      - id: review
+        type: agent
+        description: An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).
+        executor: opencode
+        profile: conflict-reviewer@1
+        workspace:
+          repo: {ref: inputs.repo}
+          ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+          credential: github-read-token
+          depth: 1
+          from: {ref: nodes.resolve.output.workspace}
+        input:
+          map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve.output.summary, 'resolutions': nodes.resolve.output.resolutions, 'unresolved': nodes.resolve.output.unresolved}, 'check': nodes.compare.output, 'diff': nodes.resolve.output.workspace.diff, 'diff_truncated': nodes.resolve.output.workspace.diff_truncated}"
+        output_schema: schemas/review.json
+        timeout: 20m
+        budget: {max_tool_calls: 15}
+      - id: refute
+        type: agent
+        description: Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).
+        executor: opencode
+        profile: conflict-refuter@1
+        workspace:
+          repo: {ref: inputs.repo}
+          ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+          credential: github-read-token
+          depth: 1
+          from: {ref: nodes.resolve.output.workspace}
+        input:
+          map: "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve.output.workspace.diff, 'findings': nodes.review.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+        output_schema: schemas/verification.json
+        timeout: 25m
+        budget: {max_tool_calls: 10}
+    overrides:
+      2: {resolve: {profile: conflict-resolver@2}}
+    exit:
+      - when: "nodes.review.output.prompt_injection_detected || nodes.resolve.output.prompt_injection_detected"
+        outcome: stop
+        reason: An agent reported text that tried to instruct it
+      - when: "nodes.compare.output.ok && size(nodes.resolve.output.unresolved) == 0 && !nodes.review.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.refute.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))"
+        outcome: done
+        reason: The check passed or is inconclusive, nothing is unresolved and no critical or major finding was confirmed
+    next:
+      change: {ref: nodes.resolve.output.workspace}
+      rejected: {map: "{'summary': nodes.resolve.output.summary, 'unresolved': nodes.resolve.output.unresolved, 'check': nodes.compare.output, 'findings': nodes.review.output.findings, 'verification': nodes.refute.output.checks}"}
 
   - id: finalize
     type: script
-    description: Take the last attempt that ran, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.
+    description: Take the last attempt, or none if a conflict was set aside, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.
     runtime: python
     entrypoint: scripts/finalize.py
     merge: any
     input:
-      map: "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': [{'resolution': has(nodes.resolve_1) ? nodes.resolve_1.output : null, 'compare': has(nodes.compare_1) ? nodes.compare_1.output : null, 'review': has(nodes.review_1) ? nodes.review_1.output : null, 'checks': has(nodes.refute_1) ? nodes.refute_1.output.checks : []}, {'resolution': has(nodes.resolve_2) ? nodes.resolve_2.output : null, 'compare': has(nodes.compare_2) ? nodes.compare_2.output : null, 'review': has(nodes.review_2) ? nodes.review_2.output : null, 'checks': has(nodes.refute_2) ? nodes.refute_2.output.checks : []}]}"
+      map: "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': has(nodes.attempt) ? nodes.attempt.output.rounds.map(r, {'resolution': r.steps.resolve, 'compare': r.steps.compare, 'review': r.steps.review, 'checks': r.steps.refute.checks}) : []}"
     output_schema: schemas/finalize.json
     limits: {time: 2m, memory_mb: 512}
   - id: ship_gate

@@ -10,42 +10,42 @@
       "severity": "warning",
       "code": "workspace_from_untyped",
       "message": "workspace.from 'nodes.triage.output.change' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "resolve_1",
+      "node": "attempt_1_resolve",
       "path": "workspace.from"
     },
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "review_1",
+      "message": "workspace.from 'nodes.attempt_1_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "attempt_1_review",
       "path": "workspace.from"
     },
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "refute_1",
+      "message": "workspace.from 'nodes.attempt_1_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "attempt_1_refute",
       "path": "workspace.from"
     },
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "resolve_2",
+      "message": "workspace.from 'nodes.attempt_1_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "attempt_2_resolve",
       "path": "workspace.from"
     },
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.resolve_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "review_2",
+      "message": "workspace.from 'nodes.attempt_2_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "attempt_2_review",
       "path": "workspace.from"
     },
     {
       "severity": "warning",
       "code": "workspace_from_untyped",
-      "message": "workspace.from 'nodes.resolve_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
-      "node": "refute_2",
+      "message": "workspace.from 'nodes.attempt_2_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "attempt_2_refute",
       "path": "workspace.from"
     }
   ],
@@ -53,7 +53,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-conflict-resolver",
-    "definitionHash": "sha256:ad09ef60698fff0e83f7214571897a35a8f66ff98dd9c0cf03c9ce04ebd227c3",
+    "definitionHash": "sha256:d3bdead6b9680484eac9a2b845d43c130652bea79420a0cc1e02c4b1bb3fa7d5",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -386,7 +386,7 @@
           "expression": "size(nodes.triage.output.blocked) > 0 ? 'blocked' : 'go'",
           "routes": {
             "go": [
-              "resolve_1"
+              "attempt_1_resolve"
             ],
             "blocked": []
           },
@@ -404,7 +404,7 @@
         "maxAttempts": 3
       },
       {
-        "id": "resolve_1",
+        "id": "attempt_1_resolve",
         "type": "agent",
         "deps": [
           "pr",
@@ -416,9 +416,9 @@
           "triage"
         ],
         "def": {
-          "id": "resolve_1",
+          "id": "attempt_1_resolve",
           "type": "agent",
-          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (first attempt). The worker then runs the tests on the result.",
+          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.",
           "executor": "opencode",
           "profile": "conflict-resolver@1",
           "workspace": {
@@ -441,7 +441,7 @@
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': null}"
           },
           "output_schema": "schemas/resolution.json",
           "timeout": "45m",
@@ -455,33 +455,38 @@
           "condition": "triage_gate",
           "route": "go"
         },
+        "loop": {
+          "loop": "attempt",
+          "round": 1,
+          "step": "resolve"
+        },
         "agentTools": []
       },
       {
-        "id": "compare_1",
+        "id": "attempt_1_compare",
         "type": "script",
         "deps": [
+          "attempt_1_resolve",
           "base_run",
           "head_run",
           "merge_attempt",
-          "resolve_1",
           "triage"
         ],
         "dataDeps": [
+          "attempt_1_resolve",
           "base_run",
           "head_run",
           "merge_attempt",
-          "resolve_1",
           "triage"
         ],
         "def": {
-          "id": "compare_1",
+          "id": "attempt_1_compare",
           "type": "script",
           "description": "Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.",
           "runtime": "python",
           "entrypoint": "scripts/compare.py",
           "input": {
-            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_1.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_1.output.workspace.files}"
+            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_1_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_1_resolve.output.workspace.files}"
           },
           "output_schema": "schemas/compare.json",
           "limits": {
@@ -490,25 +495,30 @@
           }
         },
         "timeoutMs": 120000,
-        "maxAttempts": 3
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 1,
+          "step": "compare"
+        }
       },
       {
-        "id": "review_1",
+        "id": "attempt_1_review",
         "type": "agent",
         "deps": [
-          "compare_1",
+          "attempt_1_compare",
+          "attempt_1_resolve",
           "pr",
-          "resolve_1",
           "triage"
         ],
         "dataDeps": [
-          "compare_1",
+          "attempt_1_compare",
+          "attempt_1_resolve",
           "pr",
-          "resolve_1",
           "triage"
         ],
         "def": {
-          "id": "review_1",
+          "id": "attempt_1_review",
           "type": "agent",
           "description": "An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).",
           "executor": "opencode",
@@ -523,11 +533,11 @@
             "credential": "github-read-token",
             "depth": 1,
             "from": {
-              "ref": "nodes.resolve_1.output.workspace"
+              "ref": "nodes.attempt_1_resolve.output.workspace"
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_1.output.summary, 'resolutions': nodes.resolve_1.output.resolutions, 'unresolved': nodes.resolve_1.output.unresolved}, 'check': nodes.compare_1.output, 'diff': nodes.resolve_1.output.workspace.diff, 'diff_truncated': nodes.resolve_1.output.workspace.diff_truncated}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.attempt_1_resolve.output.summary, 'resolutions': nodes.attempt_1_resolve.output.resolutions, 'unresolved': nodes.attempt_1_resolve.output.unresolved}, 'check': nodes.attempt_1_compare.output, 'diff': nodes.attempt_1_resolve.output.workspace.diff, 'diff_truncated': nodes.attempt_1_resolve.output.workspace.diff_truncated}"
           },
           "output_schema": "schemas/review.json",
           "timeout": "20m",
@@ -537,23 +547,28 @@
         },
         "timeoutMs": 1200000,
         "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 1,
+          "step": "review"
+        },
         "agentTools": []
       },
       {
-        "id": "refute_1",
+        "id": "attempt_1_refute",
         "type": "agent",
         "deps": [
-          "pr",
-          "resolve_1",
-          "review_1"
+          "attempt_1_resolve",
+          "attempt_1_review",
+          "pr"
         ],
         "dataDeps": [
-          "pr",
-          "resolve_1",
-          "review_1"
+          "attempt_1_resolve",
+          "attempt_1_review",
+          "pr"
         ],
         "def": {
-          "id": "refute_1",
+          "id": "attempt_1_refute",
           "type": "agent",
           "description": "Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).",
           "executor": "opencode",
@@ -568,11 +583,11 @@
             "credential": "github-read-token",
             "depth": 1,
             "from": {
-              "ref": "nodes.resolve_1.output.workspace"
+              "ref": "nodes.attempt_1_resolve.output.workspace"
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_1.output.workspace.diff, 'findings': nodes.review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.attempt_1_resolve.output.workspace.diff, 'findings': nodes.attempt_1_review.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
           },
           "output_schema": "schemas/verification.json",
           "timeout": "25m",
@@ -582,36 +597,49 @@
         },
         "timeoutMs": 1500000,
         "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 1,
+          "step": "refute"
+        },
         "agentTools": []
       },
       {
-        "id": "gate_1",
+        "id": "attempt_1_gate",
         "type": "condition",
         "deps": [
-          "compare_1",
-          "refute_1",
-          "resolve_1",
-          "review_1"
+          "attempt_1_compare",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review"
         ],
         "dataDeps": [
-          "compare_1",
-          "refute_1",
-          "resolve_1",
-          "review_1"
+          "attempt_1_compare",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review"
         ],
         "def": {
-          "id": "gate_1",
+          "id": "attempt_1_gate",
           "type": "condition",
-          "description": "Accept the first attempt when the check passed or is inconclusive, nobody was told to do something else by the text it read, nothing is left unresolved and no critical or major finding was confirmed. Otherwise one stronger second attempt, unless an agent reported an injection (then it stops here).",
-          "expression": "nodes.compare_1.output.ok && !nodes.review_1.output.prompt_injection_detected && !nodes.resolve_1.output.prompt_injection_detected && size(nodes.resolve_1.output.unresolved) == 0 && !nodes.review_1.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.refute_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence)) ? 'ok' : (nodes.review_1.output.prompt_injection_detected || nodes.resolve_1.output.prompt_injection_detected ? 'stop' : 'retry')",
+          "description": "Decides how round 1 of attempt ends.",
+          "merge": "any",
+          "depends_on": [
+            "attempt_1_resolve",
+            "attempt_1_compare",
+            "attempt_1_review",
+            "attempt_1_refute"
+          ],
+          "expression": "(nodes.attempt_1_review.output.prompt_injection_detected || nodes.attempt_1_resolve.output.prompt_injection_detected) ? 'stop' : ((nodes.attempt_1_compare.output.ok && size(nodes.attempt_1_resolve.output.unresolved) == 0 && !nodes.attempt_1_review.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.attempt_1_refute.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'done' : 'retry')",
           "routes": {
-            "ok": [],
+            "done": [],
             "stop": [],
+            "no_progress": [],
             "retry": [
-              "resolve_2"
+              "attempt_2_resolve"
             ]
           },
-          "default": "retry"
+          "default": "stop"
         },
         "outputSchema": {
           "type": "object",
@@ -622,32 +650,37 @@
           }
         },
         "timeoutMs": 1000,
-        "maxAttempts": 3
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 1,
+          "step": "gate"
+        }
       },
       {
-        "id": "resolve_2",
+        "id": "attempt_2_resolve",
         "type": "agent",
         "deps": [
-          "compare_1",
-          "gate_1",
+          "attempt_1_compare",
+          "attempt_1_gate",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review",
           "pr",
-          "refute_1",
-          "resolve_1",
-          "review_1",
           "triage"
         ],
         "dataDeps": [
-          "compare_1",
+          "attempt_1_compare",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review",
           "pr",
-          "refute_1",
-          "resolve_1",
-          "review_1",
           "triage"
         ],
         "def": {
-          "id": "resolve_2",
+          "id": "attempt_2_resolve",
           "type": "agent",
-          "description": "The second and last attempt, on a stronger model, starting from the first attempt's result and told why it was rejected.",
+          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.",
           "executor": "opencode",
           "profile": "conflict-resolver@2",
           "workspace": {
@@ -660,7 +693,7 @@
             "credential": "github-read-token",
             "depth": 1,
             "from": {
-              "ref": "nodes.resolve_1.output.workspace"
+              "ref": "nodes.attempt_1_resolve.output.workspace"
             },
             "mode": "write",
             "test": {
@@ -670,7 +703,7 @@
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': {'summary': nodes.resolve_1.output.summary, 'unresolved': nodes.resolve_1.output.unresolved, 'check': nodes.compare_1.output, 'findings': nodes.review_1.output.findings, 'verification': nodes.refute_1.output.checks}}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': ({'summary': nodes.attempt_1_resolve.output.summary, 'unresolved': nodes.attempt_1_resolve.output.unresolved, 'check': nodes.attempt_1_compare.output, 'findings': nodes.attempt_1_review.output.findings, 'verification': nodes.attempt_1_refute.output.checks})}"
           },
           "output_schema": "schemas/resolution.json",
           "timeout": "45m",
@@ -681,36 +714,41 @@
         "timeoutMs": 2700000,
         "maxAttempts": 3,
         "route": {
-          "condition": "gate_1",
+          "condition": "attempt_1_gate",
           "route": "retry"
+        },
+        "loop": {
+          "loop": "attempt",
+          "round": 2,
+          "step": "resolve"
         },
         "agentTools": []
       },
       {
-        "id": "compare_2",
+        "id": "attempt_2_compare",
         "type": "script",
         "deps": [
+          "attempt_2_resolve",
           "base_run",
           "head_run",
           "merge_attempt",
-          "resolve_2",
           "triage"
         ],
         "dataDeps": [
+          "attempt_2_resolve",
           "base_run",
           "head_run",
           "merge_attempt",
-          "resolve_2",
           "triage"
         ],
         "def": {
-          "id": "compare_2",
+          "id": "attempt_2_compare",
           "type": "script",
-          "description": "The same comparison for the second attempt.",
+          "description": "Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.",
           "runtime": "python",
           "entrypoint": "scripts/compare.py",
           "input": {
-            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_2.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_2.output.workspace.files}"
+            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_2_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_2_resolve.output.workspace.files}"
           },
           "output_schema": "schemas/compare.json",
           "limits": {
@@ -719,27 +757,32 @@
           }
         },
         "timeoutMs": 120000,
-        "maxAttempts": 3
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 2,
+          "step": "compare"
+        }
       },
       {
-        "id": "review_2",
+        "id": "attempt_2_review",
         "type": "agent",
         "deps": [
-          "compare_2",
+          "attempt_2_compare",
+          "attempt_2_resolve",
           "pr",
-          "resolve_2",
           "triage"
         ],
         "dataDeps": [
-          "compare_2",
+          "attempt_2_compare",
+          "attempt_2_resolve",
           "pr",
-          "resolve_2",
           "triage"
         ],
         "def": {
-          "id": "review_2",
+          "id": "attempt_2_review",
           "type": "agent",
-          "description": "The independent review of the second attempt.",
+          "description": "An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).",
           "executor": "opencode",
           "profile": "conflict-reviewer@1",
           "workspace": {
@@ -752,11 +795,11 @@
             "credential": "github-read-token",
             "depth": 1,
             "from": {
-              "ref": "nodes.resolve_2.output.workspace"
+              "ref": "nodes.attempt_2_resolve.output.workspace"
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_2.output.summary, 'resolutions': nodes.resolve_2.output.resolutions, 'unresolved': nodes.resolve_2.output.unresolved}, 'check': nodes.compare_2.output, 'diff': nodes.resolve_2.output.workspace.diff, 'diff_truncated': nodes.resolve_2.output.workspace.diff_truncated}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.attempt_2_resolve.output.summary, 'resolutions': nodes.attempt_2_resolve.output.resolutions, 'unresolved': nodes.attempt_2_resolve.output.unresolved}, 'check': nodes.attempt_2_compare.output, 'diff': nodes.attempt_2_resolve.output.workspace.diff, 'diff_truncated': nodes.attempt_2_resolve.output.workspace.diff_truncated}"
           },
           "output_schema": "schemas/review.json",
           "timeout": "20m",
@@ -766,25 +809,30 @@
         },
         "timeoutMs": 1200000,
         "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 2,
+          "step": "review"
+        },
         "agentTools": []
       },
       {
-        "id": "refute_2",
+        "id": "attempt_2_refute",
         "type": "agent",
         "deps": [
-          "pr",
-          "resolve_2",
-          "review_2"
+          "attempt_2_resolve",
+          "attempt_2_review",
+          "pr"
         ],
         "dataDeps": [
-          "pr",
-          "resolve_2",
-          "review_2"
+          "attempt_2_resolve",
+          "attempt_2_review",
+          "pr"
         ],
         "def": {
-          "id": "refute_2",
+          "id": "attempt_2_refute",
           "type": "agent",
-          "description": "Try to refute the second review's critical and major findings.",
+          "description": "Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).",
           "executor": "opencode",
           "profile": "conflict-refuter@1",
           "workspace": {
@@ -797,11 +845,11 @@
             "credential": "github-read-token",
             "depth": 1,
             "from": {
-              "ref": "nodes.resolve_2.output.workspace"
+              "ref": "nodes.attempt_2_resolve.output.workspace"
             }
           },
           "input": {
-            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_2.output.workspace.diff, 'findings': nodes.review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.attempt_2_resolve.output.workspace.diff, 'findings': nodes.attempt_2_review.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
           },
           "output_schema": "schemas/verification.json",
           "timeout": "25m",
@@ -811,42 +859,228 @@
         },
         "timeoutMs": 1500000,
         "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 2,
+          "step": "refute"
+        },
         "agentTools": []
+      },
+      {
+        "id": "attempt_2_gate",
+        "type": "condition",
+        "deps": [
+          "attempt_2_compare",
+          "attempt_2_refute",
+          "attempt_2_resolve",
+          "attempt_2_review"
+        ],
+        "dataDeps": [
+          "attempt_2_compare",
+          "attempt_2_refute",
+          "attempt_2_resolve",
+          "attempt_2_review"
+        ],
+        "def": {
+          "id": "attempt_2_gate",
+          "type": "condition",
+          "description": "Decides how round 2 of attempt ends.",
+          "merge": "any",
+          "depends_on": [
+            "attempt_2_resolve",
+            "attempt_2_compare",
+            "attempt_2_review",
+            "attempt_2_refute"
+          ],
+          "expression": "(nodes.attempt_2_review.output.prompt_injection_detected || nodes.attempt_2_resolve.output.prompt_injection_detected) ? 'stop' : ((nodes.attempt_2_compare.output.ok && size(nodes.attempt_2_resolve.output.unresolved) == 0 && !nodes.attempt_2_review.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.attempt_2_refute.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence))) ? 'done' : 'exhausted')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "exhausted": []
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "attempt",
+          "round": 2,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "attempt",
+        "type": "loop",
+        "deps": [
+          "attempt_1_compare",
+          "attempt_1_gate",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review",
+          "attempt_2_compare",
+          "attempt_2_gate",
+          "attempt_2_refute",
+          "attempt_2_resolve",
+          "attempt_2_review"
+        ],
+        "dataDeps": [
+          "attempt_1_compare",
+          "attempt_1_refute",
+          "attempt_1_resolve",
+          "attempt_1_review",
+          "attempt_2_compare",
+          "attempt_2_refute",
+          "attempt_2_resolve",
+          "attempt_2_review"
+        ],
+        "def": {
+          "id": "attempt",
+          "type": "loop",
+          "description": "Resolve the hunks the rules left, then check, review and try to refute the result. A rejected first attempt gets one more, on a stronger model.",
+          "merge": "any",
+          "depends_on": [
+            "attempt_1_gate",
+            "attempt_2_gate"
+          ],
+          "max_iterations": 2,
+          "on_max": "continue",
+          "reasons": {
+            "stop": "An agent reported text that tried to instruct it",
+            "done": "The check passed or is inconclusive, nothing is unresolved and no critical or major finding was confirmed"
+          },
+          "rounds": [
+            {
+              "gate": "attempt_1_gate",
+              "required": [
+                "attempt_1_resolve",
+                "attempt_1_compare",
+                "attempt_1_review",
+                "attempt_1_refute"
+              ],
+              "steps": {
+                "resolve": {
+                  "ref": "nodes.attempt_1_resolve.output"
+                },
+                "compare": {
+                  "ref": "nodes.attempt_1_compare.output"
+                },
+                "review": {
+                  "ref": "nodes.attempt_1_review.output"
+                },
+                "refute": {
+                  "ref": "nodes.attempt_1_refute.output"
+                }
+              }
+            },
+            {
+              "gate": "attempt_2_gate",
+              "required": [
+                "attempt_2_resolve",
+                "attempt_2_compare",
+                "attempt_2_review",
+                "attempt_2_refute"
+              ],
+              "steps": {
+                "resolve": {
+                  "ref": "nodes.attempt_2_resolve.output"
+                },
+                "compare": {
+                  "ref": "nodes.attempt_2_compare.output"
+                },
+                "review": {
+                  "ref": "nodes.attempt_2_review.output"
+                },
+                "refute": {
+                  "ref": "nodes.attempt_2_refute.output"
+                }
+              }
+            }
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "count": {
+              "type": "integer"
+            },
+            "exited": {
+              "type": "boolean"
+            },
+            "last": {
+              "type": "object",
+              "properties": {
+                "resolve": {},
+                "compare": {},
+                "review": {},
+                "refute": {}
+              }
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "round": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "object",
+                    "properties": {
+                      "resolve": {},
+                      "compare": {},
+                      "review": {},
+                      "refute": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
       },
       {
         "id": "finalize",
         "type": "script",
         "deps": [
-          "compare_1",
-          "compare_2",
-          "refute_1",
-          "refute_2",
-          "resolve_1",
-          "resolve_2",
-          "review_1",
-          "review_2",
+          "attempt",
           "triage"
         ],
         "dataDeps": [
-          "compare_1",
-          "compare_2",
-          "refute_1",
-          "refute_2",
-          "resolve_1",
-          "resolve_2",
-          "review_1",
-          "review_2",
+          "attempt",
           "triage"
         ],
         "def": {
           "id": "finalize",
           "type": "script",
-          "description": "Take the last attempt that ran, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.",
+          "description": "Take the last attempt, or none if a conflict was set aside, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.",
           "runtime": "python",
           "entrypoint": "scripts/finalize.py",
           "merge": "any",
           "input": {
-            "map": "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': [{'resolution': has(nodes.resolve_1) ? nodes.resolve_1.output : null, 'compare': has(nodes.compare_1) ? nodes.compare_1.output : null, 'review': has(nodes.review_1) ? nodes.review_1.output : null, 'checks': has(nodes.refute_1) ? nodes.refute_1.output.checks : []}, {'resolution': has(nodes.resolve_2) ? nodes.resolve_2.output : null, 'compare': has(nodes.compare_2) ? nodes.compare_2.output : null, 'review': has(nodes.review_2) ? nodes.review_2.output : null, 'checks': has(nodes.refute_2) ? nodes.refute_2.output.checks : []}]}"
+            "map": "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': has(nodes.attempt) ? nodes.attempt.output.rounds.map(r, {'resolution': r.steps.resolve, 'compare': r.steps.compare, 'review': r.steps.review, 'checks': r.steps.refute.checks}) : []}"
           },
           "output_schema": "schemas/finalize.json",
           "limits": {
@@ -1112,32 +1346,34 @@
         "head_run": "output of tainted agent head_run",
         "triage": "output of tainted agent merge_attempt",
         "triage_gate": "output of tainted agent merge_attempt",
-        "resolve_1": "output of tainted agent resolve_1",
-        "compare_1": "output of tainted agent base_run",
-        "review_1": "output of tainted agent review_1",
-        "refute_1": "output of tainted agent refute_1",
-        "gate_1": "output of tainted agent base_run",
-        "resolve_2": "output of tainted agent resolve_2",
-        "compare_2": "output of tainted agent base_run",
-        "review_2": "output of tainted agent review_2",
-        "refute_2": "output of tainted agent refute_2",
-        "finalize": "output of tainted agent base_run",
-        "ship_gate": "output of tainted agent base_run",
-        "push_branch": "output of tainted agent base_run",
-        "open_pr": "output of tainted agent base_run",
-        "announce": "output of tainted agent base_run",
-        "give_up": "output of tainted agent base_run"
+        "attempt_1_resolve": "output of tainted agent attempt_1_resolve",
+        "attempt_1_compare": "output of tainted agent attempt_1_resolve",
+        "attempt_1_review": "output of tainted agent attempt_1_review",
+        "attempt_1_refute": "output of tainted agent attempt_1_refute",
+        "attempt_1_gate": "output of tainted agent attempt_1_resolve",
+        "attempt_2_resolve": "output of tainted agent attempt_2_resolve",
+        "attempt_2_compare": "output of tainted agent attempt_2_resolve",
+        "attempt_2_review": "output of tainted agent attempt_2_review",
+        "attempt_2_refute": "output of tainted agent attempt_2_refute",
+        "attempt_2_gate": "output of tainted agent attempt_2_resolve",
+        "attempt": "output of tainted agent attempt_1_resolve",
+        "finalize": "output of tainted agent attempt_1_resolve",
+        "ship_gate": "output of tainted agent attempt_1_resolve",
+        "push_branch": "output of tainted agent attempt_1_resolve",
+        "open_pr": "output of tainted agent attempt_1_resolve",
+        "announce": "output of tainted agent attempt_1_resolve",
+        "give_up": "output of tainted agent attempt_1_resolve"
       },
       "tainted": {
         "merge_attempt": "reads a cloned repository (its files are untrusted)",
         "base_run": "reads a cloned repository (its files are untrusted)",
         "head_run": "reads a cloned repository (its files are untrusted)",
-        "resolve_1": "reads a cloned repository (its files are untrusted)",
-        "review_1": "reads a cloned repository (its files are untrusted)",
-        "refute_1": "reads a cloned repository (its files are untrusted)",
-        "resolve_2": "reads a cloned repository (its files are untrusted)",
-        "review_2": "reads a cloned repository (its files are untrusted)",
-        "refute_2": "reads a cloned repository (its files are untrusted)"
+        "attempt_1_resolve": "reads a cloned repository (its files are untrusted)",
+        "attempt_1_review": "reads a cloned repository (its files are untrusted)",
+        "attempt_1_refute": "reads a cloned repository (its files are untrusted)",
+        "attempt_2_resolve": "reads a cloned repository (its files are untrusted)",
+        "attempt_2_review": "reads a cloned repository (its files are untrusted)",
+        "attempt_2_refute": "reads a cloned repository (its files are untrusted)"
       },
       "paths": []
     }

@@ -28,7 +28,7 @@ describe('pr-conflict-resolver example', () => {
   it('is listed by the marketplace with its steps and tools', () => {
     const e = loadExample('pr-conflict-resolver')!;
     expect(e.name).toBe('Pull request conflict resolver');
-    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'merge_attempt', 'triage', 'resolve_1', 'compare_1', 'review_1', 'refute_1', 'resolve_2', 'finalize', 'release_approval', 'push_branch']));
+    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'merge_attempt', 'triage', 'attempt', 'finalize', 'release_approval', 'push_branch']));
     expect((e.config.tools ?? []).map((t) => t.id)).toEqual(['github.get-pull-request', 'github.push-branch', 'github.create-pull-request', 'github.comment-on-pr']);
   });
 
@@ -42,6 +42,30 @@ describe('pr-conflict-resolver example', () => {
     // On the skip route all three are skipped with merge_attempt; only the report runs.
     const wf = parse(readFileSync(`${PKG}/workflow.yaml`, 'utf8'));
     expect(wf.nodes.find((n: any) => n.id === 'eligible').routes).toEqual({ ok: ['merge_attempt'], skip: ['skip_report'] });
+  });
+
+  it('writes the two attempts out as one loop: the second on a stronger model, continuing from the first', () => {
+    const { result } = load();
+    const ids = result.plan!.nodes.map((n) => n.id);
+    for (const round of [1, 2]) for (const step of ['resolve', 'compare', 'review', 'refute', 'gate']) expect(ids).toContain(`attempt_${round}_${step}`);
+    expect(ids).not.toContain('attempt_3_resolve');
+    const def = (id: string) => result.plan!.nodes.find((n) => n.id === id)!.def as any;
+    expect(def('attempt_1_resolve').profile).toBe('conflict-resolver@1');
+    expect(def('attempt_2_resolve').profile).toBe('conflict-resolver@2');
+    expect(def('attempt_1_resolve').workspace.from).toEqual({ ref: 'nodes.triage.output.change' });
+    expect(def('attempt_2_resolve').workspace.from).toEqual({ ref: 'nodes.attempt_1_resolve.output.workspace' });
+    expect(def('attempt_2_review').workspace.from).toEqual({ ref: 'nodes.attempt_2_resolve.output.workspace' });
+    expect(def('attempt_2_resolve').input.map).toContain('nodes.attempt_1_review.output.findings');
+    expect(def('attempt_1_resolve').input.map).toContain("'rejected_attempt': null");
+    // A rejected attempt goes on, an injection stops; the triage route leads into the first round.
+    expect(Object.keys(def('attempt_1_gate').routes).sort()).toEqual(['done', 'no_progress', 'retry', 'stop']);
+    expect(def('attempt_1_gate').routes.retry).toEqual(['attempt_2_resolve']);
+    expect(def('triage_gate').routes.go).toEqual(['attempt_1_resolve']);
+    expect(def('attempt_1_gate').expression.indexOf("'stop'")).toBeLessThan(def('attempt_1_gate').expression.indexOf("'done'"));
+    // Everything after the loop reads the join. No later step can name a round.
+    expect(def('finalize').input.map).toContain('nodes.attempt.output.rounds');
+    expect(JSON.stringify(result.plan!.nodes.filter((n) => !n.loop && n.id !== 'attempt').map((n) => n.def))).not.toMatch(/nodes\.attempt_\d_/);
+    expect(result.diagnostics.filter((d) => d.code.startsWith('loop_'))).toEqual([]);
   });
 
   it('requires evidence for the prompt injection flag in both agent reports', () => {
@@ -59,7 +83,9 @@ describe('pr-conflict-resolver example', () => {
   it('keeps writes behind an approval and a guard, and every agent on a read-only token', () => {
     const wf = parse(readFileSync(`${PKG}/workflow.yaml`, 'utf8'));
     const nodes: any[] = wf.nodes;
-    for (const n of nodes.filter((x) => x.type === 'agent')) expect(n.workspace.credential).toBe('github-read-token');
+    const agents = [...nodes, ...nodes.flatMap((x) => x.body ?? [])].filter((x) => x.type === 'agent');
+    expect(agents.map((n) => n.id)).toEqual(expect.arrayContaining(['merge_attempt', 'resolve', 'review', 'refute']));
+    for (const n of agents) expect(n.workspace.credential).toBe('github-read-token');
     const writes = nodes.filter((n) => n.type === 'tool' && /push-branch|create-pull-request|comment-on-pr/.test(n.tool));
     expect(writes.map((n) => n.id)).toEqual(['push_branch', 'open_pr', 'announce', 'give_up']);
     for (const n of writes) expect(String(n.guard)).toMatch(/args\.repo == inputs\.repo/);

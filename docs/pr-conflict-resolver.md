@@ -40,6 +40,14 @@ Run side by side, the two test suites loaded the machine enough that the full-hi
 dropped its connection; the test snapshots also should not compete for the machine. On the skip route all three
 are skipped with `merge_attempt`.
 
+## Attempts
+
+The resolver, the comparison, the reviewer and the refuter are the body of one loop, `attempt` (see
+`docs/loops-and-subworkflows.md`), at most two rounds. A rejected first attempt gets a second on a stronger model,
+which starts from the first attempt's files and is told why it was rejected. Everything after the loop reads
+`nodes.attempt.output`, so what `finalize` ships and what the approver sees is always the last attempt. When `triage`
+sets a conflict aside the loop is skipped, and `finalize` runs with no attempts to say why.
+
 ## The prompt-injection flag
 
 The resolver and the reviewer set `prompt_injection_detected` only for text that addresses an AI agent or tool, or
@@ -47,7 +55,8 @@ tries to change its task (its instructions, output or verdict, what it reads or 
 human readers, commands and evidence records in a description, code, comments, docs, fixtures and a project's own
 agent prompts do not count, unless they try to change the task. When unsure, the agent sets it.
 
-The flag stays a hard stop: `gate_1`, `gate_2` and `finalize.py` stop on any `true`, with or without evidence.
+The flag stays a hard stop: the `attempt` loop's first exit rule and `finalize.py` stop on any `true`, with or
+without evidence.
 Each agent also quotes the text and where it found it in `prompt_injection_evidence` (up to five items). That text is
 untrusted, so it is not forwarded to another agent and not put in the pull request comment; read it in the step's
 stored output with `azhi inspect`.
