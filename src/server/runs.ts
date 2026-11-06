@@ -8,6 +8,8 @@ import { tx } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { buildRunPlan, type RunPlanReport } from '../plan/run-plan.js';
+import type { ExecutionPlan } from '../compiler/plan.js';
+import { loopRounds } from '../plan/loop-rounds.js';
 import { checkResume } from '../plan/resume-check.js';
 import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog, loadToolRevision } from './catalog.js';
@@ -251,9 +253,11 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
       [workspaceId, runId],
     ),
   ]);
+  const version = (await ctx.pool.query(`SELECT plan FROM workflow_versions WHERE id=$1`, [run.workflow_version_id])).rows[0] as { plan: ExecutionPlan } | undefined;
   return {
     run,
     children: children.rows,
+    loops: version ? loopRounds(version.plan, attempts.rows, usage.rows) : [],
     plan: (planned.rows[0]?.data as RunPlanReport | undefined) ?? null,
     approvals: requests.rows.map((r) => {
       const d = decisions.rows.find((x) => x.node_id === r.node_id);

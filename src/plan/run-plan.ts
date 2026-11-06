@@ -234,6 +234,11 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
       }
       case 'parallel':
       case 'loop':
+        if ('rounds' in n.def) {
+          // The join needs no worker: each round's steps are in the plan with their own requirements.
+          np.coverage.push({ action: 'rounds', enforcement: 'enforced', detail: `at most ${(n.def as { max_iterations: number }).max_iterations} rounds, each step listed in this plan and able to run once per round; the first exit rule that holds ends the loop` });
+          break;
+        }
         if (n.tool) np.requirements.push(toolRequirement(n, n.tool.ref));
         else np.requirements.push(...workerRequirements((n.def as unknown as { node: ScriptNode }).node.runtime));
         np.coverage.push(

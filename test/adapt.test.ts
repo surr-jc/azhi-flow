@@ -39,6 +39,18 @@ describe('adaptWorkflow', () => {
     expect(v.definition.nodes[0].executor).toBeUndefined();
   });
 
+  it('changes a step of a loop in the loop body, where the definition has it', async () => {
+    const step = { type: 'agent', profile: 'review@1' };
+    const v: any = {
+      definition: { id: 'wf', nodes: [{ id: 'attempt', type: 'loop', max_iterations: 2, body: [{ id: 'fix', ...step }], exit: [] }] },
+      plan: { nodes: [1, 2].map((round) => ({ id: `attempt_${round}_fix`, type: 'agent', def: { id: `attempt_${round}_fix`, ...step }, loop: { loop: 'attempt', round, step: 'fix' } })) },
+    };
+    const r = await adapt(v, ['github-copilot']);
+    expect(r.steps.map((s) => s.status)).toEqual(['changed', 'changed']);
+    expect((r.definition as any).nodes[0].body[0].executor).toBe('opencode');
+    expect(v.definition.nodes[0].body[0].executor).toBeUndefined();
+  });
+
   it('writes a chosen provider and model, and drops executor when model-agent suffices', async () => {
     const r = await adapt(version([{ id: 'a', type: 'agent', profile: 'review@1', executor: 'opencode' }]), ['anthropic', 'openai'], { provider: 'openai', model: 'gpt-5' });
     expect((r.definition as any).model_defaults).toEqual({ provider: 'openai', name: 'gpt-5' });

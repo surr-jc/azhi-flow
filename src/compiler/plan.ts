@@ -19,6 +19,8 @@ export interface PlanNode {
   maxAttempts: number;
   tool?: { ref: string; effect: EffectClass; revision?: number; outputTrusted: boolean; safeForTainted: boolean };
   route?: { condition: string; route: string };
+  /** Only for a step written out from a loop's body: the loop, the round (from 1), and the body step or `gate`. */
+  loop?: { loop: string; round: number; step: string };
   /** Agent nodes: the tools the agent may call, as registered. */
   agentTools?: Array<{ ref: string; effect: EffectClass; outputTrusted: boolean; safeForTainted: boolean; revision?: number }>;
 }

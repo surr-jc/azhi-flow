@@ -149,6 +149,43 @@ export interface LoopNode extends NodeCommon {
   on_max?: 'fail' | 'continue';
 }
 
+export interface LoopExitRule {
+  /** CEL over the round's steps and its state. The first rule that holds ends the loop; none means another round. */
+  when: string;
+  outcome: 'done' | 'stop' | 'no_progress';
+  /** Fixed text written by the author: it never carries ticket or repository text. */
+  reason?: string;
+}
+
+/**
+ * Repeats several steps, agents included, as a loop the compiler writes out: every round becomes ordinary steps and a
+ * gate, and this node becomes the join later steps read (see compiler/loops.ts). It never reaches the interpreter.
+ */
+export interface LoopBlockNode extends NodeCommon {
+  type: 'loop';
+  max_iterations: number;
+  on_max?: 'fail' | 'continue';
+  /** The state of round 1. Inside the body, `state.<key>` is replaced by its value for that round. */
+  initial?: Record<string, Value>;
+  body: NodeDef[];
+  /** Per round (1-based), per step: fields that replace the step's own, for example a stronger profile. */
+  overrides?: Record<number, Record<string, Record<string, unknown>>>;
+  exit: LoopExitRule[];
+  /** The state of the next round, reading this round's steps. A key left out keeps its value. */
+  next?: Record<string, Value>;
+}
+
+/** What a LoopBlockNode compiles to, once its rounds have settled. Only the compiler writes one. */
+export interface LoopJoinNode extends NodeCommon {
+  type: 'loop';
+  merge: 'any';
+  depends_on: string[];
+  max_iterations: number;
+  on_max?: 'fail' | 'continue';
+  reasons: Record<string, string>;
+  rounds: Array<{ gate: string; steps: Record<string, Value> }>;
+}
+
 export interface SubworkflowNode extends NodeCommon {
   type: 'subworkflow';
   workflow: string;
@@ -191,6 +228,8 @@ export type NodeDef =
   | ConditionNode
   | ParallelNode
   | LoopNode
+  | LoopBlockNode
+  | LoopJoinNode
   | SubworkflowNode
   | ApprovalNode
   | ReportNode

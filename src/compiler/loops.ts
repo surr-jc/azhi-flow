@@ -1,5 +1,7 @@
 import type { Diagnostic } from '../definition/load.js';
-import { isValueExpr, type NodeDef, type Value, type WorkflowDefinition } from '../definition/types.js';
+import { isValueExpr, type LoopBlockNode, type LoopJoinNode, type NodeDef, type Value, type WorkflowDefinition } from '../definition/types.js';
+
+export type { LoopBlockNode, LoopExitRule, LoopJoinNode } from '../definition/types.js';
 
 /**
  * Multi-step loops. A loop with a `body` is written out when the workflow is compiled: every round becomes ordinary
@@ -8,46 +10,6 @@ import { isValueExpr, type NodeDef, type Value, type WorkflowDefinition } from '
  * cost agent runs, and the cap is what lets the plan show every step that could run.
  */
 export const LOOP_OUTCOMES = ['done', 'stop', 'no_progress'] as const;
-export type LoopOutcome = (typeof LOOP_OUTCOMES)[number];
-
-export interface LoopExitRule {
-  /** CEL over the round's steps and its state. The first rule that holds ends the loop; none means another round. */
-  when: string;
-  outcome: LoopOutcome;
-  /** Fixed text written by the author: it never carries ticket or repository text. */
-  reason?: string;
-}
-
-/** A loop as the author writes it. */
-export interface LoopBlockNode {
-  id: string;
-  type: 'loop';
-  description?: string;
-  depends_on?: string[];
-  max_iterations: number;
-  on_max?: 'fail' | 'continue';
-  /** The state of round 1. Inside the body, `state.<key>` is replaced by its value for that round. */
-  initial?: Record<string, Value>;
-  body: NodeDef[];
-  /** Per round (1-based), per step: fields that replace the step's own, for example a stronger profile. */
-  overrides?: Record<number, Record<string, Record<string, unknown>>>;
-  exit: LoopExitRule[];
-  /** The state of the next round, reading this round's steps. A key left out keeps its value. */
-  next?: Record<string, Value>;
-}
-
-/** What the loop becomes: the node later steps read, once the rounds have settled. */
-export interface LoopJoinNode {
-  id: string;
-  type: 'loop';
-  description?: string;
-  merge: 'any';
-  depends_on: string[];
-  max_iterations: number;
-  on_max?: 'fail' | 'continue';
-  reasons: Record<string, string>;
-  rounds: Array<{ gate: string; steps: Record<string, Value> }>;
-}
 
 export interface LoopOrigin {
   loop: string;
@@ -302,6 +264,8 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
   const entriesOf = new Map<string, string[]>();
   const generatedBy = new Map<string, string>();
   const expanded = new Map<string, Array<NodeDef | LoopJoinNode>>();
+  const roundContexts: Record<string, Record<string, Value>> = {};
+  const usedByBody = new Set<string>();
 
   for (const raw of authored.nodes) {
     if (!isBlock(raw)) continue;
@@ -309,10 +273,11 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
     const bad = (code: string, message: string, path?: string) => err(code, message, loop.id, path);
     for (const f of IGNORED_FIELDS) if ((loop as unknown as Record<string, unknown>)[f] !== undefined) bad('loop_invalid', `loop '${loop.id}' cannot set '${f}': it would apply to no step. Set it on the steps of the body`, f);
     if (!loop.body?.length) bad('loop_invalid', `loop '${loop.id}' has no steps in its body`, 'body');
-    if (!loop.exit?.length) bad('loop_invalid', `loop '${loop.id}' has no exit rules, so nothing could ever end it early`, 'exit');
+    if (!Array.isArray(loop.exit) || !loop.exit.length) bad('loop_invalid', `loop '${loop.id}' needs a list of exit rules, or nothing could ever end it early`, 'exit');
+    if (loop.initial !== undefined && (loop.initial === null || typeof loop.initial !== 'object' || Array.isArray(loop.initial) || isValueExpr(loop.initial as Value))) bad('loop_invalid', `the initial of loop '${loop.id}' must be an object of keys, each a ref, a cel or a literal`, 'initial');
     if (!Number.isInteger(loop.max_iterations) || loop.max_iterations < 1) bad('loop_invalid', `loop '${loop.id}' needs a max_iterations of 1 or more`, 'max_iterations');
     const reasons: Record<string, string> = {};
-    for (const rule of loop.exit ?? []) {
+    for (const rule of Array.isArray(loop.exit) ? loop.exit : []) {
       if (!LOOP_OUTCOMES.includes(rule.outcome)) bad('loop_invalid', `outcome '${String(rule.outcome)}' is not one of: ${LOOP_OUTCOMES.join(', ')}. Another round is what happens when no rule holds`, 'exit');
       if (rule.reason === undefined) continue;
       if (reasons[rule.outcome] !== undefined && reasons[rule.outcome] !== rule.reason) bad('loop_reason_conflict', `outcome '${rule.outcome}' has two different reasons, and the round records only the outcome. Use one reason`, 'exit');
@@ -330,7 +295,6 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
       seen.add(step.id);
       if (step.id === 'gate') invalid('loop_step_invalid', `'gate' is the name of each round's generated gate; rename the step`);
       if (!BODY_TYPES.has(step.type)) invalid('loop_body_unsupported', `a '${step.type}' step cannot be in a loop body yet`);
-      if ((step as { context?: unknown }).context !== undefined) invalid('loop_body_unsupported', `step '${step.id}' uses a context, which a loop body does not support yet; write its input out`);
       if (outerIds.has(step.id)) invalid('loop_step_shadows', `step '${step.id}' in loop '${loop.id}' has the same id as a step outside it, so 'nodes.${step.id}' would be ambiguous`);
     }
     for (const round of Object.keys(loop.overrides ?? {})) {
@@ -363,8 +327,20 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
         for (const members of Object.values(step.routes)) for (const m of members) if (ids.has(m)) waiting.add(m);
       }
       const stepNodes = body.map((step) => {
-        const merged = { ...step, ...(loop.overrides?.[round]?.[step.id] ?? {}) } as NodeDef;
-        const node = rewriteStep(merged, ids.get(step.id)!, { ids, state, iteration, touched: () => waiting.add(step.id), problem });
+        const merged = { ...step, ...(loop.overrides?.[round]?.[step.id] ?? {}) } as NodeDef & { context?: string[] };
+        const stepScope: RoundScope = { ids, state, iteration, touched: () => waiting.add(step.id), problem };
+        // A bundle can read the round's steps and state, so each round has its own copy. An unknown name stays, and is reported where bundles are.
+        if (merged.context) {
+          merged.context = merged.context.map((name) => {
+            const bundle = authored.contexts?.[name];
+            if (!bundle) return name;
+            const copy = `${loop.id}_${round}_${name}`;
+            roundContexts[copy] = rewriteRecord(bundle, stepScope);
+            usedByBody.add(name);
+            return copy;
+          });
+        }
+        const node = rewriteStep(merged, ids.get(step.id)!, stepScope);
         origins.set(node.id, { loop: loop.id, round, step: step.id });
         return node;
       });
@@ -444,5 +420,9 @@ export function expandLoops(authored: WorkflowDefinition): LoopExpansion {
     const routes = Object.fromEntries(Object.entries(n.routes).map(([route, members]) => [route, members.flatMap((m) => entriesOf.get(m) ?? [m])]));
     return [{ ...n, routes }];
   });
-  return { def: { ...authored, nodes }, origins, diagnostics };
+  // A bundle only rounds use is replaced by their copies, so it is not reported as unused.
+  const outside = new Set(nodes.flatMap((n) => (n as { context?: string[] }).context ?? []));
+  const kept = Object.entries(authored.contexts ?? {}).filter(([name]) => !usedByBody.has(name) || outside.has(name));
+  const contexts = { ...Object.fromEntries(kept), ...roundContexts };
+  return { def: { ...authored, nodes, ...(Object.keys(contexts).length ? { contexts } : {}) }, origins, diagnostics };
 }

@@ -24,6 +24,7 @@ import {
 import { compatible, projectSchema, resolvePath, schemaOfLiteral, typesOf } from './schema-path.js';
 import { analyseTaint, type DatasetInfo } from './taint.js';
 import { expandContexts, skipCauses, skipCoupling } from './contexts.js';
+import { expandLoops } from './loops.js';
 
 export interface CompileOptions {
   pkg?: PackageSource;
@@ -79,6 +80,8 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'parallel':
       return { for_each: n.for_each, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'loop':
+      if ('rounds' in n) return { rounds: n.rounds as unknown as Value };
+      if ('body' in n) return {};
       return { initial: n.initial, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'approval':
       return { message: n.message, payload: n.payload };
@@ -99,8 +102,8 @@ function nodeCel(n: NodeDef): Array<{ path: string; text: string }> {
   const out: Array<{ path: string; text: string }> = [];
   if (n.type === 'condition') out.push({ path: 'expression', text: n.expression });
   if ((n.type === 'notify' || n.type === 'tool') && n.guard) out.push({ path: 'guard', text: n.guard });
-  if (n.type === 'loop') out.push({ path: 'exit', text: n.exit });
-  if (n.type === 'parallel' || n.type === 'loop') {
+  if (n.type === 'parallel' || (n.type === 'loop' && 'node' in n)) {
+    if (n.type === 'loop') out.push({ path: 'exit', text: n.exit });
     const guard = (n.node as { guard?: string }).guard;
     if (guard) out.push({ path: 'node.guard', text: guard });
   }
@@ -113,9 +116,12 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
   const warn = (code: string, message: string, node?: string, path?: string) => diags.push({ severity: 'warning', code, message, node, path });
   const supported = opts.supportedNodeTypes ?? ALPHA_NODE_TYPES;
 
-  // Context bundles are written into the steps' inputs first, so everything below (refs, types, ordering, taint)
-  // sees an ordinary input. `authored` stays what the definition hash and signing cover.
-  const expansion = expandContexts(authored);
+  // Multi-step loops are written out first, then context bundles into the steps' inputs, so everything below (refs,
+  // types, ordering, taint) sees ordinary steps with ordinary inputs. `authored` stays what the definition hash and signing cover.
+  const loops = expandLoops(authored);
+  diags.push(...loops.diagnostics);
+  if (loops.diagnostics.some((d) => d.severity === 'error')) return { ok: false, diagnostics: diags };
+  const expansion = expandContexts(loops.def);
   const def = expansion.def;
   diags.push(...expansion.diagnostics);
 
@@ -148,7 +154,8 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
   const dataDeps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set<string>()]));
   for (const n of def.nodes) {
     for (const d of n.depends_on ?? []) if (!byId.has(d)) err('unknown_dependency', `depends_on '${d}' is not a node`, n.id);
-    if (n.merge && n.type === 'condition') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
+    // Only the gate a loop generates may merge: it must still decide when an inner route skipped part of its round.
+    if (n.merge && n.type === 'condition' && loops.origins.get(n.id)?.step !== 'gate') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
   }
   const routeOf = new Map<string, { condition: string; route: string }>();
   for (const n of def.nodes) {
@@ -270,7 +277,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
     return undefined;
   };
 
-  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || n.type === 'loop') && n.node.type === 'tool'))) {
+  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || (n.type === 'loop' && 'node' in n)) && n.node.type === 'tool'))) {
     warn('catalog_unavailable', 'tool catalog not available: tool references, arguments and projections were not checked');
   }
 
@@ -453,6 +460,24 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         break;
       }
       case 'loop': {
+        if ('rounds' in n) {
+          // Later steps are type-checked against the steps of the body. A step whose round skipped it is null.
+          const stepOf = (ref: Value) => outputs.get((ref as { ref: string }).ref.split('.')[1]!) ?? {};
+          const steps = { type: 'object', properties: Object.fromEntries(Object.entries(n.rounds[0]!.steps).map(([k, v]) => [k, stepOf(v)])) };
+          outputSchema = {
+            type: 'object',
+            properties: {
+              outcome: { type: 'string' },
+              reason: { type: ['string', 'null'] },
+              count: { type: 'integer' },
+              exited: { type: 'boolean' },
+              last: steps,
+              rounds: { type: 'array', items: { type: 'object', properties: { round: { type: 'integer' }, outcome: { type: 'string' }, steps } } },
+            },
+          };
+          break;
+        }
+        if ('body' in n) break;
         let inner: JsonSchema | undefined;
         if (n.node.type === 'tool') inner = checkTool(n.node.tool, n.node.arguments, n.node.project, 'node.arguments');
         else if (n.node.type === 'script') {
@@ -494,6 +519,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
       maxAttempts: n.retry?.max_attempts ?? 3,
       ...(toolInfo ? { tool: toolInfo } : {}),
       ...(routeOf.has(id) ? { route: routeOf.get(id)! } : {}),
+      ...(loops.origins.has(id) ? { loop: loops.origins.get(id)! } : {}),
       ...(agentToolsById.has(id) ? { agentTools: agentToolsById.get(id)! } : {}),
     });
   }
@@ -521,7 +547,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
     const ownDeps = new Map<string, Set<string>>();
     const ownData = new Map<string, Set<string>>();
     for (const c of consumers) {
-      const original = authored.nodes.find((x) => x.id === c)!;
+      const original = loops.def.nodes.find((x) => x.id === c)!;
       const data = new Set<string>();
       for (const v of Object.values(nodeValues(original))) for (const t of targetsOf(v)) data.add(t);
       ownData.set(c, data);

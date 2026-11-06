@@ -176,6 +176,20 @@ describe('expanding a loop', () => {
     expect(n.get('attempt_2_resolve').depends_on).toBeUndefined();
   });
 
+  it('gives each round its own copy of a context, and drops one only rounds use', () => {
+    const d = { ...wf(loop({ initial: { hint: 'h' }, next: undefined, body: [script('resolve', "{'n': 1}"), script('review', '', { input: {}, context: ['round', 'shared'] })], exit: [{ when: 'nodes.review.output.ok', outcome: 'done' }] }), script('outside', '', { input: {}, context: ['shared'] })), contexts: { round: { change: { ref: 'nodes.resolve.output.diff' }, hint: { cel: "state.hint + '!'" } }, shared: { base: { ref: 'inputs.base' } }, unused: { x: 1 } } } as WorkflowDefinition;
+    const r = expandLoops(d);
+    expect(codes(r)).toEqual([]);
+    const n = byId(r.def);
+    expect(n.get('attempt_2_review').context).toEqual(['attempt_2_round', 'attempt_2_shared']);
+    expect(r.def.contexts!.attempt_2_round).toEqual({ change: { ref: 'nodes.attempt_2_resolve.output.diff' }, hint: { cel: "'h' + '!'" } });
+    expect(r.def.contexts!.round).toBeUndefined();
+    expect(r.def.contexts!.shared).toBeDefined();
+    expect(r.def.contexts!.unused).toBeDefined();
+    // A step that reads the round only through a bundle still waits inside the round.
+    expect(n.get('attempt_1_gate').routes.retry).toEqual(['attempt_2_resolve']);
+  });
+
   it('records where each generated step came from', () => {
     const { origins } = expandLoops(wf(loop()));
     expect(origins.get('attempt_2_review')).toEqual({ loop: 'attempt', round: 2, step: 'review' });
@@ -205,9 +219,6 @@ describe('what a loop cannot be', () => {
     for (const type of ['approval', 'notify', 'parallel', 'loop']) {
       expect(bad({ body: [{ id: 'x', type } as unknown as NodeDef] })).toContain('loop_body_unsupported');
     }
-  });
-  it('refuses a context in the body for now', () => {
-    expect(bad({ body: [script('x', '{}', { context: ['round'] })] })).toContain('loop_body_unsupported');
   });
   it('refuses an empty body, no exit and fields that would be ignored', () => {
     expect(bad({ body: [] })).toContain('loop_invalid');

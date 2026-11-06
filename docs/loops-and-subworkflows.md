@@ -33,8 +33,50 @@ Repeats one tool or script step, one iteration after another.
   iteration.
 - Taint: a loop over a tool is as trusted as that tool's output. A `guard` in the body runs before every
   call and counts as the write's gate, in a `parallel` body too; the compiler checks it like any other guard.
-- Not supported: agents as the loop body (an agent's transcript is keyed by node, not iteration),
-  and several steps in one body (use a subworkflow for that).
+- A `node` loop cannot hold an agent or several steps (an agent's transcript is keyed by node, not
+  iteration). Use a `body` for that.
+
+### Several steps: `body`
+
+Repeats several steps, agents included. The compiler writes the rounds out as ordinary steps, so taint
+checks, the run plan, the ledger and resume treat them like any other step, and a resumed run keeps the
+rounds that finished.
+
+```yaml
+- id: attempt
+  type: loop
+  max_iterations: 2
+  on_max: continue             # or fail; default fail
+  initial:
+    change: {ref: nodes.triage.output.change}
+    feedback: null
+  body:
+    - {id: resolve, type: agent, profile: resolver@1, workspace: {from: {ref: state.change}, ...}, input: {map: "{'feedback': state.feedback}"}, ...}
+    - {id: review, type: agent, profile: reviewer@1, ...}
+  overrides: {2: {resolve: {profile: resolver@2}}}
+  exit:                        # the first that holds ends the loop; none means another round
+    - {when: nodes.review.output.prompt_injection_detected, outcome: stop, reason: Prompt injection reported}
+    - {when: nodes.review.output.approved, outcome: done, reason: Review approved}
+  next:                        # the next round's state, reading this round; a key left out keeps its value
+    change: {ref: nodes.resolve.output.workspace}
+    feedback: {cel: nodes.review.output.findings}
+```
+
+- Each round becomes `attempt_1_resolve`, `attempt_2_resolve` and so on, plus a gate `attempt_1_gate` that
+  applies `exit`. Inside the body, `nodes.<step>` means this round's step, `state.<key>` this round's state and
+  `iteration` the 0-based round. In `exit`, `iteration` is the number of rounds completed.
+- Later steps read only `nodes.attempt.output`, never a round's steps: `{outcome, reason, count, exited, last, rounds}`.
+  `outcome` is `done`, `stop`, `no_progress` or `exhausted`. `last.<step>` is the output from the last round, null if
+  that round skipped the step. `rounds` lists every round that ran. A large result is stored as one artifact.
+- Out of rounds with `on_max: fail` fails the run with `contract_violation`. `stop` and `no_progress` do not fail it:
+  later steps decide. An `exit` rule that reads a step its round can skip needs its route checked first, as rules are
+  tried in order.
+- A plain `{ref: state.x}` stays a plain ref when `x` is one, so `workspace.from` works. `has(state.x)` works only
+  when `x` is a plain ref, and a rule or input can always compare it with `null`.
+- A `context` in the body gets its own copy per round, so a bundle can read the round's steps and state.
+- `GET /v1/runs/:id` returns `loops`: per round its outcome, fixed reason, step states and usage (null when unknown).
+  A failed run has it too. The reason is text the author wrote, never ticket or repository text.
+- Not supported in a body yet: approvals, notifications, `parallel` and nested loops.
 
 ## Subworkflow
 

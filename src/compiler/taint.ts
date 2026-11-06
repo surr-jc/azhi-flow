@@ -52,7 +52,7 @@ export function analyseTaint(nodes: PlanNode[], datasets: (ref: string) => Datas
   for (const n of nodes) {
     const upstream = n.dataDeps.find((d) => untrusted[d]);
     if (n.type === 'tool' && n.tool && !n.tool.outputTrusted) untrusted[n.id] = `output of ${n.tool.ref} is not marked trusted`;
-    else if ((n.type === 'parallel' || n.type === 'loop') && (n.def as ParallelNode).node.type === 'tool' && n.tool && !n.tool.outputTrusted) untrusted[n.id] = `output of ${n.tool.ref} is not marked trusted`;
+    else if ((n.type === 'parallel' || n.type === 'loop') && (n.def as Partial<ParallelNode>).node?.type === 'tool' && n.tool && !n.tool.outputTrusted) untrusted[n.id] = `output of ${n.tool.ref} is not marked trusted`;
     // A child run may call untrusted tools and agents the parent cannot see into, so what comes back is untrusted.
     else if (n.type === 'subworkflow') untrusted[n.id] = 'output of a subworkflow is not marked trusted';
     else if (n.type === 'retrieve') {
@@ -80,7 +80,7 @@ export function analyseTaint(nodes: PlanNode[], datasets: (ref: string) => Datas
     n.type === 'notify' || ((n.type === 'tool' || n.type === 'parallel' || n.type === 'loop') && n.tool !== undefined && n.tool.effect !== 'read');
   const gateOf = (n: PlanNode): Gate | null => {
     // A repeated tool call is guarded per call by its body's guard, which the compiler checks like any other.
-    const guard = n.type === 'notify' ? (n.def as NotifyNode).guard : n.type === 'tool' ? (n.def as ToolNode).guard : n.type === 'parallel' || n.type === 'loop' ? ((n.def as ParallelNode).node as Partial<ToolNode>).guard : undefined;
+    const guard = n.type === 'notify' ? (n.def as NotifyNode).guard : n.type === 'tool' ? (n.def as ToolNode).guard : n.type === 'parallel' || n.type === 'loop' ? ((n.def as Partial<ParallelNode>).node as Partial<ToolNode> | undefined)?.guard : undefined;
     if (guard) return 'guard';
     if (n.tool?.safeForTainted) return 'safe_for_tainted';
     return null;

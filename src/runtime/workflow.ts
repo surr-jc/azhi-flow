@@ -22,7 +22,7 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { Value, AgentNode, ApprovalNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
+import type { Value, AgentNode, ApprovalNode, LoopJoinNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
 import { parseDuration } from '../lib/duration.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
@@ -403,6 +403,35 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     return r.output;
   };
 
+  /**
+   * The end of a loop written out by the compiler: which rounds ran, read from their gates, with their steps' outputs.
+   * The outputs are opened next to the artifact store and the result kept there when large, so later steps can read
+   * into it and the rounds' contents stay out of workflow history.
+   */
+  const joinRounds = async (node: PlanNode, def: LoopJoinNode, s: ValueScope): Promise<{ output: unknown }> => {
+    const ran = def.rounds.filter((r) => status.nodes[r.gate]?.status === 'succeeded');
+    const final = ran[ran.length - 1];
+    if (!final) throw ApplicationFailure.create({ type: 'internal', message: `loop '${node.id}' has no finished round`, nonRetryable: true });
+    const outcome = status.nodes[final.gate]!.route!;
+    if (outcome === 'exhausted' && (def.on_max ?? 'fail') === 'fail') {
+      throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}' used all ${def.rounds.length} rounds without an exit rule holding`, nonRetryable: true });
+    }
+    // A step its round skipped is null, not missing.
+    const stepsOf = (r: LoopJoinNode['rounds'][number]) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => [k, status.nodes[(v as { ref: string }).ref.split('.')[1]!]?.status === 'succeeded' ? v : null]));
+    const value = {
+      outcome,
+      reason: def.reasons[outcome] ?? null,
+      count: ran.length,
+      exited: outcome !== 'exhausted',
+      last: stepsOf(final),
+      rounds: ran.map((r, i) => ({ round: i + 1, outcome: status.nodes[r.gate]!.route!, reason: def.reasons[status.nodes[r.gate]!.route!] ?? null, steps: stepsOf(r) })),
+    };
+    const named = new Set(ran.flatMap((r) => Object.values(r.steps).map((v) => (v as { ref: string }).ref.split('.')[1]!)));
+    const nodes = Object.fromEntries(Object.entries(s.nodes).filter(([id]) => named.has(id)));
+    const reads = Object.keys(nodes).filter((id) => isHandle(nodes[id]?.output));
+    return { output: await gateway(node).resolveValue({ workspaceId, value: value as never, scope: { ...s, nodes }, reads }) };
+  };
+
   const execute = async (node: PlanNode): Promise<{ output?: unknown; route?: string }> => {
     const s = scope();
     switch (node.type) {
@@ -484,6 +513,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         return { output: { items: results, completed, failed } };
       }
       case 'loop': {
+        if ('rounds' in node.def) return joinRounds(node, node.def as LoopJoinNode, s);
         const def = node.def as LoopNode;
         let state = resolveValue(def.initial, s);
         const iterations: unknown[] = [];

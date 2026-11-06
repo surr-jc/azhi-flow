@@ -92,29 +92,30 @@ export const workflowSchema = {
     nodes: {
       type: 'array',
       minItems: 1,
-      items: {
-        type: 'object',
-        required: ['id', 'type'],
-        properties: { type: { enum: ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'loop', 'subworkflow', 'approval', 'report', 'notify'] } },
-        allOf: [
-          { if: { properties: { type: { const: 'tool' } } }, then: { $ref: '#/$defs/tool' } },
-          { if: { properties: { type: { const: 'script' } } }, then: { $ref: '#/$defs/script' } },
-          { if: { properties: { type: { const: 'agent' } } }, then: { $ref: '#/$defs/agent' } },
-          { if: { properties: { type: { const: 'retrieve' } } }, then: { $ref: '#/$defs/retrieve' } },
-          { if: { properties: { type: { const: 'condition' } } }, then: { $ref: '#/$defs/condition' } },
-          { if: { properties: { type: { const: 'parallel' } } }, then: { $ref: '#/$defs/parallel' } },
-          { if: { properties: { type: { const: 'loop' } } }, then: { $ref: '#/$defs/loop' } },
-          { if: { properties: { type: { const: 'subworkflow' } } }, then: { $ref: '#/$defs/subworkflow' } },
-          { if: { properties: { type: { const: 'approval' } } }, then: { $ref: '#/$defs/approval' } },
-          { if: { properties: { type: { const: 'report' } } }, then: { $ref: '#/$defs/report' } },
-          { if: { properties: { type: { const: 'notify' } } }, then: { $ref: '#/$defs/notify' } },
-        ],
-      },
+      items: { $ref: '#/$defs/step' },
     },
   },
   required: ['schema_version', 'id', 'nodes'],
   additionalProperties: false,
   $defs: {
+    step: {
+      type: 'object',
+      required: ['id', 'type'],
+      properties: { type: { enum: ['script', 'agent', 'tool', 'retrieve', 'condition', 'parallel', 'loop', 'subworkflow', 'approval', 'report', 'notify'] } },
+      allOf: [
+        { if: { properties: { type: { const: 'tool' } } }, then: { $ref: '#/$defs/tool' } },
+        { if: { properties: { type: { const: 'script' } } }, then: { $ref: '#/$defs/script' } },
+        { if: { properties: { type: { const: 'agent' } } }, then: { $ref: '#/$defs/agent' } },
+        { if: { properties: { type: { const: 'retrieve' } } }, then: { $ref: '#/$defs/retrieve' } },
+        { if: { properties: { type: { const: 'condition' } } }, then: { $ref: '#/$defs/condition' } },
+        { if: { properties: { type: { const: 'parallel' } } }, then: { $ref: '#/$defs/parallel' } },
+        { if: { properties: { type: { const: 'loop' } } }, then: { $ref: '#/$defs/loop' } },
+        { if: { properties: { type: { const: 'subworkflow' } } }, then: { $ref: '#/$defs/subworkflow' } },
+        { if: { properties: { type: { const: 'approval' } } }, then: { $ref: '#/$defs/approval' } },
+        { if: { properties: { type: { const: 'report' } } }, then: { $ref: '#/$defs/report' } },
+        { if: { properties: { type: { const: 'notify' } } }, then: { $ref: '#/$defs/notify' } },
+      ],
+    },
     value: {
       oneOf: [
         { type: 'object', properties: { ref: { type: 'string' } }, required: ['ref'], additionalProperties: false },
@@ -227,17 +228,41 @@ export const workflowSchema = {
       },
       ['for_each', 'node'],
     ),
-    loop: node(
-      'loop',
-      {
-        node: { type: 'object', properties: { type: { enum: ['tool', 'script'] } }, required: ['type'] },
-        initial: { $ref: '#/$defs/value' },
-        max_iterations: { type: 'integer', minimum: 1, maximum: 1000 },
-        exit: { type: 'string' },
-        on_max: { enum: ['fail', 'continue'] },
-      },
-      ['node', 'max_iterations', 'exit'],
-    ),
+    // One tool or script step (`node`, a CEL `exit`), or several steps the compiler writes out (`body`, `exit` rules).
+    loop: {
+      ...node(
+        'loop',
+        {
+          node: { type: 'object', properties: { type: { enum: ['tool', 'script'] } }, required: ['type'] },
+          body: { type: 'array', minItems: 1, items: { $ref: '#/$defs/step' } },
+          initial: { $ref: '#/$defs/value' },
+          next: { type: 'object', propertyNames: id, additionalProperties: { $ref: '#/$defs/value' } },
+          overrides: { type: 'object', propertyNames: { pattern: '^[1-9][0-9]*$' }, additionalProperties: { type: 'object', additionalProperties: { type: 'object' } } },
+          max_iterations: { type: 'integer', minimum: 1, maximum: 1000 },
+          exit: {
+            oneOf: [
+              { type: 'string' },
+              {
+                type: 'array',
+                minItems: 1,
+                items: {
+                  type: 'object',
+                  properties: { when: { type: 'string' }, outcome: { enum: ['done', 'stop', 'no_progress'] }, reason: { type: 'string', maxLength: 300 } },
+                  required: ['when', 'outcome'],
+                  additionalProperties: false,
+                },
+              },
+            ],
+          },
+          on_max: { enum: ['fail', 'continue'] },
+        },
+        ['max_iterations', 'exit'],
+      ),
+      oneOf: [
+        { required: ['node'], not: { required: ['body'] }, properties: { exit: { type: 'string' } } },
+        { required: ['body'], not: { required: ['node'] }, properties: { exit: { type: 'array' } } },
+      ],
+    },
     subworkflow: node('subworkflow', { workflow: { type: 'string' }, input: { $ref: '#/$defs/value' } }, ['workflow']),
     approval: node('approval', {
       role: { enum: ['owner', 'admin', 'author', 'operator'] },

@@ -119,7 +119,10 @@ export async function adaptWorkflow(
   if (chosen && modelChanged) definition.model_defaults = chosen;
   for (const s of steps) {
     if (s.status === 'blocked' || s.from.executor === s.to.executor) continue;
-    const node = definition.nodes.find((n) => n.id === s.node);
+    // A step written out from a loop is in the definition once, in the loop's body, whichever round named it.
+    const origin = version.plan.nodes.find((n) => n.id === s.node)?.loop;
+    const body = origin && (definition.nodes.find((n) => n.id === origin.loop) as { body?: Array<Record<string, unknown>> } | undefined)?.body;
+    const node = body ? body.find((n) => n.id === origin.step) : definition.nodes.find((n) => n.id === s.node);
     // `model-agent` is the default, so it is written by leaving the field out.
     if (node) s.to.executor === 'model-agent' ? delete node.executor : (node.executor = s.to.executor);
   }
