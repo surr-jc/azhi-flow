@@ -27,7 +27,9 @@ import type { RunPlanReport } from '../plan/run-plan.js';
 import type { ResumeCheck } from '../plan/resume-check.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
 
-const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0');
+const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0', '-V');
+// `--version` belongs to `resume` and `tool` when it follows them; Commander would take it for the root's anywhere in the arguments.
+if (process.argv[2] === '--version') process.argv[2] = '-V';
 program.option('--url <url>', 'server URL (default: $AZHI_URL, saved login, or the local server)').option('--token <token>', 'API token');
 
 const client = () => apiClient(program.opts());
