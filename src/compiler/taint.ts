@@ -79,7 +79,8 @@ export function analyseTaint(nodes: PlanNode[], datasets: (ref: string) => Datas
   const isWrite = (n: PlanNode) =>
     n.type === 'notify' || ((n.type === 'tool' || n.type === 'parallel' || n.type === 'loop') && n.tool !== undefined && n.tool.effect !== 'read');
   const gateOf = (n: PlanNode): Gate | null => {
-    const guard = n.type === 'notify' ? (n.def as NotifyNode).guard : n.type === 'tool' ? (n.def as ToolNode).guard : undefined;
+    // A repeated tool call is guarded per call by its body's guard, which the compiler checks like any other.
+    const guard = n.type === 'notify' ? (n.def as NotifyNode).guard : n.type === 'tool' ? (n.def as ToolNode).guard : n.type === 'parallel' || n.type === 'loop' ? ((n.def as ParallelNode).node as Partial<ToolNode>).guard : undefined;
     if (guard) return 'guard';
     if (n.tool?.safeForTainted) return 'safe_for_tainted';
     return null;

@@ -51,6 +51,54 @@ ${nodes}`;
 const errors = (r: ReturnType<typeof build>) => r.diagnostics.filter((d) => d.severity === 'error').map((d) => `${d.code}:${d.node}`);
 
 describe('taint rule', () => {
+  const repeated = (guard?: string) => ({
+    parallel: `  - id: file
+    type: parallel
+    for_each: {cel: "[nodes.analyse.output.summary]"}
+    max_concurrency: 1
+    node:
+      type: tool
+      tool: jira.create@1
+      arguments: {title: {ref: item}}
+${guard ? `      guard: ${JSON.stringify(guard)}\n` : ''}`,
+    loop: `  - id: file
+    type: loop
+    initial: {n: 0}
+    max_iterations: 2
+    exit: "iteration >= 2"
+    node:
+      type: tool
+      tool: jira.create@1
+      arguments: {title: {ref: nodes.analyse.output.summary}}
+${guard ? `      guard: ${JSON.stringify(guard)}\n` : ''}`,
+  });
+
+  for (const kind of ['parallel', 'loop'] as const) {
+    it(`accepts a write repeated by ${kind} when its body has a guard, as the interpreter enforces it`, () => {
+      const r = build(repeated("args.title != ''")[kind]);
+      expect(errors(r)).toEqual([]);
+      expect(r.plan!.taint.paths.find((p) => p.write === 'file')?.gate).toBe('guard');
+    });
+
+    it(`rejects a write repeated by ${kind} with no guard`, () => {
+      expect(errors(build(repeated()[kind]))).toEqual(['tainted_write_ungated:file']);
+    });
+
+    it(`does not let a broken guard in a ${kind} body count as a gate`, () => {
+      expect(errors(build(repeated("args.title ==")[kind]))).toContain('invalid_cel:file');
+      expect(errors(build(repeated("nodes.missing.output.x == 'y'")[kind]))).toContain('unknown_ref_node:file');
+    });
+
+    it(`orders a ${kind} after the steps its body guard reads`, () => {
+      const r = build(`  - id: later
+    type: tool
+    tool: docs.lookup@1
+${repeated("nodes.later.output.ok == true")[kind]}`);
+      expect(errors(r)).toEqual([]);
+      expect(r.plan!.nodes.find((n) => n.id === 'file')?.deps).toContain('later');
+    });
+  }
+
   it('rejects an ungated notify after an agent that read untrusted tool output', () => {
     const r = build(`  - id: post
     type: notify

@@ -31,7 +31,8 @@ Repeats one tool or script step, one iteration after another.
 - Each iteration is an ordinary script attempt (id `refine[i]`) or tool call with its own ledger
   ordinal, so writes inside a loop are deduplicated per iteration. Tool and script retries apply per
   iteration.
-- Taint: a loop over a tool is as trusted as that tool's output.
+- Taint: a loop over a tool is as trusted as that tool's output. A `guard` in the body runs before every
+  call and counts as the write's gate, in a `parallel` body too; the compiler checks it like any other guard.
 - Not supported: agents as the loop body (an agent's transcript is keyed by node, not iteration),
   and several steps in one body (use a subworkflow for that).
 

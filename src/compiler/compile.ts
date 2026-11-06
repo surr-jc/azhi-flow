@@ -100,6 +100,10 @@ function nodeCel(n: NodeDef): Array<{ path: string; text: string }> {
   if (n.type === 'condition') out.push({ path: 'expression', text: n.expression });
   if ((n.type === 'notify' || n.type === 'tool') && n.guard) out.push({ path: 'guard', text: n.guard });
   if (n.type === 'loop') out.push({ path: 'exit', text: n.exit });
+  if (n.type === 'parallel' || n.type === 'loop') {
+    const guard = (n.node as { guard?: string }).guard;
+    if (guard) out.push({ path: 'node.guard', text: guard });
+  }
   return out;
 }
 
