@@ -705,6 +705,9 @@
             "state": {
               "type": "string"
             },
+            "error": {
+              "type": "object"
+            },
             "nodes": {
               "type": "object"
             }
@@ -761,6 +764,9 @@
             },
             "state": {
               "type": "string"
+            },
+            "error": {
+              "type": "object"
             },
             "nodes": {
               "type": "object"
@@ -919,6 +925,9 @@
             "state": {
               "type": "string"
             },
+            "error": {
+              "type": "object"
+            },
             "nodes": {
               "type": "object"
             }
@@ -975,6 +984,9 @@
             },
             "state": {
               "type": "string"
+            },
+            "error": {
+              "type": "object"
             },
             "nodes": {
               "type": "object"
@@ -1133,6 +1145,9 @@
             "state": {
               "type": "string"
             },
+            "error": {
+              "type": "object"
+            },
             "nodes": {
               "type": "object"
             }
@@ -1189,6 +1204,9 @@
             },
             "state": {
               "type": "string"
+            },
+            "error": {
+              "type": "object"
             },
             "nodes": {
               "type": "object"

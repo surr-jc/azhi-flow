@@ -6,7 +6,7 @@ Pull request into {{staging_branch}}: {{outcome.pr_url}}{{#outcome.draft}} (draf
 Merging it into {{staging_branch}} is a person's decision.
 {{/shipped}}
 {{^shipped}}
-Sent back without a pull request (tests: {{outcome.tests}}). The ticket is marked for its owner and the next lap skips it.
+{{#outcome.failure}}The delivery ended {{outcome.child_state}} ({{outcome.failure}}). {{/outcome.failure}}Sent back without a pull request (tests: {{outcome.tests}}). The ticket is marked for its owner and the next lap skips it.
 {{/shipped}}
 {{#pick.skipped}}
 - skipped {{key}}: {{why}}

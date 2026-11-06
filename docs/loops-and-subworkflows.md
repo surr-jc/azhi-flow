@@ -107,7 +107,10 @@ Runs a published workflow as a child run.
   as the parent run's principal, and is created once per parent node, so a retry reuses it.
 - Output: `{run_id, workflow, version, state, nodes}` where `nodes` maps each succeeded child node
   to its output, so `nodes.review.output.nodes.double.doubled` reads a child result. If the child
-  does not end `succeeded`, the node fails with the child's error class.
+  does not end `succeeded`, the node fails with the child's error class, unless it says `on_failure: continue`:
+  then the node completes with `state` (`failed`, `expired`, `cancelled` or `delivery_failed`) and `error` (`{class, message}`)
+  added to the output, and the nodes that succeeded are still in `nodes`. Cancelling the parent still cancels the run.
+  Steps after it must check `state` before reading `nodes`; the error message can quote untrusted text.
 - Taint: the output is treated as untrusted, since the child may call tools and agents the parent
   cannot see into.
 - Guards: a workflow cannot call itself directly or through its chain, and nesting stops at four

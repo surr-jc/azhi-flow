@@ -79,6 +79,24 @@ nodes:
     expect(r.ok).toBe(true);
     expect(r.plan!.taint.untrusted.child).toMatch(/subworkflow/);
   });
+  it('accepts on_failure: continue on a subworkflow only, and lets a later step read the error', () => {
+    const wf = (extra: string) => `schema_version: "2.0"
+id: parent
+nodes:
+  - id: child
+    type: subworkflow
+    workflow: other${extra}
+  - id: after
+    type: condition
+    expression: "nodes.child.output.state == 'succeeded' ? 'ok' : nodes.child.output.error.class"
+    routes: {ok: []}
+    default: ok
+`;
+    const ok = compileText(wf('\n    on_failure: continue'));
+    expect(ok.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(loadDefinitionText(wf('\n    on_failure: ignore')).diagnostics.some((d) => d.severity === 'error')).toBe(true);
+    expect(loadDefinitionText(loopWorkflow().replace('exit:', 'on_failure: continue\n    exit:')).diagnostics.some((d) => d.severity === 'error')).toBe(true);
+  });
 });
 
 const up = await temporalAvailable();
@@ -168,6 +186,50 @@ nodes:
     const childRun = await h.api.get<any>(`/v1/runs/${sub.run_id}`);
     expect(childRun.run).toMatchObject({ state: 'succeeded', trigger: 'subworkflow', workflow: 'doubler' });
     expect(childRun.run.snapshot.parent).toMatchObject({ run_id, node_id: 'sub', chain: ['caller'] });
+  });
+
+  it('on_failure: continue reports a failed child to the next step instead of failing the run; the default still fails it', async () => {
+    const boom = await uploadDir(
+      h.api,
+      pkg(`schema_version: "2.0"
+id: boom
+nodes:
+  - id: go
+    type: script
+    runtime: python
+    entrypoint: scripts/boom.py
+    retry: {max_attempts: 1}
+    input: {}
+    output_schema: {type: object}
+`, {
+        'scripts/boom.py': 'raise SystemExit("boom")\n',
+      }),
+    );
+    await h.api.post(`/v1/versions/${boom.version.id}/publish`, {});
+    const parent = (extra: string) => `schema_version: "2.0"
+id: tolerant
+nodes:
+  - id: sub
+    type: subworkflow
+    workflow: boom${extra}
+  - id: after
+    type: script
+    runtime: python
+    entrypoint: scripts/inc.py
+    input: {map: "{'n': size(nodes.sub.output.error.class)}"}
+    output_schema: {type: object, properties: {n: {type: integer}}, required: [n]}
+`;
+    const lenient = await uploadDir(h.api, pkg(parent('\n    on_failure: continue'), { 'scripts/inc.py': INC }));
+    expect(lenient.ok).toBe(true);
+    const a = await waitForRun(h.api, (await h.api.post<{ run_id: string }>('/v1/runs', { version: lenient.version.id, inputs: {} })).run_id);
+    expect(a.run.state).toBe('succeeded');
+    expect(a.attempts.find((x: any) => x.node_id === 'sub' && x.state === 'succeeded').output).toMatchObject({ workflow: 'boom', state: 'failed', error: { class: expect.any(String) }, nodes: {} });
+    expect(a.attempts.find((x: any) => x.node_id === 'after' && x.state === 'succeeded')).toBeTruthy();
+
+    const strict = await uploadDir(h.api, pkg(parent(''), { 'scripts/inc.py': INC }));
+    const b = await waitForRun(h.api, (await h.api.post<{ run_id: string }>('/v1/runs', { version: strict.version.id, inputs: {} })).run_id);
+    expect(b.run.state).toBe('failed');
+    expect(b.attempts.find((x: any) => x.node_id === 'after')).toMatchObject({ state: 'skipped' });
   });
 
   it('blocks a subworkflow that is not published or that calls its own workflow', async () => {

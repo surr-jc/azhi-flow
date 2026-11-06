@@ -8,7 +8,9 @@
     "summary": {"type": "string"},
     "tests": {"type": "string"},
     "needs_attention": {"type": "boolean"},
-    "run_id": {"type": "string"}
+    "run_id": {"type": "string"},
+    "child_state": {"type": "string"},
+    "failure": {"type": "string"}
   },
   "required": ["status", "pr_url", "summary", "tests"]
 }

@@ -547,14 +547,29 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         const def = node.def as SubworkflowNode;
         const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: ((await resolve(node, def.input, s)) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
         // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
-        await executeChild('azhiRun', {
-          workflowId: prep.run.runId,
-          taskQueue: workflowInfo().taskQueue,
-          args: [prep.run],
-          parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
-          workflowExecutionTimeout: node.timeoutMs + 60_000,
-        });
+        // With on_failure: continue a child that fails or times out is reported to the next steps instead of failing this run.
+        const lenient = def.on_failure === 'continue';
+        let childError: NodeError | undefined;
+        try {
+          await executeChild('azhiRun', {
+            workflowId: prep.run.runId,
+            taskQueue: workflowInfo().taskQueue,
+            args: [prep.run],
+            parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
+            workflowExecutionTimeout: node.timeoutMs + 60_000,
+          });
+        } catch (err) {
+          if (!lenient || isCancellation(err)) throw err;
+          childError = toNodeError(err);
+        }
         const result = await gateway(node).childResult(workspaceId, prep.run.runId);
+        if (result.state !== 'succeeded' && lenient) {
+          // A child that died without recording an end state has not succeeded either.
+          const ended = ['failed', 'expired', 'cancelled', 'delivery_failed'].includes(result.state);
+          const state = ended ? result.state : 'failed';
+          const error = result.error ?? childError ?? { class: 'internal', message: `the child run ended ${result.state}` };
+          return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state, error, nodes: result.nodes } };
+        }
         if (result.state !== 'succeeded') {
           throw ApplicationFailure.create({
             type: result.error?.class ?? 'internal',

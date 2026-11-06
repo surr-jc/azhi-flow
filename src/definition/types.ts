@@ -191,6 +191,8 @@ export interface SubworkflowNode extends NodeCommon {
   type: 'subworkflow';
   workflow: string;
   input?: Value;
+  /** `continue`: a child that does not succeed completes this node with its state and error instead of failing the run. Default `fail`. */
+  on_failure?: 'fail' | 'continue';
 }
 
 export interface ApprovalNode extends NodeCommon {

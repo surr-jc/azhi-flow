@@ -122,8 +122,10 @@ The three workflows run the same on all three. Nothing in them depends on the op
   wrong back as new tickets. GitHub does not close an issue when a pull request merges into a branch other than the
   default one, so a person **closes each slice's issue** after merging it: that is what releases the slices that depend
   on it. (When staging is the default branch, `Closes #N` in the pull request does it.)
-- **A failed or rejected delivery cannot label its ticket.** A child run that does not succeed fails the lap, so the
-  claim label stays and the ticket is skipped until a person removes it.
+- **A failed delivery is sent back, not lost.** The lap runs the delivery with `on_failure: continue`, so a child run
+  that fails, expires or is rejected ends the lap normally: the ticket gets `factory-needs-owner` and the report names
+  the failure class. A lap that is itself cancelled, or that dies between the claim and the outcome, still leaves the
+  claim label until a person removes it.
 - **No event triggers.** Readiness runs on a schedule; a CI failure does not start it. Azhi has no webhook triggers yet.
 - **Order is enforced inside an epic, not between epics.** The plan says when an epic needs another merged first.
 - **No fan-out.** Azhi cannot loop agents or sub-workflows over a list, so each ticket is one scheduled run, not an

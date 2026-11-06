@@ -68,6 +68,12 @@ describe('AI SDLC Factory packages', () => {
     expect(tools.filter((t: any) => t.effect !== 'read').map((t: any) => t.id).sort()).toEqual(['github.label-issue', 'jira.update-labels']);
   });
 
+  it('the lap carries on when the delivery fails, so a failed ticket is sent back and not left claimed', () => {
+    const pkg = packageFromDirectory('examples/ai-sdlc-factory');
+    const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+    expect((def.nodes as any[]).find((n) => n.id === 'deliver').on_failure).toBe('continue');
+  });
+
   it('the release plan is brainstormed with a person before it is planned, and the brainstormer can only read', () => {
     const pkg = packageFromDirectory('examples/ai-sdlc-factory-plan');
     const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
@@ -212,6 +218,12 @@ describe('outcome.py', () => {
     expect(shipped).toMatchObject({ status: 'shipped', pr_url: 'https://github.com/acme/shop/pull/7', pr_number: 7, draft: true, tests: 'passed', needs_attention: true });
     expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r2', nodes: { finalize: { change: { tests: { status: 'failed' } } } } } })).toMatchObject({ status: 'sent_back', pr_url: '', tests: 'failed' });
     expect(run('ai-sdlc-factory', 'outcome.py', { child: {} })).toMatchObject({ status: 'sent_back', tests: 'unavailable' });
+    // A delivery that failed or was rejected arrives with its state and error: sent back, with the class and not the message.
+    const failed = run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r3', state: 'failed', error: { class: 'contract_violation', message: 'ticket text here' }, nodes: {} } });
+    expect(failed).toMatchObject({ status: 'sent_back', pr_url: '', child_state: 'failed', failure: 'contract_violation' });
+    expect(JSON.stringify(failed)).not.toContain('ticket text here');
+    expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r4', state: 'failed', error: { class: 'internal' }, nodes: { open_pr: { url: 'https://github.com/acme/shop/pull/8', number: 8 } } } })).toMatchObject({ status: 'shipped', failure: 'internal' });
+    expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r1', state: 'succeeded', nodes: {} } })).toMatchObject({ failure: '' });
   });
 });
 

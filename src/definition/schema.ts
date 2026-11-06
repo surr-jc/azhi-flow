@@ -263,7 +263,7 @@ export const workflowSchema = {
         { required: ['body'], not: { required: ['node'] }, properties: { exit: { type: 'array' } } },
       ],
     },
-    subworkflow: node('subworkflow', { workflow: { type: 'string' }, input: { $ref: '#/$defs/value' } }, ['workflow']),
+    subworkflow: node('subworkflow', { workflow: { type: 'string' }, input: { $ref: '#/$defs/value' }, on_failure: { enum: ['fail', 'continue'] } }, ['workflow']),
     approval: node('approval', {
       role: { enum: ['owner', 'admin', 'author', 'operator'] },
       message: { $ref: '#/$defs/value' },

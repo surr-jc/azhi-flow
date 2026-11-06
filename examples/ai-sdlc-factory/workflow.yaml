@@ -118,6 +118,7 @@ nodes:
     type: subworkflow
     description: Deliver the ticket through the published sdlc-universal workflow (plan, build, test, review, release approval, pull request into the staging branch).
     workflow: sdlc-universal
+    on_failure: continue
     merge: any
     depends_on: [claim_github, claim_jira]
     input:

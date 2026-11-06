@@ -69,6 +69,8 @@ export const SUBWORKFLOW_OUTPUT_SCHEMA: JsonSchema = {
     workflow: { type: 'string' },
     version: { type: 'integer' },
     state: { type: 'string' },
+    /** Only when the child did not succeed and the node says `on_failure: continue`. */
+    error: { type: 'object' },
     nodes: { type: 'object' },
   },
 };

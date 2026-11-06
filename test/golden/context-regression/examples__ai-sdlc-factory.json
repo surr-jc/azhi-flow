@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory",
-    "definitionHash": "sha256:23561a80053d8f7e1b2afaf274cfe6a1617bd99a5652773ba3ba3d486ab5f819",
+    "definitionHash": "sha256:3f45e94c607017b7e19c22b9e261ff4700c67d68df1d13867e8319c760f569b7",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -427,6 +427,7 @@
           "type": "subworkflow",
           "description": "Deliver the ticket through the published sdlc-universal workflow (plan, build, test, review, release approval, pull request into the staging branch).",
           "workflow": "sdlc-universal",
+          "on_failure": "continue",
           "merge": "any",
           "depends_on": [
             "claim_github",
@@ -461,6 +462,9 @@
             },
             "state": {
               "type": "string"
+            },
+            "error": {
+              "type": "object"
             },
             "nodes": {
               "type": "object"
