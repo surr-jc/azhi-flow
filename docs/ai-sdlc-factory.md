@@ -52,6 +52,8 @@ makes up to six slices, so a release comes to about 10 to 18 tickets.
 4. *Deliver.* The published [`sdlc-universal`](ai-sdlc.md) workflow does the work: readiness check, preflight, plan,
    build and test with the repository's own commands, one independent review, a release approval, then a pushed
    `azhi/` branch and a pull request into the **staging branch** (`staging_branch`).
+   [`sdlc-lean`](../examples/sdlc-lean/README.md) is the same delivery with fewer steps (about five model turns, no
+   untested builds); the lap calls `sdlc-universal`, and it can be pointed at `sdlc-lean` by changing the `deliver` node.
 5. *Outcome.* A pull request opened is reported. A delivery that ended without one (tests failed, nothing changed, a
    blocker) is reported and the ticket gets `factory-needs-owner`, so laps skip it until a person acts.
 

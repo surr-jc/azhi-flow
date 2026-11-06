@@ -1,0 +1,24 @@
+{
+  "_note": "Model names per provider and tier, used by scripts/apply_models.mjs. Edit them to what your subscription or API account offers; the names here are the ones this repository's other examples and docs use. Tiers: strong = rare, costly-if-wrong (planning); balanced = bounded work from a plan (build, review); light = reading and running (readiness check, preflight, test strategy); alt = the finding verifier, which should not share a blind spot with the reviewer.",
+  "anthropic": {
+    "credential": "anthropic-api-key",
+    "strong": "claude-opus-5-5",
+    "balanced": "claude-sonnet-5-5",
+    "light": "claude-haiku-5-5",
+    "alt": "claude-opus-5-5"
+  },
+  "github-copilot": {
+    "credential": "github-copilot-token",
+    "strong": "claude-opus-5.5",
+    "balanced": "claude-sonnet-5",
+    "light": "gpt-5.6-luna",
+    "alt": "gpt-5.6-sol"
+  },
+  "openai-chatgpt": {
+    "credential": "openai-chatgpt-auth",
+    "strong": "gpt-6-sol",
+    "balanced": "gpt-6-luna",
+    "light": "gpt-5.6-luna",
+    "alt": "gpt-5.6-sol"
+  }
+}
