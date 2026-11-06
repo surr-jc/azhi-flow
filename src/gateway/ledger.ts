@@ -15,6 +15,7 @@ export interface ActionRow {
   id: string;
   state: ActionState;
   fence: number;
+  idempotency_key: string;
   receipt: unknown;
   created_at: Date;
 }
@@ -59,6 +60,28 @@ export function actionIdFor(runId: string, nodeId: string, op: WriteOperation): 
   return `act_${sha256(canonicalJson([runId, nodeId, op.tool, op.operation, op.ordinal ?? 0])).slice(0, 32)}`;
 }
 
+/**
+ * The oldest action for this same write in the runs this one resumes, if it may have reached the target and has no
+ * settled state. A resumed run is a new run with its own action IDs, so this is the only link back to that write.
+ */
+async function unresolvedInResumedRuns(scope: LedgerScope, op: WriteOperation) {
+  const runs = await scope.pool.query(
+    `WITH RECURSIVE chain(id) AS (
+       SELECT snapshot->'resume'->>'from_run' FROM runs WHERE id=$1 AND workspace_id=$2
+       UNION ALL
+       SELECT r.snapshot->'resume'->>'from_run' FROM runs r JOIN chain c ON r.id = c.id
+     ) SELECT id FROM chain WHERE id IS NOT NULL`,
+    [scope.runId, scope.workspaceId],
+  );
+  if (!runs.rows.length) return undefined;
+  const ids = runs.rows.map((r) => actionIdFor(r.id as string, scope.nodeId, op));
+  const found = await scope.pool.query(
+    `SELECT id, run_id, idempotency_key, created_at FROM actions WHERE id = ANY($1) AND state IN ('dispatched','outcome_unknown') ORDER BY created_at LIMIT 1`,
+    [ids],
+  );
+  return found.rows[0] as { id: string; run_id: string; idempotency_key: string; created_at: Date } | undefined;
+}
+
 export interface LedgerResult<R> {
   actionId: string;
   receipt: R;
@@ -80,16 +103,22 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
     await scope.pool.query(`INSERT INTO action_transitions(action_id, state, fence, note) VALUES ($1,$2,$3,$4)`, [id, state, scope.fence, note ?? null]);
   };
 
+  // The run this one resumes may have applied this write. Its key is what the target knows the write by, so it carries over.
+  const earlier = await unresolvedInResumedRuns(scope, op);
+  if (earlier && op.effect === 'write-unsafe') {
+    throw new AzhiError(ErrorClass.needsOperator, `write-unsafe action ${earlier.id} in run ${earlier.run_id}, which this run resumes, has an unknown outcome; an operator must reconcile it before this write can go ahead`, { action_id: earlier.id, run_id: earlier.run_id });
+  }
+
   const inserted = await scope.pool.query(
     `INSERT INTO actions(id, workspace_id, run_id, node_id, tool, effect, operation_hash, idempotency_key, target, state, fence)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$1,$8,'planned',$9) ON CONFLICT (id) DO NOTHING`,
-    [id, scope.workspaceId, scope.runId, scope.nodeId, op.tool, op.effect, sha256(canonicalJson(op.operation)), JSON.stringify(op.target ?? {}), scope.fence],
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'planned',$10) ON CONFLICT (id) DO NOTHING`,
+    [id, scope.workspaceId, scope.runId, scope.nodeId, op.tool, op.effect, sha256(canonicalJson(op.operation)), earlier?.idempotency_key ?? id, JSON.stringify(op.target ?? {}), scope.fence],
   );
   if (inserted.rowCount === 1) {
     await scope.pool.query(`INSERT INTO action_transitions(action_id, state, fence) VALUES ($1,'planned',$2)`, [id, scope.fence]);
   }
   crashPoint('ledger.planned');
-  const row = (await scope.pool.query(`SELECT id, state, fence, receipt, created_at FROM actions WHERE id=$1`, [id])).rows[0] as ActionRow;
+  const row = (await scope.pool.query(`SELECT id, state, fence, idempotency_key, receipt, created_at FROM actions WHERE id=$1`, [id])).rows[0] as ActionRow;
   if (row.fence > scope.fence) throw new AzhiError(ErrorClass.needsOperator, `action ${id} belongs to a newer attempt (${row.fence})`);
 
   if (row.state === 'confirmed') return { actionId: id, receipt: row.receipt as R, reused: true };
@@ -101,15 +130,16 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
     state = 'outcome_unknown';
   }
 
-  if (state === 'outcome_unknown' || state === 'failed') {
+  if (state === 'outcome_unknown' || state === 'failed' || earlier) {
     if (op.effect === 'write-unsafe') {
       throw new AzhiError(ErrorClass.needsOperator, `write-unsafe action ${id} is ${state}; an operator must reconcile it before any retry`, { action_id: id });
     }
-    if (state === 'outcome_unknown' && op.effect === 'write-dedupable') {
+    if ((state === 'outcome_unknown' || earlier) && op.effect === 'write-dedupable') {
       if (!handlers.lookup) throw new AzhiError(ErrorClass.needsOperator, `tool ${op.tool} is write-dedupable but has no lookup`);
-      const found = await handlers.lookup(id, new Date(row.created_at.getTime() - 60_000));
+      // The write can only be as old as the first send, which may be long before this row.
+      const found = await handlers.lookup(row.idempotency_key, new Date((earlier?.created_at ?? row.created_at).getTime() - 60_000));
       if (found) {
-        await transition('confirmed', 'reconciled: found on target by dedupe key', { receipt: found });
+        await transition('confirmed', earlier ? `reconciled: found on target by the dedupe key of ${earlier.id} in run ${earlier.run_id}` : 'reconciled: found on target by dedupe key', { receipt: found });
         return { actionId: id, receipt: found, reused: true };
       }
     }
@@ -120,7 +150,7 @@ export async function ledgeredWrite<R>(scope: LedgerScope, op: WriteOperation, h
   crashPoint('ledger.dispatched');
   let receipt: R;
   try {
-    receipt = await handlers.send(id);
+    receipt = await handlers.send(row.idempotency_key);
     crashPoint('ledger.sent');
   } catch (err) {
     const definite = err instanceof SendError && err.definite;
