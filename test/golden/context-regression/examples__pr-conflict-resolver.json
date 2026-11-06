@@ -1,0 +1,1145 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.triage.output.change' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "resolve_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "review_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "refute_1",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.resolve_1.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "resolve_2",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.resolve_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "review_2",
+      "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "workspace_from_untyped",
+      "message": "workspace.from 'nodes.resolve_2.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
+      "node": "refute_2",
+      "path": "workspace.from"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "pr-conflict-resolver",
+    "definitionHash": "sha256:ad09ef60698fff0e83f7214571897a35a8f66ff98dd9c0cf03c9ce04ebd227c3",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "owner/name, for example acme/payments"
+        },
+        "pr": {
+          "type": "integer",
+          "title": "Pull request number"
+        },
+        "resolve_draft": {
+          "type": "boolean",
+          "default": false,
+          "title": "Resolve a draft pull request too (off by default)"
+        }
+      },
+      "required": [
+        "repo",
+        "pr"
+      ]
+    },
+    "config": {
+      "min_confidence": 80
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "pr",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "pr",
+          "type": "tool",
+          "description": "Read the pull request, its refs and whether GitHub sees conflicts.",
+          "tool": "github.get-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "eligible",
+        "type": "condition",
+        "deps": [
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "eligible",
+          "type": "condition",
+          "description": "Resolve only an open pull request from this repository that GitHub reports as conflicting (mergeable_state dirty). A fork, a draft (unless resolve_draft), a clean or an unknown one is skipped, and nothing is spent.",
+          "expression": "nodes.pr.output.state == 'open' && nodes.pr.output.mergeable_state == 'dirty' && !nodes.pr.output.head_is_fork && (!nodes.pr.output.draft || (has(inputs.resolve_draft) && inputs.resolve_draft)) ? 'ok' : 'skip'",
+          "routes": {
+            "ok": [
+              "merge_attempt"
+            ],
+            "skip": [
+              "skip_report"
+            ]
+          },
+          "default": "skip"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "skip_report",
+        "type": "report",
+        "deps": [
+          "eligible",
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "skip_report",
+          "type": "report",
+          "description": "Say why the pull request was skipped.",
+          "template": "templates/skip.md",
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr}, 'reason': nodes.pr.output.state != 'open' ? 'the pull request is not open' : (nodes.pr.output.head_is_fork ? 'it comes from a fork, which this workflow does not resolve' : (nodes.pr.output.mergeable_state != 'dirty' ? 'GitHub does not report merge conflicts (mergeable_state is ' + nodes.pr.output.mergeable_state + '; unknown means GitHub had not computed it yet, try again)' : 'it is a draft (set resolve_draft to include drafts)'))}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "eligible",
+          "route": "skip"
+        }
+      },
+      {
+        "id": "merge_attempt",
+        "type": "agent",
+        "deps": [
+          "eligible",
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "merge_attempt",
+          "type": "agent",
+          "description": "Merge the base branch into the pull request's head on the worker (nothing is committed). Conflicts stay in the files as markers and the step reports which paths conflict. A do-nothing agent; the worker does the work.",
+          "executor": "opencode",
+          "profile": "noop@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "merge_ref": {
+              "cel": "'refs/heads/' + nodes.pr.output.base_ref"
+            },
+            "credential": "github-read-token",
+            "mode": "write"
+          },
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/note.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "eligible",
+          "route": "ok"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "base_run",
+        "type": "agent",
+        "deps": [
+          "merge_attempt",
+          "pr"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "base_run",
+          "type": "agent",
+          "description": "Run the test command on the untouched base branch (the first of three snapshots). A do-nothing agent.",
+          "depends_on": [
+            "merge_attempt"
+          ],
+          "executor": "opencode",
+          "profile": "noop@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + nodes.pr.output.base_ref"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "npm ci && npm test",
+              "timeout": "20m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/note.json",
+          "timeout": "30m",
+          "budget": {
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 1800000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "head_run",
+        "type": "agent",
+        "deps": [
+          "base_run"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "head_run",
+          "type": "agent",
+          "description": "Run the same test command on the pull request alone, before the merge (the second snapshot). A do-nothing agent.",
+          "depends_on": [
+            "base_run"
+          ],
+          "executor": "opencode",
+          "profile": "noop@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "mode": "write",
+            "test": {
+              "command": "npm ci && npm test",
+              "timeout": "20m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/note.json",
+          "timeout": "30m",
+          "budget": {
+            "max_tool_calls": 0
+          }
+        },
+        "timeoutMs": 1800000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "triage",
+        "type": "script",
+        "deps": [
+          "head_run",
+          "merge_attempt",
+          "pr"
+        ],
+        "dataDeps": [
+          "merge_attempt",
+          "pr"
+        ],
+        "def": {
+          "id": "triage",
+          "type": "script",
+          "description": "Settle the easy hunks by rule (no model) and say what is left. A delete-against-edit conflict, a binary file or a lock file is set aside for a person.",
+          "runtime": "python",
+          "entrypoint": "scripts/triage.py",
+          "depends_on": [
+            "head_run"
+          ],
+          "input": {
+            "map": "{'change': nodes.merge_attempt.output.workspace, 'pr': {'repo': inputs.repo, 'number': inputs.pr, 'url': nodes.pr.output.url, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref, 'head_sha': nodes.pr.output.head_sha}}"
+          },
+          "output_schema": "schemas/triage.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "triage_gate",
+        "type": "condition",
+        "deps": [
+          "triage"
+        ],
+        "dataDeps": [
+          "triage"
+        ],
+        "def": {
+          "id": "triage_gate",
+          "type": "condition",
+          "description": "Go on only when no conflict is set aside for a person.",
+          "expression": "size(nodes.triage.output.blocked) > 0 ? 'blocked' : 'go'",
+          "routes": {
+            "go": [
+              "resolve_1"
+            ],
+            "blocked": []
+          },
+          "default": "blocked"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "resolve_1",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "triage",
+          "triage_gate"
+        ],
+        "dataDeps": [
+          "pr",
+          "triage"
+        ],
+        "def": {
+          "id": "resolve_1",
+          "type": "agent",
+          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (first attempt). The worker then runs the tests on the result.",
+          "executor": "opencode",
+          "profile": "conflict-resolver@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.triage.output.change"
+            },
+            "mode": "write",
+            "test": {
+              "command": "npm ci && npm test",
+              "timeout": "20m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved}"
+          },
+          "output_schema": "schemas/resolution.json",
+          "timeout": "45m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 2700000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "triage_gate",
+          "route": "go"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "compare_1",
+        "type": "script",
+        "deps": [
+          "base_run",
+          "head_run",
+          "merge_attempt",
+          "resolve_1",
+          "triage"
+        ],
+        "dataDeps": [
+          "base_run",
+          "head_run",
+          "merge_attempt",
+          "resolve_1",
+          "triage"
+        ],
+        "def": {
+          "id": "compare_1",
+          "type": "script",
+          "description": "Compare the three test runs and check the files (no markers left, nothing changed outside the conflicts, nothing dropped), with rules and no model.",
+          "runtime": "python",
+          "entrypoint": "scripts/compare.py",
+          "input": {
+            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_1.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_1.output.workspace.files}"
+          },
+          "output_schema": "schemas/compare.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "review_1",
+        "type": "agent",
+        "deps": [
+          "compare_1",
+          "pr",
+          "resolve_1",
+          "triage"
+        ],
+        "dataDeps": [
+          "compare_1",
+          "pr",
+          "resolve_1",
+          "triage"
+        ],
+        "def": {
+          "id": "review_1",
+          "type": "agent",
+          "description": "An independent reviewer reads the resolved merge against what each side meant (merge-intent-review skill).",
+          "executor": "opencode",
+          "profile": "conflict-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.resolve_1.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_1.output.summary, 'resolutions': nodes.resolve_1.output.resolutions, 'unresolved': nodes.resolve_1.output.unresolved}, 'check': nodes.compare_1.output, 'diff': nodes.resolve_1.output.workspace.diff, 'diff_truncated': nodes.resolve_1.output.workspace.diff_truncated}"
+          },
+          "output_schema": "schemas/review.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 15
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "refute_1",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "resolve_1",
+          "review_1"
+        ],
+        "dataDeps": [
+          "pr",
+          "resolve_1",
+          "review_1"
+        ],
+        "def": {
+          "id": "refute_1",
+          "type": "agent",
+          "description": "Try to refute each critical or major finding in its own checkout, on a different model, and score the confidence (finding-verification skill).",
+          "executor": "opencode",
+          "profile": "conflict-refuter@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.resolve_1.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_1.output.workspace.diff, 'findings': nodes.review_1.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+          },
+          "output_schema": "schemas/verification.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "gate_1",
+        "type": "condition",
+        "deps": [
+          "compare_1",
+          "refute_1",
+          "resolve_1",
+          "review_1"
+        ],
+        "dataDeps": [
+          "compare_1",
+          "refute_1",
+          "resolve_1",
+          "review_1"
+        ],
+        "def": {
+          "id": "gate_1",
+          "type": "condition",
+          "description": "Accept the first attempt when the check passed or is inconclusive, nobody was told to do something else by the text it read, nothing is left unresolved and no critical or major finding was confirmed. Otherwise one stronger second attempt, unless an agent reported an injection (then it stops here).",
+          "expression": "nodes.compare_1.output.ok && !nodes.review_1.output.prompt_injection_detected && !nodes.resolve_1.output.prompt_injection_detected && size(nodes.resolve_1.output.unresolved) == 0 && !nodes.review_1.output.findings.exists(f, (f.severity == 'critical' || f.severity == 'major') && nodes.refute_1.output.checks.exists(c, c.id == f.id && c.verdict == 'confirmed' && c.confidence >= config.min_confidence)) ? 'ok' : (nodes.review_1.output.prompt_injection_detected || nodes.resolve_1.output.prompt_injection_detected ? 'stop' : 'retry')",
+          "routes": {
+            "ok": [],
+            "stop": [],
+            "retry": [
+              "resolve_2"
+            ]
+          },
+          "default": "retry"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "resolve_2",
+        "type": "agent",
+        "deps": [
+          "compare_1",
+          "gate_1",
+          "pr",
+          "refute_1",
+          "resolve_1",
+          "review_1",
+          "triage"
+        ],
+        "dataDeps": [
+          "compare_1",
+          "pr",
+          "refute_1",
+          "resolve_1",
+          "review_1",
+          "triage"
+        ],
+        "def": {
+          "id": "resolve_2",
+          "type": "agent",
+          "description": "The second and last attempt, on a stronger model, starting from the first attempt's result and told why it was rejected.",
+          "executor": "opencode",
+          "profile": "conflict-resolver@2",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.resolve_1.output.workspace"
+            },
+            "mode": "write",
+            "test": {
+              "command": "npm ci && npm test",
+              "timeout": "20m",
+              "attempts": 1
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref, 'head_ref': nodes.pr.output.head_ref}, 'remaining': nodes.triage.output.remaining, 'resolved': nodes.triage.output.resolved, 'rejected_attempt': {'summary': nodes.resolve_1.output.summary, 'unresolved': nodes.resolve_1.output.unresolved, 'check': nodes.compare_1.output, 'findings': nodes.review_1.output.findings, 'verification': nodes.refute_1.output.checks}}"
+          },
+          "output_schema": "schemas/resolution.json",
+          "timeout": "45m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 2700000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "gate_1",
+          "route": "retry"
+        },
+        "agentTools": []
+      },
+      {
+        "id": "compare_2",
+        "type": "script",
+        "deps": [
+          "base_run",
+          "head_run",
+          "merge_attempt",
+          "resolve_2",
+          "triage"
+        ],
+        "dataDeps": [
+          "base_run",
+          "head_run",
+          "merge_attempt",
+          "resolve_2",
+          "triage"
+        ],
+        "def": {
+          "id": "compare_2",
+          "type": "script",
+          "description": "The same comparison for the second attempt.",
+          "runtime": "python",
+          "entrypoint": "scripts/compare.py",
+          "input": {
+            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve_2.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve_2.output.workspace.files}"
+          },
+          "output_schema": "schemas/compare.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "review_2",
+        "type": "agent",
+        "deps": [
+          "compare_2",
+          "pr",
+          "resolve_2",
+          "triage"
+        ],
+        "dataDeps": [
+          "compare_2",
+          "pr",
+          "resolve_2",
+          "triage"
+        ],
+        "def": {
+          "id": "review_2",
+          "type": "agent",
+          "description": "The independent review of the second attempt.",
+          "executor": "opencode",
+          "profile": "conflict-reviewer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.resolve_2.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'base_ref': nodes.pr.output.base_ref}, 'settled_by_rule': nodes.triage.output.resolved, 'resolver': {'summary': nodes.resolve_2.output.summary, 'resolutions': nodes.resolve_2.output.resolutions, 'unresolved': nodes.resolve_2.output.unresolved}, 'check': nodes.compare_2.output, 'diff': nodes.resolve_2.output.workspace.diff, 'diff_truncated': nodes.resolve_2.output.workspace.diff_truncated}"
+          },
+          "output_schema": "schemas/review.json",
+          "timeout": "20m",
+          "budget": {
+            "max_tool_calls": 15
+          }
+        },
+        "timeoutMs": 1200000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "refute_2",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "resolve_2",
+          "review_2"
+        ],
+        "dataDeps": [
+          "pr",
+          "resolve_2",
+          "review_2"
+        ],
+        "def": {
+          "id": "refute_2",
+          "type": "agent",
+          "description": "Try to refute the second review's critical and major findings.",
+          "executor": "opencode",
+          "profile": "conflict-refuter@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "credential": "github-read-token",
+            "depth": 1,
+            "from": {
+              "ref": "nodes.resolve_2.output.workspace"
+            }
+          },
+          "input": {
+            "map": "{'pr': {'repo': inputs.repo, 'number': inputs.pr, 'base_ref': nodes.pr.output.base_ref}, 'diff': nodes.resolve_2.output.workspace.diff, 'findings': nodes.review_2.output.findings.filter(f, (f.severity == 'critical' || f.severity == 'major'))}"
+          },
+          "output_schema": "schemas/verification.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 10
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "finalize",
+        "type": "script",
+        "deps": [
+          "compare_1",
+          "compare_2",
+          "refute_1",
+          "refute_2",
+          "resolve_1",
+          "resolve_2",
+          "review_1",
+          "review_2",
+          "triage"
+        ],
+        "dataDeps": [
+          "compare_1",
+          "compare_2",
+          "refute_1",
+          "refute_2",
+          "resolve_1",
+          "resolve_2",
+          "review_1",
+          "review_2",
+          "triage"
+        ],
+        "def": {
+          "id": "finalize",
+          "type": "script",
+          "description": "Take the last attempt that ran, decide whether it may ship (an open blocker stops it; a clean result is a ready pull request, any doubt makes it a draft) and write the evidence record.",
+          "runtime": "python",
+          "entrypoint": "scripts/finalize.py",
+          "merge": "any",
+          "input": {
+            "map": "{'pr': nodes.triage.output.pr, 'triage': nodes.triage.output, 'min_confidence': config.min_confidence, 'attempts': [{'resolution': has(nodes.resolve_1) ? nodes.resolve_1.output : null, 'compare': has(nodes.compare_1) ? nodes.compare_1.output : null, 'review': has(nodes.review_1) ? nodes.review_1.output : null, 'checks': has(nodes.refute_1) ? nodes.refute_1.output.checks : []}, {'resolution': has(nodes.resolve_2) ? nodes.resolve_2.output : null, 'compare': has(nodes.compare_2) ? nodes.compare_2.output : null, 'review': has(nodes.review_2) ? nodes.review_2.output : null, 'checks': has(nodes.refute_2) ? nodes.refute_2.output.checks : []}]}"
+          },
+          "output_schema": "schemas/finalize.json",
+          "limits": {
+            "time": "2m",
+            "memory_mb": 512
+          }
+        },
+        "timeoutMs": 120000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "ship_gate",
+        "type": "condition",
+        "deps": [
+          "finalize"
+        ],
+        "dataDeps": [
+          "finalize"
+        ],
+        "def": {
+          "id": "ship_gate",
+          "type": "condition",
+          "description": "Ask for approval only when no blocker stands; otherwise tell the pull request's author why it was not resolved.",
+          "expression": "nodes.finalize.output.ship ? 'ship' : 'stop'",
+          "routes": {
+            "ship": [
+              "release_approval"
+            ],
+            "stop": [
+              "give_up"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release_approval",
+        "type": "approval",
+        "deps": [
+          "finalize",
+          "pr",
+          "ship_gate",
+          "triage"
+        ],
+        "dataDeps": [
+          "finalize",
+          "pr",
+          "triage"
+        ],
+        "def": {
+          "id": "release_approval",
+          "type": "approval",
+          "description": "The release owner approves the exact resolution, its checks and its reviews before a branch is pushed.",
+          "role": "admin",
+          "message": {
+            "cel": "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '')"
+          },
+          "payload": {
+            "map": "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.finalize.output.diff, 'diff_truncated': nodes.finalize.output.diff_truncated}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "ship_gate",
+          "route": "ship"
+        }
+      },
+      {
+        "id": "push_branch",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "release_approval",
+          "triage"
+        ],
+        "dataDeps": [
+          "finalize",
+          "triage"
+        ],
+        "def": {
+          "id": "push_branch",
+          "type": "tool",
+          "description": "Commit the resolution as an azhi/ branch (Git Data API), a merge commit of the base branch's tip and the pull request's head. Its tree is the base plus the pull request's changes, resolved; nothing the contributor owns is touched.",
+          "tool": "github.push-branch@1",
+          "depends_on": [
+            "release_approval"
+          ],
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "branch": {
+              "ref": "nodes.finalize.output.branch"
+            },
+            "base_sha": {
+              "ref": "nodes.finalize.output.base_sha"
+            },
+            "merge_parent": {
+              "ref": "nodes.triage.output.pr.head_sha"
+            },
+            "message": {
+              "ref": "nodes.finalize.output.commit_message"
+            },
+            "files": {
+              "ref": "nodes.finalize.output.files"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.branch == nodes.finalize.output.branch && args.base_sha == nodes.triage.output.pr.base_tip && args.merge_parent == nodes.triage.output.pr.head_sha"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "open_pr",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "pr",
+          "push_branch",
+          "release_approval"
+        ],
+        "dataDeps": [
+          "finalize",
+          "pr",
+          "push_branch",
+          "release_approval"
+        ],
+        "def": {
+          "id": "open_pr",
+          "type": "tool",
+          "description": "Open a pull request from that branch into the contributor's own branch (a draft when anything is in doubt), or return the one already open.",
+          "tool": "github.create-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "head": {
+              "ref": "nodes.push_branch.output.branch"
+            },
+            "base": {
+              "ref": "nodes.pr.output.head_ref"
+            },
+            "title": {
+              "ref": "nodes.finalize.output.pr_title"
+            },
+            "body": {
+              "cel": "nodes.finalize.output.pr_body + '\\n\\nApproved for push by ' + nodes.release_approval.output.by + '.\\n\\n_Opened by Azhi Flow (pr-conflict-resolver) after a person approved this resolution._'"
+            },
+            "draft": {
+              "ref": "nodes.finalize.output.draft"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.head == nodes.push_branch.output.branch && args.base == nodes.pr.output.head_ref"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "announce",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "open_pr"
+        ],
+        "dataDeps": [
+          "finalize",
+          "open_pr"
+        ],
+        "def": {
+          "id": "announce",
+          "type": "tool",
+          "description": "Tell the original pull request where the resolution is.",
+          "tool": "github.comment-on-pr@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            },
+            "body": {
+              "cel": "nodes.finalize.output.comment + '\\n\\nResolution pull request: ' + nodes.open_pr.output.url"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == inputs.pr"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "give_up",
+        "type": "tool",
+        "deps": [
+          "finalize",
+          "ship_gate"
+        ],
+        "dataDeps": [
+          "finalize"
+        ],
+        "def": {
+          "id": "give_up",
+          "type": "tool",
+          "description": "Post why the conflicts were not resolved automatically on the pull request, so a person can take over. Nothing is pushed.",
+          "tool": "github.comment-on-pr@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            },
+            "body": {
+              "ref": "nodes.finalize.output.comment"
+            }
+          },
+          "guard": "args.repo == inputs.repo && args.number == inputs.pr"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "ship_gate",
+          "route": "stop"
+        }
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "merge_attempt": "output of tainted agent merge_attempt",
+        "base_run": "output of tainted agent base_run",
+        "head_run": "output of tainted agent head_run",
+        "triage": "output of tainted agent merge_attempt",
+        "triage_gate": "output of tainted agent merge_attempt",
+        "resolve_1": "output of tainted agent resolve_1",
+        "compare_1": "output of tainted agent base_run",
+        "review_1": "output of tainted agent review_1",
+        "refute_1": "output of tainted agent refute_1",
+        "gate_1": "output of tainted agent base_run",
+        "resolve_2": "output of tainted agent resolve_2",
+        "compare_2": "output of tainted agent base_run",
+        "review_2": "output of tainted agent review_2",
+        "refute_2": "output of tainted agent refute_2",
+        "finalize": "output of tainted agent base_run",
+        "ship_gate": "output of tainted agent base_run",
+        "push_branch": "output of tainted agent base_run",
+        "open_pr": "output of tainted agent base_run",
+        "announce": "output of tainted agent base_run",
+        "give_up": "output of tainted agent base_run"
+      },
+      "tainted": {
+        "merge_attempt": "reads a cloned repository (its files are untrusted)",
+        "base_run": "reads a cloned repository (its files are untrusted)",
+        "head_run": "reads a cloned repository (its files are untrusted)",
+        "resolve_1": "reads a cloned repository (its files are untrusted)",
+        "review_1": "reads a cloned repository (its files are untrusted)",
+        "refute_1": "reads a cloned repository (its files are untrusted)",
+        "resolve_2": "reads a cloned repository (its files are untrusted)",
+        "review_2": "reads a cloned repository (its files are untrusted)",
+        "refute_2": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": []
+    }
+  }
+}
