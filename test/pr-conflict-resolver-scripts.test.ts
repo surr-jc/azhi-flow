@@ -142,6 +142,13 @@ describe.skipIf(!python)('finalize.py', () => {
     expect(r.pr_body).toContain('merge commit, not a squash');
   });
 
+  it('hands on the diff of the attempt that ships, not an earlier one', () => {
+    const withDiff = (diff: string, diff_truncated = false) => attempt({ resolution: { ...resolution, workspace: { ...resolution.workspace, diff, diff_truncated } } });
+    expect(fin([withDiff('first attempt'), withDiff('second attempt', true)])).toMatchObject({ attempt: 2, diff: 'second attempt', diff_truncated: true });
+    expect(fin([withDiff('first attempt'), null])).toMatchObject({ attempt: 1, diff: 'first attempt', diff_truncated: false });
+    expect(fin([null, null], { ...tri, blocked: ['x'] })).toMatchObject({ attempt: 0, diff: '', diff_truncated: false });
+  });
+
   it('opens a draft when the tests were inconclusive or a protected path changed', () => {
     expect(fin([attempt({ compare: { verdict: 'inconclusive', level: 'none', notes: ['x'] } })])).toMatchObject({ ship: true, draft: true, verification: 'none' });
     expect(fin([attempt()], { ...tri, protected: ['.github/workflows/ci.yml'] })).toMatchObject({ ship: true, draft: true });

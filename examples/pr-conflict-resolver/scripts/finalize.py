@@ -88,6 +88,8 @@ def main():
         "base_sha": ws.get("base_sha", ""),
         "files": [{k: f[k] for k in PUSH_KEYS if k in f} for f in ws.get("files", [])],
         "stats": stats,
+        "diff": ws.get("diff", ""),
+        "diff_truncated": bool(ws.get("diff_truncated")),
         "commit_message": f"Resolve merge conflicts with {base_ref} for #{number}\n\nThe base tip was merged into the pull request head {head_sha[:12]}. {summary}.",
         "pr_title": f"Resolve merge conflicts with {base_ref} for #{number}",
         "pr_body": body,

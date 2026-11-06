@@ -10,6 +10,8 @@
     "base_sha": {"type": "string"},
     "files": {"type": "array", "items": {"type": "object"}},
     "stats": {"type": "object"},
+    "diff": {"type": "string"},
+    "diff_truncated": {"type": "boolean"},
     "commit_message": {"type": "string"},
     "pr_title": {"type": "string"},
     "pr_body": {"type": "string"},
@@ -19,5 +21,5 @@
     "blockers_text": {"type": "string"},
     "summary": {"type": "string"}
   },
-  "required": ["ship", "draft", "attempt", "verdict", "verification", "branch", "base_sha", "files", "stats", "commit_message", "pr_title", "pr_body", "comment", "protected", "blockers", "blockers_text", "summary"]
+  "required": ["ship", "draft", "attempt", "verdict", "verification", "branch", "base_sha", "files", "stats", "diff", "diff_truncated", "commit_message", "pr_title", "pr_body", "comment", "protected", "blockers", "blockers_text", "summary"]
 }

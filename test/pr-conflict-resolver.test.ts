@@ -67,6 +67,15 @@ describe('pr-conflict-resolver example', () => {
     expect(nodes.find((n) => n.id === 'ship_gate').routes.ship).toEqual(['release_approval']);
   });
 
+  it('shows the approver the resolution that would ship, whichever attempt made it', () => {
+    const wf = parse(readFileSync(`${PKG}/workflow.yaml`, 'utf8'));
+    const payload = String((wf.nodes as any[]).find((n) => n.id === 'release_approval').payload.map);
+    expect(payload).toContain("'diff': nodes.finalize.output.diff");
+    expect(payload).toContain("'diff_truncated': nodes.finalize.output.diff_truncated");
+    // A step that reads one attempt shows it even when another ships, and is skipped when that attempt did not run.
+    expect(payload).not.toMatch(/nodes\.(resolve|compare|review|refute)_\d/);
+  });
+
   it('pushes the resolution as a merge of the base tip and the head the merge was made from', () => {
     const wf = parse(readFileSync(`${PKG}/workflow.yaml`, 'utf8'));
     const push = (wf.nodes as any[]).find((n) => n.id === 'push_branch');
