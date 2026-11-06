@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "method": {"type": "string", "maxLength": 300},
+    "journeys": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "maxLength": 120},
+          "status": {"enum": ["pass", "fail", "unavailable"]},
+          "evidence": {"type": "array", "items": {"type": "string", "maxLength": 300}, "maxItems": 10},
+          "gap": {"type": "string", "maxLength": 600}
+        },
+        "required": ["name", "status", "evidence", "gap"],
+        "additionalProperties": false
+      }
+    },
+    "invariants": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "statement": {"type": "string", "maxLength": 400},
+          "status": {"enum": ["pass", "fail", "unavailable"]},
+          "evidence": {"type": "array", "items": {"type": "string", "maxLength": 300}, "maxItems": 10},
+          "gap": {"type": "string", "maxLength": 600}
+        },
+        "required": ["statement", "status", "evidence", "gap"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["method", "journeys", "invariants"],
+  "additionalProperties": false
+}

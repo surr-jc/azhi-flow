@@ -1,0 +1,378 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "ai-sdlc-factory-verify",
+    "definitionHash": "sha256:f2f1a17da4fb068b8ce6bd29d37f1c0ae30461bc5bb3fd9ee3604c0e079ccf83",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The GitHub repository to verify, owner/name"
+        },
+        "staging_branch": {
+          "type": "string",
+          "title": "Staging branch",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "The branch the factory delivered to (for example dev)"
+        },
+        "journeys": {
+          "type": "string",
+          "title": "Journeys and invariants",
+          "minLength": 1,
+          "maxLength": 12000,
+          "description": "The release's user journeys (steps a user takes) and the invariants that must stay true, from the approved release plan"
+        }
+      },
+      "required": [
+        "repo",
+        "staging_branch",
+        "journeys"
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}",
+      "ready_label": "ready",
+      "priority_label": "priority",
+      "verify_label": "release-verify"
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "ci",
+        "type": "tool",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "ci",
+          "type": "tool",
+          "description": "Completed CI runs of the last 7 days, oldest first.",
+          "tool": "github.ci-runs@1",
+          "arguments": {
+            "since": {
+              "cel": "string(now - duration('168h'))"
+            }
+          },
+          "project": [
+            "id",
+            "status",
+            "branch",
+            "started_at",
+            "failed_tests"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "verify",
+        "type": "agent",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "verify",
+          "type": "agent",
+          "description": "Read the staging branch and check each journey and invariant against the code, with a file as evidence (journey-verification skill).",
+          "executor": "opencode",
+          "profile": "journey-verifier@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + inputs.staging_branch"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'journeys': inputs.journeys, 'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/verify.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 40
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "verdict",
+        "type": "script",
+        "deps": [
+          "ci",
+          "verify"
+        ],
+        "dataDeps": [
+          "ci",
+          "verify"
+        ],
+        "def": {
+          "id": "verdict",
+          "type": "script",
+          "description": "Each journey and invariant with its status, the CI result and the overall grade, by rules; the fix ticket to propose when something failed.",
+          "runtime": "python",
+          "entrypoint": "scripts/verdict.py",
+          "input": {
+            "map": "{'repo': inputs.repo, 'staging_branch': inputs.staging_branch, 'verify': nodes.verify.output, 'runs': nodes.ci.output, 'labels': [config.ready_label, config.priority_label, config.verify_label]}"
+          },
+          "output_schema": "schemas/verdict.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "verdict_report",
+        "type": "report",
+        "deps": [
+          "verdict"
+        ],
+        "dataDeps": [
+          "verdict"
+        ],
+        "def": {
+          "id": "verdict_report",
+          "type": "report",
+          "description": "The verdict as Markdown.",
+          "template": "templates/verdict.md",
+          "input": {
+            "map": "{'s': nodes.verdict.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "verdict_post",
+        "type": "notify",
+        "deps": [
+          "verdict_report"
+        ],
+        "dataDeps": [
+          "verdict_report"
+        ],
+        "def": {
+          "id": "verdict_post",
+          "type": "notify",
+          "description": "Post the verdict to the channel.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.verdict_report.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "needs_fix",
+        "type": "condition",
+        "deps": [
+          "verdict"
+        ],
+        "dataDeps": [
+          "verdict"
+        ],
+        "def": {
+          "id": "needs_fix",
+          "type": "condition",
+          "description": "Something failed - ask a person. Otherwise nothing is written.",
+          "expression": "nodes.verdict.output.propose_fix ? 'ask' : 'none'",
+          "routes": {
+            "ask": [
+              "fix_approval"
+            ],
+            "none": []
+          },
+          "default": "none"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "fix_approval",
+        "type": "approval",
+        "deps": [
+          "needs_fix",
+          "verdict"
+        ],
+        "dataDeps": [
+          "verdict"
+        ],
+        "def": {
+          "id": "fix_approval",
+          "type": "approval",
+          "description": "A person approves the fix ticket before it is created. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "operator",
+          "message": {
+            "cel": "'Release verification of ' + inputs.staging_branch + ' in ' + inputs.repo + ' found ' + string(nodes.verdict.output.counts.fail) + ' problem(s). Create one fix ticket? The factory will pick it up first.'"
+          },
+          "payload": {
+            "map": "{'overall': nodes.verdict.output.overall, 'ci_status': nodes.verdict.output.ci_status, 'ticket': nodes.verdict.output.ticket}"
+          },
+          "expires_in": "24h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 86400000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "needs_fix",
+          "route": "ask"
+        }
+      },
+      {
+        "id": "create_fix",
+        "type": "tool",
+        "deps": [
+          "verdict"
+        ],
+        "dataDeps": [
+          "verdict"
+        ],
+        "def": {
+          "id": "create_fix",
+          "type": "tool",
+          "description": "Create the fix issue, labelled so the next lap picks it up first.",
+          "tool": "github.create-issue@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "title": {
+              "ref": "nodes.verdict.output.ticket.title"
+            },
+            "body": {
+              "ref": "nodes.verdict.output.ticket.body"
+            },
+            "labels": {
+              "ref": "nodes.verdict.output.ticket.labels"
+            }
+          },
+          "guard": "args.repo == inputs.repo"
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "verify": "output of tainted agent verify",
+        "verdict": "output of tainted agent verify",
+        "verdict_report": "output of tainted agent verify",
+        "verdict_post": "output of tainted agent verify",
+        "needs_fix": "output of tainted agent verify",
+        "create_fix": "output of tainted agent verify"
+      },
+      "tainted": {
+        "verify": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "verify",
+          "write": "verdict_post",
+          "path": [
+            "verify",
+            "verdict",
+            "verdict_report",
+            "verdict_post"
+          ],
+          "gate": "guard"
+        }
+      ]
+    }
+  }
+}

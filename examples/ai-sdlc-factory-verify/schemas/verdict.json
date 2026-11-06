@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {"type": "string"},
+    "staging_branch": {"type": "string"},
+    "overall": {"enum": ["verified", "failed", "unavailable"]},
+    "ci_status": {"type": "string"},
+    "method": {"type": "string"},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {"enum": ["journey", "invariant"]},
+          "title": {"type": "string"},
+          "status": {"enum": ["pass", "fail", "unavailable"]},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "gap": {"type": "string"}
+        },
+        "required": ["kind", "title", "status", "evidence", "gap"]
+      }
+    },
+    "counts": {"type": "object"},
+    "propose_fix": {"type": "boolean"},
+    "ticket": {
+      "type": ["object", "null"],
+      "properties": {
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "labels": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "required": ["repo", "staging_branch", "overall", "ci_status", "items", "counts", "propose_fix", "ticket"]
+}

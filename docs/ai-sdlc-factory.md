@@ -1,6 +1,6 @@
 # AI SDLC Factory
 
-Three workflows that run the delivery loop of a "software factory" on top of what Azhi already has: plan a release
+Four workflows that run the delivery loop of a "software factory" on top of what Azhi already has: plan a release
 with a person, split it into dependency-ordered tickets, let a scheduled lap deliver one ticket at a time into a pull
 request on a staging branch, and grade the repository's readiness so a broken CI is noticed and proposed as a ticket.
 Tickets come from **Jira or GitHub**; the code, CI and pull requests are always on GitHub.
@@ -14,6 +14,7 @@ every write sits behind a gate, and ticket text is data.
 | `ai-sdlc-factory-plan` | a release plan (PRD) with a person, then tickets with their order | manual |
 | `ai-sdlc-factory` | one lap: pick, claim, deliver one ticket into a pull request, report | schedule |
 | `ai-sdlc-factory-readiness` | bronze, silver or gold scorecard; proposes a fix ticket when CI is red | schedule |
+| `ai-sdlc-factory-verify` | checks the release's journeys and invariants against the merged staging branch; proposes one fix ticket | manual |
 
 ```
 plan       ticket/goal ─ brief ─ plan_release (agent) ─ prd_review (a person) ─ epics ─ issue-splitter / issue-splitter-jira  × up to 3 epics
@@ -67,6 +68,13 @@ and no ticket is open for it (`ci-failing` label, or the JQL for Jira), a person
 with the `ready`, `priority` and `ci-failing` labels. The next lap picks a `priority` ticket first, so a broken CI is
 fixed before new work, with a person approving the ticket and again at the delivery's release approval.
 
+**4. Verify (`ai-sdlc-factory-verify`).** After a batch of pull requests is merged into staging, give it the release's
+journeys and invariants (from the approved plan). An agent (skill `journey-verification`) reads the staging branch and
+says pass, fail or unavailable for each, with a file as evidence. Rules then grade the release: a pass without a file is
+`unavailable`, no CI runs is not a green CI, and `verified` needs no failure, nothing unavailable and CI green on the
+branch. A failure posts to Slack and, after a person approves, creates one fix ticket (`ready`, `priority`,
+`release-verify`) that the next lap picks first. This is a read of the code, not a run of the product.
+
 ## Install and run
 
 ```bash
@@ -75,6 +83,7 @@ azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=C0123A
 azhi example install ai-sdlc-factory-plan --repo OWNER/REPO
 azhi example install ai-sdlc-factory --repo OWNER/REPO --set slack_channel=C0123ABCD
 azhi example install ai-sdlc-factory-readiness --repo OWNER/REPO --set slack_channel=C0123ABCD
+azhi example install ai-sdlc-factory-verify --repo OWNER/REPO --set slack_channel=C0123ABCD
 ```
 
 Sign and publish each draft, and publish the delivery and the splitter first: the plan and the lap run them as child
@@ -109,7 +118,7 @@ The three workflows run the same on all three. Nothing in them depends on the op
 
 ## What this does not do (yet)
 
-- **No merge, no close.** A person merges each pull request into staging, batch-validates there, and sends what is
+- **No merge, no close.** A person merges each pull request into staging, runs the verify workflow there, and sends what is
   wrong back as new tickets. GitHub does not close an issue when a pull request merges into a branch other than the
   default one, so a person **closes each slice's issue** after merging it: that is what releases the slices that depend
   on it. (When staging is the default branch, `Closes #N` in the pull request does it.)

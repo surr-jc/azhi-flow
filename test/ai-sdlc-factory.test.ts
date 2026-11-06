@@ -33,7 +33,7 @@ const run = (pkg: string, script: string, input: unknown) =>
     }).toString(),
   );
 
-const PACKAGES = ['ai-sdlc-factory-plan', 'ai-sdlc-factory', 'ai-sdlc-factory-readiness'];
+const PACKAGES = ['ai-sdlc-factory-plan', 'ai-sdlc-factory', 'ai-sdlc-factory-readiness', 'ai-sdlc-factory-verify'];
 
 describe('AI SDLC Factory packages', () => {
   for (const name of PACKAGES) {
@@ -247,6 +247,33 @@ describe('score.py: the readiness level', () => {
     const unknown = score({ files: all, runs: runs('failure'), open_tickets: null });
     expect(unknown).toMatchObject({ propose_fix: false, has_unavailable: true });
     expect(unknown.unavailable).toContain('Whether a ticket is already open for the failing CI');
+  });
+});
+
+describe('verify scripts', () => {
+  const verdict = (o: any) => run('ai-sdlc-factory-verify', 'verdict.py', { repo: 'a/b', staging_branch: 'dev', labels: ['ready', 'priority', 'release-verify'], ...o });
+  const ok = (name: string, status = 'pass', evidence = ['src/a.ts']) => ({ name, status, evidence, gap: '' });
+  const green = [{ id: '1', status: 'success', branch: 'dev' }];
+
+  it('is verified only when nothing failed, nothing is unavailable and CI on the branch passed', () => {
+    expect(verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: green })).toMatchObject({ overall: 'verified', propose_fix: false, ticket: null });
+  });
+
+  it('never counts a pass without a file as evidence, and no CI runs is not a green CI', () => {
+    const v = verdict({ verify: { method: 'read', journeys: [ok('Checkout', 'pass', [])], invariants: [] }, runs: green });
+    expect(v).toMatchObject({ overall: 'unavailable', counts: { pass: 0, unavailable: 1 } });
+    expect(verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: [{ id: '1', status: 'success', branch: 'main' }] })).toMatchObject({ overall: 'unavailable', ci_status: 'unavailable' });
+    expect(verdict({ verify: { method: 'read', journeys: [], invariants: [] }, runs: green }).overall).toBe('unavailable');
+  });
+
+  it('fails on a failed journey or a red CI, and proposes one labelled ticket for the failures', () => {
+    const v = verdict({ verify: { method: 'read', journeys: [ok('Checkout', 'fail', ['src/pay.ts']), ok('Login')], invariants: [{ statement: 'No data loss', status: 'fail', evidence: [], gap: 'drops rows' }] }, runs: green });
+    expect(v).toMatchObject({ overall: 'failed', propose_fix: true, counts: { fail: 2, pass: 1 } });
+    expect(v.ticket.labels).toEqual(['ready', 'priority', 'release-verify']);
+    expect(v.ticket.body).toContain('Checkout');
+    expect(v.ticket.body).toContain('drops rows');
+    const red = verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: [{ id: '2', status: 'failure', branch: 'dev' }] });
+    expect(red).toMatchObject({ overall: 'failed', propose_fix: false });
   });
 });
 

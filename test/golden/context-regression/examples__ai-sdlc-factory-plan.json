@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory-plan",
-    "definitionHash": "sha256:672efb015303933cdb72f213639ee0734433a7429daa15c86683ba3df04efac2",
+    "definitionHash": "sha256:a4c49156a0079c1e245872ca25337ca21df4320548dbab2ce6e1925e1855b145",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -308,12 +308,120 @@
         "maxAttempts": 3
       },
       {
-        "id": "plan_release",
+        "id": "brainstorm",
         "type": "agent",
         "deps": [
           "brief"
         ],
         "dataDeps": [
+          "brief"
+        ],
+        "def": {
+          "id": "brainstorm",
+          "type": "agent",
+          "description": "Read the repository and prepare the conversation before planning - the questions only a person can answer and two or three approaches with one recommended (brainstorm-requirements skill).",
+          "executor": "opencode",
+          "profile": "brainstormer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + inputs.base_branch"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/brainstorm.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 15
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "brainstorm_review",
+        "type": "approval",
+        "deps": [
+          "brainstorm"
+        ],
+        "dataDeps": [
+          "brainstorm"
+        ],
+        "def": {
+          "id": "brainstorm_review",
+          "type": "approval",
+          "description": "A person answers the questions and picks an approach before the release is planned; rejecting stops the run with nothing planned. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "'Before the release is planned: ' + nodes.brainstorm.output.summary + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"
+          },
+          "payload": {
+            "map": "{'questions': nodes.brainstorm.output.questions, 'approaches': nodes.brainstorm.output.approaches, 'assumptions': nodes.brainstorm.output.assumptions, 'unknowns': nodes.brainstorm.output.unknowns}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "approach": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "title": "Approach",
+                "description": "The name of the approach to plan, as listed (or your own direction in a few words)."
+              },
+              "answers": {
+                "type": "string",
+                "maxLength": 6000,
+                "title": "Answers",
+                "description": "One answer per question, in order. Leave empty when there were no questions. They are treated as decisions by the planner."
+              }
+            },
+            "required": [
+              "approach"
+            ],
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "plan_release",
+        "type": "agent",
+        "deps": [
+          "brainstorm_review",
+          "brief"
+        ],
+        "dataDeps": [
+          "brainstorm_review",
           "brief"
         ],
         "def": {
@@ -333,7 +441,7 @@
             "depth": 1
           },
           "input": {
-            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}}"
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
           },
           "output_schema": "schemas/prd.json",
           "timeout": "25m",
@@ -1097,6 +1205,7 @@
     ],
     "taint": {
       "untrusted": {
+        "brainstorm": "output of tainted agent brainstorm",
         "plan_release": "output of tainted agent plan_release",
         "prd": "output of tainted agent plan_release",
         "epics": "output of tainted agent plan_release",
@@ -1113,6 +1222,7 @@
         "split_3_jira": "output of a subworkflow is not marked trusted"
       },
       "tainted": {
+        "brainstorm": "reads a cloned repository (its files are untrusted)",
         "plan_release": "reads a cloned repository (its files are untrusted)"
       },
       "paths": []

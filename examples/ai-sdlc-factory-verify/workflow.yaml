@@ -1,0 +1,103 @@
+# ai-sdlc-factory-verify: did the release that was merged into staging keep its promises?
+#   ci       the CI runs of the last 7 days
+#   verify   an agent reads the staging branch and checks each user journey and invariant against the code, with a
+#            file as evidence for every verdict. It reads; it does not run the product.
+#   verdict  RULES, not a model: a pass without a file as evidence is "unavailable"; overall is "verified" only when
+#            nothing failed, nothing is unavailable and CI on the branch passed. No CI runs is not a green CI.
+#   report   the verdict, posted to Slack
+#   then     something failed: a person approves, then ONE fix ticket is created with the ready and priority labels,
+#            so the next lap of ai-sdlc-factory picks it up first
+# Nothing is merged, closed or edited. The only write is the ticket, after the approval, pinned to the repository the
+# run was given. Journey text and repository text are untrusted: the verifier is tainted and the ticket is written
+# only after a person approves it.
+schema_version: "2.0"
+id: ai-sdlc-factory-verify
+name: AI SDLC Factory - verify a release
+description: Check the release's user journeys and invariants against the code merged into the staging branch, grade it verified, failed or unavailable, and propose one fix ticket for a person to approve when something fails.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository to verify, owner/name"}
+    staging_branch: {type: string, title: Staging branch, minLength: 1, maxLength: 200, description: "The branch the factory delivered to (for example dev)"}
+    journeys: {type: string, title: Journeys and invariants, minLength: 1, maxLength: 12000, description: "The release's user journeys (steps a user takes) and the invariants that must stay true, from the approved release plan"}
+  required: [repo, staging_branch, journeys]
+config:
+  # Filled in by the example install (setting slack_channel).
+  channel: "{{slack_channel}}"
+  ready_label: ready
+  priority_label: priority
+  verify_label: release-verify
+nodes:
+  - id: ci
+    type: tool
+    description: Completed CI runs of the last 7 days, oldest first.
+    tool: github.ci-runs@1
+    arguments: {since: {cel: "string(now - duration('168h'))"}}
+    project: [id, status, branch, started_at, failed_tests]
+
+  - id: verify
+    type: agent
+    description: Read the staging branch and check each journey and invariant against the code, with a file as evidence (journey-verification skill).
+    executor: opencode
+    profile: journey-verifier@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/heads/' + inputs.staging_branch"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'journeys': inputs.journeys, 'repository': inputs.repo}"}
+    output_schema: schemas/verify.json
+    timeout: 25m
+    budget: {max_tool_calls: 40}
+
+  - id: verdict
+    type: script
+    description: Each journey and invariant with its status, the CI result and the overall grade, by rules; the fix ticket to propose when something failed.
+    runtime: python
+    entrypoint: scripts/verdict.py
+    input: {map: "{'repo': inputs.repo, 'staging_branch': inputs.staging_branch, 'verify': nodes.verify.output, 'runs': nodes.ci.output, 'labels': [config.ready_label, config.priority_label, config.verify_label]}"}
+    output_schema: schemas/verdict.json
+    limits: {time: 1m}
+
+  - id: verdict_report
+    type: report
+    description: The verdict as Markdown.
+    template: templates/verdict.md
+    input: {map: "{'s': nodes.verdict.output}"}
+
+  - id: verdict_post
+    type: notify
+    description: Post the verdict to the channel.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.verdict_report.output.markdown}
+    guard: "args.channel == config.channel"
+
+  - id: needs_fix
+    type: condition
+    description: Something failed - ask a person. Otherwise nothing is written.
+    expression: "nodes.verdict.output.propose_fix ? 'ask' : 'none'"
+    routes: {ask: [fix_approval], none: []}
+    default: none
+
+  - id: fix_approval
+    type: approval
+    description: A person approves the fix ticket before it is created. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: operator
+    message: {cel: "'Release verification of ' + inputs.staging_branch + ' in ' + inputs.repo + ' found ' + string(nodes.verdict.output.counts.fail) + ' problem(s). Create one fix ticket? The factory will pick it up first.'"}
+    payload: {map: "{'overall': nodes.verdict.output.overall, 'ci_status': nodes.verdict.output.ci_status, 'ticket': nodes.verdict.output.ticket}"}
+    expires_in: 24h
+    on_expiry: reject
+
+  - id: create_fix
+    type: tool
+    description: Create the fix issue, labelled so the next lap picks it up first.
+    tool: github.create-issue@1
+    arguments:
+      repo: {ref: inputs.repo}
+      title: {ref: nodes.verdict.output.ticket.title}
+      body: {ref: nodes.verdict.output.ticket.body}
+      labels: {ref: nodes.verdict.output.ticket.labels}
+    guard: "args.repo == inputs.repo"

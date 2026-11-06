@@ -1,0 +1,65 @@
+# Admin configuration for the AI SDLC Factory release verification:
+#   azhi example install ai-sdlc-factory-verify --repo OWNER/REPO --set slack_channel=C0123ABCD
+# Run it by hand after a batch of pull requests has been merged into the staging branch, with the release's
+# journeys and invariants (the plan's approval message and `ai-sdlc-factory-plan` print them):
+#   azhi run examples/ai-sdlc-factory-verify --input repo=OWNER/REPO --input staging_branch=dev --input journeys="..."
+# It reads the code and the CI result; it does not run the product. Try it on a throwaway repository first: an
+# approved run creates one issue.
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained, read-only "Contents" and "Actions": clones the staging branch, reads CI runs
+#   github-write-token    fine-grained, "Issues: read and write": creates the one fix issue after the approval
+#   github-copilot-token  your GitHub Copilot sign-in; the verifier runs on a Copilot model through OpenCode
+#   slack-bot-token       posts the verdict
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the verdict is posted to (the bot must be in it).
+    placeholder: C0123ABCD
+    required: true
+tools:
+  - id: github.ci-runs
+    version: 1
+    description: Completed CI runs on the repository, oldest first, with the names of failed jobs (GitHub Actions)
+    effect: read
+    source: github-actions
+    credential: github-read-token
+    transport: {kind: builtin, name: github.ci-runs, config: {repos: [OWNER/REPO], failed_run_details: 20}}
+    input_schema: {type: object, properties: {since: {type: string}}, additionalProperties: false}
+    output_schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: {type: string}
+          status: {type: string}
+          branch: {type: string}
+          started_at: {type: string}
+          finished_at: {type: string}
+          failed_tests: {type: array, items: {type: string}}
+  - id: github.create-issue
+    version: 1
+    description: Create an issue (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-write-token
+    transport: {kind: builtin, name: github.create-issue, config: {repos: [OWNER/REPO]}}
+    timeout: 60s
+    input_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        title: {type: string, maxLength: 250}
+        body: {type: string, maxLength: 60000}
+        labels: {type: array, maxItems: 10, items: {type: string, maxLength: 50}}
+        parent: {type: integer}
+      required: [repo, title, body]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        url: {type: string}
+        created: {type: boolean}
+      required: [repo, number, url]
