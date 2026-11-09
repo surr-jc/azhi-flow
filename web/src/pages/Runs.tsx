@@ -3,8 +3,46 @@ import { useEffect, useState } from 'react';
 import { api, atLeast, type Overview, type RunRow, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
 import { useRoute } from '../router';
-import { ErrorNote, Loading, PageHead, Panel } from '../ui';
-import { RunTable, StatusTiles } from './Overview';
+import { Link } from '../router';
+import { ErrorNote, Loading, money, num, PageHead, Panel } from '../ui';
+import { RunTable } from './Overview';
+
+/** One quiet line of system state. Zeros stay grey; only counts that need a person get colour. */
+function StatusBar({ o, active }: { o: Overview; active: string }) {
+  const day = o.last_24h;
+  const running = (o.open.running ?? 0) + (o.open.queued ?? 0);
+  const failed = (day.failed ?? 0) + (day.delivery_failed ?? 0) + (day.expired ?? 0);
+  const items = [
+    { key: 'running,queued', label: 'running', n: running, tone: 'run', to: '/ui/runs?state=running,queued' },
+    { key: 'waiting', label: 'waiting', n: o.open.waiting ?? 0, tone: 'warn', to: '/ui/runs?state=waiting' },
+    { key: 'approvals', label: 'need you', n: o.approvals.mine, tone: 'warn', to: '/ui/approvals' },
+    { key: 'succeeded', label: 'succeeded', n: day.succeeded ?? 0, tone: 'ok', to: '/ui/runs?state=succeeded' },
+    { key: 'failed,delivery_failed,expired', label: 'failed', n: failed, tone: 'bad', to: '/ui/runs?state=failed,delivery_failed,expired' },
+  ];
+  return (
+    <nav className="status-bar" aria-label="System status">
+      {items.map((i) => (
+        <Link key={i.key} to={i.to} className={`status-item${i.n ? ` ${i.tone}` : ''}${active === i.key ? ' active' : ''}`} aria-current={active === i.key ? 'true' : undefined}>
+          <b>{num(i.n)}</b> {i.label}
+        </Link>
+      ))}
+      <span className="status-note">last 24 hours</span>
+      <Link to="/ui/workers" className={`status-aside${o.workers.online ? '' : ' bad'}`}>{o.workers.online}/{o.workers.total} workers</Link>
+      <Link to="/ui/usage" className="status-aside">{money(o.spend.week.amount, o.spend.week.currency, o.spend.week.complete)} this week</Link>
+    </nav>
+  );
+}
+
+/** Shown only when something is waiting on the signed-in person, so an idle system stays quiet. */
+function NeedsYou({ o }: { o: Overview }) {
+  if (!o.approvals.mine) return null;
+  return (
+    <div className="needs-you" role="status">
+      <span><b>{num(o.approvals.mine)}</b> approval{o.approvals.mine === 1 ? '' : 's'} waiting for you</span>
+      <Link to="/ui/approvals" className="button">Review approvals</Link>
+    </div>
+  );
+}
 
 const STATES = ['', 'running,queued', 'waiting', 'succeeded', 'failed,delivery_failed,expired', 'cancelled'];
 const LABEL: Record<string, string> = { '': 'All states', 'running,queued': 'Running', waiting: 'Waiting', succeeded: 'Succeeded', 'failed,delivery_failed,expired': 'Failed', cancelled: 'Cancelled' };
@@ -54,8 +92,8 @@ export function Runs() {
   return (
     <>
       <PageHead title="Runs" />
-      {o.data ? <StatusTiles o={o.data} active={state} /> : null}
-      <div className="filters">
+      {o.data ? <><StatusBar o={o.data} active={state} /><NeedsYou o={o.data} /></> : null}
+      <div className="filters runs-filters">
         <select aria-label="State" value={state} onChange={(e) => set('state', e.target.value)}>
           {states.map((s) => <option key={s} value={s}>{LABEL[s] ?? s}</option>)}
         </select>
@@ -64,11 +102,11 @@ export function Runs() {
           {workflows.data?.map((w) => <option key={w.slug} value={w.slug}>{w.slug}</option>)}
         </select>
         <form className="row" role="search" onSubmit={(e) => { e.preventDefault(); set('q', typed.trim()); }}>
-          <label className="lbl"><span>Search runs</span><input type="search" placeholder="Inputs or run id" value={typed} onChange={(e) => setTyped(e.target.value)} /></label>
+          <input type="search" aria-label="Search runs" placeholder="Search inputs or run id" value={typed} onChange={(e) => setTyped(e.target.value)} />
         </form>
         <label className="row small">From <input type="date" aria-label="From" value={from} onChange={(e) => set('from', e.target.value)} /></label>
         <label className="row small">To <input type="date" aria-label="To" value={to} onChange={(e) => set('to', e.target.value)} /></label>
-        <label className="row small"><input type="checkbox" checked={subs} onChange={(e) => set('subs', e.target.checked ? '1' : '')} /> Show subworkflow runs</label>
+        <label className="row small subs-toggle"><input type="checkbox" checked={subs} onChange={(e) => set('subs', e.target.checked ? '1' : '')} /> Show subworkflow runs</label>
         {state || workflow || text || from || to || subs ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : null}
       </div>
       <Panel>

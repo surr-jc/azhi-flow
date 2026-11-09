@@ -2123,3 +2123,17 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .wk-limit-row input { width: 96px; min-height: 40px; font-size: calc(16px * var(--fs, 1)); font-weight: 600; }
 .wk-limit-row button { min-height: 40px; }
 @media (max-width: 800px) { .wk-state { align-items: flex-start; } .wk-head { flex-wrap: wrap; } }
+
+/* Runs page: one quiet status line instead of a card strip. */
+.status-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 0 0 16px; font-size: calc(14px * var(--fs, 1)); }
+.status-item { color: var(--muted); }
+.status-item b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.status-item.ok { color: var(--ok); } .status-item.bad { color: var(--bad); } .status-item.warn { color: var(--warn); } .status-item.run { color: var(--run); }
+.status-item.active { text-decoration: underline; text-underline-offset: 4px; }
+.status-note { color: var(--muted); font-size: calc(12px * var(--fs, 1)); }
+.status-aside { color: var(--muted); }
+.status-aside:first-of-type { margin-left: auto; }
+.status-aside.bad { color: var(--bad); }
+.needs-you { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--attention); background: var(--panel); border-radius: 10px; }
+.runs-filters > input[type="search"] { flex: 1 1 220px; min-width: 0; }
+.subs-toggle { margin-left: auto; color: var(--muted); }
