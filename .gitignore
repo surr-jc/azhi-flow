@@ -5,7 +5,6 @@ dist/
 .env
 coverage/
 .scratch/
-package-lock.json
 docs/demo/out/*
 
 # Claude Code dev layer
