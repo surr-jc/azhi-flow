@@ -44,8 +44,8 @@ type Filter = 'all' | Exclude<Cat, 'other'>;
 const FILTERS: Array<[Filter, string]> = [['all', 'All'], ['msg', 'Messages'], ['tool', 'Tools'], ['approval', 'Approvals'], ['problem', 'Problems']];
 
 /** The chip's word and colour family; colour always comes with the word. */
-const CHIP: Record<string, string> = { message: 'agent', prompt: 'script', reasoning: 'flow', tool: 'tool', approval: 'approval', error: 'bad', step: 'script', run: 'notify', system: 'script', model: 'script', note: 'script' };
-const CHIP_LABEL: Record<string, string> = { message: 'Message', prompt: 'Prompt', reasoning: 'Reasoning', tool: 'Tool', approval: 'Approval', error: 'Error', step: 'Step', run: 'Run', system: 'System', model: 'Model call', note: 'Note' };
+const CHIP: Record<string, string> = { message: 'agent', prompt: 'script', reasoning: 'flow', tool: 'tool', approval: 'approval', error: 'bad', step: 'script', run: 'notify', system: 'script', model: 'script', note: 'script', output: 'tool' };
+const CHIP_LABEL: Record<string, string> = { message: 'Message', prompt: 'Prompt', reasoning: 'Reasoning', tool: 'Tool', approval: 'Approval', error: 'Error', step: 'Step', run: 'Run', system: 'System', model: 'Model call', note: 'Note', output: 'Result' };
 
 /** One line of the log: a run event or a transcript entry, collapsed to a summary until opened. */
 interface Row { key: string; at: number; order: number; kind: string; cat: Cat; title: string; summary: string; right?: string; bad?: boolean; text: string; body: () => ReactNode }
@@ -97,6 +97,51 @@ function transcriptRow(e: TranscriptEntry, fallbackAt: number): Row {
     case 'error': return { ...base, kind: 'error', cat: 'problem', title: 'Error', summary: oneLine(e.text), right: 'Failed', bad: true, body: () => <Markdown className="af-text" text={e.text ?? ''} /> };
     default: return { ...base, kind: 'note', cat: 'other', title: e.id === 'dcp' ? 'Context pruning' : 'Note', summary: oneLine(e.text), body: () => <p className="af-text">{e.text}</p> };
   }
+}
+
+/** The workflow's mapped input for a step, as the canvas's Input tab shows it. */
+const INPUT_KEYS = ['input', 'arguments', 'query', 'for_each', 'payload', 'message', 'destination'];
+const mappedInput = (node?: PlanNode) => Object.fromEntries(INPUT_KEYS.filter((k) => node?.def?.[k] !== undefined).map((k) => [k, node!.def![k]]));
+
+/**
+ * What a step that is not an agent did, from its attempt: the tool it called (or the step itself) with the input
+ * the workflow mapped and the output or error it returned. Agent steps' calls come from their transcript instead.
+ */
+function attemptRow(a: any, node: PlanNode | undefined, fallbackAt: number): Row | null {
+  const type = node?.type;
+  if (type === 'agent' || type === 'approval' || !a.started_at) return null;
+  const at = new Date(a.ended_at ?? a.started_at).getTime() || fallbackAt;
+  const input = mappedInput(node);
+  const failed = a.state === 'failed' || !!a.error;
+  const running = a.state === 'running';
+  const tool = type === 'tool' ? String(node?.def?.tool ?? 'tool') : '';
+  const took = a.ended_at ? span(new Date(a.ended_at).getTime() - new Date(a.started_at).getTime()) : undefined;
+  const result = a.error ? oneLine(a.error.message ?? JSON.stringify(a.error), 120) : a.output !== undefined && a.output !== null ? oneLine(JSON.stringify(a.output), 120) : '';
+  return {
+    key: `a${a.node_id}/${a.attempt}`, at, order: Number.MAX_SAFE_INTEGER, kind: failed ? 'error' : type === 'tool' ? 'tool' : 'output', cat: failed ? 'problem' : type === 'tool' ? 'tool' : 'other',
+    title: tool || 'Output', summary: [Object.keys(input).length ? argLine(input) : '', result ? `→ ${result}` : ''].filter(Boolean).join(' '),
+    right: failed ? 'Failed' : running ? 'Running' : took, bad: failed,
+    text: `${tool} ${JSON.stringify(input)} ${JSON.stringify(a.output ?? '')} ${JSON.stringify(a.error ?? '')}`.toLowerCase(),
+    body: () => (
+      <div className="af-io">
+        {a.attempt > 1 ? <p className="muted small al-meta">Attempt {a.attempt}</p> : null}
+        <div className="af-label">Input</div>
+        {Object.keys(input).length ? <Formatted value={input} plain /> : <p className="muted small">The workflow mapped no input for this step; it read the outputs of the steps before it.</p>}
+        {a.error ? <><div className="af-label">Error</div><Formatted value={a.error} plain /></> : a.output !== undefined && a.output !== null ? <><div className="af-label">Output</div><Formatted value={a.output} /></> : <p className="muted small">{running ? 'Running. Its output appears here when it finishes.' : 'No output.'}</p>}
+      </div>
+    ),
+  };
+}
+
+/** A write the step made through the gateway, from the action ledger. */
+function actionRow(x: any): Row {
+  const failed = x.state === 'failed' || x.state === 'outcome_unknown';
+  return {
+    key: `x${x.id}`, at: new Date(x.created_at).getTime(), order: Number.MAX_SAFE_INTEGER - 1, kind: failed ? 'error' : 'tool', cat: failed ? 'problem' : 'tool',
+    title: String(x.tool), summary: `${x.effect ?? 'write'} · ${String(x.state).replaceAll('_', ' ')}`, right: failed ? String(x.state).replaceAll('_', ' ') : undefined, bad: failed,
+    text: `${x.tool} ${x.state} ${JSON.stringify(x.target ?? '')} ${JSON.stringify(x.receipt ?? '')}`.toLowerCase(),
+    body: () => <Formatted value={{ action: x.id, effect: x.effect, state: x.state, ...(x.target !== undefined ? { target: x.target } : {}), ...(x.receipt ? { receipt: x.receipt } : {}), ...(x.error ? { error: x.error } : {}) }} plain />,
+  };
 }
 
 function EventBody({ ev }: { ev: RunEvent }) {
@@ -155,11 +200,17 @@ export function ActivityLog({ runId, events, nodes, detail: d, open, focus }: { 
       last = row.at;
       add(e.node_id, row);
     }
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    for (const a of (d.attempts ?? []) as any[]) {
+      const row = attemptRow(a, byId.get(a.node_id), last);
+      if (row) add(a.node_id, row);
+    }
+    for (const x of (d.actions ?? []) as any[]) if (x.node_id) add(x.node_id, actionRow(x));
     const newest = (a: { at: number; order?: number }, b: { at: number; order?: number }) => b.at - a.at || (b.order ?? 0) - (a.order ?? 0);
     for (const g of groups.values()) g.rows.sort(newest);
     const list: Entry[] = [...[...groups.values()].map((g) => ({ group: g, at: g.start })), ...loose.map((r) => ({ row: r, at: r.at, order: r.order }))];
     return list.sort(newest);
-  }, [events, transcript, start]);
+  }, [events, transcript, start, nodes, d.attempts, d.actions]);
 
   const needle = q.trim().toLowerCase();
   const match = (r: Row) => (filter === 'all' || r.cat === filter) && (!needle || r.text.includes(needle) || r.title.toLowerCase().includes(needle));
@@ -221,7 +272,7 @@ function GroupView({ group: g, rows, start, type, detail: d, running, opened, to
   const state: string = attempts.at(-1)?.state ?? (rows.some((r) => r.kind === 'approval') ? 'waiting' : 'pending');
   const live = running && (state === 'running' || state === 'waiting');
   const end = live ? Date.now() : g.end;
-  const tools = g.rows.filter((r) => r.cat === 'tool' || (r.cat === 'problem' && r.kind === 'error' && r.key.startsWith('t'))).length;
+  const tools = g.rows.filter((r) => r.cat === 'tool' || (r.cat === 'problem' && r.kind === 'error' && /^[tax]/.test(r.key))).length;
   const msgs = g.rows.filter((r) => r.kind === 'message').length;
   const problems = g.rows.filter((r) => r.cat === 'problem').length;
   const summary = [plural(g.rows.length, 'event'), tools ? plural(tools, 'tool call') : '', msgs ? plural(msgs, 'message') : ''].filter(Boolean).join(' · ');
