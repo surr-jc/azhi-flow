@@ -77,9 +77,9 @@ export async function freePort(preferred: number): Promise<number> {
   return (await tryPort(preferred)) ?? (await tryPort(0))!;
 }
 
-function portOpen(port: number): Promise<boolean> {
+function portOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port }, () => (s.end(), resolve(true)));
+    const s = net.connect({ host, port }, () => (s.end(), resolve(true)));
     s.on('error', () => resolve(false));
     s.setTimeout(1000, () => (s.destroy(), resolve(false)));
   });
@@ -90,17 +90,27 @@ export interface TemporalDevServer {
   stop(): Promise<void>;
 }
 
-/** Starts the dev server on a free port with its state in `dbFile`, and waits until it accepts connections. */
-export async function startTemporalDevServer(o: { bin: string; dbFile: string; port?: number; log?: (m: string) => void }): Promise<TemporalDevServer> {
-  const port = await freePort(o.port ?? 7233);
-  const args = ['server', 'start-dev', '--db-filename', o.dbFile, '--ip', '127.0.0.1', '--port', String(port), '--headless', '--log-level', 'error', '--namespace', 'default'];
+/**
+ * Starts the dev server with its state in `dbFile`, and waits until it accepts connections. It listens on
+ * 127.0.0.1 on a free port by default. Any other `ip` (a pod that remote workers reach) keeps the exact
+ * port, so a busy port fails instead of moving where workers would not find it.
+ */
+export async function startTemporalDevServer(o: { bin: string; dbFile: string; port?: number; ip?: string; log?: (m: string) => void }): Promise<TemporalDevServer> {
+  const ip = o.ip ?? '127.0.0.1';
+  const exposed = ip !== '127.0.0.1' && ip !== 'localhost';
+  const wanted = o.port ?? 7233;
+  const port = await freePort(wanted);
+  if (exposed && port !== wanted) throw new Error(`Temporal port ${wanted} is in use; workers expect it there`);
+  // This process connects over loopback, which a 0.0.0.0 listener also answers.
+  const local = exposed && ip !== '0.0.0.0' ? ip : '127.0.0.1';
+  const args = ['server', 'start-dev', '--db-filename', o.dbFile, '--ip', ip, '--port', String(port), '--headless', '--log-level', 'error', '--namespace', 'default'];
   const proc: ChildProcess = spawn(o.bin, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
   let stderr = '';
   proc.stderr!.on('data', (d) => (stderr = (stderr + d).slice(-4000)));
   const exited = new Promise<void>((r) => proc.once('exit', () => r()));
   const end = Date.now() + 60_000;
   const ready = async () =>
-    (await portOpen(port)) && spawnSync(o.bin, ['operator', 'namespace', 'describe', '--namespace', 'default', '--address', `127.0.0.1:${port}`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 }).status === 0;
+    (await portOpen(port, local)) && spawnSync(o.bin, ['operator', 'namespace', 'describe', '--namespace', 'default', '--address', `${local}:${port}`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 }).status === 0;
   while (!(await ready())) {
     if (proc.exitCode !== null) throw new Error(`Temporal dev server exited with code ${proc.exitCode}: ${stderr.trim().slice(-500)}`);
     if (Date.now() > end) {
@@ -110,7 +120,7 @@ export async function startTemporalDevServer(o: { bin: string; dbFile: string; p
     await new Promise((r) => setTimeout(r, 250));
   }
   return {
-    address: `127.0.0.1:${port}`,
+    address: `${local}:${port}`,
     async stop() {
       if (proc.exitCode !== null) return;
       proc.kill('SIGTERM');

@@ -43,7 +43,11 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
 
   ensureWebBuilt(log);
   const bin = await ensureTemporalCli(join(home, 'bin'), log);
-  const temporal = await startTemporalDevServer({ bin, dbFile: join(localDir, 'temporal.db'), log });
+  // AZHI_HOST=0.0.0.0 (the single-pod install, docs/pod-poc.md) opens the API and Temporal to workers on
+  // other machines; by default both stay on this machine.
+  const host = process.env.AZHI_HOST || '127.0.0.1';
+  const temporalPort = process.env.AZHI_TEMPORAL_PORT ? Number(process.env.AZHI_TEMPORAL_PORT) : undefined;
+  const temporal = await startTemporalDevServer({ bin, dbFile: join(localDir, 'temporal.db'), ip: host, port: temporalPort, log });
   log(`Temporal dev server on ${temporal.address}`);
   const stops: Array<() => Promise<void>> = [() => temporal.stop()];
   try {
@@ -56,8 +60,8 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
         dataDir,
         artifactDir: join(dataDir, 'artifacts'),
         authMode: 'local',
-        host: '127.0.0.1',
-        ...(o.port !== undefined ? { port: o.port, publicUrl: `http://127.0.0.1:${o.port}` } : {}),
+        host,
+        ...(o.port !== undefined ? { port: o.port, publicUrl: process.env.AZHI_PUBLIC_URL || `http://127.0.0.1:${o.port}` } : {}),
       },
     });
     stops.unshift(() => server.stop());

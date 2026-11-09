@@ -2,7 +2,8 @@
 
 A team install is three containers (PostgreSQL 16 with pgvector, Temporal, the Azhi server) on
 one host, plus one or more execution workers that run natively on Linux hosts. The server image
-never runs scripts or harnesses; workers do.
+never runs scripts or harnesses; workers do. For a small trial in a single container or pod, see
+[pod-poc.md](pod-poc.md).
 
 ## Documented hardware
 

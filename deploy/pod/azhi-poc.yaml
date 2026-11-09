@@ -1,0 +1,76 @@
+# Azhi Flow proof of concept in one pod (docs/pod-poc.md).
+#
+#   kubectl apply -f deploy/pod/azhi-poc.yaml
+#
+# Replace the image with the one you pushed, and AZHI_PUBLIC_URL with the address teams use.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azhi-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azhi
+  labels: {app: azhi}
+spec:
+  replicas: 1                     # one writer: PGlite and the Temporal dev server keep state in files
+  strategy: {type: Recreate}      # never two pods on the same volume
+  selector:
+    matchLabels: {app: azhi}
+  template:
+    metadata:
+      labels: {app: azhi}
+    spec:
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: azhi
+          image: REGISTRY/azhi-flow/pod:dev
+          env:
+            - {name: AZHI_PUBLIC_URL, value: "http://AZHI_HOST_NAME:7400"}
+          ports:
+            - {name: http, containerPort: 7400}
+            - {name: temporal, containerPort: 7233}
+          resources:
+            # Your limits. About 420 MiB is used at idle, so a memory request of 128Mi lets the node evict
+            # this pod first under pressure; raise it towards 1Gi if your platform allows.
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          # Start-up (Temporal, then migrations) is slow on half a CPU: allow up to 5 minutes.
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: azhi-data}
+---
+# Team workers connect to both ports from their own machines. Temporal has no sign-in here, so limit
+# who can reach 7233 (loadBalancerSourceRanges, or your firewall) to your teams' addresses.
+apiVersion: v1
+kind: Service
+metadata:
+  name: azhi
+spec:
+  type: LoadBalancer
+  selector: {app: azhi}
+  # loadBalancerSourceRanges: ["203.0.113.0/24"]
+  ports:
+    - {name: http, port: 7400, targetPort: http}
+    - {name: temporal, port: 7233, targetPort: temporal}
