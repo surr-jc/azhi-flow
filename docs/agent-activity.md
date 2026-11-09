@@ -1,10 +1,17 @@
 # Agent activity
 
-The run page's **Agent activity** tab shows what each agent step is doing while it runs and keeps
-it afterwards: the system prompt, the prompts it was given, the model's replies and reasoning, and
-every tool call with its input and result (or error), plus each model call's token counts. It opens
-first on runs that have agent steps; the Steps list on the canvas links to it ("Watch the agent
-live").
+The run page's **Activity log** tab shows everything a run does in one list, newest first, on a time
+rail (offset from the run's start and clock time). Each step is one group holding its events
+(started, finished, failed, approval requested and decided) and, for agent steps, what the agent
+did: the system prompt, the prompts it was given, the model's replies and reasoning, every tool call
+with its input and result (or error), and each model call's token counts. Run-wide events (started,
+waiting, resumed) sit between the groups in time order.
+
+Every group and line starts collapsed. A group's header shows its type, state, duration, event and
+tool-call counts and any problems; opened, it shows the step's attempts, models, tokens and cost
+("unavailable" when the run did not report them) and its lines. A line opens to its full detail.
+Filters (Messages, Tools, Approvals, Problems), search, and Expand steps / Collapse all sit above
+the list. The Steps list on the canvas links to a step's group ("Watch the agent live").
 
 ## Where it comes from
 

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Icon } from '../icons';
 
 /**
- * The activity feed used by the run page's Agent activity and Event log: a hairline rail with a time offset
+ * An activity feed (FeedEmpty is also used by the run page's Activity log): a hairline rail with a time offset
  * and a tinted icon on the left, and the entry on the right. Newest content is the reader's call (see the
  * order switch); the rail only says "these happened one after another".
  */

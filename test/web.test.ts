@@ -83,8 +83,10 @@ describe.skipIf(!up)('mission control', () => {
     const d = await h.api.get<any>(`/v1/runs/${run_id}`);
     expect(d.approvals[0]).toMatchObject({ decision: 'approved', data: { note: 'looks right' } });
 
-    const timeline = await page.locator('.tab').innerText();
-    expect(timeline).toContain('approval.decided');
+    // The activity log starts collapsed: open the approval step, then its decision.
+    await page.locator('#al-approve').getByRole('button', { name: /approve/ }).first().click();
+    await page.locator('#al-approve').getByRole('button', { name: /Decided: approved/ }).click();
+    expect(await page.locator('.tab').innerText()).toContain('approval.decided');
     await page.getByRole('tab', { name: 'Action ledger' }).click();
     expect(await page.locator('.tab').innerText()).toMatch(/slack\.post-message@1[\s\S]*confirmed/);
     await page.getByRole('tab', { name: 'Policy coverage' }).click();
