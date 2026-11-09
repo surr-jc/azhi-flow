@@ -1371,6 +1371,9 @@ button.info:focus-visible { outline: 2px solid var(--accent); }
 .al-dot.s-waiting { background: var(--warn); }
 .al-live { padding: 10px 0; }
 .al-card { margin: 6px 0; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); min-width: 0; }
+.al-headrow { display: flex; align-items: center; min-width: 0; }
+.al-headrow .al-head { flex: 1 1 auto; min-width: 0; }
+.al-child { display: inline-flex; align-items: center; gap: 4px; flex: none; min-height: 44px; padding: 0 12px; border-left: 1px solid var(--line); font-weight: 500; }
 .al-head, .al-line { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; border: 0; border-radius: 0; background: transparent; text-align: left; min-height: 44px; padding: 8px 12px; }
 .al-head:hover:not(:disabled), .al-line:hover:not(:disabled) { background: var(--bg); }
 .al-head:active:not(:disabled), .al-line:active:not(:disabled) { transform: none; }

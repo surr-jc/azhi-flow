@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Formatted, Markdown } from '../components/Rich';
 import { FeedEmpty, type FeedTone } from '../components/ActivityFeed';
 import { Icon } from '../icons';
+import { Link } from '../router';
 import { money, num, StateBadge } from '../ui';
 import { TYPE, type PlanNode } from '../components/WorkflowCanvas';
 import { argLine, Long, ToolIO, useTranscript, type TranscriptEntry } from './AgentActivity';
@@ -277,11 +278,16 @@ function GroupView({ group: g, rows, start, type, detail: d, running, opened, to
   const problems = g.rows.filter((r) => r.cat === 'problem').length;
   const summary = [plural(g.rows.length, 'event'), tools ? plural(tools, 'tool call') : '', msgs ? plural(msgs, 'message') : ''].filter(Boolean).join(' · ');
   const t = TYPE[type ?? ''];
+  // A subworkflow step links to the run it started (one per round in a loop), as the canvas does.
+  const childRuns: string[] = type === 'subworkflow'
+    ? [...new Set([...((d.children ?? []) as any[]).filter((c) => c.parent_node_id === g.node).map((c) => String(c.id)), ...attempts.map((a) => a.output?.run_id).filter((x): x is string => typeof x === 'string')])]
+    : [];
   return (
     <li className="al-entry" id={`al-${g.node}`}>
       <Stamp at={g.start} start={start} />
       <span className="al-rail"><span className={`al-dot s-${state}`} /></span>
       <div className="al-card">
+        <div className="al-headrow">
         <button type="button" className="al-head" aria-expanded={isOpen} onClick={() => toggle(k)}>
           <Chevron open={isOpen} />
           {t ? <span className={`al-chip c-${type === 'agent' ? 'agent' : type === 'tool' ? 'tool' : 'script'}`}>{t.label}</span> : type === 'approval' ? <span className="al-chip c-approval">Approval</span> : null}
@@ -292,6 +298,12 @@ function GroupView({ group: g, rows, start, type, detail: d, running, opened, to
           <StateBadge state={state} />
           <span className="mono small al-dur">{span(end - g.start)}</span>
         </button>
+        {childRuns.map((id, i) => (
+          <Link key={id} to={`/ui/runs/${encodeURIComponent(id)}`} className="al-child small" title={`Open the run this step started: ${id}`}>
+            <Icon name="subworkflow" size={14} />{childRuns.length > 1 ? `Child run ${i + 1}` : 'Open child run'}<Icon name="chevron-right" size={14} />
+          </Link>
+        ))}
+        </div>
         {isOpen ? (
           <div className="al-body">
             <GroupNote node={g.node} type={t?.label ?? type} attempts={attempts.length} rows={g.rows} detail={d} />
