@@ -21,7 +21,10 @@ Load the openspec-format and delta-specs skills and follow them:
    produces the work.
 4. Use only the requirement names in `scan` for MODIFIED, REMOVED and RENAMED; use ADDED for anything new.
    A MODIFIED block carries the whole new requirement with all its scenarios.
-5. Anything a person must settle goes in `open_questions`; do not guess.
+5. Anything a person must settle goes in `open_questions`; do not guess. Every open question carries a
+   `recommendation`, the answer you would take if nobody answers, specific enough for the engineer to act on,
+   and a `why`, what that answer changes. Do not list a question you can answer yourself, and do not list one
+   you cannot recommend an answer for: such a problem is not an open question.
 
 If the message has `feedback`, you are starting again from a clean checkout. `feedback.errors` are what the
 automatic check rejected, and `feedback.previous_files` is your first attempt (path and content). Write every

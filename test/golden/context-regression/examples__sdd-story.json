@@ -46,7 +46,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-story",
-    "definitionHash": "sha256:43a8f1bd97945e26c21b7e1fb4c210fe5966b817d5e9a6f2ddb21fab7b2f2c04",
+    "definitionHash": "sha256:c534f7f592e15e06c81eae9617fd1cc504b07844eabe350f03e153958a4b7761",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -92,7 +92,7 @@
             "auto"
           ],
           "default": "supervised",
-          "description": "supervised asks a person at every gate. auto is accepted but not built yet; the run behaves as supervised."
+          "description": "supervised asks a person at both approvals (the specs, the sign-off). auto decides them by rules when it is safe and says so in Slack, and asks a person otherwise. Only the exact word auto is auto."
         }
       },
       "required": [
@@ -776,19 +776,85 @@
         "agentTools": []
       },
       {
+        "id": "specs_gate",
+        "type": "script",
+        "deps": [
+          "spec_change",
+          "spec_review"
+        ],
+        "dataDeps": [
+          "spec_change",
+          "spec_review"
+        ],
+        "def": {
+          "id": "specs_gate",
+          "type": "script",
+          "description": "Decide who approves the specs - the rules in auto mode when the review, the check, the conflicts and the open questions allow it, otherwise a person.",
+          "runtime": "python",
+          "entrypoint": "scripts/specs_gate.py",
+          "input": {
+            "map": "{'mode': has(inputs.mode) ? inputs.mode : 'supervised', 'review': nodes.spec_review.output, 'questions': nodes.spec_change.output.open_questions, 'check': nodes.spec_change.output.check, 'conflicts': nodes.spec_change.output.conflicts}"
+          },
+          "output_schema": "schemas/specs_gate.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "specs_choice",
+        "type": "condition",
+        "deps": [
+          "specs_gate"
+        ],
+        "dataDeps": [
+          "specs_gate"
+        ],
+        "def": {
+          "id": "specs_choice",
+          "type": "condition",
+          "description": "A person approves the specs unless the rules did.",
+          "expression": "nodes.specs_gate.output.route",
+          "routes": {
+            "ask": [
+              "proposal_approval"
+            ],
+            "auto": [
+              "specs_auto"
+            ]
+          },
+          "default": "ask"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
         "id": "proposal_approval",
         "type": "approval",
         "deps": [
           "change_id",
           "intake",
           "spec_change",
-          "spec_review"
+          "spec_review",
+          "specs_choice",
+          "specs_gate"
         ],
         "dataDeps": [
           "change_id",
           "intake",
           "spec_change",
-          "spec_review"
+          "spec_review",
+          "specs_gate"
         ],
         "def": {
           "id": "proposal_approval",
@@ -796,7 +862,7 @@
           "description": "A person approves the specs before any code is written - the gate OpenSpec only has by convention.",
           "role": "admin",
           "message": {
-            "cel": "'Approve the OpenSpec change ' + nodes.change_id.output.id + ' for ' + nodes.intake.output.key + '? ' + nodes.spec_review.output.summary + (nodes.spec_review.output.approved ? '' : ' The reviewer found a BLOCKING problem.') + (nodes.spec_review.output.prompt_injection_detected ? ' WARNING: the reviewer saw a prompt injection attempt.' : '') + (size(nodes.spec_change.output.open_questions) > 0 ? ' Answer the open questions in the notes.' : '')"
+            "cel": "'Approve the OpenSpec change ' + nodes.change_id.output.id + ' for ' + nodes.intake.output.key + '? ' + nodes.spec_review.output.summary + (nodes.spec_review.output.approved ? '' : ' The reviewer found a BLOCKING problem.') + (nodes.spec_review.output.prompt_injection_detected ? ' WARNING: the reviewer saw a prompt injection attempt.' : '') + (size(nodes.spec_change.output.open_questions) > 0 ? ' Answer the open questions in the notes.' : '') + (has(inputs.mode) && inputs.mode == 'auto' && nodes.specs_gate.output.reason != 'supervised' ? ' Asked although the run is unattended: ' + nodes.specs_gate.output.reason_text : '')"
           },
           "payload": {
             "map": "{'change_id': nodes.change_id.output.id, 'summary': nodes.spec_change.output.summary, 'deltas': nodes.spec_change.output.check.deltas, 'warnings': nodes.spec_change.output.check.warnings, 'open_questions': nodes.spec_change.output.open_questions, 'conflicts': nodes.spec_change.output.conflicts, 'review': nodes.spec_review.output, 'files': nodes.spec_change.output.workspace.files.map(f, f.path), 'diff': nodes.spec_change.output.workspace.diff}"
@@ -807,7 +873,7 @@
               "notes": {
                 "type": "string",
                 "title": "Answers and notes for the engineer",
-                "description": "One answer per open question, or: use the recommended defaults"
+                "description": "One answer per open question, or leave the notes empty to take the recommended answers"
               }
             },
             "additionalProperties": false
@@ -836,6 +902,150 @@
           }
         },
         "timeoutMs": 259200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "specs_choice",
+          "route": "ask"
+        }
+      },
+      {
+        "id": "specs_auto",
+        "type": "script",
+        "deps": [
+          "intake",
+          "spec_change",
+          "specs_choice"
+        ],
+        "dataDeps": [
+          "intake",
+          "spec_change"
+        ],
+        "def": {
+          "id": "specs_auto",
+          "type": "script",
+          "description": "Approve the specs by the rules, taking each open question's recommended answer. No person is asked.",
+          "runtime": "python",
+          "entrypoint": "scripts/specs_auto.py",
+          "input": {
+            "map": "{'key': nodes.intake.output.key, 'questions': nodes.spec_change.output.open_questions}"
+          },
+          "output_schema": "schemas/specs_auto.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "specs_choice",
+          "route": "auto"
+        }
+      },
+      {
+        "id": "specs_notify",
+        "type": "notify",
+        "deps": [
+          "specs_auto"
+        ],
+        "dataDeps": [
+          "specs_auto"
+        ],
+        "def": {
+          "id": "specs_notify",
+          "type": "notify",
+          "description": "Say the specs were approved without a person, with each question and the answer taken.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.specs_auto.output.slack"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "specs_decision",
+        "type": "script",
+        "deps": [
+          "proposal_approval",
+          "spec_change",
+          "specs_auto"
+        ],
+        "dataDeps": [
+          "proposal_approval",
+          "spec_change",
+          "specs_auto"
+        ],
+        "def": {
+          "id": "specs_decision",
+          "type": "script",
+          "description": "Who approved the specs and the notes for the engineer - a person's, or the recommended answers.",
+          "runtime": "python",
+          "entrypoint": "scripts/specs_decision.py",
+          "merge": "any",
+          "depends_on": [
+            "proposal_approval",
+            "specs_auto"
+          ],
+          "input": {
+            "map": "{'person': has(nodes.proposal_approval) ? nodes.proposal_approval.output : null, 'auto': has(nodes.specs_auto) ? nodes.specs_auto.output : null, 'questions': has(nodes.spec_change.output.open_questions) ? nodes.spec_change.output.open_questions : []}"
+          },
+          "output_schema": "schemas/specs_decision.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "specs_ok",
+        "type": "condition",
+        "deps": [
+          "specs_decision"
+        ],
+        "dataDeps": [
+          "specs_decision"
+        ],
+        "def": {
+          "id": "specs_ok",
+          "type": "condition",
+          "description": "Build only when the join found an approved decision. specs_decision also reads spec_change, which runs whatever the approval said, so a rejected approval still reaches the join and this gate stops the run.",
+          "expression": "nodes.specs_decision.output.by != null ? 'go' : 'stop'",
+          "routes": {
+            "go": [
+              "apply"
+            ],
+            "stop": []
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
         "maxAttempts": 3
       },
       {
@@ -844,14 +1054,15 @@
         "deps": [
           "change_id",
           "intake",
-          "proposal_approval",
-          "spec_change"
+          "spec_change",
+          "specs_decision",
+          "specs_ok"
         ],
         "dataDeps": [
           "change_id",
           "intake",
-          "proposal_approval",
-          "spec_change"
+          "spec_change",
+          "specs_decision"
         ],
         "def": {
           "id": "apply",
@@ -860,7 +1071,7 @@
           "executor": "opencode",
           "profile": "engineer@1",
           "depends_on": [
-            "proposal_approval"
+            "specs_decision"
           ],
           "workspace": {
             "repo": {
@@ -882,7 +1093,7 @@
             }
           },
           "input": {
-            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'deltas': nodes.spec_change.output.check.deltas, 'decisions': nodes.proposal_approval.output.data}"
+            "map": "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir': nodes.change_id.output.change_dir, 'deltas': nodes.spec_change.output.check.deltas, 'decisions': nodes.specs_decision.output.data}"
           },
           "output_schema": "schemas/change.json",
           "timeout": "60m",
@@ -892,6 +1103,10 @@
         },
         "timeoutMs": 3600000,
         "maxAttempts": 3,
+        "route": {
+          "condition": "specs_ok",
+          "route": "go"
+        },
         "agentTools": []
       },
       {
@@ -1292,13 +1507,15 @@
           "archive",
           "archive_gate",
           "change_id",
-          "intake"
+          "intake",
+          "specs_decision"
         ],
         "dataDeps": [
           "apply",
           "archive",
           "change_id",
-          "intake"
+          "intake",
+          "specs_decision"
         ],
         "def": {
           "id": "push_branch",
@@ -1322,7 +1539,7 @@
               "ref": "nodes.archive.output.workspace.files"
             }
           },
-          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.specs_decision.output.by != null"
         },
         "timeoutMs": 60000,
         "maxAttempts": 3,
@@ -1338,16 +1555,16 @@
           "apply",
           "change_id",
           "intake",
-          "proposal_approval",
           "push_branch",
+          "specs_decision",
           "verify"
         ],
         "dataDeps": [
           "apply",
           "change_id",
           "intake",
-          "proposal_approval",
           "push_branch",
+          "specs_decision",
           "verify"
         ],
         "def": {
@@ -1369,7 +1586,7 @@
               "ref": "nodes.apply.output.pr_title"
             },
             "body": {
-              "cel": "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id + '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary + '\\n\\nSpecs approved by ' + nodes.proposal_approval.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as done; nothing is merged._'"
+              "cel": "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id + '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary + '\\n\\nSpecs approved by ' + nodes.specs_decision.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as done; nothing is merged._'"
             },
             "draft": {
               "cel": "nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') || nodes.verify.output.prompt_injection_detected"
@@ -1637,14 +1854,16 @@
           "change_id",
           "fix",
           "fix_gate",
-          "intake"
+          "intake",
+          "specs_decision"
         ],
         "dataDeps": [
           "apply",
           "archive",
           "change_id",
           "fix",
-          "intake"
+          "intake",
+          "specs_decision"
         ],
         "def": {
           "id": "push_fix",
@@ -1668,7 +1887,7 @@
               "ref": "nodes.fix.output.workspace.files"
             }
           },
-          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key"
+          "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.specs_decision.output.by != null"
         },
         "timeoutMs": 60000,
         "maxAttempts": 3,
@@ -1943,6 +2162,77 @@
         "maxAttempts": 3
       },
       {
+        "id": "signoff_gate",
+        "type": "script",
+        "deps": [
+          "apply",
+          "open_pr",
+          "review_outcome",
+          "signoff_state",
+          "spec_review",
+          "verify"
+        ],
+        "dataDeps": [
+          "apply",
+          "open_pr",
+          "review_outcome",
+          "signoff_state",
+          "spec_review",
+          "verify"
+        ],
+        "def": {
+          "id": "signoff_gate",
+          "type": "script",
+          "description": "Decide who signs the pull request off - the rules in auto mode when the tests, the review, the verifier and the pull request allow it, otherwise a person.",
+          "runtime": "python",
+          "entrypoint": "scripts/signoff_gate.py",
+          "input": {
+            "map": "{'mode': has(inputs.mode) ? inputs.mode : 'supervised', 'tests': nodes.apply.output.workspace.tests, 'review': nodes.review_outcome.output, 'fix': nodes.signoff_state.output, 'verify': nodes.verify.output, 'spec_review': nodes.spec_review.output, 'pr': nodes.open_pr.output}"
+          },
+          "output_schema": "schemas/signoff_gate.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "signoff_choice",
+        "type": "condition",
+        "deps": [
+          "signoff_gate"
+        ],
+        "dataDeps": [
+          "signoff_gate"
+        ],
+        "def": {
+          "id": "signoff_choice",
+          "type": "condition",
+          "description": "A person signs the pull request off unless the rules did.",
+          "expression": "nodes.signoff_gate.output.route",
+          "routes": {
+            "ask": [
+              "signoff"
+            ],
+            "auto": [
+              "signoff_auto"
+            ]
+          },
+          "default": "ask"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
         "id": "signoff",
         "type": "approval",
         "deps": [
@@ -1952,6 +2242,8 @@
           "open_pr",
           "push_branch",
           "review_outcome",
+          "signoff_choice",
+          "signoff_gate",
           "signoff_state",
           "verify"
         ],
@@ -1962,6 +2254,7 @@
           "open_pr",
           "push_branch",
           "review_outcome",
+          "signoff_gate",
           "signoff_state",
           "verify"
         ],
@@ -1971,7 +2264,7 @@
           "description": "A person signs the pull request off - seeing the tests, the review, what remains, the verifier's report and whether a fix round ran. Rejecting it sends the Story back.",
           "role": "admin",
           "message": {
-            "cel": "'Sign off ' + nodes.intake.output.key + '? Pull request ' + nodes.open_pr.output.url + (nodes.open_pr.output.draft ? ' (a draft: the verifier found a CRITICAL issue or saw a prompt injection)' : '') + '. Tests ' + nodes.apply.output.workspace.tests.status + '. Review ' + nodes.review_outcome.output.status + ': ' + nodes.review_outcome.output.summary + ' ' + string(size(nodes.review_outcome.output.remaining)) + ' finding(s) remain. ' + nodes.verify.output.summary + (nodes.signoff_state.output.fix_ran ? ' A fix round ran and its tests passed, but the fix was not reviewed again.' : ' No fix round was needed.')"
+            "cel": "'Sign off ' + nodes.intake.output.key + '? Pull request ' + nodes.open_pr.output.url + (nodes.open_pr.output.draft ? ' (a draft: the verifier found a CRITICAL issue or saw a prompt injection)' : '') + '. Tests ' + nodes.apply.output.workspace.tests.status + '. Review ' + nodes.review_outcome.output.status + ': ' + nodes.review_outcome.output.summary + ' ' + string(size(nodes.review_outcome.output.remaining)) + ' finding(s) remain. ' + nodes.verify.output.summary + (nodes.signoff_state.output.fix_ran ? ' A fix round ran and its tests passed, but the fix was not reviewed again.' : ' No fix round was needed.') + (has(inputs.mode) && inputs.mode == 'auto' && nodes.signoff_gate.output.reason != 'supervised' ? ' Asked although the run is unattended: ' + nodes.signoff_gate.output.reason_text : '')"
           },
           "payload": {
             "map": "{'repository': inputs.repo, 'pull_request': {'number': nodes.open_pr.output.number, 'url': nodes.open_pr.output.url, 'draft': nodes.open_pr.output.draft}, 'branch': nodes.push_branch.output.branch, 'change_id': nodes.change_id.output.id, 'tests': {'status': nodes.apply.output.workspace.tests.status, 'attempts': nodes.apply.output.workspace.tests.attempts}, 'review': {'status': nodes.review_outcome.output.status, 'verdict': nodes.review_outcome.output.verdict, 'summary': nodes.review_outcome.output.summary}, 'remaining_findings': nodes.review_outcome.output.remaining, 'verification': nodes.verify.output, 'deviations': nodes.apply.output.deviations, 'fix_round': nodes.signoff_state.output.fix, 'fix_round_ran': nodes.signoff_state.output.fix_ran, 'fix_round_note': nodes.signoff_state.output.fix_ran ? 'The fix was tested but not reviewed again.' : 'No fix round ran.'}"
@@ -2011,6 +2304,121 @@
           }
         },
         "timeoutMs": 259200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "signoff_choice",
+          "route": "ask"
+        }
+      },
+      {
+        "id": "signoff_auto",
+        "type": "script",
+        "deps": [
+          "apply",
+          "intake",
+          "open_pr",
+          "review_outcome",
+          "signoff_choice",
+          "signoff_state"
+        ],
+        "dataDeps": [
+          "apply",
+          "intake",
+          "open_pr",
+          "review_outcome",
+          "signoff_state"
+        ],
+        "def": {
+          "id": "signoff_auto",
+          "type": "script",
+          "description": "Sign the pull request off by the rules. No person is asked.",
+          "runtime": "python",
+          "entrypoint": "scripts/signoff_auto.py",
+          "input": {
+            "map": "{'key': nodes.intake.output.key, 'pr_url': nodes.open_pr.output.url, 'tests_status': nodes.apply.output.workspace.tests.status, 'review_status': nodes.review_outcome.output.status, 'fix_ran': nodes.signoff_state.output.fix_ran, 'remaining': nodes.review_outcome.output.remaining}"
+          },
+          "output_schema": "schemas/signoff_auto.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "signoff_choice",
+          "route": "auto"
+        }
+      },
+      {
+        "id": "signoff_notify",
+        "type": "notify",
+        "deps": [
+          "signoff_auto"
+        ],
+        "dataDeps": [
+          "signoff_auto"
+        ],
+        "def": {
+          "id": "signoff_notify",
+          "type": "notify",
+          "description": "Say the pull request was signed off without a person, and on what grounds.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.signoff_auto.output.slack"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "signoff_decision",
+        "type": "script",
+        "deps": [
+          "signoff",
+          "signoff_auto"
+        ],
+        "dataDeps": [
+          "signoff",
+          "signoff_auto"
+        ],
+        "def": {
+          "id": "signoff_decision",
+          "type": "script",
+          "description": "Who signed the pull request off - a person, or the rules.",
+          "runtime": "python",
+          "entrypoint": "scripts/signoff_decision.py",
+          "merge": "any",
+          "depends_on": [
+            "signoff",
+            "signoff_auto"
+          ],
+          "input": {
+            "map": "{'person': has(nodes.signoff) ? nodes.signoff.output : null, 'auto': has(nodes.signoff_auto) ? nodes.signoff_auto.output : null}"
+          },
+          "output_schema": "schemas/signoff_decision.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
         "maxAttempts": 3
       },
       {
@@ -2018,10 +2426,11 @@
         "type": "tool",
         "deps": [
           "github_issue",
-          "signoff"
+          "signoff_decision"
         ],
         "dataDeps": [
-          "github_issue"
+          "github_issue",
+          "signoff_decision"
         ],
         "def": {
           "id": "label_ticket",
@@ -2029,7 +2438,7 @@
           "description": "Label the ticket as signed off, once a person has signed the pull request off.",
           "tool": "github.label-issue@1",
           "depends_on": [
-            "signoff"
+            "signoff_decision"
           ],
           "arguments": {
             "repo": {
@@ -2042,7 +2451,7 @@
               "cel": "[config.signed_off_label]"
             }
           },
-          "guard": "args.repo == inputs.repo && args.number == nodes.github_issue.output.number"
+          "guard": "args.repo == inputs.repo && args.number == nodes.github_issue.output.number && nodes.signoff_decision.output.decision == 'approved'"
         },
         "timeoutMs": 60000,
         "maxAttempts": 3
@@ -2057,7 +2466,7 @@
           "label_ticket",
           "open_pr",
           "review_outcome",
-          "signoff",
+          "signoff_decision",
           "signoff_state"
         ],
         "dataDeps": [
@@ -2066,7 +2475,7 @@
           "intake",
           "open_pr",
           "review_outcome",
-          "signoff",
+          "signoff_decision",
           "signoff_state"
         ],
         "def": {
@@ -2081,7 +2490,7 @@
             "ref": "config.channel"
           },
           "message": {
-            "cel": "'Signed off ' + nodes.intake.output.key + ' (' + nodes.signoff.output.by + '): ' + nodes.open_pr.output.url + ' (' + nodes.apply.output.summary + '; OpenSpec change ' + nodes.change_id.output.id + ' archived; review ' + nodes.review_outcome.output.status + (nodes.signoff_state.output.fix_ran ? '; fix round ran, not reviewed again' : '') + ')'"
+            "cel": "'Signed off ' + nodes.intake.output.key + ' (' + nodes.signoff_decision.output.by + '): ' + nodes.open_pr.output.url + ' (' + nodes.apply.output.summary + '; OpenSpec change ' + nodes.change_id.output.id + ' archived; review ' + nodes.review_outcome.output.status + (nodes.signoff_state.output.fix_ran ? '; fix round ran, not reviewed again' : '') + ')'"
           },
           "guard": "args.channel == config.channel"
         },
@@ -2110,13 +2519,13 @@
           "change_id",
           "intake",
           "open_pr",
-          "proposal_approval",
           "push_branch",
           "review_outcome",
-          "signoff",
+          "signoff_decision",
           "signoff_state",
           "spec_change",
           "spec_review",
+          "specs_decision",
           "story_notify",
           "verify"
         ],
@@ -2125,13 +2534,13 @@
           "change_id",
           "intake",
           "open_pr",
-          "proposal_approval",
           "push_branch",
           "review_outcome",
-          "signoff",
+          "signoff_decision",
           "signoff_state",
           "spec_change",
           "spec_review",
+          "specs_decision",
           "verify"
         ],
         "def": {
@@ -2143,7 +2552,7 @@
           ],
           "template": "templates/summary.md",
           "input": {
-            "map": "{'ticket': nodes.intake.output, 'change': nodes.change_id.output, 'deltas': nodes.spec_change.output.check.deltas, 'proposal_by': nodes.proposal_approval.output.by, 'signoff_by': nodes.signoff.output.by, 'spec_review': nodes.spec_review.output, 'apply': nodes.apply.output, 'verify': nodes.verify.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output, 'review': nodes.review_outcome.output, 'fix': nodes.signoff_state.output.fix}"
+            "map": "{'ticket': nodes.intake.output, 'change': nodes.change_id.output, 'deltas': nodes.spec_change.output.check.deltas, 'proposal_by': nodes.specs_decision.output.by, 'signoff_by': nodes.signoff_decision.output.by, 'spec_review': nodes.spec_review.output, 'apply': nodes.apply.output, 'verify': nodes.verify.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output, 'review': nodes.review_outcome.output, 'fix': nodes.signoff_state.output.fix}"
           }
         },
         "outputSchema": {
@@ -2193,6 +2602,7 @@
           "push_fix",
           "review_fail_message",
           "signoff",
+          "signoff_decision",
           "summary",
           "tests_message"
         ],
@@ -2206,6 +2616,7 @@
           "push_fix",
           "review_fail_message",
           "signoff",
+          "signoff_decision",
           "tests_message"
         ],
         "def": {
@@ -2224,10 +2635,11 @@
             "fix_fail_message",
             "proposal_approval",
             "signoff",
+            "signoff_decision",
             "summary"
           ],
           "input": {
-            "map": "{'flags': {'specs_rejected': has(nodes.proposal_approval) && nodes.proposal_approval.output.decision == 'rejected', 'specs_invalid': has(nodes.check_fail_message), 'tests_failed': has(nodes.tests_message), 'archive_failed': has(nodes.archive_fail_message), 'review_unavailable': has(nodes.review_fail_message), 'fix_tests_failed': has(nodes.fix_fail_message)}, 'signoff': has(nodes.signoff) ? nodes.signoff.output.decision : null, 'branch': has(nodes.push_branch) ? nodes.push_branch.output.branch : null, 'head_sha': has(nodes.push_fix) ? nodes.push_fix.output.commit_sha : (has(nodes.push_branch) ? nodes.push_branch.output.commit_sha : null), 'pr_number': has(nodes.open_pr) ? nodes.open_pr.output.number : null, 'pr_url': has(nodes.open_pr) ? nodes.open_pr.output.url : null}"
+            "map": "{'flags': {'specs_rejected': has(nodes.proposal_approval) && nodes.proposal_approval.output.decision == 'rejected', 'specs_invalid': has(nodes.check_fail_message), 'tests_failed': has(nodes.tests_message), 'archive_failed': has(nodes.archive_fail_message), 'review_unavailable': has(nodes.review_fail_message), 'fix_tests_failed': has(nodes.fix_fail_message)}, 'signoff': has(nodes.signoff_decision) ? nodes.signoff_decision.output.decision : (has(nodes.signoff) ? nodes.signoff.output.decision : null), 'branch': has(nodes.push_branch) ? nodes.push_branch.output.branch : null, 'head_sha': has(nodes.push_fix) ? nodes.push_fix.output.commit_sha : (has(nodes.push_branch) ? nodes.push_branch.output.commit_sha : null), 'pr_number': has(nodes.open_pr) ? nodes.open_pr.output.number : null, 'pr_url': has(nodes.open_pr) ? nodes.open_pr.output.url : null}"
           },
           "output_schema": "schemas/result.json",
           "limits": {
@@ -2252,6 +2664,12 @@
         "spec_change": "output of tainted agent propose",
         "have_change": "output of tainted agent propose",
         "spec_review": "output of tainted agent spec_review",
+        "specs_gate": "output of tainted agent propose",
+        "specs_choice": "output of tainted agent propose",
+        "specs_auto": "output of tainted agent propose",
+        "specs_notify": "output of tainted agent propose",
+        "specs_decision": "output of tainted agent propose",
+        "specs_ok": "output of tainted agent propose",
         "apply": "output of tainted agent apply",
         "verify": "output of tainted agent verify",
         "release_gate": "output of tainted agent apply",
@@ -2276,6 +2694,12 @@
         "fix_fail_message": "output of tainted agent fix",
         "fix_fail_notify": "output of tainted agent fix",
         "signoff_state": "output of tainted agent fix",
+        "signoff_gate": "output of tainted agent apply",
+        "signoff_choice": "output of tainted agent apply",
+        "signoff_auto": "output of tainted agent apply",
+        "signoff_notify": "output of tainted agent apply",
+        "signoff_decision": "output of tainted agent apply",
+        "label_ticket": "output of tainted agent apply",
         "story_notify": "output of tainted agent apply",
         "summary": "output of tainted agent apply",
         "result": "output of tainted agent apply"
@@ -2304,6 +2728,73 @@
         },
         {
           "agent": "scan",
+          "write": "specs_notify",
+          "path": [
+            "scan",
+            "check_1",
+            "spec_change",
+            "specs_auto",
+            "specs_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
+          "write": "story_notify",
+          "path": [
+            "scan",
+            "check_1",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "story_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
+          "write": "review_fail_notify",
+          "path": [
+            "scan",
+            "check_1",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "review_fail_message",
+            "review_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
+          "write": "fix_fail_notify",
+          "path": [
+            "scan",
+            "check_1",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "fix_fail_message",
+            "fix_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
+          "write": "signoff_notify",
+          "path": [
+            "scan",
+            "check_1",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "signoff_auto",
+            "signoff_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "scan",
           "write": "story_notify",
           "path": [
             "scan",
@@ -2311,6 +2802,18 @@
             "proposal_approval",
             "…",
             "story_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "scan",
+          "write": "signoff_notify",
+          "path": [
+            "scan",
+            "…",
+            "proposal_approval",
+            "…",
+            "signoff_notify"
           ],
           "gate": "approval"
         },
@@ -2363,6 +2866,80 @@
           "gate": "approval"
         },
         {
+          "agent": "scan",
+          "write": "story_notify",
+          "path": [
+            "scan",
+            "…",
+            "signoff",
+            "…",
+            "story_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "specs_notify",
+          "path": [
+            "propose",
+            "spec_change",
+            "specs_auto",
+            "specs_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "propose",
+          "write": "story_notify",
+          "path": [
+            "propose",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "story_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "propose",
+          "write": "review_fail_notify",
+          "path": [
+            "propose",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "review_fail_message",
+            "review_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "propose",
+          "write": "fix_fail_notify",
+          "path": [
+            "propose",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "fix_fail_message",
+            "fix_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "propose",
+          "write": "signoff_notify",
+          "path": [
+            "propose",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "signoff_auto",
+            "signoff_notify"
+          ],
+          "gate": "guard"
+        },
+        {
           "agent": "propose",
           "write": "story_notify",
           "path": [
@@ -2371,6 +2948,18 @@
             "proposal_approval",
             "…",
             "story_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "signoff_notify",
+          "path": [
+            "propose",
+            "…",
+            "proposal_approval",
+            "…",
+            "signoff_notify"
           ],
           "gate": "approval"
         },
@@ -2419,6 +3008,18 @@
             "proposal_approval",
             "…",
             "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "propose",
+          "write": "story_notify",
+          "path": [
+            "propose",
+            "…",
+            "signoff",
+            "…",
+            "story_notify"
           ],
           "gate": "approval"
         },
@@ -2430,6 +3031,68 @@
             "check_2",
             "check_fail_message",
             "check_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "specs_notify",
+          "path": [
+            "revise",
+            "spec_change",
+            "specs_auto",
+            "specs_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "story_notify",
+          "path": [
+            "revise",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "story_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "review_fail_notify",
+          "path": [
+            "revise",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "review_fail_message",
+            "review_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "fix_fail_notify",
+          "path": [
+            "revise",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "fix_fail_message",
+            "fix_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "revise",
+          "write": "signoff_notify",
+          "path": [
+            "revise",
+            "spec_change",
+            "specs_decision",
+            "open_pr",
+            "signoff_auto",
+            "signoff_notify"
           ],
           "gate": "guard"
         },
@@ -2447,6 +3110,18 @@
         },
         {
           "agent": "revise",
+          "write": "signoff_notify",
+          "path": [
+            "revise",
+            "…",
+            "proposal_approval",
+            "…",
+            "signoff_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "revise",
           "write": "fix_fail_notify",
           "path": [
             "revise",
@@ -2490,6 +3165,18 @@
             "proposal_approval",
             "…",
             "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "revise",
+          "write": "story_notify",
+          "path": [
+            "revise",
+            "…",
+            "signoff",
+            "…",
+            "story_notify"
           ],
           "gate": "approval"
         },
@@ -2507,6 +3194,18 @@
         },
         {
           "agent": "spec_review",
+          "write": "signoff_notify",
+          "path": [
+            "spec_review",
+            "…",
+            "proposal_approval",
+            "…",
+            "signoff_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "spec_review",
           "write": "fix_fail_notify",
           "path": [
             "spec_review",
@@ -2550,6 +3249,18 @@
             "proposal_approval",
             "…",
             "tests_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "spec_review",
+          "write": "story_notify",
+          "path": [
+            "spec_review",
+            "…",
+            "signoff",
+            "…",
+            "story_notify"
           ],
           "gate": "approval"
         },
@@ -2574,6 +3285,16 @@
         },
         {
           "agent": "apply",
+          "write": "signoff_notify",
+          "path": [
+            "apply",
+            "signoff_auto",
+            "signoff_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "apply",
           "write": "archive_fail_notify",
           "path": [
             "apply",
@@ -2651,6 +3372,17 @@
         },
         {
           "agent": "verify",
+          "write": "signoff_notify",
+          "path": [
+            "verify",
+            "open_pr",
+            "signoff_auto",
+            "signoff_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "verify",
           "write": "story_notify",
           "path": [
             "verify",
@@ -2704,6 +3436,18 @@
             "open_pr",
             "fix_fail_message",
             "fix_fail_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "archive",
+          "write": "signoff_notify",
+          "path": [
+            "archive",
+            "push_branch",
+            "open_pr",
+            "signoff_auto",
+            "signoff_notify"
           ],
           "gate": "guard"
         },
@@ -2737,6 +3481,18 @@
             "fix_done",
             "signoff_state",
             "story_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "fix",
+          "write": "signoff_notify",
+          "path": [
+            "fix",
+            "fix_done",
+            "signoff_state",
+            "signoff_auto",
+            "signoff_notify"
           ],
           "gate": "guard"
         },

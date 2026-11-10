@@ -7,7 +7,7 @@
     "change_id": {"type": "string"},
     "bootstrapped": {"type": "boolean"},
     "capabilities": {"type": "array", "items": {"type": "string"}},
-    "open_questions": {"type": "array", "items": {"type": "string"}},
+    "open_questions": {"type": "array", "items": {"type": "object", "properties": {"question": {"type": "string", "minLength": 1, "maxLength": 400}, "recommendation": {"type": "string", "minLength": 1, "maxLength": 400, "description": "The answer to take if nobody answers, specific enough for the engineer to act on"}, "why": {"type": "string", "maxLength": 400, "description": "What the answer changes"}}, "required": ["question", "recommendation", "why"], "additionalProperties": false}},
     "conflicts": {"type": "array", "items": {"type": "string"}},
     "workspace": {"type": "object"},
     "check": {

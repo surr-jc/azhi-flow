@@ -46,8 +46,8 @@ inputs:
         - supervised
         - auto
       default: supervised
-      description: supervised asks a person at every gate. auto is accepted but not built yet; the run behaves
-        as supervised.
+      description: supervised asks a person at both approvals (the specs, the sign-off). auto decides them by
+        rules when it is safe and says so in Slack, and asks a person otherwise. Only the exact word auto is auto.
   required:
     - source
     - ticket
@@ -294,6 +294,29 @@ nodes:
     timeout: 20m
     budget:
       max_tool_calls: 20
+  - id: specs_gate
+    type: script
+    description: Decide who approves the specs - the rules in auto mode when the review, the check, the
+      conflicts and the open questions allow it, otherwise a person.
+    runtime: python
+    entrypoint: scripts/specs_gate.py
+    input:
+      map: "{'mode': has(inputs.mode) ? inputs.mode : 'supervised', 'review': nodes.spec_review.output,
+        'questions': nodes.spec_change.output.open_questions, 'check': nodes.spec_change.output.check,
+        'conflicts': nodes.spec_change.output.conflicts}"
+    output_schema: schemas/specs_gate.json
+    limits:
+      time: 1m
+  - id: specs_choice
+    type: condition
+    description: A person approves the specs unless the rules did.
+    expression: nodes.specs_gate.output.route
+    routes:
+      ask:
+        - proposal_approval
+      auto:
+        - specs_auto
+    default: ask
   - id: proposal_approval
     type: approval
     description: A person approves the specs before any code is written - the gate OpenSpec only has by
@@ -304,7 +327,9 @@ nodes:
         + '? ' + nodes.spec_review.output.summary + (nodes.spec_review.output.approved ? '' : ' The
         reviewer found a BLOCKING problem.') + (nodes.spec_review.output.prompt_injection_detected ? '
         WARNING: the reviewer saw a prompt injection attempt.' : '') + (size(nodes.spec_change.output.open_questions) > 0
-        ? ' Answer the open questions in the notes.' : '')"
+        ? ' Answer the open questions in the notes.' : '') + (has(inputs.mode) && inputs.mode == 'auto' &&
+        nodes.specs_gate.output.reason != 'supervised' ? ' Asked although the run is unattended: ' +
+        nodes.specs_gate.output.reason_text : '')"
     payload:
       map: "{'change_id': nodes.change_id.output.id, 'summary': nodes.spec_change.output.summary,
         'deltas': nodes.spec_change.output.check.deltas, 'warnings': nodes.spec_change.output.check.warnings,
@@ -318,10 +343,55 @@ nodes:
         notes:
           type: string
           title: Answers and notes for the engineer
-          description: "One answer per open question, or: use the recommended defaults"
+          description: One answer per open question, or leave the notes empty to take the recommended answers
       additionalProperties: false
     expires_in: 72h
     on_expiry: reject
+  - id: specs_auto
+    type: script
+    description: Approve the specs by the rules, taking each open question's recommended answer. No person is asked.
+    runtime: python
+    entrypoint: scripts/specs_auto.py
+    input:
+      map: "{'key': nodes.intake.output.key, 'questions': nodes.spec_change.output.open_questions}"
+    output_schema: schemas/specs_auto.json
+    limits:
+      time: 1m
+  - id: specs_notify
+    type: notify
+    description: Say the specs were approved without a person, with each question and the answer taken.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      ref: nodes.specs_auto.output.slack
+    guard: args.channel == config.channel
+  - id: specs_decision
+    type: script
+    description: Who approved the specs and the notes for the engineer - a person's, or the recommended answers.
+    runtime: python
+    entrypoint: scripts/specs_decision.py
+    merge: any
+    depends_on:
+      - proposal_approval
+      - specs_auto
+    input:
+      map: "{'person': has(nodes.proposal_approval) ? nodes.proposal_approval.output : null, 'auto':
+        has(nodes.specs_auto) ? nodes.specs_auto.output : null, 'questions':
+        has(nodes.spec_change.output.open_questions) ? nodes.spec_change.output.open_questions : []}"
+    output_schema: schemas/specs_decision.json
+    limits:
+      time: 1m
+  - id: specs_ok
+    type: condition
+    description: Build only when the join found an approved decision. specs_decision also reads spec_change, which
+      runs whatever the approval said, so a rejected approval still reaches the join and this gate stops the run.
+    expression: "nodes.specs_decision.output.by != null ? 'go' : 'stop'"
+    routes:
+      go:
+        - apply
+      stop: []
+    default: stop
   - id: apply
     type: agent
     description: Build the tasks in order, one test per scenario, tick them when done (implement-from-specs
@@ -330,7 +400,7 @@ nodes:
     executor: opencode
     profile: engineer@1
     depends_on:
-      - proposal_approval
+      - specs_decision
     workspace:
       repo:
         ref: inputs.repo
@@ -349,7 +419,7 @@ nodes:
     input:
       map: "{'ticket': nodes.intake.output, 'change_id': nodes.change_id.output.id, 'change_dir':
         nodes.change_id.output.change_dir, 'deltas': nodes.spec_change.output.check.deltas, 'decisions':
-        nodes.proposal_approval.output.data}"
+        nodes.specs_decision.output.data}"
     output_schema: schemas/change.json
     timeout: 60m
     budget:
@@ -487,7 +557,8 @@ nodes:
           ' (archived)\\nRefs: ' + nodes.intake.output.key"
       files:
         ref: nodes.archive.output.workspace.files
-    guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key
+    guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key &&
+      nodes.specs_decision.output.by != null
   - id: open_pr
     type: tool
     description: Open a pull request into the base branch for the branch (a draft when the verifier found a
@@ -505,7 +576,7 @@ nodes:
       body:
         cel: "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id +
           '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary +
-          '\\n\\nSpecs approved by ' + nodes.proposal_approval.output.by + '. Ticket: ' +
+          '\\n\\nSpecs approved by ' + nodes.specs_decision.output.by + '. Ticket: ' +
           nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow
           (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as
           done; nothing is merged._'"
@@ -618,7 +689,8 @@ nodes:
           ' (archived)\\nRefs: ' + nodes.intake.output.key + '\\n\\nReview fixes: ' + nodes.fix.output.summary"
       files:
         ref: nodes.fix.output.workspace.files
-    guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key
+    guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key &&
+      nodes.specs_decision.output.by != null
   - id: fix_done
     type: script
     description: What the fix round did, for the sign-off - the fix, its tests, the commit. Not reviewed again.
@@ -681,6 +753,29 @@ nodes:
     output_schema: schemas/signoff_state.json
     limits:
       time: 1m
+  - id: signoff_gate
+    type: script
+    description: Decide who signs the pull request off - the rules in auto mode when the tests, the review, the
+      verifier and the pull request allow it, otherwise a person.
+    runtime: python
+    entrypoint: scripts/signoff_gate.py
+    input:
+      map: "{'mode': has(inputs.mode) ? inputs.mode : 'supervised', 'tests': nodes.apply.output.workspace.tests,
+        'review': nodes.review_outcome.output, 'fix': nodes.signoff_state.output, 'verify': nodes.verify.output,
+        'spec_review': nodes.spec_review.output, 'pr': nodes.open_pr.output}"
+    output_schema: schemas/signoff_gate.json
+    limits:
+      time: 1m
+  - id: signoff_choice
+    type: condition
+    description: A person signs the pull request off unless the rules did.
+    expression: nodes.signoff_gate.output.route
+    routes:
+      ask:
+        - signoff
+      auto:
+        - signoff_auto
+    default: ask
   - id: signoff
     type: approval
     description: A person signs the pull request off - seeing the tests, the review, what remains, the
@@ -693,7 +788,9 @@ nodes:
         nodes.review_outcome.output.status + ': ' + nodes.review_outcome.output.summary + ' ' +
         string(size(nodes.review_outcome.output.remaining)) + ' finding(s) remain. ' +
         nodes.verify.output.summary + (nodes.signoff_state.output.fix_ran ? ' A fix round ran and its tests
-        passed, but the fix was not reviewed again.' : ' No fix round was needed.')"
+        passed, but the fix was not reviewed again.' : ' No fix round was needed.') + (has(inputs.mode) &&
+        inputs.mode == 'auto' && nodes.signoff_gate.output.reason != 'supervised' ? ' Asked although the run is
+        unattended: ' + nodes.signoff_gate.output.reason_text : '')"
     payload:
       map: "{'repository': inputs.repo, 'pull_request': {'number': nodes.open_pr.output.number, 'url':
         nodes.open_pr.output.url, 'draft': nodes.open_pr.output.draft}, 'branch': nodes.push_branch.output.branch,
@@ -715,12 +812,48 @@ nodes:
       additionalProperties: false
     expires_in: 72h
     on_expiry: reject
+  - id: signoff_auto
+    type: script
+    description: Sign the pull request off by the rules. No person is asked.
+    runtime: python
+    entrypoint: scripts/signoff_auto.py
+    input:
+      map: "{'key': nodes.intake.output.key, 'pr_url': nodes.open_pr.output.url, 'tests_status':
+        nodes.apply.output.workspace.tests.status, 'review_status': nodes.review_outcome.output.status,
+        'fix_ran': nodes.signoff_state.output.fix_ran, 'remaining': nodes.review_outcome.output.remaining}"
+    output_schema: schemas/signoff_auto.json
+    limits:
+      time: 1m
+  - id: signoff_notify
+    type: notify
+    description: Say the pull request was signed off without a person, and on what grounds.
+    channel: slack
+    destination:
+      ref: config.channel
+    message:
+      ref: nodes.signoff_auto.output.slack
+    guard: args.channel == config.channel
+  - id: signoff_decision
+    type: script
+    description: Who signed the pull request off - a person, or the rules.
+    runtime: python
+    entrypoint: scripts/signoff_decision.py
+    merge: any
+    depends_on:
+      - signoff
+      - signoff_auto
+    input:
+      map: "{'person': has(nodes.signoff) ? nodes.signoff.output : null, 'auto': has(nodes.signoff_auto) ?
+        nodes.signoff_auto.output : null}"
+    output_schema: schemas/signoff_decision.json
+    limits:
+      time: 1m
   - id: label_ticket
     type: tool
     description: Label the ticket as signed off, once a person has signed the pull request off.
     tool: github.label-issue@1
     depends_on:
-      - signoff
+      - signoff_decision
     arguments:
       repo:
         ref: inputs.repo
@@ -728,7 +861,8 @@ nodes:
         ref: nodes.github_issue.output.number
       labels:
         cel: "[config.signed_off_label]"
-    guard: args.repo == inputs.repo && args.number == nodes.github_issue.output.number
+    guard: args.repo == inputs.repo && args.number == nodes.github_issue.output.number &&
+      nodes.signoff_decision.output.decision == 'approved'
   - id: story_notify
     type: notify
     description: Announce the signed-off pull request.
@@ -738,7 +872,7 @@ nodes:
     destination:
       ref: config.channel
     message:
-      cel: "'Signed off ' + nodes.intake.output.key + ' (' + nodes.signoff.output.by + '): ' +
+      cel: "'Signed off ' + nodes.intake.output.key + ' (' + nodes.signoff_decision.output.by + '): ' +
         nodes.open_pr.output.url + ' (' + nodes.apply.output.summary + '; OpenSpec change ' +
         nodes.change_id.output.id + ' archived; review ' + nodes.review_outcome.output.status +
         (nodes.signoff_state.output.fix_ran ? '; fix round ran, not reviewed again' : '') + ')'"
@@ -751,8 +885,8 @@ nodes:
     template: templates/summary.md
     input:
       map: "{'ticket': nodes.intake.output, 'change': nodes.change_id.output, 'deltas':
-        nodes.spec_change.output.check.deltas, 'proposal_by': nodes.proposal_approval.output.by, 'signoff_by':
-        nodes.signoff.output.by, 'spec_review': nodes.spec_review.output, 'apply': nodes.apply.output,
+        nodes.spec_change.output.check.deltas, 'proposal_by': nodes.specs_decision.output.by, 'signoff_by':
+        nodes.signoff_decision.output.by, 'spec_review': nodes.spec_review.output, 'apply': nodes.apply.output,
         'verify': nodes.verify.output, 'branch': nodes.push_branch.output, 'pr': nodes.open_pr.output,
         'review': nodes.review_outcome.output, 'fix': nodes.signoff_state.output.fix}"
   - id: result
@@ -772,13 +906,15 @@ nodes:
       - fix_fail_message
       - proposal_approval
       - signoff
+      - signoff_decision
       - summary
     input:
       map: "{'flags': {'specs_rejected': has(nodes.proposal_approval) && nodes.proposal_approval.output.decision
         == 'rejected', 'specs_invalid': has(nodes.check_fail_message), 'tests_failed':
         has(nodes.tests_message), 'archive_failed': has(nodes.archive_fail_message), 'review_unavailable':
         has(nodes.review_fail_message), 'fix_tests_failed': has(nodes.fix_fail_message)}, 'signoff':
-        has(nodes.signoff) ? nodes.signoff.output.decision : null, 'branch': has(nodes.push_branch) ?
+        has(nodes.signoff_decision) ? nodes.signoff_decision.output.decision : (has(nodes.signoff) ?
+        nodes.signoff.output.decision : null), 'branch': has(nodes.push_branch) ?
         nodes.push_branch.output.branch : null, 'head_sha': has(nodes.push_fix) ?
         nodes.push_fix.output.commit_sha : (has(nodes.push_branch) ? nodes.push_branch.output.commit_sha :
         null), 'pr_number': has(nodes.open_pr) ? nodes.open_pr.output.number : null, 'pr_url':

@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "description": "Who approved the specs and the notes for the engineer. by is null when no approved decision was found.",
+  "properties": {
+    "by": {"type": ["string", "null"]},
+    "data": {"type": ["object", "null"], "properties": {"notes": {"type": "string"}}, "required": ["notes"]}
+  },
+  "required": ["by", "data"],
+  "additionalProperties": false
+}

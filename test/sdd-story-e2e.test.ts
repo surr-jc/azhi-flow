@@ -33,8 +33,14 @@ interface Scenario {
   tests: 'passed' | 'failed';
   fixTests: 'passed' | 'failed';
   review: ReviewKind;
+  /** The open questions the spec author raises, the spec reviewer's report, and the verifier's issues. */
+  questions?: Array<{ question: string; recommendation: string; why: string }>;
+  specReview?: Record<string, unknown>;
+  verifyIssues?: Array<Record<string, unknown>>;
 }
 const HAPPY: Scenario = { check1: true, check2: true, tests: 'passed', fixTests: 'passed', review: 'approved' };
+const QUESTION = { question: 'Round up or down?', recommendation: 'Round half up to 2 places.', why: 'Totals are in cents' };
+const CRITICAL_ISSUE = { level: 'CRITICAL', dimension: 'correctness', issue: 'The discount can exceed the price', recommendation: 'Clamp it' };
 
 const file = (path: string, content: string, status = 'added') => ({ path, status, content, additions: content.split('\n').length - 1, deletions: 0 });
 const PROPOSAL = file('openspec/changes/discount/proposal.md', '# Discount\n');
@@ -55,17 +61,17 @@ const workspace = (files: Array<ReturnType<typeof file>>, tests?: { status: stri
   diff: 'diff --git a/src/cart.js b/src/cart.js\n',
 });
 const check = (ok: boolean) => ({ ok, errors: ok ? [] : ['Requirement has no scenario'], warnings: [], deltas: [{ capability: 'cart', op: 'ADDED', requirement: 'Totals apply the discount' }], capabilities: ['cart'] });
-const proposal = (content: string) => ({ summary: 'Discount spec', change_id: 'discount', bootstrapped: false, capabilities: ['cart'], open_questions: [], conflicts: [], workspace: workspace([{ ...PROPOSAL, content }]) });
+const proposal = (content: string, questions: unknown[] = []) => ({ summary: 'Discount spec', change_id: 'discount', bootstrapped: false, capabilities: ['cart'], open_questions: questions, conflicts: [], workspace: workspace([{ ...PROPOSAL, content }]) });
 
 /** What each agent (and each checker that reads a checkout) answers, by step id. */
 function answers(s: Scenario): Record<string, unknown> {
   return {
     scan: { has_openspec: true, has_config: true, has_specs: true, capabilities: [{ name: 'cart', requirements: ['Totals apply the discount'] }], active_changes: [], rules: [] },
-    propose: proposal('first'),
+    propose: proposal('first', s.questions),
     check_1: check(s.check1),
-    revise: proposal('revised'),
+    revise: proposal('revised', s.questions),
     check_2: check(s.check2),
-    spec_review: { summary: 'Specs are testable.', approved: true, prompt_injection_detected: false, findings: [] },
+    spec_review: { summary: 'Specs are testable.', approved: true, prompt_injection_detected: false, findings: [], ...s.specReview },
     apply: {
       summary: 'total() applies the discount',
       commit_message: 'fix(cart): apply the discount\n\nTotals ignored it.',
@@ -77,7 +83,7 @@ function answers(s: Scenario): Record<string, unknown> {
       risks: [],
       workspace: workspace([SRC, PROPOSAL], { status: s.tests, attempts: 2 }),
     },
-    verify: { summary: 'Every requirement is implemented.', prompt_injection_detected: false, requirements: [], tasks_unticked: [], issues: [] },
+    verify: { summary: 'Every requirement is implemented.', prompt_injection_detected: false, requirements: [], tasks_unticked: [], issues: s.verifyIssues ?? [] },
     archive: { summary: 'Merged the cart delta.', merged: [{ capability: 'cart', added: 1, modified: 0, removed: 0, renamed: 0 }], workspace: workspace(ARCHIVE_FILES) },
     archive_check: check(true),
     fix: { summary: 'Clamp the discount', fixed: ['No clamp'], skipped: [], prompt_injection_detected: false, workspace: workspace(FIX_FILES, { status: s.fixTests, attempts: 1 }) },
@@ -85,6 +91,8 @@ function answers(s: Scenario): Record<string, unknown> {
 }
 
 const python = (value: unknown) => `import json, sys\nsys.stdin.read()\nprint(json.dumps(json.loads(${JSON.stringify(JSON.stringify(value))})))\n`;
+/** The build stand-in also echoes the decisions the engineer was handed, so a test can read what reached it. */
+const echoing = (value: unknown) => `import json, sys\ngiven = json.load(sys.stdin)\nout = json.loads(${JSON.stringify(JSON.stringify(value))})\nout['received_decisions'] = given.get('decisions')\nprint(json.dumps(out))\n`;
 
 /** An agent's schema with the checkout the worker would have added: the same fields, no `additionalProperties: false`. */
 const WORKSPACE_SCHEMA = {
@@ -111,14 +119,20 @@ function storyPackage(s: Scenario): string {
     if (n.type === 'agent') {
       const schema = JSON.parse(readFileSync(join(PKG, n.output_schema), 'utf8'));
       delete schema.additionalProperties;
+      // The real schema refuses an empty recommendation at the agent; the stand-in lets one through to test the gate.
+      for (const k of ['question', 'recommendation']) delete schema.properties.open_questions?.items?.properties?.[k]?.minLength;
       schema.properties = { ...schema.properties, workspace: WORKSPACE_SCHEMA };
       writeFileSync(join(dir, `schemas/stub_${n.id}.json`), JSON.stringify(schema));
       for (const k of ['executor', 'profile', 'workspace', 'timeout', 'budget']) delete n[k];
       Object.assign(n, { type: 'script', runtime: 'python', entrypoint: `scripts/stub_${n.id}.py`, output_schema: `schemas/stub_${n.id}.json`, limits: { time: '1m' } });
     } else if (out[n.id] === undefined || n.type !== 'script') continue;
     else n.entrypoint = `scripts/stub_${n.id}.py`;
-    writeFileSync(join(dir, `scripts/stub_${n.id}.py`), python(out[n.id]));
+    writeFileSync(join(dir, `scripts/stub_${n.id}.py`), (n.id === 'apply' ? echoing : python)(out[n.id]));
   }
+  // The same stand-in leniency for the author's questions as in the agent schemas above.
+  const sc = JSON.parse(readFileSync(join(dir, 'schemas/spec_change.json'), 'utf8'));
+  for (const k of ['question', 'recommendation']) delete sc.properties.open_questions.items.properties[k].minLength;
+  writeFileSync(join(dir, 'schemas/spec_change.json'), JSON.stringify(sc));
   writeFileSync(wfPath, `# scenario ${++nonce}\n${stringify(wf)}`);
   return dir;
 }
@@ -188,7 +202,7 @@ describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-revie
   beforeAll(async () => {
     process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
     gh = await startFakeGithub(
-      { runs: [], pulls: [], issues: Array.from({ length: 20 }, (_, i) => ({ number: 12 + i, id: 5000 + i, repo: REPO, title: `Apply the discount ${12 + i}`, labels: [] as string[], body: 'Totals ignore the discount code.' })) },
+      { runs: [], pulls: [], issues: Array.from({ length: 40 }, (_, i) => ({ number: 12 + i, id: 5000 + i, repo: REPO, title: `Apply the discount ${12 + i}`, labels: [] as string[], body: 'Totals ignore the discount code.' })) },
       { token: [READ_TOKEN, WRITE_TOKEN] },
     );
     h = await startHarness();
@@ -395,5 +409,172 @@ describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-revie
     for (const id of ['label_ticket', 'story_notify', 'summary']) expect(state(done, id), id).toBe('skipped');
     expect(labels(number)).toEqual([]);
     expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'signoff_rejected', pr_number: expect.any(Number) });
+  }, SLOW);
+
+  // ---- mode: auto -------------------------------------------------------------------------------------------------
+
+  const AUTO = { mode: 'auto' };
+  const texts = (key: string) => h.slack.messages.map((m) => m.text).filter((t) => t.includes(key));
+  const received = (d: any) => out(d, 'apply').received_decisions;
+
+  it('auto: asks nobody when the rules allow it - specs and sign-off are decided, labelled, posted to Slack', async () => {
+    const { run_id, number } = await start(HAPPY, AUTO);
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.error).toBeNull();
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    expect(out(done, 'specs_gate')).toMatchObject({ route: 'auto', reason: 'auto' });
+    expect(out(done, 'signoff_gate')).toMatchObject({ route: 'auto', reason: 'auto' });
+    for (const id of ['proposal_approval', 'signoff']) expect(state(done, id), id).toBe('skipped');
+    for (const id of ['specs_auto', 'specs_notify', 'specs_decision', 'signoff_auto', 'signoff_notify', 'signoff_decision', 'label_ticket', 'story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+    expect(out(done, 'specs_decision')).toEqual({ by: 'auto', data: { notes: 'Auto mode: no person was asked. No open questions.' } });
+    expect(received(done)).toEqual({ notes: 'Auto mode: no person was asked. No open questions.' });
+    expect(out(done, 'signoff_decision')).toEqual({ decision: 'approved', by: 'auto' });
+    expect(labels(number)).toContain(LABEL);
+    const pr = tool(done, 'open_pr');
+    expect(out(done, 'result')).toEqual({ status: 'signed_off', reason: 'signed_off', branch: tool(done, 'push_branch').branch, head_sha: tool(done, 'push_branch').commit_sha, pr_number: pr.number, pr_url: pr.url });
+    const key = tool(done, 'intake').key as string;
+    const said = texts(key);
+    expect(said.some((t) => t.includes('approved by rules') && t.includes('No open questions'))).toBe(true);
+    expect(said.some((t) => t.includes('nobody signed this off') && t.includes(pr.url) && t.includes('Tests passed') && t.includes('no fix round was needed'))).toBe(true);
+    expect(said.some((t) => t.includes(`Signed off ${key} (auto)`))).toBe(true);
+  }, SLOW);
+
+  it('auto: takes the recommended answer of an open question, hands it to the engineer and says so in Slack', async () => {
+    const { run_id } = await start({ ...HAPPY, questions: [QUESTION] }, AUTO);
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    expect(out(done, 'specs_gate')).toMatchObject({ route: 'auto' });
+    expect(received(done).notes).toBe('Auto mode: no person was asked. Taken as recommended:\n1. Round up or down? -> Round half up to 2 places.');
+    const key = tool(done, 'intake').key as string;
+    expect(texts(key).some((t) => t.includes('1. Round up or down? -> Round half up to 2 places. (why: Totals are in cents)'))).toBe(true);
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('auto: asks the person about the specs when a question has no recommendation, says why, and carries on after they approve', async () => {
+    const { run_id, number } = await start({ ...HAPPY, questions: [{ ...QUESTION, recommendation: '' }] }, AUTO);
+    const specs = await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    expect(out(specs, 'specs_gate')).toMatchObject({ route: 'ask', reason: 'no_recommendation' });
+    const request = specs.approvals.find((a: any) => a.node_id === 'proposal_approval').request;
+    expect(request.message).toContain('Asked although the run is unattended: An open question has no recommended answer');
+    expect(request.payload.open_questions).toEqual([{ ...QUESTION, recommendation: '' }]);
+    expect(state(specs, 'specs_auto')).toBe('skipped');
+    await approve(run_id, 'proposal_approval');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals.map((a: any) => a.node_id)).toEqual(['proposal_approval']);
+    expect(out(done, 'specs_decision')).toMatchObject({ by: expect.any(String) });
+    expect(out(done, 'specs_decision').by).not.toBe('auto');
+    expect(state(done, 'specs_notify')).toBe('skipped');
+    expect(labels(number)).toContain(LABEL);
+    // The sign-off was still decided by the rules.
+    expect(out(done, 'signoff_decision')).toEqual({ decision: 'approved', by: 'auto' });
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('auto: a rejected specs approval that was asked sends the Story back and builds nothing', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id } = await start({ ...HAPPY, questions: [{ ...QUESTION, recommendation: '' }] }, AUTO);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    // The join still runs (it also reads the open questions) but finds no approved decision, and specs_ok stops the run there.
+    expect(out(done, 'specs_decision')).toEqual({ by: null, data: null });
+    for (const id of ['apply', 'archive', 'push_branch', 'open_pr', 'review', 'signoff_gate', 'signoff_auto', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'specs_rejected', pr_number: null });
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+  }, SLOW);
+
+  it('auto: a review that asked for changes still gets its fix round, but a person signs the unreviewed fix off, and is told why', async () => {
+    const { run_id, number } = await start({ ...HAPPY, review: 'findings' }, AUTO);
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    // The fix ran and passed its tests and was pushed; nobody reviewed it, so the rules do not sign it off.
+    expect(state(sign, 'fix')).toBe('succeeded');
+    expect(tool(sign, 'push_fix').commit_sha).toBeTruthy();
+    expect(out(sign, 'signoff_gate')).toMatchObject({ route: 'ask', reason: 'fix_not_reviewed' });
+    expect(state(sign, 'signoff_auto')).toBe('skipped');
+    expect(sign.approvals.map((a: any) => a.node_id)).toEqual(['signoff']);
+    expect(sign.approvals[0].request.message).toContain('Asked although the run is unattended: The review asked for changes and a fix round followed; nobody reviewed the fix, so a person signs it off.');
+    expect(sign.approvals[0].request.payload).toMatchObject({ fix_round_ran: true, fix_round_note: 'The fix was tested but not reviewed again.' });
+    expect(sign.attempts.filter((a: any) => a.node_id === 'review')).toHaveLength(1);
+    expect(labels(number)).not.toContain(LABEL);
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(state(done, 'signoff_notify')).toBe('skipped');
+    expect(out(done, 'signoff_decision').by).not.toBe('auto');
+    expect(labels(number)).toContain(LABEL);
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off', head_sha: tool(done, 'push_fix').commit_sha });
+  }, SLOW);
+
+  it('auto: a CRITICAL verifier issue makes the pull request a draft and the sign-off IS asked, with the reason', async () => {
+    const { run_id, number } = await start({ ...HAPPY, verifyIssues: [CRITICAL_ISSUE] }, AUTO);
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    expect(out(sign, 'signoff_gate')).toMatchObject({ route: 'ask', reason: 'critical_issue' });
+    expect(state(sign, 'signoff_auto')).toBe('skipped');
+    expect(tool(sign, 'open_pr').draft).toBe(true);
+    expect(gh.git.pulls.at(-1)).toMatchObject({ draft: true });
+    expect(sign.approvals.map((a: any) => a.node_id)).toEqual(['signoff']);
+    expect(sign.approvals[0].request.message).toContain('Asked although the run is unattended: The verifier found a CRITICAL issue.');
+    expect(labels(number)).not.toContain(LABEL);
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(state(done, 'signoff_notify')).toBe('skipped');
+    expect(out(done, 'signoff_decision')).toMatchObject({ decision: 'approved' });
+    expect(out(done, 'signoff_decision').by).not.toBe('auto');
+    expect(labels(number)).toContain(LABEL);
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('auto: a rejected sign-off that was asked sends the Story back, unlabelled', async () => {
+    const { run_id, number } = await start({ ...HAPPY, verifyIssues: [CRITICAL_ISSUE] }, AUTO);
+    await waitForApprovalOn(h.api, run_id, 'signoff');
+    await approve(run_id, 'signoff', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['signoff_decision', 'label_ticket', 'story_notify', 'summary']) expect(state(done, id), id).toBe('skipped');
+    expect(labels(number)).toEqual([]);
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'signoff_rejected', pr_number: expect.any(Number) });
+  }, SLOW);
+
+  it('auto: a failing review child sends the Story back as in supervised mode, with nobody asked', async () => {
+    const { run_id } = await start({ ...HAPPY, review: 'fail' }, AUTO);
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    expect(out(done, 'review_outcome')).toMatchObject({ status: 'unavailable' });
+    for (const id of ['fix', 'signoff_gate', 'signoff_auto', 'signoff_decision', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'review_unavailable', pr_number: expect.any(Number) });
+  }, SLOW);
+
+  it('auto: failing tests send the Story back and nothing is signed off', async () => {
+    const { run_id } = await start({ ...HAPPY, tests: 'failed' }, AUTO);
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'tests_failed', pr_number: null });
+  }, SLOW);
+
+  it('supervised: open questions still reach the person, who can leave the notes empty to take the recommended answers', async () => {
+    const { run_id } = await start({ ...HAPPY, questions: [QUESTION] }, { mode: 'supervised' });
+    const specs = await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    expect(out(specs, 'specs_gate')).toMatchObject({ route: 'ask', reason: 'supervised' });
+    const request = specs.approvals.find((a: any) => a.node_id === 'proposal_approval').request;
+    expect(request.message).not.toContain('Asked although');
+    expect(request.payload.open_questions).toEqual([QUESTION]);
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    expect(sign.approvals.find((a: any) => a.node_id === 'signoff').request.message).not.toContain('Asked although');
+    expect(received(sign)).toEqual({ notes: 'Taken as recommended:\n1. Round up or down? -> Round half up to 2 places.' });
+    expect(['specs_auto', 'specs_notify', 'signoff_auto']).toSatisfy((ids: string[]) => ids.every((id) => state(sign, id) === 'skipped'));
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals.map((a: any) => a.node_id)).toEqual(['proposal_approval', 'signoff']);
+    expect(out(done, 'signoff_decision').by).not.toBe('auto');
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
   }, SLOW);
 });
