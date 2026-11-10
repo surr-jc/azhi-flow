@@ -3,19 +3,22 @@
 A spec-driven delivery of a whole release in one run. A person gives it a goal (or a ticket) for a GitHub repository and
 a base branch. It asks questions with a recommendation each, writes a release plan, splits it into Stories, and
 delivers the Stories one after another into a stack of pull requests, each reviewed and signed off by a person. It is
-built from workflows that already exist; two are new.
+built from workflows that already exist; three are new. The Stories are GitHub issues (`source: github`) or, with no
+tracker at all, live in the run and in the first pull request (`source: files`, see "No tracker" below).
 
 | Workflow | What it does | Status |
 |---|---|---|
 | `sdd-factory` | the orchestrator: plan, split, ask once, deliver every Story in order, check the release, summarize | new |
 | `sdd-story` | one Story to a signed-off pull request: an OpenSpec change, a build with tests, a review, one fix round, a sign-off | new |
-| `issue-splitter` | splits an epic into Stories (GitHub issues) | existing |
+| `sdd-breakdown` | splits an epic into Stories and returns them as data; writes nothing (`source: files`) | new |
+| `issue-splitter` | splits an epic into Stories (GitHub issues) (`source: github`) | existing |
 | `pr-review` | reviews one pull request with four reviewers and a verifier | existing, new `diff_base` input |
 | `ai-sdlc-factory-verify` | checks the release's journeys and invariants against a branch | existing, new `propose_fix` input |
 
 ```
 plan      goal/ticket ─ brief ─ brainstorm ─ person ─ plan_release ─ person ─ epics
-split                                                                      └─ split_epics: issue-splitter × epics (≤ 3)
+split                                                                      └─ github: split_epics: issue-splitter × epics (≤ 3)
+                                                                               files:  breakdown_epics: sdd-breakdown × epics (≤ 3)
 ask                                                                           └─ order ─ autonomy (person)
 deliver                                                                          └─ deliver_stories: sdd-story × Stories (≤ 20)
 end                                                                                  └─ release_check ─ summary ─ Slack
@@ -75,12 +78,41 @@ azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=C0123A
 azhi example install pr-review --repo OWNER/REPO --set slack_channel=C0123ABCD
 azhi example install ai-sdlc-factory-verify --repo OWNER/REPO --set slack_channel=C0123ABCD
 azhi example install sdd-story --repo OWNER/REPO --set slack_channel=C0123ABCD
+azhi example install sdd-breakdown --repo OWNER/REPO --set slack_channel=C0123ABCD   # only for source=files
 azhi example install sdd-factory --repo OWNER/REPO --set slack_channel=C0123ABCD
 azhi run examples/sdd-factory --input source=github --input repo=OWNER/REPO --input base_branch=dev --input goal="..."
 ```
 
 Sign and publish each draft, children first: the factory resolves each child when its step starts. A child that is not
-published stops the run there. `pr-review` needs the OpenCode sign-in and tokens described in [pr-review](pr-review.md).
+published stops the run there (`issue-splitter` for `source=github`, `sdd-breakdown` for `source=files`). `pr-review` needs the OpenCode sign-in and tokens described in [pr-review](pr-review.md).
+
+## No tracker (`source: files`)
+
+`source=files` runs without any tracker: no issue is read or created, and the run needs a `goal` (a ticket is refused).
+Everything else is the same run. The differences:
+
+- **Split.** Each epic goes through the published `sdd-breakdown` instead of `issue-splitter` (a `tracker_gate` after
+  `has_epics` picks the loop). It sizes the epic against the code, a person approves its plan, and it returns the
+  Stories as data (a slice number, a one-line title, a Markdown body); it creates nothing. An epic that is not a code
+  change, or whose slices were all left out, gives no Story and does not stop the run. A breakdown that fails, ends
+  without its `stories` step (a rejected plan) or returns more than 6 Stories for an epic stops the run before any
+  Story is delivered, like a splitter that fails.
+- **Names.** The `release` step makes an id from the plan's title and six random hex characters. They are random, not a hash
+  of the goal, so two runs of the same goal on the same repository never push over each other's branches; a resumed run
+  keeps its names because a step that succeeded is not run again. The Stories
+  are numbered 1..N across the release (epics in plan order, then slice order) and named `<release>-sN`. A Story's
+  branch is `azhi/<release>-sN`. The summary and the approval show that key where `files` has no issue number.
+- **The breakdown file.** `breakdown_doc` writes `docs/release/<release>/breakdown.md`: the plan and every Story with
+  its epic and body (the plan cut to 30000 characters, each body to 3000, the file to 60000). It is committed in the
+  first Story's pull request only (`extra_files` of the first `sdd-story` run), so a person reviews the plan next to
+  the first change. Later Stories do not carry it.
+- **Each Story** is a run of `sdd-story` with `source: files`: the Story's key, title and body are inputs instead of a
+  ticket.
+- **The autonomy question** lists each Story's key, title and epic (the bodies are not put in the approval), and says that
+  the plan is committed in the first pull request.
+- **Limits.** At most 3 epics of 6 Stories, so 18 Stories: the 20-Story refusal exists but a files release cannot reach it.
+  The Story's title is cleaned to one line and its body of control characters before they reach a child or a file; they
+  are text from an agent and appear only inside the breakdown file and the child's inputs.
 
 ## Auto mode
 
@@ -100,6 +132,27 @@ plainly that nobody signed it off. A Story whose review asked for changes still 
 signs it off, with the reason in the approval message. A failed test, a failed review or a rejected approval still sends
 the Story back, and a Story that is sent back still stops the loop.
 
+## A new product (greenfield)
+
+Create the repository yourself with one commit on the base branch, such as a README, and start the factory on it. The
+brainstorm reads the checkout, and when it finds no source code (only a README, a licence, an ignore file or CI
+templates) it sets `greenfield`. You see that in the approval message and can say it is wrong. In a greenfield
+repository:
+
+- the brainstorm spends its questions on what the code cannot answer, each with a recommendation: the language and
+  framework, the shape of the application, storage and deployment, test tooling and what CI must run
+- the first Story of the first epic that is split (epic 1, unless you left it out) is a runnable scaffold: the project
+  layout for the chosen stack, one passing test, a CI workflow that runs it, a README with the run and test commands,
+  and `.azhi/commands.json` with the install, typecheck, test and build commands
+- the later Stories stack on that scaffold like any others
+
+The scaffold carries `.azhi/commands.json` because the delivery runs the repository's own commands on every Story and a
+fresh repository has no history to detect them from.
+
+What is covered: the flag, the questions, the planner's instruction and the line added to the first epic are wired and
+tested. What is not: whether the agents follow the instruction, or whether a real scaffold passes the delivery's test
+gate. Treat the first greenfield run as a trial of those two.
+
 ## Limits and rules
 
 - **Nothing merges, closes or force-pushes.** A person merges the pull requests, in the order the summary gives, and
@@ -117,21 +170,30 @@ the Story back, and a Story that is sent back still stops the loop.
 
 ## Not built yet
 
-- **Jira** and a **tracker-free mode** that keeps the breakdown as files in the repository.
-- **Greenfield**: the factory reads the repository for its brainstorm and each push needs a base commit, so an empty
-  repository without any commit does not work.
+- **Jira.**
+- **A repository with no commit at all**: each push is a commit onto a base commit, and the brainstorm clones the base
+  branch, so create the repository with one commit (a README is enough). See "A new product" above.
 - **Order between epics** is the plan's order; only the Stories inside an epic have dependencies.
 
 ## Verification
 
-`test/sdd-story.test.ts` and `test/sdd-factory.test.ts` compile both packages with their tools, check that every write
-has a gate, and run every script on fixtures including the cases that fail closed. `test/sdd-story-e2e.test.ts` and
-`test/sdd-factory-e2e.test.ts` run the packages' own graphs on the engine. Neither runs the agents: the checkout agents
-of `sdd-story` are replaced by scripts, the brainstorm and planning agents of the factory by scripted answers, and the
+`test/sdd-story.test.ts`, `test/sdd-breakdown.test.ts` and `test/sdd-factory.test.ts` compile the packages with their
+tools, check that every write has a gate, and run every script on fixtures including the cases that fail closed. Each
+script's output is also checked against the schema its package declares for it, because the engine refuses an output its
+schema does not allow. `test/sdd-story-e2e.test.ts`, `test/sdd-breakdown-e2e.test.ts` and `test/sdd-factory-e2e.test.ts`
+run the packages' own graphs on the engine. None of them runs the agents: the checkout agents of `sdd-story` and
+`sdd-breakdown` are replaced by scripts, the brainstorm and planning agents of the factory by scripted answers, and the
 children of each are stand-ins. So these tests cover the wiring (routes, joins, ordering, stacking, stopping, the
 summary), not what the agents write, the real test gate on a repository, or a run against GitHub and Slack.
 
+`test/sdd-contracts.test.ts` covers the seams the stand-ins hide. It runs the real scripts of one package on the real
+output of another (what `sdd-breakdown` returns, through the factory's outcome, order and document scripts, to the inputs
+`sdd-story` declares), and checks every child call in the compiled plans against the child's declared inputs.
+
 One engine rule matters when editing these workflows. A loop's round gate runs unless every step of that round was
 skipped, and the compiler counts any step an exit rule reads as one of its dependencies. An exit rule that reads a step
-outside the loop therefore makes the gate of a round that never started run, and the run fails. Both loops here read
-only their own steps (`last` is computed inside the round), and a unit test checks it.
+outside the loop therefore makes the gate of a round that never started run, and the run fails. All three loops here
+(`split_epics`, `breakdown_epics`, `deliver_stories`) read only their own steps (`last` is computed inside the round),
+and a unit test checks it. The `order` and `summary` steps read the loops only behind `has()` and are `merge: any`
+joins, because a step that reads a skipped step is skipped; `summary` does not list `breakdown_epics`, since a run
+cannot end inside it (`order` always follows and `has_stories` reaches the summary).

@@ -3,14 +3,18 @@
 Input:  prd_title (the plan's title, or null), order (the output of the order step, or null when the run ended before
         it), autonomy (the autonomy approval's decision, "approved" or "rejected", or null), mode, loop (the output of
         the deliver_stories loop {outcome, rounds: [{round, steps: {story_outcome}}]}, or null when it did not run),
-        release (the release_outcome step's output, or null when it did not run).
+        release (the release_outcome step's output, or null when it did not run), source ("github" or "files") and
+        release_id (the release id, or null), which only decide the breakdown_path line.
 Output: {status: "delivered" | "stopped" | "nothing_to_deliver" | "not_started", headline, prd_title, stories, stack,
         signed_off, total, stopped_at, release}.
         stories lists every Story in order with its result: signed_off, sent_back (with a fixed reason word) or
         not_started. stack is the signed-off Stories in order, which is the order to merge their pull requests in.
         stopped_at names where the run stopped: the first Story that was not signed off (as owner/name#N), or a
         fixed word (plan, split_failed, too_many, unreadable, autonomy); null when everything was delivered.
-        release is {status, counts}; it is skipped unless every Story was signed off.
+        release is {status, counts}; it is skipped unless every Story was signed off. For a files run (no tracker) a Story
+        is identified by its key, <release>-s<N>, in place of owner/name#N; stack lines carry a label (#N or the key).
+        breakdown_path is the file that holds the breakdown, in the first pull request, for a files run whose first
+        Story got that far; otherwise null.
 Everything is read as data. Ticket text, review text and error messages are never copied in: a Story's title (from the
 splitter's issue, untrusted) is cut to 200 characters and kept as a title only, and every other text is a fixed word.
 """
@@ -25,6 +29,8 @@ TITLE_MAX = 200
 URL = re.compile(r"^https://[^\s]+$")
 BRANCH = re.compile(r"^azhi/[A-Za-z0-9._/#-]+$")
 REF = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$")
+# A Story of a files run (no tracker) is identified by its key, <release>-s<N>, not by an issue.
+KEY = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 REASONS = {
     "specs_rejected",
     "specs_invalid",
@@ -74,7 +80,10 @@ def story_list(order):
     for s in order.get("stories") if isinstance(order.get("stories"), list) else []:
         number = positive_int(s.get("number")) if isinstance(s, dict) else None
         ref = s.get("ref") if isinstance(s, dict) else None
-        if number is None or not isinstance(ref, str) or not REF.fullmatch(ref) or not ref.endswith(f"#{number}"):
+        if number is None or not isinstance(ref, str):
+            return None
+        # github: owner/name#N where N is the issue number; files: the key <release>-s<N> where N is the Story's number.
+        if not (REF.fullmatch(ref) and ref.endswith(f"#{number}")) and not (KEY.fullmatch(ref) and ref.endswith(f"-s{number}")):
             return None
         out.append({"ref": ref, "number": number, "title": clean_title(s.get("title"))})
     return out
@@ -142,7 +151,8 @@ def decide(d):
             row.update(status="sent_back", reason=reason if reason in REASONS else "not_signed_off", pr_url=url if isinstance(url, str) and len(url) <= 500 and URL.fullmatch(url) else None)
         rows.append(row)
 
-    stack = [{"number": r["number"], "title": r["title"], "pr_url": r["pr_url"], "branch": r["branch"]} for r in rows if r["status"] == "signed_off"]
+    # A pull request is listed as #N for an issue and by its key for a Story of a files run.
+    stack = [{"ref": r["ref"], "label": r["ref"] if KEY.fullmatch(r["ref"]) else f"#{r['number']}", "number": r["number"], "title": r["title"], "pr_url": r["pr_url"], "branch": r["branch"]} for r in rows if r["status"] == "signed_off"]
     total = len(rows)
     signed = len(stack)
     if loop.get("outcome") == "done" and signed == total:
@@ -155,5 +165,20 @@ def decide(d):
     return base("stopped", f"Stopped at {ref} ({first['reason']}): {signed} of {total} Stories signed off.", prd_title, ref, skipped, rows, stack)
 
 
+def breakdown_path(d, out):
+    """Where the breakdown is, for a files run whose first pull request was opened; otherwise null."""
+    release = d.get("release_id")
+    stories = out.get("stories")
+    if d.get("source") != "files" or not isinstance(release, str) or not KEY.fullmatch(release) or not stories:
+        return None
+    first = stories[0]
+    if first.get("status") != "signed_off" and not first.get("pr_url"):
+        return None
+    return f"docs/release/{release}/breakdown.md"
+
+
 payload = json.load(sys.stdin)
-print(json.dumps(decide(payload if isinstance(payload, dict) else {})))
+payload = payload if isinstance(payload, dict) else {}
+summary = decide(payload)
+summary["breakdown_path"] = breakdown_path(payload, summary)
+print(json.dumps(summary))

@@ -8,13 +8,17 @@
 #   split      each remaining epic goes through the published issue-splitter, one after the other in a loop. Each run
 #              sizes the epic against the code and, after its own approval, creates the Stories (GitHub issues). Up to
 #              3 epics of up to 6 Stories each; a release of more than 20 Stories is not delivered.
-#   order      the Stories in delivery order: epics in plan order, Stories as the splitter created them
+#              With source files there is no tracker: each epic goes through the published sdd-breakdown instead, which
+#              returns the Stories as data and writes nothing, and no issue is created.
+#   order      the Stories in delivery order: epics in plan order, Stories as the splitter created them (files: by
+#              slice, keyed <release>-s<N>)
 #   autonomy   a person confirms the repository, the base branch and the Stories, and how the run is supervised.
 #              Only "supervised" exists for now: a person approves every Story's specs and its sign-off.
 #   deliver    each Story is a child run of the published sdd-story, one after the other: an OpenSpec change, a build
 #              with the repository's tests, a branch cut from the previous Story's branch (the first from the base
 #              branch), a pull request into the base branch, a pr-review run on it, one fix round and a sign-off. A
-#              Story that is not signed off stops the loop; later Stories are not started.
+#              Story that is not signed off stops the loop; later Stories are not started. With source files the first
+#              Story's pull request also carries the breakdown of the release as a Markdown file, for review there.
 #   release    when every Story is signed off, the published ai-sdlc-factory-verify checks the top branch of the stack
 #              against the plan's journeys and invariants (no fix ticket is proposed)
 #   summary    the Stories and their result, the pull request stack in merge order, and the release check, as a
@@ -35,16 +39,20 @@ inputs:
     source:
       type: string
       title: Tracker
-      enum: [github]
-      description: Where the tickets are read from and created. The code is always on GitHub.
+      enum: [github, files]
+      description: "github: the Stories are GitHub issues, created by the issue-splitter after its own approval. files: no tracker - the Stories live in the run and the breakdown is committed in the first pull request. The code is always on GitHub."
     repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository the release changes, owner/name"}
     base_branch: {type: string, title: Base branch, minLength: 1, maxLength: 200, description: "The branch the plan reads and every pull request targets (for example dev)"}
     ticket: {type: string, title: Ticket, maxLength: 300, description: "An existing GitHub issue to plan, such as acme/payments#42. Leave empty to describe a goal instead."}
-    goal: {type: string, title: Goal, maxLength: 12000, description: "What the release should achieve, in your words. Added to the ticket when both are given."}
+    goal: {type: string, title: Goal, maxLength: 12000, description: "What the release should achieve, in your words. Added to the ticket when both are given. Required when the tracker is files."}
   required: [source, repo, base_branch]
   anyOf:
     - {required: [ticket], properties: {ticket: {minLength: 1}}}
     - {required: [goal], properties: {goal: {minLength: 1}}}
+  # No tracker means no ticket to read: a files run is planned from the goal alone.
+  allOf:
+    - if: {properties: {source: {const: files}}, required: [source]}
+      then: {required: [goal], properties: {goal: {minLength: 1}, ticket: {maxLength: 0}}}
 config:
   # Filled in by the example install (setting slack_channel).
   channel: "{{slack_channel}}"
@@ -111,7 +119,7 @@ nodes:
     type: approval
     description: A person answers the questions and picks an approach before the release is planned; rejecting stops the run with nothing planned. Answer in mission control, with azhi approve, or from the Slack approval message.
     role: author
-    message: {cel: "'Before the release is planned: ' + nodes.brainstorm.output.summary + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"}
+    message: {cel: "'Before the release is planned: ' + nodes.brainstorm.output.summary + (nodes.brainstorm.output.greenfield ? ' The repository has no code yet, so the first Story will be a runnable scaffold - say so if that is wrong.' : '') + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"}
     payload: {map: "{'questions': nodes.brainstorm.output.questions, 'approaches': nodes.brainstorm.output.approaches, 'assumptions': nodes.brainstorm.output.assumptions, 'unknowns': nodes.brainstorm.output.unknowns}"}
     decision_schema:
       type: object
@@ -133,7 +141,7 @@ nodes:
       ref: {cel: "'refs/heads/' + inputs.base_branch"}
       credential: github-read-token
       depth: 1
-    input: {map: "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'questions': nodes.brainstorm.output.questions, 'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"}
+    input: {map: "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'greenfield': nodes.brainstorm.output.greenfield, 'decisions': {'questions': nodes.brainstorm.output.questions, 'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"}
     output_schema: schemas/prd.json
     timeout: 25m
     budget: {max_tool_calls: 20}
@@ -163,17 +171,36 @@ nodes:
     description: The text of each epic the splitter receives, with the release context in front (epics the approver left out are removed).
     runtime: python
     entrypoint: scripts/epics.py
-    input: {map: "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"}
+    input: {map: "{'prd': nodes.plan_release.output, 'greenfield': nodes.brainstorm.output.greenfield, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"}
     output_schema: schemas/epics.json
     limits: {time: 1m}
 
-  # ---- Split: one run of the published issue-splitter per epic, in order -----------------------------
+  # Names the release, so a files run has branch names and a file path that do not depend on a tracker. It depends on
+  # epics so that it is skipped when epics is (a rejected plan): the order step reads both.
+  - id: release
+    type: script
+    description: An id for this release - a slug of the plan's title and six random hex characters. Random, so two runs of the same goal never push over each other's branches; a resumed run keeps it, since a step that succeeded is not run again.
+    runtime: python
+    entrypoint: scripts/release.py
+    depends_on: [epics]
+    input: {map: "{'prd': nodes.plan_release.output}"}
+    output_schema: schemas/release.json
+    limits: {time: 1m}
+
+  # ---- Split: one run of the published issue-splitter (github) or sdd-breakdown (files) per epic, in order ----
   - id: has_epics
     type: condition
     description: Is there an epic to split? A plan whose epics were all left out ends here, with nothing to deliver.
     expression: "nodes.epics.output.count >= 1 ? 'yes' : 'none'"
-    routes: {yes: [split_epics], none: []}
+    routes: {yes: [tracker_gate], none: []}
     default: none
+
+  - id: tracker_gate
+    type: condition
+    description: Where the Stories come from - GitHub issues made by the issue-splitter, or (no tracker) the sdd-breakdown, which creates nothing.
+    expression: "inputs.source"
+    routes: {github: [split_epics], files: [breakdown_epics]}
+    default: github
 
   # Each round splits epic number iteration + 1 and is checked after it: with one epic only round 1 runs, so no round
   # reads past the end of the list. A splitter that fails stops the loop; later epics are not split.
@@ -204,17 +231,57 @@ nodes:
       - {when: "nodes.split_outcome.output.status != 'ok'", outcome: stop, reason: An epic could not be split}
       - {when: "nodes.split_outcome.output.last", outcome: done, reason: Every epic is split}
 
-  # A merge node: it also runs when there were no epics (has_epics took the none route and split_epics did not run).
-  # The loop is read only behind has(), since a step that reads a skipped step is skipped even inside has().
+  # The same shape for a files run: each round breaks one epic down with the published sdd-breakdown (96h: it waits for a
+  # person at its own plan approval). It returns the Stories as data and writes nothing; breakdown_outcome reads them.
+  - id: breakdown_epics
+    type: loop
+    description: Break each epic down into Stories with the published sdd-breakdown (analysis, its own approval, then the Stories as data), one after the other. No tracker; nothing is created.
+    max_iterations: 3
+    on_max: continue
+    body:
+      - id: breakdown
+        type: subworkflow
+        description: Run the published sdd-breakdown on this round's epic. It waits for a person at its own approval, so it may take days.
+        workflow: sdd-breakdown
+        on_failure: continue
+        timeout: 96h
+        input: {repo: {ref: inputs.repo}, text: {cel: "nodes.epics.output.epics[iteration].text"}, base_branch: {ref: inputs.base_branch}, epic: {cel: "nodes.epics.output.epics[iteration].n"}, release: {ref: nodes.release.output.id}}
+      - id: breakdown_outcome
+        type: script
+        description: The Stories this round's breakdown returned, or that it failed. Reads the child's output as data and fails closed.
+        runtime: python
+        entrypoint: scripts/breakdown_outcome.py
+        input: {map: "{'child': nodes.breakdown.output, 'epic': nodes.epics.output.epics[iteration].n, 'last': iteration + 1 >= nodes.epics.output.count}"}
+        output_schema: schemas/breakdown_outcome.json
+        limits: {time: 1m}
+    exit:
+      - {when: "nodes.breakdown_outcome.output.status != 'ok'", outcome: stop, reason: An epic could not be broken down}
+      - {when: "nodes.breakdown_outcome.output.last", outcome: done, reason: Every epic is broken down}
+
+  # A merge node: it also runs when there were no epics (has_epics took the none route and no loop ran), and whichever
+  # of the two loops the tracker chose. Each loop is read only behind has(), since a step that reads a skipped step is
+  # skipped even inside has(). release and epics always run once the plan was approved, and the join lists has_epics,
+  # which always runs after them, so it is never blocked: that is right here because it has no approval of its own to
+  # wait for (a rejected plan skips epics and release, and the step reads both).
   - id: order
     type: script
-    description: The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them - or why there is nothing to deliver.
+    description: The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them (files - by slice, keyed <release>-s<N>) - or why there is nothing to deliver.
     runtime: python
     entrypoint: scripts/order.py
     merge: any
-    depends_on: [split_epics, has_epics]
-    input: {map: "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'epics': nodes.epics.output.count, 'repo': inputs.repo}"}
+    depends_on: [split_epics, breakdown_epics, has_epics]
+    input: {map: "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'breakdown': has(nodes.breakdown_epics) ? nodes.breakdown_epics.output : null, 'source': inputs.source, 'epics': nodes.epics.output.count, 'repo': inputs.repo, 'release': nodes.release.output.id}"}
     output_schema: schemas/order.json
+    limits: {time: 1m}
+
+  # The breakdown as a Markdown file for the first Story's pull request (a files run); nothing for github.
+  - id: breakdown_doc
+    type: script
+    description: The breakdown of the release as docs/release/<release>/breakdown.md, committed in the first Story's pull request for review there (empty for github).
+    runtime: python
+    entrypoint: scripts/breakdown_doc.py
+    input: {map: "{'source': inputs.source, 'release': nodes.release.output.id, 'prd': nodes.prd.output.markdown, 'order': nodes.order.output}"}
+    output_schema: schemas/breakdown_doc.json
     limits: {time: 1m}
 
   - id: has_stories
@@ -228,8 +295,8 @@ nodes:
     type: approval
     description: A person confirms what will be delivered before the first Story starts; rejecting it stops the run with nothing delivered. Answer in mission control, with azhi approve, or from the Slack approval message.
     role: author
-    message: {cel: "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Choose the mode: supervised (a person approves the specs of each Story and signs each one off) or auto (the recommendations of the agents are taken where the rules say it is safe, every such decision is posted to Slack, and anything doubtful still asks). Leaving it empty is supervised. Reject to stop with nothing delivered.'"}
-    payload: {map: "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories}"}
+    message: {cel: "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '.' + (inputs.source == 'files' ? ' No tracker: the Stories are not issues, they are named ' + nodes.release.output.id + '-s1, -s2 and so on, and the plan is committed in the first pull request (docs/release/' + nodes.release.output.id + '/breakdown.md).' : '') + ' Choose the mode: supervised (a person approves the specs of each Story and signs each one off) or auto (the recommendations of the agents are taken where the rules say it is safe, every such decision is posted to Slack, and anything doubtful still asks). Leaving it empty is supervised. Reject to stop with nothing delivered.'"}
+    payload: {map: "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories.map(s, {'ref': s.ref, 'title': s.title, 'epic': s.epic})}"}
     decision_schema:
       type: object
       properties:
@@ -265,7 +332,11 @@ nodes:
         timeout: 168h
         input:
           source: {ref: inputs.source}
-          ticket: {cel: "nodes.order.output.stories[iteration].ref"}
+          ticket: {cel: "nodes.order.output.stories[iteration].inputs.ticket"}
+          story_key: {cel: "nodes.order.output.stories[iteration].inputs.story_key"}
+          story_title: {cel: "nodes.order.output.stories[iteration].inputs.story_title"}
+          story_body: {cel: "nodes.order.output.stories[iteration].inputs.story_body"}
+          extra_files: {cel: "iteration == 0 ? nodes.breakdown_doc.output.files : []"}
           repo: {ref: inputs.repo}
           base_branch: {ref: inputs.base_branch}
           stack_on: {ref: state.stack_on}
@@ -344,7 +415,7 @@ nodes:
     entrypoint: scripts/summary.py
     merge: any
     depends_on: [brief, has_stories, autonomy, deliver_stories, release_outcome]
-    input: {map: "{'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"}
+    input: {map: "{'source': inputs.source, 'release_id': has(nodes.release) ? nodes.release.output.id : null, 'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"}
     output_schema: schemas/summary.json
     limits: {time: 1m}
 

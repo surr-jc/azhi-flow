@@ -48,6 +48,12 @@ Cut the work into 1 to the allowed number of epics. Each epic is a body of work 
 tickets of one pull request each, and has a `goal`, a `scope` (what it touches), and `acceptance_criteria` a
 tester can check true or false.
 
+- When the message says `greenfield` is true, the repository has no code: the FIRST Story of the first epic is a
+  runnable scaffold that a person could clone and run - the project layout for the chosen stack, one passing test,
+  a CI workflow that runs it, a README with the run and test commands, and `.azhi/commands.json` with the install,
+  typecheck, test and build commands (for example `{"install":"npm ci","test":"npm test"}`), because the delivery
+  that checks every Story runs those commands, and a fresh scaffold has no history for it to detect them from. Say
+  so in `walking_skeleton`, and plan nothing else in that epic until it.
 - The first epic makes the product runnable end to end: the smallest vertical path a user can walk. Later
   epics build on it. If the repository already runs end to end, say so in `walking_skeleton` and start from
   the first valuable change.

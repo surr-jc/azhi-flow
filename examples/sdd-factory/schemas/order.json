@@ -23,10 +23,12 @@
         "type": "object",
         "properties": {
           "ref": {
-            "type": "string"
+            "type": "string",
+            "description": "The identity shown to people: owner/name#N for github, the Story key for files."
           },
           "number": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The issue number for github, 1..N across the release for files."
           },
           "title": {
             "type": [
@@ -36,13 +38,38 @@
           },
           "epic": {
             "type": "integer"
+          },
+          "inputs": {
+            "type": "object",
+            "properties": {
+              "ticket": {
+                "type": "string"
+              },
+              "story_key": {
+                "type": "string"
+              },
+              "story_title": {
+                "type": "string"
+              },
+              "story_body": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ticket",
+              "story_key",
+              "story_title",
+              "story_body"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "ref",
           "number",
           "title",
-          "epic"
+          "epic",
+          "inputs"
         ],
         "additionalProperties": false
       }

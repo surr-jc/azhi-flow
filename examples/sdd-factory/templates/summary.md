@@ -13,11 +13,14 @@ No Story was delivered.
 
 Pull request stack, merge them in this order:
 {{#summary.stack}}
-• #{{number}} {{title}} {{pr_url}} ({{branch}})
+• {{label}} {{title}} {{pr_url}} ({{branch}})
 {{/summary.stack}}
 {{^summary.stack}}
 No pull request is ready to merge.
 {{/summary.stack}}
+{{#summary.breakdown_path}}
+No tracker was used: the breakdown of the release is in the first pull request ({{summary.breakdown_path}}).
+{{/summary.breakdown_path}}
 
 Release check: {{summary.release.status}}{{#summary.release.counts}} ({{pass}} passed, {{fail}} failed, {{unavailable}} unavailable){{/summary.release.counts}}
 {{#summary.stopped_at}}

@@ -30,6 +30,7 @@ const brainstorm = {
   approaches: [{ name: 'Walking skeleton first', delivers: 'One card payment end to end.', cost: 'Little polish.', leaves_out: 'Refunds', recommended: true, reason: 'Smallest path a user can walk.', counter: 'Refunds wait.' }],
   assumptions: ['Cards only'],
   unknowns: ['Which provider'],
+  greenfield: false,
 };
 const prd = {
   title: 'Pay by card',
@@ -125,38 +126,105 @@ function splitterPackage(kind: SplitKind): string {
   );
 }
 
-/** A stand-in sdd-story: it echoes its inputs, then signs the Story off, sends it back (`fail`) or fails (`crash`), by issue number. */
-function storyPackage(fail: number[], crash: number[]): string {
+/**
+ * A stand-in sdd-story: it echoes its inputs (the Story's text and the extra files included), then signs the Story off,
+ * sends it back (`fail`) or fails (`crash`). A Story is identified by its issue number (source github) or by its
+ * story_key (source files; its number is the N of `<release>-sN`); `fail` and `crash` list numbers or keys.
+ */
+function storyPackage(fail: Array<number | string>, crash: Array<number | string>): string {
   return standIn(
     'sdd-story',
-    '    source: {type: string}\n    ticket: {type: string}\n    repo: {type: string}\n    base_branch: {type: string}\n    stack_on: {type: string}\n    mode: {type: string}\n  required: [ticket, repo]',
+    `    source: {type: string}
+    ticket: {type: string}
+    repo: {type: string}
+    base_branch: {type: string}
+    stack_on: {type: string}
+    mode: {type: string}
+    story_key: {type: string}
+    story_title: {type: string}
+    story_body: {type: string}
+    extra_files: {type: array, items: {type: object, properties: {path: {type: string}, content: {type: string}}, required: [path, content]}}
+  required: [ticket, repo]`,
     `  - id: echo
     type: script
     runtime: python
     entrypoint: scripts/echo.py
-    input: {map: "{'source': inputs.source, 'ticket': inputs.ticket, 'repo': inputs.repo, 'base_branch': inputs.base_branch, 'stack_on': has(inputs.stack_on) ? inputs.stack_on : '', 'mode': has(inputs.mode) ? inputs.mode : ''}"}
+    input: {map: "{'source': inputs.source, 'ticket': inputs.ticket, 'repo': inputs.repo, 'base_branch': inputs.base_branch, 'stack_on': has(inputs.stack_on) ? inputs.stack_on : '', 'mode': has(inputs.mode) ? inputs.mode : '', 'story_key': has(inputs.story_key) ? inputs.story_key : '', 'story_title': has(inputs.story_title) ? inputs.story_title : '', 'story_body': has(inputs.story_body) ? inputs.story_body : '', 'extra_files': has(inputs.extra_files) ? inputs.extra_files : []}"}
     output_schema: {type: object}
   - id: result
     type: script
     runtime: python
     entrypoint: scripts/result.py
     retry: {max_attempts: 1}
-    input: {map: "{'ticket': inputs.ticket}"}
+    input: {map: "{'ticket': inputs.ticket, 'source': inputs.source, 'story_key': has(inputs.story_key) ? inputs.story_key : ''}"}
     output_schema: {type: object}
 `,
     {
       'echo.py': ECHO,
       'result.py': `import json, sys
-ticket = json.load(sys.stdin)["ticket"]
-number = int(ticket.split("#")[1])
-if number in ${JSON.stringify(crash)}:
+d = json.load(sys.stdin)
+if d["source"] == "files":
+    ident = d["story_key"]
+    number = int(ident.rsplit("-s", 1)[1])
+    branch = "azhi/" + ident
+else:
+    ident = d["ticket"]
+    number = int(ident.split("#")[1])
+    branch = "azhi/" + ident.replace("#", "-")
+if number in ${JSON.stringify(crash)} or ident in ${JSON.stringify(crash)}:
     raise SystemExit("the Story crashed")
-if number in ${JSON.stringify(fail)}:
+if number in ${JSON.stringify(fail)} or ident in ${JSON.stringify(fail)}:
     print(json.dumps({"status": "sent_back", "reason": "tests_failed", "branch": None, "head_sha": None, "pr_number": None, "pr_url": None}))
 else:
-    print(json.dumps({"status": "signed_off", "reason": "signed_off", "branch": "azhi/" + ticket.replace("#", "-"), "head_sha": "c" * 40, "pr_number": number, "pr_url": "https://github.com/acme/shop/pull/%d" % number}))
+    print(json.dumps({"status": "signed_off", "reason": "signed_off", "branch": branch, "head_sha": "c" * 40, "pr_number": number, "pr_url": "https://github.com/acme/shop/pull/%d" % number}))
 `,
     },
+  );
+}
+
+/**
+ * A stand-in sdd-breakdown: it echoes its inputs and returns the Stories as data, and writes nothing. 'ok': epic 1 gives
+ * two Stories, epic 2 one. 'not_code': epic 2 is not a code change. 'none': every slice of every epic was left out.
+ * 'many': seven Stories per epic (one more than a breakdown may return). 'fail': the run fails. 'nostep': it ends
+ * without a stories step, as a child whose plan approval was rejected does.
+ */
+type BreakKind = 'ok' | 'not_code' | 'none' | 'many' | 'fail' | 'nostep';
+function breakdownPackage(kind: BreakKind): string {
+  const stories = `import json, sys
+d = json.load(sys.stdin)
+n = d["epic"]
+kind = ${JSON.stringify(kind)}
+per = 7 if kind == "many" else (2 if n == 1 else 1)
+if kind == "none":
+    out = {"status": "none", "epic": n, "release": d["release"], "stories": []}
+elif kind == "not_code" and n == 2:
+    out = {"status": "not_code", "epic": n, "release": d["release"], "stories": []}
+else:
+    out = {"status": "ok", "epic": n, "release": d["release"], "stories": [{"slice": i, "title": "Epic %d slice %d" % (n, i), "body": "Body of epic %d slice %d\\n\\n- do it" % (n, i)} for i in range(1, per + 1)]}
+print(json.dumps(out))
+`;
+  return standIn(
+    'sdd-breakdown',
+    '    repo: {type: string}\n    text: {type: string}\n    base_branch: {type: string}\n    epic: {type: integer}\n    release: {type: string}\n  required: [repo, text]',
+    `  - id: echo
+    type: script
+    runtime: python
+    entrypoint: scripts/echo.py
+    input: {map: "{'repo': inputs.repo, 'text': inputs.text, 'base_branch': has(inputs.base_branch) ? inputs.base_branch : '', 'epic': has(inputs.epic) ? inputs.epic : 0, 'release': has(inputs.release) ? inputs.release : ''}"}
+    output_schema: {type: object}
+${
+  kind === 'nostep'
+    ? ''
+    : `  - id: stories
+    type: script
+    runtime: python
+    entrypoint: scripts/stories.py
+    retry: {max_attempts: 1}
+    input: {map: "{'epic': has(inputs.epic) ? inputs.epic : 0, 'release': has(inputs.release) ? inputs.release : ''}"}
+    output_schema: {type: object}
+`
+}`,
+    { 'echo.py': ECHO, 'stories.py': kind === 'fail' ? 'raise SystemExit("the breakdown failed")\n' : stories },
   );
 }
 
@@ -195,6 +263,9 @@ async function waitForApprovalOn(api: ApiClient, runId: string, node: string) {
 }
 
 const SLOW = 300_000;
+const GOAL = 'Let customers pay by card';
+/** The release id of the run being asserted on: the slug of the plan's title and six random hex characters, read from the run by `start`. */
+let RELEASE = '';
 
 describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children)', () => {
   let h: Harness;
@@ -228,23 +299,33 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
 
   interface Setup {
     split?: SplitKind;
-    fail?: number[];
-    crash?: number[];
+    fail?: Array<number | string>;
+    crash?: Array<number | string>;
     verify?: 'verified' | 'failed' | 'boom';
+    /** The tracker: github (the default) or files. */
+    source?: 'github' | 'files';
+    breakdown?: BreakKind;
   }
   /** Publishes the stand-ins, then starts a run and answers the brainstorm and the plan (`drop`: the epics left out). */
   const start = async (s: Setup = {}, drop = '') => {
-    for (const dir of [splitterPackage(s.split ?? 'mixed'), storyPackage(s.fail ?? [], s.crash ?? []), verifyPackage(s.verify ?? 'verified')]) {
+    for (const dir of [splitterPackage(s.split ?? 'mixed'), breakdownPackage(s.breakdown ?? 'ok'), storyPackage(s.fail ?? [], s.crash ?? []), verifyPackage(s.verify ?? 'verified')]) {
       const v = await uploadDir(h.api, dir);
       expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
       await h.api.post(`/v1/versions/${v.version.id}/publish`, {});
     }
-    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: factory, inputs: { source: 'github', repo: REPO, base_branch: 'dev', goal: 'Let customers pay by card' } });
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: factory, inputs: { source: s.source ?? 'github', repo: REPO, base_branch: 'dev', goal: GOAL } });
     const asked = await waitForApprovalOn(h.api, run_id, 'brainstorm_review');
     brainstormRequest = asked.approvals.find((a: any) => a.node_id === 'brainstorm_review').request;
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'brainstorm_review', decision: 'approved', data: { approach: 'Walking skeleton first', answers: 'UK only.' } });
     await waitForApprovalOn(h.api, run_id, 'prd_review');
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'prd_review', decision: 'approved', data: { drop } });
+    // The release id has random characters, so each case reads the one its run was given before it asserts on names.
+    RELEASE = '';
+    for (let i = 0; i < 300 && !RELEASE; i++) {
+      const id = out(await h.api.get<any>(`/v1/runs/${run_id}`), 'release')?.id;
+      if (typeof id === 'string') RELEASE = id;
+      else await new Promise((r) => setTimeout(r, 200));
+    }
     return run_id;
   };
   const approve = (run_id: string, node: string, decision: 'approved' | 'rejected' = 'approved', data?: Record<string, unknown>) => h.api.post(`/v1/runs/${run_id}/approvals`, { node, decision, ...(data ? { data } : {}) });
@@ -253,6 +334,8 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
   const stories = (d: any) => d.attempts.filter((a: any) => /^deliver_stories_\d+_story$/.test(a.node_id) && a.state === 'succeeded').sort((a: any, b: any) => a.node_id.localeCompare(b.node_id, undefined, { numeric: true })).map((a: any) => a.output);
   const posted = (since: number) => h.slack.messages.slice(since).map((m) => m.text);
   const childrenOf = (d: any, workflow: string) => d.children.filter((c: any) => c.workflow === workflow);
+  const breakdowns = (d: any) => d.attempts.filter((a: any) => /^breakdown_epics_\d+_breakdown$/.test(a.node_id) && a.state === 'succeeded').sort((a: any, b: any) => a.node_id.localeCompare(b.node_id, undefined, { numeric: true })).map((a: any) => a.output);
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `${RELEASE}-s${i + 1}`);
 
   it('delivers every Story in order, each stacked on the one before, then checks the release and says what to merge', async () => {
     const before = h.slack.messages.length;
@@ -267,6 +350,8 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
     expect(request.payload).toMatchObject({ repository: REPO, base_branch: 'dev', prd_title: 'Pay by card' });
     expect(request.payload.stories.map((s: any) => s.ref)).toEqual(refs);
     expect(request.payload.stories.map((s: any) => s.epic)).toEqual([1, 1, 2]);
+    expect(request.payload.stories.map((s: any) => Object.keys(s).sort())).toEqual([['epic', 'ref', 'title'], ['epic', 'ref', 'title'], ['epic', 'ref', 'title']]);
+    expect(request.message).not.toContain('No tracker');
     expect(asked.attempts.filter((a: any) => a.node_id.startsWith('deliver_stories') && a.state === 'succeeded')).toEqual([]);
     await approve(run_id, 'autonomy');
 
@@ -279,8 +364,13 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
     expect(ran.map((s: any) => s.nodes.echo.ticket)).toEqual(refs);
     const branches = [1001, 1002, single].map((n) => `azhi/${REPO.replace('/', '/')}-${n}`);
     expect(ran.map((s: any) => s.nodes.echo.stack_on)).toEqual(['dev', branches[0], branches[1]]);
-    for (const s of ran) expect(s.nodes.echo).toMatchObject({ source: 'github', repo: REPO, base_branch: 'dev', mode: 'supervised' });
+    for (const s of ran) expect(s.nodes.echo).toMatchObject({ source: 'github', repo: REPO, base_branch: 'dev', mode: 'supervised', story_key: '', story_title: '', story_body: '', extra_files: [] });
     expect(out(done, 'deliver_stories')).toMatchObject({ outcome: 'done', count: 3 });
+    // github is as before: the splitter ran, the breakdown did not, no breakdown file is carried, the summary names issues.
+    expect(childrenOf(done, 'sdd-breakdown')).toEqual([]);
+    expect(out(done, 'breakdown_doc')).toEqual({ files: [] });
+    expect(state(done, 'breakdown_epics_1_breakdown')).toBe('skipped');
+    expect(out(done, 'summary').breakdown_path).toBeNull();
 
     // The release check reads the top branch of the stack, the plan's journeys and invariants, and asks for no fix ticket.
     const check = out(done, 'release_check');
@@ -302,6 +392,202 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
     expect(childrenOf(done, 'ai-sdlc-factory-verify').map((c: any) => c.state)).toEqual(['succeeded']);
     expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review', 'autonomy']);
   }, SLOW);
+
+  describe('source files: no tracker, the breakdown is committed in the first pull request', () => {
+    const titles = ['Epic 1 slice 1', 'Epic 1 slice 2', 'Epic 2 slice 1'];
+
+    it('delivers three Stories stacked in order, keyed <release>-sN, with the breakdown only in the first one', async () => {
+      const before = h.slack.messages.length;
+      const reqs = gh.requests.length;
+      const createdBefore = gh.created.length;
+      const run_id = await start({ source: 'files', breakdown: 'ok' });
+
+      const asked = await waitForApprovalOn(h.api, run_id, 'autonomy');
+      const request = asked.approvals.find((a: any) => a.node_id === 'autonomy').request;
+      // The approval lists ref, title and epic - the key as the ref - and no Story text.
+      expect(request.payload.stories).toEqual(keys(3).map((ref, i) => ({ ref, title: titles[i], epic: [1, 1, 2][i] })));
+      expect(JSON.stringify(request)).not.toContain('Body of epic');
+      expect(request.message).toContain('No tracker');
+      expect(request.message).toContain(`docs/release/${RELEASE}/breakdown.md`);
+      await approve(run_id, 'autonomy');
+
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.error).toBeNull();
+      expect(done.run.state).toBe('succeeded');
+      expect(RELEASE).toMatch(/^pay-by-card-[0-9a-f]{6}$/);
+      expect(out(done, 'release')).toEqual({ id: RELEASE });
+
+      // The epics were broken down by the breakdown child, one after the other, and no issue was made.
+      expect(childrenOf(done, 'sdd-breakdown').map((c: any) => c.state)).toEqual(['succeeded', 'succeeded']);
+      expect(childrenOf(done, 'issue-splitter')).toEqual([]);
+      expect(state(done, 'split_epics_1_split')).toBe('skipped');
+      const bd = breakdowns(done);
+      expect(bd.map((b: any) => b.nodes.echo.epic)).toEqual([1, 2]);
+      for (const b of bd) expect(b.nodes.echo).toMatchObject({ repo: REPO, base_branch: 'dev', release: RELEASE });
+      expect(bd[0].nodes.echo.text).toContain('# Epic 1: Take a card payment');
+      expect(gh.requests.slice(reqs).filter((r) => r.includes('/issues'))).toEqual([]);
+      expect(gh.created).toHaveLength(createdBefore);
+
+      // The order: global numbers, the key as the ref, the Story text as inputs.
+      const order = out(done, 'order');
+      expect(order).toMatchObject({ ok: true, count: 3 });
+      expect(order.stories.map((s: any) => [s.ref, s.number, s.epic])).toEqual(keys(3).map((k, i) => [k, i + 1, [1, 1, 2][i]]));
+
+      // One Story per round, in order, each stacked on the one before; the first on the base branch.
+      const ran = stories(done);
+      expect(ran.map((s: any) => s.nodes.echo.story_key)).toEqual(keys(3));
+      expect(ran.map((s: any) => s.nodes.echo.story_title)).toEqual(titles);
+      expect(ran.map((s: any) => s.nodes.echo.stack_on)).toEqual(['dev', `azhi/${keys(3)[0]}`, `azhi/${keys(3)[1]}`]);
+      for (const [i, s] of ran.entries()) expect(s.nodes.echo, `Story ${i + 1}`).toMatchObject({ source: 'files', ticket: '', repo: REPO, base_branch: 'dev', mode: 'supervised' });
+      expect(ran[0].nodes.echo.story_body).toBe('Body of epic 1 slice 1\n\n- do it');
+      expect(ran[2].nodes.echo.story_body).toBe('Body of epic 2 slice 1\n\n- do it');
+      expect(out(done, 'deliver_stories')).toMatchObject({ outcome: 'done', count: 3 });
+
+      // The breakdown document rides on Story 1 only.
+      const first = ran[0].nodes.echo.extra_files;
+      expect(first).toHaveLength(1);
+      expect(first[0].path).toBe(`docs/release/${RELEASE}/breakdown.md`);
+      expect(first[0].content).toContain('Pay by card');
+      for (const t of titles) expect(first[0].content).toContain(t);
+      expect(first[0].content).toContain(`### ${keys(3)[2]}: Epic 2 slice 1`);
+      expect(ran[1].nodes.echo.extra_files).toEqual([]);
+      expect(ran[2].nodes.echo.extra_files).toEqual([]);
+
+      // The release check reads the top branch of the stack.
+      expect(out(done, 'release_check').nodes.echo).toMatchObject({ repo: REPO, staging_branch: `azhi/${keys(3)[2]}`, propose_fix: false });
+
+      // The summary names the Stories by key and says where the plan is.
+      const summary = out(done, 'summary');
+      expect(summary).toMatchObject({ status: 'delivered', signed_off: 3, total: 3, stopped_at: null, breakdown_path: `docs/release/${RELEASE}/breakdown.md`, release: { status: 'verified' } });
+      expect(summary.stories.map((s: any) => s.ref)).toEqual(keys(3));
+      expect(summary.stack.map((s: any) => s.label)).toEqual(keys(3));
+      const text = posted(before).join('\n');
+      for (const k of keys(3)) expect(text).toContain(k);
+      expect(text).not.toContain('• #1');
+      expect(text).toContain('the breakdown of the release is in the first pull request');
+      expect(text).toContain(`docs/release/${RELEASE}/breakdown.md`);
+      expect(text).toContain('Nothing was merged.');
+      expect(childrenOf(done, 'sdd-story').map((c: any) => c.state)).toEqual(['succeeded', 'succeeded', 'succeeded']);
+      expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review', 'autonomy']);
+    }, SLOW);
+
+    it("passes the person's auto mode to every Story", async () => {
+      const run_id = await start({ source: 'files', breakdown: 'ok' }, '2');
+      await waitForApprovalOn(h.api, run_id, 'autonomy');
+      await approve(run_id, 'autonomy', 'approved', { mode: 'auto' });
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.state).toBe('succeeded');
+      expect(out(done, 'mode')).toEqual({ mode: 'auto' });
+      const ran = stories(done);
+      expect(ran.map((s: any) => s.nodes.echo.story_key)).toEqual(keys(2));
+      for (const s of ran) expect(s.nodes.echo).toMatchObject({ source: 'files', mode: 'auto' });
+      // Epic 2 was left out, so the one breakdown that ran is epic 1; its two Stories are numbered from 1.
+      expect(breakdowns(done).map((b: any) => b.nodes.echo.epic)).toEqual([1]);
+      expect(ran[0].nodes.echo.extra_files).toHaveLength(1);
+      expect(ran[1].nodes.echo.extra_files).toEqual([]);
+    }, SLOW);
+
+    it('stops at the first Story that is not signed off, by key: nothing is stacked on it and the release is not checked', async () => {
+      const before = h.slack.messages.length;
+      const run_id = await start({ source: 'files', breakdown: 'ok', fail: [2] });
+      await waitForApprovalOn(h.api, run_id, 'autonomy');
+      await approve(run_id, 'autonomy');
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.error).toBeNull();
+      expect(done.run.state).toBe('succeeded');
+      expect(stories(done).map((s: any) => s.nodes.echo.story_key)).toEqual(keys(3).slice(0, 2));
+      expect(out(done, 'deliver_stories')).toMatchObject({ outcome: 'stop', count: 2 });
+      expect(state(done, 'deliver_stories_3_story')).toBe('skipped');
+      for (const id of ['journeys', 'release_check']) expect(state(done, id), id).toBe('skipped');
+      const summary = out(done, 'summary');
+      expect(summary).toMatchObject({ status: 'stopped', signed_off: 1, total: 3, stopped_at: keys(3)[1], headline: `Stopped at ${keys(3)[1]} (tests_failed): 1 of 3 Stories signed off.`, breakdown_path: `docs/release/${RELEASE}/breakdown.md` });
+      expect(summary.stack.map((s: any) => s.label)).toEqual([keys(3)[0]]);
+      expect(posted(before).join('\n')).toContain(`Stopped at ${keys(3)[1]} (tests_failed)`);
+    }, SLOW);
+
+    it('treats a Story whose run fails as not signed off', async () => {
+      const run_id = await start({ source: 'files', breakdown: 'ok', crash: [1] });
+      await waitForApprovalOn(h.api, run_id, 'autonomy');
+      await approve(run_id, 'autonomy');
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.state).toBe('succeeded');
+      expect(childrenOf(done, 'sdd-story').map((c: any) => c.state)).toEqual(['failed']);
+      expect(out(done, 'summary')).toMatchObject({ status: 'stopped', signed_off: 0, total: 3, stopped_at: keys(3)[0], breakdown_path: null });
+    }, SLOW);
+
+    it('delivers nothing when a breakdown fails: no question, no Story, a summary that says the epic could not be handled', async () => {
+      const before = h.slack.messages.length;
+      const reqs = gh.requests.length;
+      const run_id = await start({ source: 'files', breakdown: 'fail' });
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.error).toBeNull();
+      expect(done.run.state).toBe('succeeded');
+      expect(childrenOf(done, 'sdd-breakdown').map((c: any) => c.state)).toEqual(['failed']);
+      expect(out(done, 'breakdown_epics')).toMatchObject({ outcome: 'stop', count: 1 });
+      expect(out(done, 'order')).toMatchObject({ ok: false, problem: 'split_failed', count: 0, stories: [] });
+      expect(childrenOf(done, 'sdd-story')).toEqual([]);
+      expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review']);
+      expect(out(done, 'summary')).toMatchObject({ status: 'stopped', stopped_at: 'split_failed', stories: [], breakdown_path: null });
+      expect(posted(before).join('\n')).toContain('could not be split');
+      expect(gh.requests.slice(reqs).filter((r) => r.includes('/issues'))).toEqual([]);
+    }, SLOW);
+
+    it('delivers nothing when a breakdown ends without a stories step (a rejected plan)', async () => {
+      const run_id = await start({ source: 'files', breakdown: 'nostep' });
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.state).toBe('succeeded');
+      expect(childrenOf(done, 'sdd-breakdown').map((c: any) => c.state)).toEqual(['succeeded']);
+      expect(out(done, 'breakdown_epics_1_breakdown_outcome')).toMatchObject({ status: 'failed', reason: 'no_stories_step', stories: [] });
+      expect(out(done, 'order')).toMatchObject({ ok: false, problem: 'split_failed' });
+      expect(childrenOf(done, 'sdd-story')).toEqual([]);
+      expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review']);
+    }, SLOW);
+
+    it('fails the epic whose breakdown returns more than 6 Stories, and does not break down the epic after it', async () => {
+      const run_id = await start({ source: 'files', breakdown: 'many' });
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.state).toBe('succeeded');
+      // Three epics of six Stories are 18, so a files release never reaches the 20-Story refusal through the loop: the
+      // per-epic cap is what stops an oversized breakdown (the order step's own refusal of 21 is a unit test).
+      expect(childrenOf(done, 'sdd-breakdown')).toHaveLength(1);
+      expect(out(done, 'breakdown_epics_1_breakdown_outcome')).toMatchObject({ status: 'failed', reason: 'bad_story', stories: [] });
+      expect(out(done, 'order')).toMatchObject({ ok: false, problem: 'split_failed', stories: [] });
+      expect(childrenOf(done, 'sdd-story')).toEqual([]);
+      expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review']);
+    }, SLOW);
+
+    it('delivers only the code epics: an epic that is not a code change gives no Story and does not stop the run', async () => {
+      const run_id = await start({ source: 'files', breakdown: 'not_code' });
+      await waitForApprovalOn(h.api, run_id, 'autonomy');
+      await approve(run_id, 'autonomy');
+      const done = await waitForRun(h.api, run_id, SLOW);
+      expect(done.run.state).toBe('succeeded');
+      expect(childrenOf(done, 'sdd-breakdown').map((c: any) => c.state)).toEqual(['succeeded', 'succeeded']);
+      expect(out(done, 'breakdown_epics_2_breakdown_outcome')).toMatchObject({ status: 'ok', reason: 'not_code', stories: [] });
+      expect(out(done, 'order')).toMatchObject({ ok: true, count: 2 });
+      expect(stories(done).map((s: any) => s.nodes.echo.story_key)).toEqual(keys(2));
+      expect(out(done, 'summary')).toMatchObject({ status: 'delivered', signed_off: 2, total: 2 });
+    }, SLOW);
+
+    it('delivers nothing, and asks nothing, when no epic gives a Story or the person leaves every epic out', async () => {
+      for (const [setup, drop] of [[{ source: 'files', breakdown: 'none' }, ''], [{ source: 'files', breakdown: 'ok' }, '1,2']] as const) {
+        const run_id = await start(setup, drop);
+        const done = await waitForRun(h.api, run_id, SLOW);
+        expect(done.run.error, drop).toBeNull();
+        expect(done.run.state, drop).toBe('succeeded');
+        expect(out(done, 'order'), drop).toMatchObject({ ok: true, count: 0 });
+        expect(childrenOf(done, 'sdd-story'), drop).toEqual([]);
+        expect(done.approvals.map((a: any) => a.node_id), drop).toEqual(['brainstorm_review', 'prd_review']);
+        expect(out(done, 'summary'), drop).toMatchObject({ status: 'nothing_to_deliver', total: 0, breakdown_path: null });
+        expect(out(done, 'breakdown_doc'), drop).toEqual({ files: [] });
+      }
+    }, SLOW * 2);
+
+    it('refuses a files run with a ticket, or with no goal, before it starts', async () => {
+      await expect(h.api.post('/v1/runs', { version: factory, inputs: { source: 'files', repo: REPO, base_branch: 'dev', goal: GOAL, ticket: `${REPO}#4` } })).rejects.toThrow();
+      await expect(h.api.post('/v1/runs', { version: factory, inputs: { source: 'files', repo: REPO, base_branch: 'dev' } })).rejects.toThrow();
+    }, SLOW);
+  });
 
   it('shows each brainstorm question with its recommendation, and runs every Story in the mode the person chose', async () => {
     const run_id = await start({ split: 'split' }, '2');

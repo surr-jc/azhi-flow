@@ -94,6 +94,10 @@
         "maxLength": 400
       },
       "maxItems": 10
+    },
+    "greenfield": {
+      "type": "boolean",
+      "description": "True when the repository has no source code yet (only a README, a licence, an ignore file or CI templates), so the first Story has to create the project."
     }
   },
   "required": [
@@ -101,7 +105,8 @@
     "questions",
     "approaches",
     "assumptions",
-    "unknowns"
+    "unknowns",
+    "greenfield"
   ],
   "additionalProperties": false
 }

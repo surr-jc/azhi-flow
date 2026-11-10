@@ -1,6 +1,7 @@
 """Writes the text of each epic the backlog splitter will receive. Reads JSON on stdin, prints JSON.
 
-Input:  prd (the approved release plan), drop (epic numbers the approver left out, e.g. "2,3"), brief_key.
+Input:  prd (the approved release plan), drop (epic numbers the approver left out, e.g. "2,3"), brief_key, greenfield
+        (true when the repository has no code yet: the first epic kept then says its first slice is a runnable scaffold).
 Output: the epics to split, in order, each as one Markdown text with the release context in front, so the
         splitter's analyst sees the invariants and journeys, not just its own epic. Epic numbers keep the plan's
         numbering. Text is cut to the splitter's 20000 character limit.
@@ -13,6 +14,11 @@ d = json.load(sys.stdin) or {}
 prd = d.get("prd") or {}
 dropped = {int(n) for n in re.findall(r"\d+", d.get("drop") or "")}
 MAX = 19000
+GREENFIELD = (
+    "\n## Greenfield\nThe repository has no code yet. The first Story of this epic is a runnable scaffold: the project layout "
+    "for the chosen stack, one passing test, a CI workflow that runs it, a README with the run and test commands, and "
+    ".azhi/commands.json with the install, typecheck, test and build commands. Plan nothing else in this epic until it.\n"
+)
 
 
 def bullets(items):
@@ -38,6 +44,12 @@ for n, e in enumerate(prd.get("epics") or [], start=1):
     )
     if n == 1 and prd.get("walking_skeleton"):
         text += f"\n## Walking skeleton\n{prd['walking_skeleton']}\n"
-    epics.append({"n": n, "title": e["title"], "text": text[:MAX], "truncated": len(text) > MAX})
+    # The scaffold goes in the first epic that is split, whichever epic that is: the approver may have left epic 1 out.
+    # The cut leaves room for it, so a long epic never loses the instruction.
+    scaffold = not epics and d.get("greenfield") is True
+    limit = MAX - len(GREENFIELD) if scaffold else MAX
+    truncated = len(text) > limit
+    text = text[:limit] + (GREENFIELD if scaffold else "")
+    epics.append({"n": n, "title": e["title"], "text": text, "truncated": truncated})
 
 print(json.dumps({"count": len(epics), "epics": epics, "dropped": sorted(dropped)}))

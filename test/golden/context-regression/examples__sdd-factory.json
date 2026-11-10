@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-factory",
-    "definitionHash": "sha256:6ffce47272918f948e6048f3592dad3b5caf74100419234fb0cfd6b1e477f7f2",
+    "definitionHash": "sha256:aeaefe5b33c7046d21c3b8748f90146f1253a140b4a8e54dadf070f70ac3dd7f",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -19,9 +19,10 @@
           "type": "string",
           "title": "Tracker",
           "enum": [
-            "github"
+            "github",
+            "files"
           ],
-          "description": "Where the tickets are read from and created. The code is always on GitHub."
+          "description": "github: the Stories are GitHub issues, created by the issue-splitter after its own approval. files: no tracker - the Stories live in the run and the breakdown is committed in the first pull request. The code is always on GitHub."
         },
         "repo": {
           "type": "string",
@@ -46,7 +47,7 @@
           "type": "string",
           "title": "Goal",
           "maxLength": 12000,
-          "description": "What the release should achieve, in your words. Added to the ticket when both are given."
+          "description": "What the release should achieve, in your words. Added to the ticket when both are given. Required when the tracker is files."
         }
       },
       "required": [
@@ -72,6 +73,33 @@
           "properties": {
             "goal": {
               "minLength": 1
+            }
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "files"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "then": {
+            "required": [
+              "goal"
+            ],
+            "properties": {
+              "goal": {
+                "minLength": 1
+              },
+              "ticket": {
+                "maxLength": 0
+              }
             }
           }
         }
@@ -293,7 +321,7 @@
           "description": "A person answers the questions and picks an approach before the release is planned; rejecting stops the run with nothing planned. Answer in mission control, with azhi approve, or from the Slack approval message.",
           "role": "author",
           "message": {
-            "cel": "'Before the release is planned: ' + nodes.brainstorm.output.summary + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"
+            "cel": "'Before the release is planned: ' + nodes.brainstorm.output.summary + (nodes.brainstorm.output.greenfield ? ' The repository has no code yet, so the first Story will be a runnable scaffold - say so if that is wrong.' : '') + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"
           },
           "payload": {
             "map": "{'questions': nodes.brainstorm.output.questions, 'approaches': nodes.brainstorm.output.approaches, 'assumptions': nodes.brainstorm.output.assumptions, 'unknowns': nodes.brainstorm.output.unknowns}"
@@ -376,7 +404,7 @@
             "depth": 1
           },
           "input": {
-            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'questions': nodes.brainstorm.output.questions, 'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'greenfield': nodes.brainstorm.output.greenfield, 'decisions': {'questions': nodes.brainstorm.output.questions, 'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
           },
           "output_schema": "schemas/prd.json",
           "timeout": "25m",
@@ -504,10 +532,12 @@
         "id": "epics",
         "type": "script",
         "deps": [
+          "brainstorm",
           "plan_release",
           "prd_review"
         ],
         "dataDeps": [
+          "brainstorm",
           "plan_release",
           "prd_review"
         ],
@@ -518,9 +548,39 @@
           "runtime": "python",
           "entrypoint": "scripts/epics.py",
           "input": {
-            "map": "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"
+            "map": "{'prd': nodes.plan_release.output, 'greenfield': nodes.brainstorm.output.greenfield, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"
           },
           "output_schema": "schemas/epics.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release",
+        "type": "script",
+        "deps": [
+          "epics",
+          "plan_release"
+        ],
+        "dataDeps": [
+          "plan_release"
+        ],
+        "def": {
+          "id": "release",
+          "type": "script",
+          "description": "An id for this release - a slug of the plan's title and six random hex characters. Random, so two runs of the same goal never push over each other's branches; a resumed run keeps it, since a step that succeeded is not run again.",
+          "runtime": "python",
+          "entrypoint": "scripts/release.py",
+          "depends_on": [
+            "epics"
+          ],
+          "input": {
+            "map": "{'prd': nodes.plan_release.output}"
+          },
+          "output_schema": "schemas/release.json",
           "limits": {
             "time": "1m"
           }
@@ -544,7 +604,7 @@
           "expression": "nodes.epics.output.count >= 1 ? 'yes' : 'none'",
           "routes": {
             "yes": [
-              "split_epics_1_split"
+              "tracker_gate"
             ],
             "none": []
           },
@@ -562,11 +622,48 @@
         "maxAttempts": 3
       },
       {
+        "id": "tracker_gate",
+        "type": "condition",
+        "deps": [
+          "has_epics"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "tracker_gate",
+          "type": "condition",
+          "description": "Where the Stories come from - GitHub issues made by the issue-splitter, or (no tracker) the sdd-breakdown, which creates nothing.",
+          "expression": "inputs.source",
+          "routes": {
+            "github": [
+              "split_epics_1_split"
+            ],
+            "files": [
+              "breakdown_epics_1_breakdown"
+            ]
+          },
+          "default": "github"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_epics",
+          "route": "yes"
+        }
+      },
+      {
         "id": "split_epics_1_split",
         "type": "subworkflow",
         "deps": [
           "epics",
-          "has_epics"
+          "tracker_gate"
         ],
         "dataDeps": [
           "epics"
@@ -616,8 +713,8 @@
         "timeoutMs": 345600000,
         "maxAttempts": 3,
         "route": {
-          "condition": "has_epics",
-          "route": "yes"
+          "condition": "tracker_gate",
+          "route": "github"
         },
         "loop": {
           "loop": "split_epics",
@@ -1170,32 +1267,699 @@
         "maxAttempts": 3
       },
       {
-        "id": "order",
-        "type": "script",
+        "id": "breakdown_epics_1_breakdown",
+        "type": "subworkflow",
         "deps": [
           "epics",
-          "has_epics",
-          "split_epics"
+          "release",
+          "tracker_gate"
         ],
         "dataDeps": [
           "epics",
+          "release"
+        ],
+        "def": {
+          "id": "breakdown_epics_1_breakdown",
+          "type": "subworkflow",
+          "description": "Run the published sdd-breakdown on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "sdd-breakdown",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[0].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "epic": {
+              "cel": "nodes.epics.output.epics[0].n"
+            },
+            "release": {
+              "ref": "nodes.release.output.id"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "tracker_gate",
+          "route": "files"
+        },
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 1,
+          "step": "breakdown"
+        }
+      },
+      {
+        "id": "breakdown_epics_1_breakdown_outcome",
+        "type": "script",
+        "deps": [
+          "breakdown_epics_1_breakdown",
+          "epics"
+        ],
+        "dataDeps": [
+          "breakdown_epics_1_breakdown",
+          "epics"
+        ],
+        "def": {
+          "id": "breakdown_epics_1_breakdown_outcome",
+          "type": "script",
+          "description": "The Stories this round's breakdown returned, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/breakdown_outcome.py",
+          "input": {
+            "map": "{'child': nodes.breakdown_epics_1_breakdown.output, 'epic': nodes.epics.output.epics[0].n, 'last': 0 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/breakdown_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 1,
+          "step": "breakdown_outcome"
+        }
+      },
+      {
+        "id": "breakdown_epics_1_gate",
+        "type": "condition",
+        "deps": [
+          "breakdown_epics_1_breakdown",
+          "breakdown_epics_1_breakdown_outcome"
+        ],
+        "dataDeps": [
+          "breakdown_epics_1_breakdown_outcome"
+        ],
+        "def": {
+          "id": "breakdown_epics_1_gate",
+          "type": "condition",
+          "description": "Decides how round 1 of breakdown_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "breakdown_epics_1_breakdown",
+            "breakdown_epics_1_breakdown_outcome"
+          ],
+          "expression": "(nodes.breakdown_epics_1_breakdown_outcome.output.status != 'ok') ? 'stop' : ((nodes.breakdown_epics_1_breakdown_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "breakdown_epics_2_breakdown"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 1,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "breakdown_epics_2_breakdown",
+        "type": "subworkflow",
+        "deps": [
+          "breakdown_epics_1_gate",
+          "epics",
+          "release"
+        ],
+        "dataDeps": [
+          "epics",
+          "release"
+        ],
+        "def": {
+          "id": "breakdown_epics_2_breakdown",
+          "type": "subworkflow",
+          "description": "Run the published sdd-breakdown on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "sdd-breakdown",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[1].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "epic": {
+              "cel": "nodes.epics.output.epics[1].n"
+            },
+            "release": {
+              "ref": "nodes.release.output.id"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "breakdown_epics_1_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 2,
+          "step": "breakdown"
+        }
+      },
+      {
+        "id": "breakdown_epics_2_breakdown_outcome",
+        "type": "script",
+        "deps": [
+          "breakdown_epics_2_breakdown",
+          "epics"
+        ],
+        "dataDeps": [
+          "breakdown_epics_2_breakdown",
+          "epics"
+        ],
+        "def": {
+          "id": "breakdown_epics_2_breakdown_outcome",
+          "type": "script",
+          "description": "The Stories this round's breakdown returned, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/breakdown_outcome.py",
+          "input": {
+            "map": "{'child': nodes.breakdown_epics_2_breakdown.output, 'epic': nodes.epics.output.epics[1].n, 'last': 1 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/breakdown_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 2,
+          "step": "breakdown_outcome"
+        }
+      },
+      {
+        "id": "breakdown_epics_2_gate",
+        "type": "condition",
+        "deps": [
+          "breakdown_epics_2_breakdown",
+          "breakdown_epics_2_breakdown_outcome"
+        ],
+        "dataDeps": [
+          "breakdown_epics_2_breakdown_outcome"
+        ],
+        "def": {
+          "id": "breakdown_epics_2_gate",
+          "type": "condition",
+          "description": "Decides how round 2 of breakdown_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "breakdown_epics_2_breakdown",
+            "breakdown_epics_2_breakdown_outcome"
+          ],
+          "expression": "(nodes.breakdown_epics_2_breakdown_outcome.output.status != 'ok') ? 'stop' : ((nodes.breakdown_epics_2_breakdown_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "breakdown_epics_3_breakdown"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 2,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "breakdown_epics_3_breakdown",
+        "type": "subworkflow",
+        "deps": [
+          "breakdown_epics_2_gate",
+          "epics",
+          "release"
+        ],
+        "dataDeps": [
+          "epics",
+          "release"
+        ],
+        "def": {
+          "id": "breakdown_epics_3_breakdown",
+          "type": "subworkflow",
+          "description": "Run the published sdd-breakdown on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "sdd-breakdown",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[2].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "epic": {
+              "cel": "nodes.epics.output.epics[2].n"
+            },
+            "release": {
+              "ref": "nodes.release.output.id"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "breakdown_epics_2_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 3,
+          "step": "breakdown"
+        }
+      },
+      {
+        "id": "breakdown_epics_3_breakdown_outcome",
+        "type": "script",
+        "deps": [
+          "breakdown_epics_3_breakdown",
+          "epics"
+        ],
+        "dataDeps": [
+          "breakdown_epics_3_breakdown",
+          "epics"
+        ],
+        "def": {
+          "id": "breakdown_epics_3_breakdown_outcome",
+          "type": "script",
+          "description": "The Stories this round's breakdown returned, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/breakdown_outcome.py",
+          "input": {
+            "map": "{'child': nodes.breakdown_epics_3_breakdown.output, 'epic': nodes.epics.output.epics[2].n, 'last': 2 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/breakdown_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 3,
+          "step": "breakdown_outcome"
+        }
+      },
+      {
+        "id": "breakdown_epics_3_gate",
+        "type": "condition",
+        "deps": [
+          "breakdown_epics_3_breakdown",
+          "breakdown_epics_3_breakdown_outcome"
+        ],
+        "dataDeps": [
+          "breakdown_epics_3_breakdown_outcome"
+        ],
+        "def": {
+          "id": "breakdown_epics_3_gate",
+          "type": "condition",
+          "description": "Decides how round 3 of breakdown_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "breakdown_epics_3_breakdown",
+            "breakdown_epics_3_breakdown_outcome"
+          ],
+          "expression": "(nodes.breakdown_epics_3_breakdown_outcome.output.status != 'ok') ? 'stop' : ((nodes.breakdown_epics_3_breakdown_outcome.output.last) ? 'done' : 'exhausted')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "exhausted": []
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "breakdown_epics",
+          "round": 3,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "breakdown_epics",
+        "type": "loop",
+        "deps": [
+          "breakdown_epics_1_breakdown",
+          "breakdown_epics_1_breakdown_outcome",
+          "breakdown_epics_1_gate",
+          "breakdown_epics_2_breakdown",
+          "breakdown_epics_2_breakdown_outcome",
+          "breakdown_epics_2_gate",
+          "breakdown_epics_3_breakdown",
+          "breakdown_epics_3_breakdown_outcome",
+          "breakdown_epics_3_gate"
+        ],
+        "dataDeps": [
+          "breakdown_epics_1_breakdown",
+          "breakdown_epics_1_breakdown_outcome",
+          "breakdown_epics_2_breakdown",
+          "breakdown_epics_2_breakdown_outcome",
+          "breakdown_epics_3_breakdown",
+          "breakdown_epics_3_breakdown_outcome"
+        ],
+        "def": {
+          "id": "breakdown_epics",
+          "type": "loop",
+          "description": "Break each epic down into Stories with the published sdd-breakdown (analysis, its own approval, then the Stories as data), one after the other. No tracker; nothing is created.",
+          "merge": "any",
+          "depends_on": [
+            "breakdown_epics_1_gate",
+            "breakdown_epics_2_gate",
+            "breakdown_epics_3_gate"
+          ],
+          "max_iterations": 3,
+          "on_max": "continue",
+          "reasons": {
+            "stop": "An epic could not be broken down",
+            "done": "Every epic is broken down"
+          },
+          "rounds": [
+            {
+              "gate": "breakdown_epics_1_gate",
+              "required": [
+                "breakdown_epics_1_breakdown",
+                "breakdown_epics_1_breakdown_outcome"
+              ],
+              "steps": {
+                "breakdown": {
+                  "ref": "nodes.breakdown_epics_1_breakdown.output"
+                },
+                "breakdown_outcome": {
+                  "ref": "nodes.breakdown_epics_1_breakdown_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "breakdown_epics_2_gate",
+              "required": [
+                "breakdown_epics_2_breakdown",
+                "breakdown_epics_2_breakdown_outcome"
+              ],
+              "steps": {
+                "breakdown": {
+                  "ref": "nodes.breakdown_epics_2_breakdown.output"
+                },
+                "breakdown_outcome": {
+                  "ref": "nodes.breakdown_epics_2_breakdown_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "breakdown_epics_3_gate",
+              "required": [
+                "breakdown_epics_3_breakdown",
+                "breakdown_epics_3_breakdown_outcome"
+              ],
+              "steps": {
+                "breakdown": {
+                  "ref": "nodes.breakdown_epics_3_breakdown.output"
+                },
+                "breakdown_outcome": {
+                  "ref": "nodes.breakdown_epics_3_breakdown_outcome.output"
+                }
+              }
+            }
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "count": {
+              "type": "integer"
+            },
+            "exited": {
+              "type": "boolean"
+            },
+            "last": {
+              "type": "object",
+              "properties": {
+                "breakdown": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "workflow": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "object"
+                    },
+                    "nodes": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "breakdown_outcome": {}
+              }
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "round": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "object",
+                    "properties": {
+                      "breakdown": {
+                        "type": "object",
+                        "properties": {
+                          "run_id": {
+                            "type": "string"
+                          },
+                          "workflow": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "object"
+                          },
+                          "nodes": {
+                            "type": "object"
+                          }
+                        }
+                      },
+                      "breakdown_outcome": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "order",
+        "type": "script",
+        "deps": [
+          "breakdown_epics",
+          "epics",
+          "has_epics",
+          "release",
+          "split_epics"
+        ],
+        "dataDeps": [
+          "breakdown_epics",
+          "epics",
+          "release",
           "split_epics"
         ],
         "def": {
           "id": "order",
           "type": "script",
-          "description": "The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them - or why there is nothing to deliver.",
+          "description": "The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them (files - by slice, keyed <release>-s<N>) - or why there is nothing to deliver.",
           "runtime": "python",
           "entrypoint": "scripts/order.py",
           "merge": "any",
           "depends_on": [
             "split_epics",
+            "breakdown_epics",
             "has_epics"
           ],
           "input": {
-            "map": "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'epics': nodes.epics.output.count, 'repo': inputs.repo}"
+            "map": "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'breakdown': has(nodes.breakdown_epics) ? nodes.breakdown_epics.output : null, 'source': inputs.source, 'epics': nodes.epics.output.count, 'repo': inputs.repo, 'release': nodes.release.output.id}"
           },
           "output_schema": "schemas/order.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "breakdown_doc",
+        "type": "script",
+        "deps": [
+          "order",
+          "prd",
+          "release"
+        ],
+        "dataDeps": [
+          "order",
+          "prd",
+          "release"
+        ],
+        "def": {
+          "id": "breakdown_doc",
+          "type": "script",
+          "description": "The breakdown of the release as docs/release/<release>/breakdown.md, committed in the first Story's pull request for review there (empty for github).",
+          "runtime": "python",
+          "entrypoint": "scripts/breakdown_doc.py",
+          "input": {
+            "map": "{'source': inputs.source, 'release': nodes.release.output.id, 'prd': nodes.prd.output.markdown, 'order': nodes.order.output}"
+          },
+          "output_schema": "schemas/breakdown_doc.json",
           "limits": {
             "time": "1m"
           }
@@ -1242,11 +2006,13 @@
         "deps": [
           "has_stories",
           "order",
-          "plan_release"
+          "plan_release",
+          "release"
         ],
         "dataDeps": [
           "order",
-          "plan_release"
+          "plan_release",
+          "release"
         ],
         "def": {
           "id": "autonomy",
@@ -1254,10 +2020,10 @@
           "description": "A person confirms what will be delivered before the first Story starts; rejecting it stops the run with nothing delivered. Answer in mission control, with azhi approve, or from the Slack approval message.",
           "role": "author",
           "message": {
-            "cel": "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Choose the mode: supervised (a person approves the specs of each Story and signs each one off) or auto (the recommendations of the agents are taken where the rules say it is safe, every such decision is posted to Slack, and anything doubtful still asks). Leaving it empty is supervised. Reject to stop with nothing delivered.'"
+            "cel": "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '.' + (inputs.source == 'files' ? ' No tracker: the Stories are not issues, they are named ' + nodes.release.output.id + '-s1, -s2 and so on, and the plan is committed in the first pull request (docs/release/' + nodes.release.output.id + '/breakdown.md).' : '') + ' Choose the mode: supervised (a person approves the specs of each Story and signs each one off) or auto (the recommendations of the agents are taken where the rules say it is safe, every such decision is posted to Slack, and anything doubtful still asks). Leaving it empty is supervised. Reject to stop with nothing delivered.'"
           },
           "payload": {
-            "map": "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories}"
+            "map": "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories.map(s, {'ref': s.ref, 'title': s.title, 'epic': s.epic})}"
           },
           "decision_schema": {
             "type": "object",
@@ -1335,10 +2101,12 @@
         "id": "deliver_stories_1_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "mode",
           "order"
         ],
@@ -1354,7 +2122,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[0].ref"
+              "cel": "nodes.order.output.stories[0].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[0].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[0].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[0].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "0 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -1484,12 +2264,14 @@
         "id": "deliver_stories_2_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_1_gate",
           "deliver_stories_1_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_1_story_outcome",
           "mode",
           "order"
@@ -1506,7 +2288,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[1].ref"
+              "cel": "nodes.order.output.stories[1].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[1].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[1].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[1].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "1 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -1640,12 +2434,14 @@
         "id": "deliver_stories_3_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_2_gate",
           "deliver_stories_2_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_2_story_outcome",
           "mode",
           "order"
@@ -1662,7 +2458,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[2].ref"
+              "cel": "nodes.order.output.stories[2].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[2].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[2].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[2].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "2 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -1796,12 +2604,14 @@
         "id": "deliver_stories_4_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_3_gate",
           "deliver_stories_3_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_3_story_outcome",
           "mode",
           "order"
@@ -1818,7 +2628,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[3].ref"
+              "cel": "nodes.order.output.stories[3].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[3].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[3].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[3].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "3 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -1952,12 +2774,14 @@
         "id": "deliver_stories_5_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_4_gate",
           "deliver_stories_4_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_4_story_outcome",
           "mode",
           "order"
@@ -1974,7 +2798,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[4].ref"
+              "cel": "nodes.order.output.stories[4].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[4].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[4].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[4].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "4 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2108,12 +2944,14 @@
         "id": "deliver_stories_6_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_5_gate",
           "deliver_stories_5_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_5_story_outcome",
           "mode",
           "order"
@@ -2130,7 +2968,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[5].ref"
+              "cel": "nodes.order.output.stories[5].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[5].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[5].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[5].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "5 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2264,12 +3114,14 @@
         "id": "deliver_stories_7_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_6_gate",
           "deliver_stories_6_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_6_story_outcome",
           "mode",
           "order"
@@ -2286,7 +3138,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[6].ref"
+              "cel": "nodes.order.output.stories[6].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[6].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[6].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[6].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "6 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2420,12 +3284,14 @@
         "id": "deliver_stories_8_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_7_gate",
           "deliver_stories_7_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_7_story_outcome",
           "mode",
           "order"
@@ -2442,7 +3308,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[7].ref"
+              "cel": "nodes.order.output.stories[7].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[7].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[7].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[7].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "7 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2576,12 +3454,14 @@
         "id": "deliver_stories_9_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_8_gate",
           "deliver_stories_8_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_8_story_outcome",
           "mode",
           "order"
@@ -2598,7 +3478,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[8].ref"
+              "cel": "nodes.order.output.stories[8].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[8].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[8].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[8].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "8 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2732,12 +3624,14 @@
         "id": "deliver_stories_10_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_9_gate",
           "deliver_stories_9_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_9_story_outcome",
           "mode",
           "order"
@@ -2754,7 +3648,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[9].ref"
+              "cel": "nodes.order.output.stories[9].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[9].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[9].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[9].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "9 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -2888,12 +3794,14 @@
         "id": "deliver_stories_11_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_10_gate",
           "deliver_stories_10_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_10_story_outcome",
           "mode",
           "order"
@@ -2910,7 +3818,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[10].ref"
+              "cel": "nodes.order.output.stories[10].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[10].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[10].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[10].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "10 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3044,12 +3964,14 @@
         "id": "deliver_stories_12_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_11_gate",
           "deliver_stories_11_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_11_story_outcome",
           "mode",
           "order"
@@ -3066,7 +3988,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[11].ref"
+              "cel": "nodes.order.output.stories[11].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[11].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[11].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[11].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "11 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3200,12 +4134,14 @@
         "id": "deliver_stories_13_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_12_gate",
           "deliver_stories_12_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_12_story_outcome",
           "mode",
           "order"
@@ -3222,7 +4158,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[12].ref"
+              "cel": "nodes.order.output.stories[12].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[12].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[12].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[12].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "12 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3356,12 +4304,14 @@
         "id": "deliver_stories_14_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_13_gate",
           "deliver_stories_13_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_13_story_outcome",
           "mode",
           "order"
@@ -3378,7 +4328,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[13].ref"
+              "cel": "nodes.order.output.stories[13].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[13].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[13].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[13].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "13 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3512,12 +4474,14 @@
         "id": "deliver_stories_15_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_14_gate",
           "deliver_stories_14_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_14_story_outcome",
           "mode",
           "order"
@@ -3534,7 +4498,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[14].ref"
+              "cel": "nodes.order.output.stories[14].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[14].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[14].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[14].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "14 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3668,12 +4644,14 @@
         "id": "deliver_stories_16_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_15_gate",
           "deliver_stories_15_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_15_story_outcome",
           "mode",
           "order"
@@ -3690,7 +4668,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[15].ref"
+              "cel": "nodes.order.output.stories[15].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[15].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[15].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[15].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "15 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3824,12 +4814,14 @@
         "id": "deliver_stories_17_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_16_gate",
           "deliver_stories_16_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_16_story_outcome",
           "mode",
           "order"
@@ -3846,7 +4838,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[16].ref"
+              "cel": "nodes.order.output.stories[16].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[16].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[16].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[16].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "16 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -3980,12 +4984,14 @@
         "id": "deliver_stories_18_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_17_gate",
           "deliver_stories_17_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_17_story_outcome",
           "mode",
           "order"
@@ -4002,7 +5008,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[17].ref"
+              "cel": "nodes.order.output.stories[17].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[17].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[17].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[17].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "17 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -4136,12 +5154,14 @@
         "id": "deliver_stories_19_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_18_gate",
           "deliver_stories_18_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_18_story_outcome",
           "mode",
           "order"
@@ -4158,7 +5178,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[18].ref"
+              "cel": "nodes.order.output.stories[18].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[18].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[18].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[18].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "18 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -4292,12 +5324,14 @@
         "id": "deliver_stories_20_story",
         "type": "subworkflow",
         "deps": [
+          "breakdown_doc",
           "deliver_stories_19_gate",
           "deliver_stories_19_story_outcome",
           "mode",
           "order"
         ],
         "dataDeps": [
+          "breakdown_doc",
           "deliver_stories_19_story_outcome",
           "mode",
           "order"
@@ -4314,7 +5348,19 @@
               "ref": "inputs.source"
             },
             "ticket": {
-              "cel": "nodes.order.output.stories[19].ref"
+              "cel": "nodes.order.output.stories[19].inputs.ticket"
+            },
+            "story_key": {
+              "cel": "nodes.order.output.stories[19].inputs.story_key"
+            },
+            "story_title": {
+              "cel": "nodes.order.output.stories[19].inputs.story_title"
+            },
+            "story_body": {
+              "cel": "nodes.order.output.stories[19].inputs.story_body"
+            },
+            "extra_files": {
+              "cel": "19 == 0 ? nodes.breakdown_doc.output.files : []"
             },
             "repo": {
               "ref": "inputs.repo"
@@ -5182,6 +6228,7 @@
           "mode",
           "order",
           "plan_release",
+          "release",
           "release_outcome"
         ],
         "dataDeps": [
@@ -5190,6 +6237,7 @@
           "mode",
           "order",
           "plan_release",
+          "release",
           "release_outcome"
         ],
         "def": {
@@ -5207,7 +6255,7 @@
             "release_outcome"
           ],
           "input": {
-            "map": "{'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"
+            "map": "{'source': inputs.source, 'release_id': has(nodes.release) ? nodes.release.output.id : null, 'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"
           },
           "output_schema": "schemas/summary.json",
           "limits": {
@@ -5313,20 +6361,32 @@
         "brainstorm": "output of tainted agent brainstorm",
         "plan_release": "output of tainted agent plan_release",
         "prd": "output of tainted agent plan_release",
-        "epics": "output of tainted agent plan_release",
-        "has_epics": "output of tainted agent plan_release",
+        "epics": "output of tainted agent brainstorm",
+        "release": "output of tainted agent plan_release",
+        "has_epics": "output of tainted agent brainstorm",
         "split_epics_1_split": "output of a subworkflow is not marked trusted",
-        "split_epics_1_split_outcome": "output of tainted agent plan_release",
-        "split_epics_1_gate": "output of tainted agent plan_release",
+        "split_epics_1_split_outcome": "output of tainted agent brainstorm",
+        "split_epics_1_gate": "output of tainted agent brainstorm",
         "split_epics_2_split": "output of a subworkflow is not marked trusted",
-        "split_epics_2_split_outcome": "output of tainted agent plan_release",
-        "split_epics_2_gate": "output of tainted agent plan_release",
+        "split_epics_2_split_outcome": "output of tainted agent brainstorm",
+        "split_epics_2_gate": "output of tainted agent brainstorm",
         "split_epics_3_split": "output of a subworkflow is not marked trusted",
-        "split_epics_3_split_outcome": "output of tainted agent plan_release",
-        "split_epics_3_gate": "output of tainted agent plan_release",
+        "split_epics_3_split_outcome": "output of tainted agent brainstorm",
+        "split_epics_3_gate": "output of tainted agent brainstorm",
         "split_epics": "derived from split_epics_1_split",
-        "order": "output of tainted agent plan_release",
-        "has_stories": "output of tainted agent plan_release",
+        "breakdown_epics_1_breakdown": "output of a subworkflow is not marked trusted",
+        "breakdown_epics_1_breakdown_outcome": "derived from breakdown_epics_1_breakdown",
+        "breakdown_epics_1_gate": "derived from breakdown_epics_1_breakdown_outcome",
+        "breakdown_epics_2_breakdown": "output of a subworkflow is not marked trusted",
+        "breakdown_epics_2_breakdown_outcome": "derived from breakdown_epics_2_breakdown",
+        "breakdown_epics_2_gate": "derived from breakdown_epics_2_breakdown_outcome",
+        "breakdown_epics_3_breakdown": "output of a subworkflow is not marked trusted",
+        "breakdown_epics_3_breakdown_outcome": "derived from breakdown_epics_3_breakdown",
+        "breakdown_epics_3_gate": "derived from breakdown_epics_3_breakdown_outcome",
+        "breakdown_epics": "derived from breakdown_epics_1_breakdown",
+        "order": "derived from breakdown_epics",
+        "breakdown_doc": "derived from order",
+        "has_stories": "derived from order",
         "deliver_stories_1_story": "output of a subworkflow is not marked trusted",
         "deliver_stories_1_story_outcome": "derived from deliver_stories_1_story",
         "deliver_stories_1_gate": "derived from deliver_stories_1_story_outcome",
@@ -5407,8 +6467,33 @@
           "write": "summary_notify",
           "path": [
             "brainstorm",
+            "epics",
+            "order",
+            "summary",
+            "summary_report",
+            "summary_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "brainstorm",
+          "write": "summary_notify",
+          "path": [
+            "brainstorm",
             "…",
             "brainstorm_review",
+            "…",
+            "summary_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "brainstorm",
+          "write": "summary_notify",
+          "path": [
+            "brainstorm",
+            "…",
+            "autonomy",
             "…",
             "summary_notify"
           ],

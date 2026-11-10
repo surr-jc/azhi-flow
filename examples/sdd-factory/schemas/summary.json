@@ -78,6 +78,14 @@
       "items": {
         "type": "object",
         "properties": {
+          "ref": {
+            "type": "string",
+            "description": "owner/name#N for an issue, the Story key for a files run."
+          },
+          "label": {
+            "type": "string",
+            "description": "How the pull request is named in the stack: #N for an issue, the Story key for a files run."
+          },
           "number": {
             "type": "integer"
           },
@@ -101,6 +109,8 @@
           }
         },
         "required": [
+          "ref",
+          "label",
           "number",
           "title",
           "pr_url",
@@ -161,6 +171,13 @@
         "counts"
       ],
       "additionalProperties": false
+    },
+    "breakdown_path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The file that holds the breakdown, in the first pull request, for a files run; otherwise null."
     }
   },
   "required": [
@@ -172,7 +189,8 @@
     "signed_off",
     "total",
     "stopped_at",
-    "release"
+    "release",
+    "breakdown_path"
   ],
   "additionalProperties": false
 }

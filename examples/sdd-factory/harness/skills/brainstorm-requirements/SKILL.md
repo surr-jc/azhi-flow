@@ -23,6 +23,15 @@ has a `why` (what it changes) and a `recommendation`: the answer you would take 
 specific enough to plan from, so they can accept it with a word. Ask one thing per question. Order them by how much the answer changes the plan.
 If the brief is already clear, ask fewer; do not pad.
 
+### Greenfield
+
+If the checkout has no source code - only a README, a licence, an ignore file, CI templates or the like - set
+`greenfield` to true (otherwise false: never true because the code is small). A person starting a new product has
+decisions the code cannot answer, so spend the questions on them, one thing each, each with a recommendation: the
+language and framework, the shape of the application (one service or several, web, API, command line), how it is
+stored and deployed, the test tooling, and what must run in CI. Do not ask about anything the brief already settles.
+Every approach then starts from a runnable scaffold; say so in what it delivers.
+
 ## 3. Approaches
 
 Offer 2 or 3 approaches that differ in scope or in direction, not in wording. For each: what it delivers, what
