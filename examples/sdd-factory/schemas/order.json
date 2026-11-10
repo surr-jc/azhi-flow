@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "description": "The Stories to deliver, in order.",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "problem": {
+      "enum": [
+        "split_failed",
+        "unreadable",
+        "too_many",
+        null
+      ]
+    },
+    "count": {
+      "type": "integer"
+    },
+    "stories": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "epic": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ref",
+          "number",
+          "title",
+          "epic"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "too_many": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok",
+    "problem",
+    "count",
+    "stories",
+    "too_many"
+  ],
+  "additionalProperties": false
+}

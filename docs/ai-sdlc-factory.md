@@ -5,6 +5,9 @@ with a person, split it into dependency-ordered tickets, let a scheduled lap del
 request on a staging branch, and grade the repository's readiness so a broken CI is noticed and proposed as a ticket.
 Tickets come from **Jira or GitHub**; the code, CI and pull requests are always on GitHub.
 
+To deliver a whole release in one run instead of one ticket per scheduled lap, see [sdd-factory](sdd-factory.md): it
+plans, splits and delivers every Story in order as stacked pull requests.
+
 The shape follows Cole Medin's software factory (his video on wrapping a factory with Port, and
 <https://github.com/coleam00/ai-software-factory>), adapted to Azhi's rules: **nothing merges, closes or force-pushes**,
 every write sits behind a gate, and ticket text is data.

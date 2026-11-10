@@ -1,0 +1,64 @@
+# Admin configuration for the SDD Factory:
+#   azhi example install sdd-factory --repo OWNER/REPO --set slack_channel=C0123ABCD
+# Needs these published first, installed with the same --repo: issue-splitter (creates the tickets, after its own
+# approval), sdd-story (delivers one Story), pr-review (run by sdd-story on its pull request) and
+# ai-sdlc-factory-verify (the release check). The children carry their own tools and secrets; this workflow only
+# plans the release, hands them their work and posts the summary. Try it on a throwaway repository first.
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained, read-only "Contents" and "Issues": reads the ticket and clones the
+#                         repository on the worker for the brainstorm and the plan
+#   github-copilot-token  your GitHub Copilot sign-in; the brainstorm and the plan run on a Copilot model through
+#                         OpenCode (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+#   slack-bot-token       posts the summary (the bot must be in the channel)
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the release summary is posted to (the bot must be in it).
+    placeholder: C0123ABCD
+    required: true
+tools:
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: ticket.normalize
+    version: 1
+    description: A GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport: {kind: builtin, name: ticket.normalize}
+    input_schema: {type: object, properties: {source: {type: string, enum: [github]}, issue: {type: object}}, required: [source, issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        source: {type: string}
+        key: {type: string}
+        title: {type: string}
+        description: {type: string}
+        priority: {type: string}
+        reporter: {type: string}
+        status: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+      required: [source, key, title, description]
+secrets:
+  - github-read-token
+  - github-copilot-token
+  - slack-bot-token

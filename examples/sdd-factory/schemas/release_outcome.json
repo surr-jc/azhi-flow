@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "enum": [
+        "verified",
+        "failed",
+        "unavailable",
+        "skipped"
+      ]
+    },
+    "counts": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "pass": {
+          "type": "integer"
+        },
+        "fail": {
+          "type": "integer"
+        },
+        "unavailable": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pass",
+        "fail",
+        "unavailable"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "status",
+    "counts"
+  ],
+  "additionalProperties": false
+}

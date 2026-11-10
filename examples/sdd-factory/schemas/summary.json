@@ -1,0 +1,178 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "enum": [
+        "delivered",
+        "stopped",
+        "nothing_to_deliver",
+        "not_started"
+      ]
+    },
+    "headline": {
+      "type": "string"
+    },
+    "prd_title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "signed_off",
+              "sent_back",
+              "not_started"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pr_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "number",
+          "title",
+          "status",
+          "reason",
+          "pr_url",
+          "branch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "stack": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pr_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "pr_url",
+          "branch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "signed_off": {
+      "type": "integer"
+    },
+    "total": {
+      "type": "integer"
+    },
+    "stopped_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "release": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "failed",
+            "unavailable",
+            "skipped"
+          ]
+        },
+        "counts": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "pass": {
+              "type": "integer"
+            },
+            "fail": {
+              "type": "integer"
+            },
+            "unavailable": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "pass",
+            "fail",
+            "unavailable"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "status",
+        "counts"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "status",
+    "headline",
+    "prd_title",
+    "stories",
+    "stack",
+    "signed_off",
+    "total",
+    "stopped_at",
+    "release"
+  ],
+  "additionalProperties": false
+}

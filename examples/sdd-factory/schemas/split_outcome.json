@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "description": "The Stories one splitter run created for an epic.",
+  "properties": {
+    "status": {
+      "enum": [
+        "ok",
+        "failed"
+      ]
+    },
+    "epic": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "stories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "number",
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "last": {
+      "type": "boolean",
+      "description": "True when this was the last round that was meant to run: the loop ends after it. Unknown counts as last, so a loop whose input could not be read ends rather than goes on."
+    }
+  },
+  "required": [
+    "status",
+    "epic",
+    "stories",
+    "reason",
+    "last"
+  ],
+  "additionalProperties": false
+}

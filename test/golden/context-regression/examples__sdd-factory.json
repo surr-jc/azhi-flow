@@ -1,0 +1,5452 @@
+{
+  "ok": true,
+  "diagnostics": [
+    {
+      "severity": "warning",
+      "code": "catalog_unavailable",
+      "message": "tool catalog not available: tool references, arguments and projections were not checked"
+    }
+  ],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "sdd-factory",
+    "definitionHash": "sha256:f953d2e6304ab1220fefd0b3f569c271bccbb33f5942f11f95f72fd9c3bce72a",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "title": "Tracker",
+          "enum": [
+            "github"
+          ],
+          "description": "Where the tickets are read from and created. The code is always on GitHub."
+        },
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The GitHub repository the release changes, owner/name"
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "The branch the plan reads and every pull request targets (for example dev)"
+        },
+        "ticket": {
+          "type": "string",
+          "title": "Ticket",
+          "maxLength": 300,
+          "description": "An existing GitHub issue to plan, such as acme/payments#42. Leave empty to describe a goal instead."
+        },
+        "goal": {
+          "type": "string",
+          "title": "Goal",
+          "maxLength": 12000,
+          "description": "What the release should achieve, in your words. Added to the ticket when both are given."
+        }
+      },
+      "required": [
+        "source",
+        "repo",
+        "base_branch"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "ticket"
+          ],
+          "properties": {
+            "ticket": {
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "goal"
+          ],
+          "properties": {
+            "goal": {
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}"
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "source_gate",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "source_gate",
+          "type": "condition",
+          "description": "Read the ticket from GitHub, or plan from the goal alone.",
+          "expression": "has(inputs.ticket) && inputs.ticket != '' ? inputs.source : 'text'",
+          "routes": {
+            "github": [
+              "github_issue"
+            ],
+            "text": [
+              "text_pass"
+            ]
+          },
+          "default": "text"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "github_issue",
+        "type": "tool",
+        "deps": [
+          "source_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "github_issue",
+          "type": "tool",
+          "description": "Read the GitHub issue and its first comments.",
+          "tool": "github.get-issue@1",
+          "arguments": {
+            "issue": {
+              "ref": "inputs.ticket"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source_gate",
+          "route": "github"
+        }
+      },
+      {
+        "id": "text_pass",
+        "type": "condition",
+        "deps": [
+          "source_gate"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "text_pass",
+          "type": "condition",
+          "description": "No ticket to read - the goal is the request. Marks that branch for the join below.",
+          "expression": "'go'",
+          "routes": {
+            "go": []
+          },
+          "default": "go"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source_gate",
+          "route": "text"
+        }
+      },
+      {
+        "id": "normalize",
+        "type": "tool",
+        "deps": [
+          "github_issue"
+        ],
+        "dataDeps": [
+          "github_issue"
+        ],
+        "def": {
+          "id": "normalize",
+          "type": "tool",
+          "description": "The ticket as one plain ticket (key, title, description).",
+          "tool": "ticket.normalize@1",
+          "merge": "any",
+          "depends_on": [
+            "github_issue"
+          ],
+          "arguments": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "issue": {
+              "ref": "nodes.github_issue.output"
+            }
+          },
+          "project": [
+            "source",
+            "key",
+            "title",
+            "description"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "brief",
+        "type": "script",
+        "deps": [
+          "normalize",
+          "text_pass"
+        ],
+        "dataDeps": [
+          "normalize"
+        ],
+        "def": {
+          "id": "brief",
+          "type": "script",
+          "description": "The request as one brief - the ticket, then any direction typed as the goal.",
+          "runtime": "python",
+          "entrypoint": "scripts/brief.py",
+          "merge": "any",
+          "depends_on": [
+            "text_pass",
+            "normalize"
+          ],
+          "input": {
+            "map": "{'ticket': has(nodes.normalize) ? nodes.normalize.output : null, 'goal': has(inputs.goal) ? inputs.goal : ''}"
+          },
+          "output_schema": "schemas/brief.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "brainstorm",
+        "type": "agent",
+        "deps": [
+          "brief"
+        ],
+        "dataDeps": [
+          "brief"
+        ],
+        "def": {
+          "id": "brainstorm",
+          "type": "agent",
+          "description": "Read the repository and prepare the conversation before planning - the questions only a person can answer and two or three approaches with one recommended (brainstorm-requirements skill).",
+          "executor": "opencode",
+          "profile": "brainstormer@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + inputs.base_branch"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo}"
+          },
+          "output_schema": "schemas/brainstorm.json",
+          "timeout": "15m",
+          "budget": {
+            "max_tool_calls": 15
+          }
+        },
+        "timeoutMs": 900000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "brainstorm_review",
+        "type": "approval",
+        "deps": [
+          "brainstorm"
+        ],
+        "dataDeps": [
+          "brainstorm"
+        ],
+        "def": {
+          "id": "brainstorm_review",
+          "type": "approval",
+          "description": "A person answers the questions and picks an approach before the release is planned; rejecting stops the run with nothing planned. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "'Before the release is planned: ' + nodes.brainstorm.output.summary + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"
+          },
+          "payload": {
+            "map": "{'questions': nodes.brainstorm.output.questions, 'approaches': nodes.brainstorm.output.approaches, 'assumptions': nodes.brainstorm.output.assumptions, 'unknowns': nodes.brainstorm.output.unknowns}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "approach": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "title": "Approach",
+                "description": "The name of the approach to plan, as listed (or your own direction in a few words)."
+              },
+              "answers": {
+                "type": "string",
+                "maxLength": 6000,
+                "title": "Answers",
+                "description": "One answer per question, in order. Leave empty when there were no questions. They are treated as decisions by the planner."
+              }
+            },
+            "required": [
+              "approach"
+            ],
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "plan_release",
+        "type": "agent",
+        "deps": [
+          "brainstorm_review",
+          "brief"
+        ],
+        "dataDeps": [
+          "brainstorm_review",
+          "brief"
+        ],
+        "def": {
+          "id": "plan_release",
+          "type": "agent",
+          "description": "Read the repository and write the release plan - problem, scope, invariants, user journeys and up to three epics (release-prd skill).",
+          "executor": "opencode",
+          "profile": "release-planner@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/heads/' + inputs.base_branch"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
+          },
+          "output_schema": "schemas/prd.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 20
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "prd",
+        "type": "report",
+        "deps": [
+          "plan_release"
+        ],
+        "dataDeps": [
+          "plan_release"
+        ],
+        "def": {
+          "id": "prd",
+          "type": "report",
+          "description": "The release plan as Markdown, for the approver.",
+          "template": "templates/prd.md",
+          "input": {
+            "map": "{'prd': nodes.plan_release.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "prd_review",
+        "type": "approval",
+        "deps": [
+          "plan_release",
+          "prd"
+        ],
+        "dataDeps": [
+          "plan_release",
+          "prd"
+        ],
+        "def": {
+          "id": "prd_review",
+          "type": "approval",
+          "description": "A person approves the release plan before any ticket is created, and may leave epics out. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "'Approve the release plan \"' + nodes.plan_release.output.title + '\" and split its ' + string(size(nodes.plan_release.output.epics)) + ' epic(s) into tickets? Name the epics to leave out, if any.'"
+          },
+          "payload": {
+            "map": "{'markdown': nodes.prd.output.markdown, 'owner': nodes.plan_release.output.owner, 'epics': nodes.plan_release.output.epics.map(e, e.title), 'open_questions': nodes.plan_release.output.open_questions}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "drop": {
+                "type": "string",
+                "maxLength": 20,
+                "pattern": "^[0-9, ]*$",
+                "title": "Epics to leave out",
+                "description": "Epic numbers from the plan, for example 2,3. Leave empty to split them all."
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "epics",
+        "type": "script",
+        "deps": [
+          "plan_release",
+          "prd_review"
+        ],
+        "dataDeps": [
+          "plan_release",
+          "prd_review"
+        ],
+        "def": {
+          "id": "epics",
+          "type": "script",
+          "description": "The text of each epic the splitter receives, with the release context in front (epics the approver left out are removed).",
+          "runtime": "python",
+          "entrypoint": "scripts/epics.py",
+          "input": {
+            "map": "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"
+          },
+          "output_schema": "schemas/epics.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_epics",
+        "type": "condition",
+        "deps": [
+          "epics"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "has_epics",
+          "type": "condition",
+          "description": "Is there an epic to split? A plan whose epics were all left out ends here, with nothing to deliver.",
+          "expression": "nodes.epics.output.count >= 1 ? 'yes' : 'none'",
+          "routes": {
+            "yes": [
+              "split_epics_1_split"
+            ],
+            "none": []
+          },
+          "default": "none"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "split_epics_1_split",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "has_epics"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_epics_1_split",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "issue-splitter",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[0].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_epics",
+          "route": "yes"
+        },
+        "loop": {
+          "loop": "split_epics",
+          "round": 1,
+          "step": "split"
+        }
+      },
+      {
+        "id": "split_epics_1_split_outcome",
+        "type": "script",
+        "deps": [
+          "epics",
+          "split_epics_1_split"
+        ],
+        "dataDeps": [
+          "epics",
+          "split_epics_1_split"
+        ],
+        "def": {
+          "id": "split_epics_1_split_outcome",
+          "type": "script",
+          "description": "The Stories this round's splitter created, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/split_outcome.py",
+          "input": {
+            "map": "{'child': nodes.split_epics_1_split.output, 'repo': inputs.repo, 'epic': nodes.epics.output.epics[0].n, 'last': 0 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/split_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 1,
+          "step": "split_outcome"
+        }
+      },
+      {
+        "id": "split_epics_1_gate",
+        "type": "condition",
+        "deps": [
+          "split_epics_1_split",
+          "split_epics_1_split_outcome"
+        ],
+        "dataDeps": [
+          "split_epics_1_split_outcome"
+        ],
+        "def": {
+          "id": "split_epics_1_gate",
+          "type": "condition",
+          "description": "Decides how round 1 of split_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "split_epics_1_split",
+            "split_epics_1_split_outcome"
+          ],
+          "expression": "(nodes.split_epics_1_split_outcome.output.status != 'ok') ? 'stop' : ((nodes.split_epics_1_split_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "split_epics_2_split"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 1,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "split_epics_2_split",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "split_epics_1_gate"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_epics_2_split",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "issue-splitter",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[1].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "split_epics_1_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "split_epics",
+          "round": 2,
+          "step": "split"
+        }
+      },
+      {
+        "id": "split_epics_2_split_outcome",
+        "type": "script",
+        "deps": [
+          "epics",
+          "split_epics_2_split"
+        ],
+        "dataDeps": [
+          "epics",
+          "split_epics_2_split"
+        ],
+        "def": {
+          "id": "split_epics_2_split_outcome",
+          "type": "script",
+          "description": "The Stories this round's splitter created, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/split_outcome.py",
+          "input": {
+            "map": "{'child': nodes.split_epics_2_split.output, 'repo': inputs.repo, 'epic': nodes.epics.output.epics[1].n, 'last': 1 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/split_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 2,
+          "step": "split_outcome"
+        }
+      },
+      {
+        "id": "split_epics_2_gate",
+        "type": "condition",
+        "deps": [
+          "split_epics_2_split",
+          "split_epics_2_split_outcome"
+        ],
+        "dataDeps": [
+          "split_epics_2_split_outcome"
+        ],
+        "def": {
+          "id": "split_epics_2_gate",
+          "type": "condition",
+          "description": "Decides how round 2 of split_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "split_epics_2_split",
+            "split_epics_2_split_outcome"
+          ],
+          "expression": "(nodes.split_epics_2_split_outcome.output.status != 'ok') ? 'stop' : ((nodes.split_epics_2_split_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "split_epics_3_split"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 2,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "split_epics_3_split",
+        "type": "subworkflow",
+        "deps": [
+          "epics",
+          "split_epics_2_gate"
+        ],
+        "dataDeps": [
+          "epics"
+        ],
+        "def": {
+          "id": "split_epics_3_split",
+          "type": "subworkflow",
+          "description": "Run the published issue-splitter on this round's epic. It waits for a person at its own approval, so it may take days.",
+          "workflow": "issue-splitter",
+          "on_failure": "continue",
+          "timeout": "96h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "text": {
+              "cel": "nodes.epics.output.epics[2].text"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 345600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "split_epics_2_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "split_epics",
+          "round": 3,
+          "step": "split"
+        }
+      },
+      {
+        "id": "split_epics_3_split_outcome",
+        "type": "script",
+        "deps": [
+          "epics",
+          "split_epics_3_split"
+        ],
+        "dataDeps": [
+          "epics",
+          "split_epics_3_split"
+        ],
+        "def": {
+          "id": "split_epics_3_split_outcome",
+          "type": "script",
+          "description": "The Stories this round's splitter created, or that it failed. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/split_outcome.py",
+          "input": {
+            "map": "{'child': nodes.split_epics_3_split.output, 'repo': inputs.repo, 'epic': nodes.epics.output.epics[2].n, 'last': 2 + 1 >= nodes.epics.output.count}"
+          },
+          "output_schema": "schemas/split_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 3,
+          "step": "split_outcome"
+        }
+      },
+      {
+        "id": "split_epics_3_gate",
+        "type": "condition",
+        "deps": [
+          "split_epics_3_split",
+          "split_epics_3_split_outcome"
+        ],
+        "dataDeps": [
+          "split_epics_3_split_outcome"
+        ],
+        "def": {
+          "id": "split_epics_3_gate",
+          "type": "condition",
+          "description": "Decides how round 3 of split_epics ends.",
+          "merge": "any",
+          "depends_on": [
+            "split_epics_3_split",
+            "split_epics_3_split_outcome"
+          ],
+          "expression": "(nodes.split_epics_3_split_outcome.output.status != 'ok') ? 'stop' : ((nodes.split_epics_3_split_outcome.output.last) ? 'done' : 'exhausted')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "exhausted": []
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "split_epics",
+          "round": 3,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "split_epics",
+        "type": "loop",
+        "deps": [
+          "split_epics_1_gate",
+          "split_epics_1_split",
+          "split_epics_1_split_outcome",
+          "split_epics_2_gate",
+          "split_epics_2_split",
+          "split_epics_2_split_outcome",
+          "split_epics_3_gate",
+          "split_epics_3_split",
+          "split_epics_3_split_outcome"
+        ],
+        "dataDeps": [
+          "split_epics_1_split",
+          "split_epics_1_split_outcome",
+          "split_epics_2_split",
+          "split_epics_2_split_outcome",
+          "split_epics_3_split",
+          "split_epics_3_split_outcome"
+        ],
+        "def": {
+          "id": "split_epics",
+          "type": "loop",
+          "description": "Split each epic with the published issue-splitter (analysis, its own approval, then the Stories), one after the other.",
+          "merge": "any",
+          "depends_on": [
+            "split_epics_1_gate",
+            "split_epics_2_gate",
+            "split_epics_3_gate"
+          ],
+          "max_iterations": 3,
+          "on_max": "continue",
+          "reasons": {
+            "stop": "An epic could not be split",
+            "done": "Every epic is split"
+          },
+          "rounds": [
+            {
+              "gate": "split_epics_1_gate",
+              "required": [
+                "split_epics_1_split",
+                "split_epics_1_split_outcome"
+              ],
+              "steps": {
+                "split": {
+                  "ref": "nodes.split_epics_1_split.output"
+                },
+                "split_outcome": {
+                  "ref": "nodes.split_epics_1_split_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "split_epics_2_gate",
+              "required": [
+                "split_epics_2_split",
+                "split_epics_2_split_outcome"
+              ],
+              "steps": {
+                "split": {
+                  "ref": "nodes.split_epics_2_split.output"
+                },
+                "split_outcome": {
+                  "ref": "nodes.split_epics_2_split_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "split_epics_3_gate",
+              "required": [
+                "split_epics_3_split",
+                "split_epics_3_split_outcome"
+              ],
+              "steps": {
+                "split": {
+                  "ref": "nodes.split_epics_3_split.output"
+                },
+                "split_outcome": {
+                  "ref": "nodes.split_epics_3_split_outcome.output"
+                }
+              }
+            }
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "count": {
+              "type": "integer"
+            },
+            "exited": {
+              "type": "boolean"
+            },
+            "last": {
+              "type": "object",
+              "properties": {
+                "split": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "workflow": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "object"
+                    },
+                    "nodes": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "split_outcome": {}
+              }
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "round": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "object",
+                    "properties": {
+                      "split": {
+                        "type": "object",
+                        "properties": {
+                          "run_id": {
+                            "type": "string"
+                          },
+                          "workflow": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "object"
+                          },
+                          "nodes": {
+                            "type": "object"
+                          }
+                        }
+                      },
+                      "split_outcome": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "order",
+        "type": "script",
+        "deps": [
+          "epics",
+          "has_epics",
+          "split_epics"
+        ],
+        "dataDeps": [
+          "epics",
+          "split_epics"
+        ],
+        "def": {
+          "id": "order",
+          "type": "script",
+          "description": "The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them - or why there is nothing to deliver.",
+          "runtime": "python",
+          "entrypoint": "scripts/order.py",
+          "merge": "any",
+          "depends_on": [
+            "split_epics",
+            "has_epics"
+          ],
+          "input": {
+            "map": "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'epics': nodes.epics.output.count, 'repo': inputs.repo}"
+          },
+          "output_schema": "schemas/order.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "has_stories",
+        "type": "condition",
+        "deps": [
+          "order"
+        ],
+        "dataDeps": [
+          "order"
+        ],
+        "def": {
+          "id": "has_stories",
+          "type": "condition",
+          "description": "Deliver only when every epic was split and there is at least one Story. Otherwise the run goes to the summary.",
+          "expression": "nodes.order.output.ok && nodes.order.output.count >= 1 ? 'yes' : 'no'",
+          "routes": {
+            "yes": [
+              "autonomy"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "autonomy",
+        "type": "approval",
+        "deps": [
+          "has_stories",
+          "order",
+          "plan_release"
+        ],
+        "dataDeps": [
+          "order",
+          "plan_release"
+        ],
+        "def": {
+          "id": "autonomy",
+          "type": "approval",
+          "description": "A person confirms what will be delivered before the first Story starts; rejecting it stops the run with nothing delivered. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Reject to stop with nothing delivered.'"
+          },
+          "payload": {
+            "map": "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "supervised"
+                ],
+                "default": "supervised",
+                "title": "Mode",
+                "description": "Every Story's specs and sign-off are approved by a person. An unattended mode that follows the agents' recommendations is not available yet."
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "has_stories",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "mode",
+        "type": "script",
+        "deps": [
+          "autonomy"
+        ],
+        "dataDeps": [
+          "autonomy"
+        ],
+        "def": {
+          "id": "mode",
+          "type": "script",
+          "description": "The mode every Story runs in. Always supervised for now; this is the one place an unattended mode would change.",
+          "runtime": "python",
+          "entrypoint": "scripts/mode.py",
+          "input": {
+            "map": "{'data': has(nodes.autonomy.output.data) ? nodes.autonomy.output.data : null}"
+          },
+          "output_schema": "schemas/mode.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "deliver_stories_1_story",
+        "type": "subworkflow",
+        "deps": [
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_1_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[0].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "ref": "inputs.base_branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 1,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_1_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_1_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_1_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_1_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_1_story.output, 'last': 0 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 1,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_1_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_1_story",
+          "deliver_stories_1_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_1_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_1_gate",
+          "type": "condition",
+          "description": "Decides how round 1 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_1_story",
+            "deliver_stories_1_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_1_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_1_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_2_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 1,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_2_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_1_gate",
+          "deliver_stories_1_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_1_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_2_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[1].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_1_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_1_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 2,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_2_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_2_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_2_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_2_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_2_story.output, 'last': 1 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 2,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_2_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_2_story",
+          "deliver_stories_2_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_2_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_2_gate",
+          "type": "condition",
+          "description": "Decides how round 2 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_2_story",
+            "deliver_stories_2_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_2_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_2_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_3_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 2,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_3_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_2_gate",
+          "deliver_stories_2_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_2_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_3_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[2].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_2_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_2_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 3,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_3_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_3_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_3_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_3_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_3_story.output, 'last': 2 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 3,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_3_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_3_story",
+          "deliver_stories_3_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_3_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_3_gate",
+          "type": "condition",
+          "description": "Decides how round 3 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_3_story",
+            "deliver_stories_3_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_3_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_3_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_4_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 3,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_4_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_3_gate",
+          "deliver_stories_3_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_3_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_4_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[3].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_3_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_3_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 4,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_4_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_4_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_4_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_4_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_4_story.output, 'last': 3 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 4,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_4_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_4_story",
+          "deliver_stories_4_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_4_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_4_gate",
+          "type": "condition",
+          "description": "Decides how round 4 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_4_story",
+            "deliver_stories_4_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_4_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_4_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_5_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 4,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_5_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_4_gate",
+          "deliver_stories_4_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_4_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_5_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[4].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_4_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_4_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 5,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_5_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_5_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_5_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_5_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_5_story.output, 'last': 4 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 5,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_5_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_5_story",
+          "deliver_stories_5_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_5_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_5_gate",
+          "type": "condition",
+          "description": "Decides how round 5 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_5_story",
+            "deliver_stories_5_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_5_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_5_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_6_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 5,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_6_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_5_gate",
+          "deliver_stories_5_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_5_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_6_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[5].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_5_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_5_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 6,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_6_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_6_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_6_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_6_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_6_story.output, 'last': 5 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 6,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_6_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_6_story",
+          "deliver_stories_6_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_6_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_6_gate",
+          "type": "condition",
+          "description": "Decides how round 6 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_6_story",
+            "deliver_stories_6_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_6_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_6_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_7_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 6,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_7_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_6_gate",
+          "deliver_stories_6_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_6_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_7_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[6].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_6_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_6_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 7,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_7_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_7_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_7_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_7_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_7_story.output, 'last': 6 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 7,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_7_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_7_story",
+          "deliver_stories_7_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_7_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_7_gate",
+          "type": "condition",
+          "description": "Decides how round 7 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_7_story",
+            "deliver_stories_7_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_7_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_7_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_8_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 7,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_8_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_7_gate",
+          "deliver_stories_7_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_7_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_8_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[7].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_7_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_7_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 8,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_8_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_8_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_8_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_8_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_8_story.output, 'last': 7 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 8,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_8_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_8_story",
+          "deliver_stories_8_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_8_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_8_gate",
+          "type": "condition",
+          "description": "Decides how round 8 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_8_story",
+            "deliver_stories_8_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_8_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_8_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_9_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 8,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_9_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_8_gate",
+          "deliver_stories_8_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_8_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_9_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[8].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_8_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_8_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 9,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_9_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_9_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_9_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_9_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_9_story.output, 'last': 8 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 9,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_9_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_9_story",
+          "deliver_stories_9_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_9_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_9_gate",
+          "type": "condition",
+          "description": "Decides how round 9 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_9_story",
+            "deliver_stories_9_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_9_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_9_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_10_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 9,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_10_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_9_gate",
+          "deliver_stories_9_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_9_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_10_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[9].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_9_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_9_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 10,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_10_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_10_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_10_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_10_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_10_story.output, 'last': 9 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 10,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_10_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_10_story",
+          "deliver_stories_10_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_10_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_10_gate",
+          "type": "condition",
+          "description": "Decides how round 10 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_10_story",
+            "deliver_stories_10_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_10_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_10_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_11_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 10,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_11_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_10_gate",
+          "deliver_stories_10_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_10_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_11_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[10].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_10_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_10_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 11,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_11_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_11_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_11_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_11_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_11_story.output, 'last': 10 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 11,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_11_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_11_story",
+          "deliver_stories_11_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_11_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_11_gate",
+          "type": "condition",
+          "description": "Decides how round 11 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_11_story",
+            "deliver_stories_11_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_11_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_11_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_12_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 11,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_12_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_11_gate",
+          "deliver_stories_11_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_11_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_12_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[11].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_11_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_11_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 12,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_12_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_12_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_12_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_12_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_12_story.output, 'last': 11 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 12,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_12_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_12_story",
+          "deliver_stories_12_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_12_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_12_gate",
+          "type": "condition",
+          "description": "Decides how round 12 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_12_story",
+            "deliver_stories_12_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_12_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_12_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_13_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 12,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_13_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_12_gate",
+          "deliver_stories_12_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_12_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_13_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[12].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_12_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_12_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 13,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_13_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_13_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_13_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_13_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_13_story.output, 'last': 12 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 13,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_13_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_13_story",
+          "deliver_stories_13_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_13_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_13_gate",
+          "type": "condition",
+          "description": "Decides how round 13 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_13_story",
+            "deliver_stories_13_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_13_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_13_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_14_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 13,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_14_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_13_gate",
+          "deliver_stories_13_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_13_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_14_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[13].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_13_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_13_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 14,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_14_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_14_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_14_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_14_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_14_story.output, 'last': 13 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 14,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_14_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_14_story",
+          "deliver_stories_14_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_14_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_14_gate",
+          "type": "condition",
+          "description": "Decides how round 14 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_14_story",
+            "deliver_stories_14_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_14_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_14_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_15_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 14,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_15_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_14_gate",
+          "deliver_stories_14_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_14_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_15_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[14].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_14_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_14_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 15,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_15_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_15_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_15_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_15_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_15_story.output, 'last': 14 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 15,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_15_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_15_story",
+          "deliver_stories_15_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_15_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_15_gate",
+          "type": "condition",
+          "description": "Decides how round 15 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_15_story",
+            "deliver_stories_15_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_15_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_15_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_16_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 15,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_16_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_15_gate",
+          "deliver_stories_15_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_15_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_16_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[15].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_15_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_15_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 16,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_16_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_16_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_16_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_16_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_16_story.output, 'last': 15 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 16,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_16_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_16_story",
+          "deliver_stories_16_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_16_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_16_gate",
+          "type": "condition",
+          "description": "Decides how round 16 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_16_story",
+            "deliver_stories_16_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_16_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_16_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_17_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 16,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_17_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_16_gate",
+          "deliver_stories_16_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_16_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_17_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[16].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_16_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_16_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 17,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_17_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_17_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_17_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_17_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_17_story.output, 'last': 16 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 17,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_17_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_17_story",
+          "deliver_stories_17_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_17_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_17_gate",
+          "type": "condition",
+          "description": "Decides how round 17 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_17_story",
+            "deliver_stories_17_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_17_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_17_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_18_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 17,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_18_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_17_gate",
+          "deliver_stories_17_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_17_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_18_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[17].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_17_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_17_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 18,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_18_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_18_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_18_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_18_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_18_story.output, 'last': 17 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 18,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_18_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_18_story",
+          "deliver_stories_18_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_18_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_18_gate",
+          "type": "condition",
+          "description": "Decides how round 18 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_18_story",
+            "deliver_stories_18_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_18_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_18_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_19_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 18,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_19_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_18_gate",
+          "deliver_stories_18_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_18_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_19_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[18].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_18_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_18_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 19,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_19_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_19_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_19_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_19_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_19_story.output, 'last': 18 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 19,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_19_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_19_story",
+          "deliver_stories_19_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_19_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_19_gate",
+          "type": "condition",
+          "description": "Decides how round 19 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_19_story",
+            "deliver_stories_19_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_19_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_19_story_outcome.output.last) ? 'done' : 'retry')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "retry": [
+              "deliver_stories_20_story"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 19,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories_20_story",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories_19_gate",
+          "deliver_stories_19_story_outcome",
+          "mode",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_19_story_outcome",
+          "mode",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_20_story",
+          "type": "subworkflow",
+          "description": "Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.",
+          "workflow": "sdd-story",
+          "on_failure": "continue",
+          "timeout": "168h",
+          "input": {
+            "source": {
+              "ref": "inputs.source"
+            },
+            "ticket": {
+              "cel": "nodes.order.output.stories[19].ref"
+            },
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "base_branch": {
+              "ref": "inputs.base_branch"
+            },
+            "stack_on": {
+              "cel": "nodes.deliver_stories_19_story_outcome.output.branch"
+            },
+            "mode": {
+              "ref": "nodes.mode.output.mode"
+            }
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 604800000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_stories_19_gate",
+          "route": "retry"
+        },
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 20,
+          "step": "story"
+        }
+      },
+      {
+        "id": "deliver_stories_20_story_outcome",
+        "type": "script",
+        "deps": [
+          "deliver_stories_20_story",
+          "order"
+        ],
+        "dataDeps": [
+          "deliver_stories_20_story",
+          "order"
+        ],
+        "def": {
+          "id": "deliver_stories_20_story_outcome",
+          "type": "script",
+          "description": "Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.",
+          "runtime": "python",
+          "entrypoint": "scripts/story_outcome.py",
+          "input": {
+            "map": "{'child': nodes.deliver_stories_20_story.output, 'last': 19 + 1 >= nodes.order.output.count}"
+          },
+          "output_schema": "schemas/story_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 20,
+          "step": "story_outcome"
+        }
+      },
+      {
+        "id": "deliver_stories_20_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories_20_story",
+          "deliver_stories_20_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_20_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories_20_gate",
+          "type": "condition",
+          "description": "Decides how round 20 of deliver_stories ends.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_20_story",
+            "deliver_stories_20_story_outcome"
+          ],
+          "expression": "(nodes.deliver_stories_20_story_outcome.output.status != 'signed_off') ? 'stop' : ((nodes.deliver_stories_20_story_outcome.output.last) ? 'done' : 'exhausted')",
+          "routes": {
+            "done": [],
+            "stop": [],
+            "no_progress": [],
+            "exhausted": []
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "loop": {
+          "loop": "deliver_stories",
+          "round": 20,
+          "step": "gate"
+        }
+      },
+      {
+        "id": "deliver_stories",
+        "type": "loop",
+        "deps": [
+          "deliver_stories_10_gate",
+          "deliver_stories_10_story",
+          "deliver_stories_10_story_outcome",
+          "deliver_stories_11_gate",
+          "deliver_stories_11_story",
+          "deliver_stories_11_story_outcome",
+          "deliver_stories_12_gate",
+          "deliver_stories_12_story",
+          "deliver_stories_12_story_outcome",
+          "deliver_stories_13_gate",
+          "deliver_stories_13_story",
+          "deliver_stories_13_story_outcome",
+          "deliver_stories_14_gate",
+          "deliver_stories_14_story",
+          "deliver_stories_14_story_outcome",
+          "deliver_stories_15_gate",
+          "deliver_stories_15_story",
+          "deliver_stories_15_story_outcome",
+          "deliver_stories_16_gate",
+          "deliver_stories_16_story",
+          "deliver_stories_16_story_outcome",
+          "deliver_stories_17_gate",
+          "deliver_stories_17_story",
+          "deliver_stories_17_story_outcome",
+          "deliver_stories_18_gate",
+          "deliver_stories_18_story",
+          "deliver_stories_18_story_outcome",
+          "deliver_stories_19_gate",
+          "deliver_stories_19_story",
+          "deliver_stories_19_story_outcome",
+          "deliver_stories_1_gate",
+          "deliver_stories_1_story",
+          "deliver_stories_1_story_outcome",
+          "deliver_stories_20_gate",
+          "deliver_stories_20_story",
+          "deliver_stories_20_story_outcome",
+          "deliver_stories_2_gate",
+          "deliver_stories_2_story",
+          "deliver_stories_2_story_outcome",
+          "deliver_stories_3_gate",
+          "deliver_stories_3_story",
+          "deliver_stories_3_story_outcome",
+          "deliver_stories_4_gate",
+          "deliver_stories_4_story",
+          "deliver_stories_4_story_outcome",
+          "deliver_stories_5_gate",
+          "deliver_stories_5_story",
+          "deliver_stories_5_story_outcome",
+          "deliver_stories_6_gate",
+          "deliver_stories_6_story",
+          "deliver_stories_6_story_outcome",
+          "deliver_stories_7_gate",
+          "deliver_stories_7_story",
+          "deliver_stories_7_story_outcome",
+          "deliver_stories_8_gate",
+          "deliver_stories_8_story",
+          "deliver_stories_8_story_outcome",
+          "deliver_stories_9_gate",
+          "deliver_stories_9_story",
+          "deliver_stories_9_story_outcome"
+        ],
+        "dataDeps": [
+          "deliver_stories_10_story",
+          "deliver_stories_10_story_outcome",
+          "deliver_stories_11_story",
+          "deliver_stories_11_story_outcome",
+          "deliver_stories_12_story",
+          "deliver_stories_12_story_outcome",
+          "deliver_stories_13_story",
+          "deliver_stories_13_story_outcome",
+          "deliver_stories_14_story",
+          "deliver_stories_14_story_outcome",
+          "deliver_stories_15_story",
+          "deliver_stories_15_story_outcome",
+          "deliver_stories_16_story",
+          "deliver_stories_16_story_outcome",
+          "deliver_stories_17_story",
+          "deliver_stories_17_story_outcome",
+          "deliver_stories_18_story",
+          "deliver_stories_18_story_outcome",
+          "deliver_stories_19_story",
+          "deliver_stories_19_story_outcome",
+          "deliver_stories_1_story",
+          "deliver_stories_1_story_outcome",
+          "deliver_stories_20_story",
+          "deliver_stories_20_story_outcome",
+          "deliver_stories_2_story",
+          "deliver_stories_2_story_outcome",
+          "deliver_stories_3_story",
+          "deliver_stories_3_story_outcome",
+          "deliver_stories_4_story",
+          "deliver_stories_4_story_outcome",
+          "deliver_stories_5_story",
+          "deliver_stories_5_story_outcome",
+          "deliver_stories_6_story",
+          "deliver_stories_6_story_outcome",
+          "deliver_stories_7_story",
+          "deliver_stories_7_story_outcome",
+          "deliver_stories_8_story",
+          "deliver_stories_8_story_outcome",
+          "deliver_stories_9_story",
+          "deliver_stories_9_story_outcome"
+        ],
+        "def": {
+          "id": "deliver_stories",
+          "type": "loop",
+          "description": "Deliver each Story with the published sdd-story, in order. A Story that is not signed off stops the loop.",
+          "merge": "any",
+          "depends_on": [
+            "deliver_stories_1_gate",
+            "deliver_stories_2_gate",
+            "deliver_stories_3_gate",
+            "deliver_stories_4_gate",
+            "deliver_stories_5_gate",
+            "deliver_stories_6_gate",
+            "deliver_stories_7_gate",
+            "deliver_stories_8_gate",
+            "deliver_stories_9_gate",
+            "deliver_stories_10_gate",
+            "deliver_stories_11_gate",
+            "deliver_stories_12_gate",
+            "deliver_stories_13_gate",
+            "deliver_stories_14_gate",
+            "deliver_stories_15_gate",
+            "deliver_stories_16_gate",
+            "deliver_stories_17_gate",
+            "deliver_stories_18_gate",
+            "deliver_stories_19_gate",
+            "deliver_stories_20_gate"
+          ],
+          "max_iterations": 20,
+          "on_max": "fail",
+          "reasons": {
+            "stop": "A Story was not signed off",
+            "done": "Every Story is signed off"
+          },
+          "rounds": [
+            {
+              "gate": "deliver_stories_1_gate",
+              "required": [
+                "deliver_stories_1_story",
+                "deliver_stories_1_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_1_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_1_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_2_gate",
+              "required": [
+                "deliver_stories_2_story",
+                "deliver_stories_2_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_2_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_2_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_3_gate",
+              "required": [
+                "deliver_stories_3_story",
+                "deliver_stories_3_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_3_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_3_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_4_gate",
+              "required": [
+                "deliver_stories_4_story",
+                "deliver_stories_4_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_4_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_4_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_5_gate",
+              "required": [
+                "deliver_stories_5_story",
+                "deliver_stories_5_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_5_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_5_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_6_gate",
+              "required": [
+                "deliver_stories_6_story",
+                "deliver_stories_6_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_6_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_6_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_7_gate",
+              "required": [
+                "deliver_stories_7_story",
+                "deliver_stories_7_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_7_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_7_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_8_gate",
+              "required": [
+                "deliver_stories_8_story",
+                "deliver_stories_8_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_8_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_8_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_9_gate",
+              "required": [
+                "deliver_stories_9_story",
+                "deliver_stories_9_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_9_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_9_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_10_gate",
+              "required": [
+                "deliver_stories_10_story",
+                "deliver_stories_10_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_10_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_10_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_11_gate",
+              "required": [
+                "deliver_stories_11_story",
+                "deliver_stories_11_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_11_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_11_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_12_gate",
+              "required": [
+                "deliver_stories_12_story",
+                "deliver_stories_12_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_12_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_12_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_13_gate",
+              "required": [
+                "deliver_stories_13_story",
+                "deliver_stories_13_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_13_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_13_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_14_gate",
+              "required": [
+                "deliver_stories_14_story",
+                "deliver_stories_14_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_14_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_14_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_15_gate",
+              "required": [
+                "deliver_stories_15_story",
+                "deliver_stories_15_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_15_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_15_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_16_gate",
+              "required": [
+                "deliver_stories_16_story",
+                "deliver_stories_16_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_16_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_16_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_17_gate",
+              "required": [
+                "deliver_stories_17_story",
+                "deliver_stories_17_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_17_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_17_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_18_gate",
+              "required": [
+                "deliver_stories_18_story",
+                "deliver_stories_18_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_18_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_18_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_19_gate",
+              "required": [
+                "deliver_stories_19_story",
+                "deliver_stories_19_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_19_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_19_story_outcome.output"
+                }
+              }
+            },
+            {
+              "gate": "deliver_stories_20_gate",
+              "required": [
+                "deliver_stories_20_story",
+                "deliver_stories_20_story_outcome"
+              ],
+              "steps": {
+                "story": {
+                  "ref": "nodes.deliver_stories_20_story.output"
+                },
+                "story_outcome": {
+                  "ref": "nodes.deliver_stories_20_story_outcome.output"
+                }
+              }
+            }
+          ]
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "count": {
+              "type": "integer"
+            },
+            "exited": {
+              "type": "boolean"
+            },
+            "last": {
+              "type": "object",
+              "properties": {
+                "story": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "workflow": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "object"
+                    },
+                    "nodes": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "story_outcome": {}
+              }
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "round": {
+                    "type": "integer"
+                  },
+                  "outcome": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "object",
+                    "properties": {
+                      "story": {
+                        "type": "object",
+                        "properties": {
+                          "run_id": {
+                            "type": "string"
+                          },
+                          "workflow": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "integer"
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "object"
+                          },
+                          "nodes": {
+                            "type": "object"
+                          }
+                        }
+                      },
+                      "story_outcome": {}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "timeoutMs": 3600000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "deliver_gate",
+        "type": "condition",
+        "deps": [
+          "deliver_stories"
+        ],
+        "dataDeps": [
+          "deliver_stories"
+        ],
+        "def": {
+          "id": "deliver_gate",
+          "type": "condition",
+          "description": "Check the release only when every Story was signed off. A stopped loop goes straight to the summary.",
+          "expression": "nodes.deliver_stories.output.outcome == 'done' ? 'done' : 'other'",
+          "routes": {
+            "done": [
+              "journeys"
+            ],
+            "other": []
+          },
+          "default": "other"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "journeys",
+        "type": "script",
+        "deps": [
+          "deliver_gate",
+          "plan_release"
+        ],
+        "dataDeps": [
+          "plan_release"
+        ],
+        "def": {
+          "id": "journeys",
+          "type": "script",
+          "description": "The plan's user journeys and invariants as one text for the release check.",
+          "runtime": "python",
+          "entrypoint": "scripts/journeys.py",
+          "input": {
+            "map": "{'prd': nodes.plan_release.output}"
+          },
+          "output_schema": "schemas/journeys.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "deliver_gate",
+          "route": "done"
+        }
+      },
+      {
+        "id": "release_gate",
+        "type": "condition",
+        "deps": [
+          "journeys"
+        ],
+        "dataDeps": [
+          "journeys"
+        ],
+        "def": {
+          "id": "release_gate",
+          "type": "condition",
+          "description": "Run the release check only when the plan has journeys or invariants to check.",
+          "expression": "nodes.journeys.output.count > 0 ? 'check' : 'none'",
+          "routes": {
+            "check": [
+              "release_check"
+            ],
+            "none": []
+          },
+          "default": "none"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "release_check",
+        "type": "subworkflow",
+        "deps": [
+          "deliver_stories",
+          "journeys",
+          "release_gate"
+        ],
+        "dataDeps": [
+          "deliver_stories",
+          "journeys"
+        ],
+        "def": {
+          "id": "release_check",
+          "type": "subworkflow",
+          "description": "Run the published ai-sdlc-factory-verify on the top branch of the stack, against the plan's journeys and invariants. No fix ticket is proposed.",
+          "workflow": "ai-sdlc-factory-verify",
+          "on_failure": "continue",
+          "timeout": "2h",
+          "input": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "staging_branch": {
+              "cel": "nodes.deliver_stories.output.last.story_outcome.branch"
+            },
+            "journeys": {
+              "ref": "nodes.journeys.output.text"
+            },
+            "propose_fix": false
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            },
+            "version": {
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": "object"
+            },
+            "nodes": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 7200000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "release_gate",
+          "route": "check"
+        }
+      },
+      {
+        "id": "release_outcome",
+        "type": "script",
+        "deps": [
+          "release_check",
+          "release_gate"
+        ],
+        "dataDeps": [
+          "release_check"
+        ],
+        "def": {
+          "id": "release_outcome",
+          "type": "script",
+          "description": "The release check's verdict, or that it was skipped or unavailable. A failed or unreadable check is never verified.",
+          "runtime": "python",
+          "entrypoint": "scripts/release_outcome.py",
+          "merge": "any",
+          "depends_on": [
+            "release_check",
+            "release_gate"
+          ],
+          "input": {
+            "map": "{'child': has(nodes.release_check) ? nodes.release_check.output : null}"
+          },
+          "output_schema": "schemas/release_outcome.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "summary",
+        "type": "script",
+        "deps": [
+          "autonomy",
+          "brief",
+          "deliver_stories",
+          "has_stories",
+          "mode",
+          "order",
+          "plan_release",
+          "release_outcome"
+        ],
+        "dataDeps": [
+          "autonomy",
+          "deliver_stories",
+          "mode",
+          "order",
+          "plan_release",
+          "release_outcome"
+        ],
+        "def": {
+          "id": "summary",
+          "type": "script",
+          "description": "What the run did - the Stories in order with their result, the pull request stack in merge order, the Story that stopped it and the release check.",
+          "runtime": "python",
+          "entrypoint": "scripts/summary.py",
+          "merge": "any",
+          "depends_on": [
+            "brief",
+            "has_stories",
+            "autonomy",
+            "deliver_stories",
+            "release_outcome"
+          ],
+          "input": {
+            "map": "{'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"
+          },
+          "output_schema": "schemas/summary.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "summary_report",
+        "type": "report",
+        "deps": [
+          "summary"
+        ],
+        "dataDeps": [
+          "summary"
+        ],
+        "def": {
+          "id": "summary_report",
+          "type": "report",
+          "description": "The summary as Markdown - Stories, the pull request stack to merge in order, the release check.",
+          "template": "templates/summary.md",
+          "input": {
+            "map": "{'summary': nodes.summary.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "summary_notify",
+        "type": "notify",
+        "deps": [
+          "summary_report"
+        ],
+        "dataDeps": [
+          "summary_report"
+        ],
+        "def": {
+          "id": "summary_notify",
+          "type": "notify",
+          "description": "Post the summary to Slack.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.summary_report.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "brainstorm": "output of tainted agent brainstorm",
+        "plan_release": "output of tainted agent plan_release",
+        "prd": "output of tainted agent plan_release",
+        "epics": "output of tainted agent plan_release",
+        "has_epics": "output of tainted agent plan_release",
+        "split_epics_1_split": "output of a subworkflow is not marked trusted",
+        "split_epics_1_split_outcome": "output of tainted agent plan_release",
+        "split_epics_1_gate": "output of tainted agent plan_release",
+        "split_epics_2_split": "output of a subworkflow is not marked trusted",
+        "split_epics_2_split_outcome": "output of tainted agent plan_release",
+        "split_epics_2_gate": "output of tainted agent plan_release",
+        "split_epics_3_split": "output of a subworkflow is not marked trusted",
+        "split_epics_3_split_outcome": "output of tainted agent plan_release",
+        "split_epics_3_gate": "output of tainted agent plan_release",
+        "split_epics": "derived from split_epics_1_split",
+        "order": "output of tainted agent plan_release",
+        "has_stories": "output of tainted agent plan_release",
+        "deliver_stories_1_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_1_story_outcome": "derived from deliver_stories_1_story",
+        "deliver_stories_1_gate": "derived from deliver_stories_1_story_outcome",
+        "deliver_stories_2_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_2_story_outcome": "derived from deliver_stories_2_story",
+        "deliver_stories_2_gate": "derived from deliver_stories_2_story_outcome",
+        "deliver_stories_3_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_3_story_outcome": "derived from deliver_stories_3_story",
+        "deliver_stories_3_gate": "derived from deliver_stories_3_story_outcome",
+        "deliver_stories_4_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_4_story_outcome": "derived from deliver_stories_4_story",
+        "deliver_stories_4_gate": "derived from deliver_stories_4_story_outcome",
+        "deliver_stories_5_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_5_story_outcome": "derived from deliver_stories_5_story",
+        "deliver_stories_5_gate": "derived from deliver_stories_5_story_outcome",
+        "deliver_stories_6_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_6_story_outcome": "derived from deliver_stories_6_story",
+        "deliver_stories_6_gate": "derived from deliver_stories_6_story_outcome",
+        "deliver_stories_7_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_7_story_outcome": "derived from deliver_stories_7_story",
+        "deliver_stories_7_gate": "derived from deliver_stories_7_story_outcome",
+        "deliver_stories_8_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_8_story_outcome": "derived from deliver_stories_8_story",
+        "deliver_stories_8_gate": "derived from deliver_stories_8_story_outcome",
+        "deliver_stories_9_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_9_story_outcome": "derived from deliver_stories_9_story",
+        "deliver_stories_9_gate": "derived from deliver_stories_9_story_outcome",
+        "deliver_stories_10_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_10_story_outcome": "derived from deliver_stories_10_story",
+        "deliver_stories_10_gate": "derived from deliver_stories_10_story_outcome",
+        "deliver_stories_11_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_11_story_outcome": "derived from deliver_stories_11_story",
+        "deliver_stories_11_gate": "derived from deliver_stories_11_story_outcome",
+        "deliver_stories_12_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_12_story_outcome": "derived from deliver_stories_12_story",
+        "deliver_stories_12_gate": "derived from deliver_stories_12_story_outcome",
+        "deliver_stories_13_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_13_story_outcome": "derived from deliver_stories_13_story",
+        "deliver_stories_13_gate": "derived from deliver_stories_13_story_outcome",
+        "deliver_stories_14_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_14_story_outcome": "derived from deliver_stories_14_story",
+        "deliver_stories_14_gate": "derived from deliver_stories_14_story_outcome",
+        "deliver_stories_15_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_15_story_outcome": "derived from deliver_stories_15_story",
+        "deliver_stories_15_gate": "derived from deliver_stories_15_story_outcome",
+        "deliver_stories_16_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_16_story_outcome": "derived from deliver_stories_16_story",
+        "deliver_stories_16_gate": "derived from deliver_stories_16_story_outcome",
+        "deliver_stories_17_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_17_story_outcome": "derived from deliver_stories_17_story",
+        "deliver_stories_17_gate": "derived from deliver_stories_17_story_outcome",
+        "deliver_stories_18_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_18_story_outcome": "derived from deliver_stories_18_story",
+        "deliver_stories_18_gate": "derived from deliver_stories_18_story_outcome",
+        "deliver_stories_19_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_19_story_outcome": "derived from deliver_stories_19_story",
+        "deliver_stories_19_gate": "derived from deliver_stories_19_story_outcome",
+        "deliver_stories_20_story": "output of a subworkflow is not marked trusted",
+        "deliver_stories_20_story_outcome": "derived from deliver_stories_20_story",
+        "deliver_stories_20_gate": "derived from deliver_stories_20_story_outcome",
+        "deliver_stories": "derived from deliver_stories_10_story",
+        "deliver_gate": "derived from deliver_stories",
+        "journeys": "output of tainted agent plan_release",
+        "release_gate": "output of tainted agent plan_release",
+        "release_check": "output of a subworkflow is not marked trusted",
+        "release_outcome": "derived from release_check",
+        "summary": "derived from deliver_stories",
+        "summary_report": "derived from summary",
+        "summary_notify": "derived from summary_report"
+      },
+      "tainted": {
+        "brainstorm": "reads a cloned repository (its files are untrusted)",
+        "plan_release": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "brainstorm",
+          "write": "summary_notify",
+          "path": [
+            "brainstorm",
+            "…",
+            "brainstorm_review",
+            "…",
+            "summary_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "plan_release",
+          "write": "summary_notify",
+          "path": [
+            "plan_release",
+            "summary",
+            "summary_report",
+            "summary_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "plan_release",
+          "write": "summary_notify",
+          "path": [
+            "plan_release",
+            "…",
+            "prd_review",
+            "…",
+            "summary_notify"
+          ],
+          "gate": "approval"
+        },
+        {
+          "agent": "plan_release",
+          "write": "summary_notify",
+          "path": [
+            "plan_release",
+            "…",
+            "autonomy",
+            "…",
+            "summary_notify"
+          ],
+          "gate": "approval"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,363 @@
+# sdd-factory: a goal or a ticket to a stack of signed-off pull requests, one child run per Story.
+#   input      a repository and base branch, and a GitHub ticket (an epic, a feature request) and/or a goal typed as text
+#   brief      the request as one plain brief
+#   brainstorm an agent reads the repository and prepares questions and 2-3 approaches; a person answers and picks one
+#   plan       an agent reads the repository and writes the release plan: problem, scope, invariants, user
+#              journeys and up to three epics (the first one makes the product runnable end to end)
+#   review     a person approves the plan, and may leave epics out; nothing is created before this
+#   split      each remaining epic goes through the published issue-splitter, one after the other in a loop. Each run
+#              sizes the epic against the code and, after its own approval, creates the Stories (GitHub issues). Up to
+#              3 epics of up to 6 Stories each; a release of more than 20 Stories is not delivered.
+#   order      the Stories in delivery order: epics in plan order, Stories as the splitter created them
+#   autonomy   a person confirms the repository, the base branch and the Stories, and how the run is supervised.
+#              Only "supervised" exists for now: a person approves every Story's specs and its sign-off.
+#   deliver    each Story is a child run of the published sdd-story, one after the other: an OpenSpec change, a build
+#              with the repository's tests, a branch cut from the previous Story's branch (the first from the base
+#              branch), a pull request into the base branch, a pr-review run on it, one fix round and a sign-off. A
+#              Story that is not signed off stops the loop; later Stories are not started.
+#   release    when every Story is signed off, the published ai-sdlc-factory-verify checks the top branch of the stack
+#              against the plan's journeys and invariants (no fix ticket is proposed)
+#   summary    the Stories and their result, the pull request stack in merge order, and the release check, as a
+#              report and a Slack message. Every end of the run reaches it, a rejected approval included.
+# Ticket, issue and repository text are untrusted: the planner is tainted, and every child's output is read only by
+# scripts that fail closed. The only writes in this package are the Slack notices, each with a guard; everything else
+# that writes (tickets, branches, pull requests, labels) is inside the children, after their own approvals. Nothing
+# is merged or closed. The stacked pull requests are merged by a person, in the order the summary lists.
+schema_version: "2.0"
+id: sdd-factory
+name: SDD Factory - from a goal to a stack of signed-off pull requests
+description: Plan a release against the code with a person, split it into Stories, then deliver each Story as its own spec-driven child run - a branch stacked on the previous Story, a reviewed pull request and a sign-off - and finish with a release check and a summary. Nothing merges.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    source:
+      type: string
+      title: Tracker
+      enum: [github]
+      description: Where the tickets are read from and created. The code is always on GitHub.
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository the release changes, owner/name"}
+    base_branch: {type: string, title: Base branch, minLength: 1, maxLength: 200, description: "The branch the plan reads and every pull request targets (for example dev)"}
+    ticket: {type: string, title: Ticket, maxLength: 300, description: "An existing GitHub issue to plan, such as acme/payments#42. Leave empty to describe a goal instead."}
+    goal: {type: string, title: Goal, maxLength: 12000, description: "What the release should achieve, in your words. Added to the ticket when both are given."}
+  required: [source, repo, base_branch]
+  anyOf:
+    - {required: [ticket], properties: {ticket: {minLength: 1}}}
+    - {required: [goal], properties: {goal: {minLength: 1}}}
+config:
+  # Filled in by the example install (setting slack_channel).
+  channel: "{{slack_channel}}"
+nodes:
+  - id: source_gate
+    type: condition
+    description: Read the ticket from GitHub, or plan from the goal alone.
+    expression: "has(inputs.ticket) && inputs.ticket != '' ? inputs.source : 'text'"
+    routes: {github: [github_issue], text: [text_pass]}
+    default: text
+
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {ref: inputs.ticket}}
+
+  - id: text_pass
+    type: condition
+    description: No ticket to read - the goal is the request. Marks that branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  - id: normalize
+    type: tool
+    description: The ticket as one plain ticket (key, title, description).
+    tool: ticket.normalize@1
+    merge: any
+    depends_on: [github_issue]
+    arguments:
+      source: {ref: inputs.source}
+      issue: {ref: nodes.github_issue.output}
+    project: [source, key, title, description]
+
+  # The join reads nothing from before the branches: a merge node runs when any input got through.
+  - id: brief
+    type: script
+    description: The request as one brief - the ticket, then any direction typed as the goal.
+    runtime: python
+    entrypoint: scripts/brief.py
+    merge: any
+    depends_on: [text_pass, normalize]
+    input: {map: "{'ticket': has(nodes.normalize) ? nodes.normalize.output : null, 'goal': has(inputs.goal) ? inputs.goal : ''}"}
+    output_schema: schemas/brief.json
+    limits: {time: 1m}
+
+  - id: brainstorm
+    type: agent
+    description: Read the repository and prepare the conversation before planning - the questions only a person can answer and two or three approaches with one recommended (brainstorm-requirements skill).
+    executor: opencode
+    profile: brainstormer@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/heads/' + inputs.base_branch"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'brief': nodes.brief.output, 'repository': inputs.repo}"}
+    output_schema: schemas/brainstorm.json
+    timeout: 15m
+    budget: {max_tool_calls: 15}
+
+  - id: brainstorm_review
+    type: approval
+    description: A person answers the questions and picks an approach before the release is planned; rejecting stops the run with nothing planned. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: author
+    message: {cel: "'Before the release is planned: ' + nodes.brainstorm.output.summary + ' Answer the ' + string(size(nodes.brainstorm.output.questions)) + ' question(s) and choose an approach, or reject to stop.'"}
+    payload: {map: "{'questions': nodes.brainstorm.output.questions, 'approaches': nodes.brainstorm.output.approaches, 'assumptions': nodes.brainstorm.output.assumptions, 'unknowns': nodes.brainstorm.output.unknowns}"}
+    decision_schema:
+      type: object
+      properties:
+        approach: {type: string, minLength: 1, maxLength: 120, title: Approach, description: "The name of the approach to plan, as listed (or your own direction in a few words)."}
+        answers: {type: string, maxLength: 6000, title: Answers, description: "One answer per question, in order. Leave empty when there were no questions. They are treated as decisions by the planner."}
+      required: [approach]
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: plan_release
+    type: agent
+    description: Read the repository and write the release plan - problem, scope, invariants, user journeys and up to three epics (release-prd skill).
+    executor: opencode
+    profile: release-planner@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/heads/' + inputs.base_branch"}
+      credential: github-read-token
+      depth: 1
+    input: {map: "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"}
+    output_schema: schemas/prd.json
+    timeout: 25m
+    budget: {max_tool_calls: 20}
+
+  - id: prd
+    type: report
+    description: The release plan as Markdown, for the approver.
+    template: templates/prd.md
+    input: {map: "{'prd': nodes.plan_release.output}"}
+
+  - id: prd_review
+    type: approval
+    description: A person approves the release plan before any ticket is created, and may leave epics out. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: author
+    message: {cel: "'Approve the release plan \"' + nodes.plan_release.output.title + '\" and split its ' + string(size(nodes.plan_release.output.epics)) + ' epic(s) into tickets? Name the epics to leave out, if any.'"}
+    payload: {map: "{'markdown': nodes.prd.output.markdown, 'owner': nodes.plan_release.output.owner, 'epics': nodes.plan_release.output.epics.map(e, e.title), 'open_questions': nodes.plan_release.output.open_questions}"}
+    decision_schema:
+      type: object
+      properties:
+        drop: {type: string, maxLength: 20, pattern: "^[0-9, ]*$", title: Epics to leave out, description: "Epic numbers from the plan, for example 2,3. Leave empty to split them all."}
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: epics
+    type: script
+    description: The text of each epic the splitter receives, with the release context in front (epics the approver left out are removed).
+    runtime: python
+    entrypoint: scripts/epics.py
+    input: {map: "{'prd': nodes.plan_release.output, 'drop': has(nodes.prd_review.output.data.drop) ? nodes.prd_review.output.data.drop : ''}"}
+    output_schema: schemas/epics.json
+    limits: {time: 1m}
+
+  # ---- Split: one run of the published issue-splitter per epic, in order -----------------------------
+  - id: has_epics
+    type: condition
+    description: Is there an epic to split? A plan whose epics were all left out ends here, with nothing to deliver.
+    expression: "nodes.epics.output.count >= 1 ? 'yes' : 'none'"
+    routes: {yes: [split_epics], none: []}
+    default: none
+
+  # Each round splits epic number iteration + 1 and is checked after it: with one epic only round 1 runs, so no round
+  # reads past the end of the list. A splitter that fails stops the loop; later epics are not split.
+  # The exit rules read only this round's own steps. split_outcome says whether this was the last epic (it reads the
+  # count), because a gate that read a step outside the loop would count as reached even when its round never started.
+  - id: split_epics
+    type: loop
+    description: Split each epic with the published issue-splitter (analysis, its own approval, then the Stories), one after the other.
+    max_iterations: 3
+    on_max: continue
+    body:
+      - id: split
+        type: subworkflow
+        description: Run the published issue-splitter on this round's epic. It waits for a person at its own approval, so it may take days.
+        workflow: issue-splitter
+        on_failure: continue
+        timeout: 96h
+        input: {repo: {ref: inputs.repo}, text: {cel: "nodes.epics.output.epics[iteration].text"}, base_branch: {ref: inputs.base_branch}}
+      - id: split_outcome
+        type: script
+        description: The Stories this round's splitter created, or that it failed. Reads the child's output as data and fails closed.
+        runtime: python
+        entrypoint: scripts/split_outcome.py
+        input: {map: "{'child': nodes.split.output, 'repo': inputs.repo, 'epic': nodes.epics.output.epics[iteration].n, 'last': iteration + 1 >= nodes.epics.output.count}"}
+        output_schema: schemas/split_outcome.json
+        limits: {time: 1m}
+    exit:
+      - {when: "nodes.split_outcome.output.status != 'ok'", outcome: stop, reason: An epic could not be split}
+      - {when: "nodes.split_outcome.output.last", outcome: done, reason: Every epic is split}
+
+  # A merge node: it also runs when there were no epics (has_epics took the none route and split_epics did not run).
+  # The loop is read only behind has(), since a step that reads a skipped step is skipped even inside has().
+  - id: order
+    type: script
+    description: The Stories in delivery order - epics in plan order, then each epic's Stories as the splitter created them - or why there is nothing to deliver.
+    runtime: python
+    entrypoint: scripts/order.py
+    merge: any
+    depends_on: [split_epics, has_epics]
+    input: {map: "{'split': has(nodes.split_epics) ? nodes.split_epics.output : null, 'epics': nodes.epics.output.count, 'repo': inputs.repo}"}
+    output_schema: schemas/order.json
+    limits: {time: 1m}
+
+  - id: has_stories
+    type: condition
+    description: Deliver only when every epic was split and there is at least one Story. Otherwise the run goes to the summary.
+    expression: "nodes.order.output.ok && nodes.order.output.count >= 1 ? 'yes' : 'no'"
+    routes: {yes: [autonomy], no: []}
+    default: 'no'
+
+  - id: autonomy
+    type: approval
+    description: A person confirms what will be delivered before the first Story starts; rejecting it stops the run with nothing delivered. Answer in mission control, with azhi approve, or from the Slack approval message.
+    role: author
+    message: {cel: "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Reject to stop with nothing delivered.'"}
+    payload: {map: "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories}"}
+    decision_schema:
+      type: object
+      properties:
+        mode: {type: string, enum: [supervised], default: supervised, title: Mode, description: "Every Story's specs and sign-off are approved by a person. An unattended mode that follows the agents' recommendations is not available yet."}
+      additionalProperties: false
+    expires_in: 72h
+    on_expiry: reject
+
+  - id: mode
+    type: script
+    description: The mode every Story runs in. Always supervised for now; this is the one place an unattended mode would change.
+    runtime: python
+    entrypoint: scripts/mode.py
+    input: {map: "{'data': has(nodes.autonomy.output.data) ? nodes.autonomy.output.data : null}"}
+    output_schema: schemas/mode.json
+    limits: {time: 1m}
+
+  # ---- Deliver: one run of the published sdd-story per Story, each stacked on the one before ----------
+  # A round is checked after it: a Story that is not signed off stops the loop, so a Story is never stacked on a branch
+  # that was not signed off. Round N reads its branch from round N-1's story_outcome, round 1 from the base branch.
+  - id: deliver_stories
+    type: loop
+    description: Deliver each Story with the published sdd-story, in order. A Story that is not signed off stops the loop.
+    max_iterations: 20
+    on_max: fail
+    initial: {stack_on: {ref: inputs.base_branch}}
+    body:
+      - id: story
+        type: subworkflow
+        description: Run the published sdd-story on this round's Story. It waits for a person at its approvals, so it may take days.
+        workflow: sdd-story
+        on_failure: continue
+        timeout: 168h
+        input:
+          source: {ref: inputs.source}
+          ticket: {cel: "nodes.order.output.stories[iteration].ref"}
+          repo: {ref: inputs.repo}
+          base_branch: {ref: inputs.base_branch}
+          stack_on: {ref: state.stack_on}
+          mode: {ref: nodes.mode.output.mode}
+      - id: story_outcome
+        type: script
+        description: Whether the Story was signed off, and the branch it left. Reads the child's output as data and fails closed.
+        runtime: python
+        entrypoint: scripts/story_outcome.py
+        input: {map: "{'child': nodes.story.output, 'last': iteration + 1 >= nodes.order.output.count}"}
+        output_schema: schemas/story_outcome.json
+        limits: {time: 1m}
+    exit:
+      - {when: "nodes.story_outcome.output.status != 'signed_off'", outcome: stop, reason: A Story was not signed off}
+      - {when: "nodes.story_outcome.output.last", outcome: done, reason: Every Story is signed off}
+    next:
+      stack_on: {cel: nodes.story_outcome.output.branch}
+
+  # ---- Release check: only when every Story is signed off ----------------------------------------------
+  - id: deliver_gate
+    type: condition
+    description: Check the release only when every Story was signed off. A stopped loop goes straight to the summary.
+    expression: "nodes.deliver_stories.output.outcome == 'done' ? 'done' : 'other'"
+    routes: {done: [journeys], other: []}
+    default: other
+
+  - id: journeys
+    type: script
+    description: The plan's user journeys and invariants as one text for the release check.
+    runtime: python
+    entrypoint: scripts/journeys.py
+    input: {map: "{'prd': nodes.plan_release.output}"}
+    output_schema: schemas/journeys.json
+    limits: {time: 1m}
+
+  - id: release_gate
+    type: condition
+    description: Run the release check only when the plan has journeys or invariants to check.
+    expression: "nodes.journeys.output.count > 0 ? 'check' : 'none'"
+    routes: {check: [release_check], none: []}
+    default: none
+
+  - id: release_check
+    type: subworkflow
+    description: Run the published ai-sdlc-factory-verify on the top branch of the stack, against the plan's journeys and invariants. No fix ticket is proposed.
+    workflow: ai-sdlc-factory-verify
+    on_failure: continue
+    timeout: 2h
+    input:
+      repo: {ref: inputs.repo}
+      staging_branch: {cel: "nodes.deliver_stories.output.last.story_outcome.branch"}
+      journeys: {ref: nodes.journeys.output.text}
+      propose_fix: false
+
+  # A merge node: it also runs when the release check did not (no journeys to check).
+  - id: release_outcome
+    type: script
+    description: The release check's verdict, or that it was skipped or unavailable. A failed or unreadable check is never verified.
+    runtime: python
+    entrypoint: scripts/release_outcome.py
+    merge: any
+    depends_on: [release_check, release_gate]
+    input: {map: "{'child': has(nodes.release_check) ? nodes.release_check.output : null}"}
+    output_schema: schemas/release_outcome.json
+    limits: {time: 1m}
+
+  # ---- Summary: every end of the run reaches it ---------------------------------------------------------
+  # A merge node runs when any upstream step got through, and a rejected approval blocks what follows it. So it lists
+  # one step for each way a run can end and reads each of the others only behind has(): brief (reached before any
+  # approval, so a rejected brainstorm or plan ends here), has_stories (no epics, a failed split, too many Stories),
+  # autonomy (rejected), deliver_stories (the loop ended, done or stopped) and release_outcome (checked or skipped).
+  - id: summary
+    type: script
+    description: What the run did - the Stories in order with their result, the pull request stack in merge order, the Story that stopped it and the release check.
+    runtime: python
+    entrypoint: scripts/summary.py
+    merge: any
+    depends_on: [brief, has_stories, autonomy, deliver_stories, release_outcome]
+    input: {map: "{'prd_title': has(nodes.plan_release) ? nodes.plan_release.output.title : null, 'order': has(nodes.order) ? nodes.order.output : null, 'autonomy': has(nodes.autonomy) ? nodes.autonomy.output.decision : null, 'mode': has(nodes.mode) ? nodes.mode.output.mode : null, 'loop': has(nodes.deliver_stories) ? nodes.deliver_stories.output : null, 'release': has(nodes.release_outcome) ? nodes.release_outcome.output : null}"}
+    output_schema: schemas/summary.json
+    limits: {time: 1m}
+
+  - id: summary_report
+    type: report
+    description: The summary as Markdown - Stories, the pull request stack to merge in order, the release check.
+    template: templates/summary.md
+    input: {map: "{'summary': nodes.summary.output}"}
+
+  - id: summary_notify
+    type: notify
+    description: Post the summary to Slack.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.summary_report.output.markdown}
+    guard: args.channel == config.channel

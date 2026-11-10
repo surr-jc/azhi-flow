@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "maxLength": 12000
+    },
+    "count": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "text",
+    "count"
+  ],
+  "additionalProperties": false
+}

@@ -88,6 +88,8 @@ const META: Record<string, { category: string; steps: number; works_with: string
   'ai-sdlc-factory': { category: 'Delivery', steps: 18, works_with: ['GitHub', 'Jira', 'Slack'] },
   'ai-sdlc-factory-readiness': { category: 'Delivery', steps: 13, works_with: ['GitHub', 'Jira', 'Slack'] },
   'ai-sdlc-factory-verify': { category: 'Delivery', steps: 8, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdd-story': { category: 'Delivery', steps: 49, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdd-factory': { category: 'Delivery', steps: 26, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'sdlc-lean': { category: 'Delivery', steps: 36, works_with: ['GitHub', 'Jira', 'Slack', 'OpenCode'] },
   'issue-investigation': { category: 'Investigation', steps: 6, works_with: ['GitHub', 'OpenCode'] },
   'ci-digest': { category: 'Reports', steps: 4, works_with: [] },
