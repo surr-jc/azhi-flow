@@ -21,7 +21,7 @@ and never decide the verdict; refuted ones are dropped and counted. See
 |---|---|
 | `pr` | `github.get-pull-request@1`: title, body, author, state, base and head refs and SHAs, changed files with line counts |
 | `should_review` | Only an open pull request is reviewed. A closed or merged one skips every later step (no model calls, no comment, no Slack) unless the run input `allow_closed` is true |
-| `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`) |
+| `correctness`, `security`, `tests`, `quality` | OpenCode agents, each in its own fresh checkout of `refs/pull/<n>/head`, returning findings (`schemas/findings.json`). The diff is against the base commit GitHub recorded, or against the run input `diff_base` (a full commit SHA) when it is given: a stacked pull request is then reviewed from the commit its own work starts at, not from the base branch |
 | `verify` | OpenCode agent (`finding-verifier@1`, `gpt-5.6-terra`) in its own checkout: re-derives every finding, walks its scenario, looks for the reason it is fine, and returns `confirmed`/`refuted`/`unverifiable` with a 0 to 100 confidence and quoted evidence (`schemas/verification.json`, skill `finding-verification`) |
 | `triage` | Script (`scripts/triage.py`): kept = confirmed at or above `config.min_confidence`; unverified = unverifiable or unchecked; dropped = refuted or confirmed below the bar |
 | `summarize` | OpenCode agent without a checkout: merges the findings into a verdict, findings and a Markdown body (`schemas/review.json`), and triages each finding as fix now, follow-up issue or check by hand |

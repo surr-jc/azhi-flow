@@ -49,6 +49,7 @@ describe.skipIf(!hasGit)('pr-review base of a merged pull request', () => {
   const root = mkdtempSync(join(tmpdir(), 'azhi-pr-base-'));
   let git: Awaited<ReturnType<typeof startFakeGit>>;
   let baseSha = '';
+  let stackBase = '';
   let n = 0;
 
   beforeAll(async () => {
@@ -67,9 +68,20 @@ describe.skipIf(!hasGit)('pr-review base of a merged pull request', () => {
     // Merged with a merge commit: the release branch now contains the PR head.
     g('checkout', '-q', 'release');
     g('merge', '-q', '--no-ff', '-m', 'Merge pull request #664', 'feature');
+    // A stacked pull request: its branch holds an earlier story's commit, then its own.
+    g('checkout', '-qb', 'stacked', baseSha);
+    writeFileSync(join(work, 'src/one.txt'), 'story one\n');
+    g('add', '.');
+    g('commit', '-qm', 'story one');
+    stackBase = g('rev-parse', 'HEAD');
+    writeFileSync(join(work, 'src/two.txt'), 'story two\n');
+    g('add', '.');
+    g('commit', '-qm', 'story two');
+    g('checkout', '-q', 'release');
     mkdirSync(join(root, 'srv/acme'), { recursive: true });
     execFileSync('git', ['clone', '-q', '--bare', work, join(root, 'srv/acme/app.git')], { env });
     execFileSync('git', ['-C', join(root, 'srv/acme/app.git'), 'update-ref', 'refs/pull/664/head', 'refs/heads/feature'], { env });
+    execFileSync('git', ['-C', join(root, 'srv/acme/app.git'), 'update-ref', 'refs/pull/665/head', 'refs/heads/stacked'], { env });
     git = await startFakeGit(join(root, 'srv'), { token: 'ghp_read' });
   });
   afterAll(async () => {
@@ -77,11 +89,11 @@ describe.skipIf(!hasGit)('pr-review base of a merged pull request', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const clone = (baseRef?: string) => {
+  const clone = (baseRef?: string, ref = 'refs/pull/664/head') => {
     const step = join(root, `step${++n}`);
     const home = join(step, 'home');
     mkdirSync(home, { recursive: true });
-    return cloneWorkspace({ host: git.url, repo: 'acme/app', ref: 'refs/pull/664/head', ...(baseRef ? { baseRef } : {}) }, { root: step, home, token: 'ghp_read', timeoutMs: 30_000 });
+    return cloneWorkspace({ host: git.url, repo: 'acme/app', ref, ...(baseRef ? { baseRef } : {}) }, { root: step, home, token: 'ghp_read', timeoutMs: 30_000 });
   };
 
   it('diffs the merged pull request against its recorded base commit', async () => {
@@ -115,6 +127,22 @@ describe.skipIf(!hasGit)('pr-review base of a merged pull request', () => {
     for (const id of ['correctness', 'security', 'tests', 'quality']) expect(r.plan!.nodes.find((x) => x.id === id)!.route).toEqual({ condition: 'should_review', route: 'review' });
     const gate = def.nodes.find((x) => x.id === 'should_review') as { expression: string };
     expect(gate.expression).toContain("nodes.pr.output.state == 'open'");
-    expect((def.nodes.find((x) => x.id === 'security') as { workspace: { base_ref: unknown } }).workspace.base_ref).toEqual({ ref: 'nodes.pr.output.base_sha' });
+    // The recorded base, unless the run names the commit a stacked pull request's own work starts from.
+    expect((def.nodes.find((x) => x.id === 'security') as { workspace: { base_ref: unknown } }).workspace.base_ref).toEqual({ cel: "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha" });
+    const diffBase = (def.inputs as { properties: Record<string, { pattern?: string }> }).properties.diff_base!;
+    for (const [value, ok] of [['', true], ['a'.repeat(40), true], ['a'.repeat(64), true], ['main', false], ['refs/heads/x', false], ['a'.repeat(39), false]] as const) {
+      expect(new RegExp(diffBase.pattern!).test(value), value).toBe(ok);
+    }
+  });
+
+  it('reviews a stacked pull request from the commit its own work starts at', async () => {
+    // Against the base branch the diff holds the earlier story too; against diff_base, only this one.
+    const whole = await repoFacts((await clone(baseSha, 'refs/pull/665/head')).dir, 'changed-files');
+    expect(whole.content[0]!.text.split('\n').sort()).toEqual(['A\tsrc/one.txt', 'A\tsrc/two.txt']);
+    const own = await clone(stackBase, 'refs/pull/665/head');
+    expect(own.base).toBe(stackBase);
+    const files = await repoFacts(own.dir, 'changed-files');
+    expect(files.isError).toBeFalsy();
+    expect(files.content[0]!.text).toBe('A\tsrc/two.txt');
   });
 });

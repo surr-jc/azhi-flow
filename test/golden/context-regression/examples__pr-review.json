@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review",
-    "definitionHash": "sha256:449b3a13a96bb085ad20052c93061d3cd1472ee3013ca2863c8339a121f6eb3d",
+    "definitionHash": "sha256:024f2bd86c6ab8b451181df3b442e20c689074f6d0e3ecef3fbd11684173e6d3",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -38,6 +38,12 @@
           "type": "boolean",
           "default": false,
           "title": "Offer to merge a clean approved pull request (asks for approval in Slack first; off by default)"
+        },
+        "diff_base": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}([0-9a-f]{24})?)?$",
+          "title": "Review from this commit",
+          "description": "A full commit SHA the pull request's branch was built on. The review then covers only the commits after it, which is what a stacked pull request needs. Leave empty to review the whole pull request."
         }
       },
       "required": [
@@ -135,12 +141,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
@@ -180,12 +186,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
@@ -225,12 +231,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
@@ -270,12 +276,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
@@ -322,12 +328,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"
           },
           "output_schema": "schemas/verification.json",
           "timeout": "25m",

@@ -23,3 +23,7 @@ and checks you covered, so the verifier and the reader can see the clean result 
 Review the change the diff shows and its users. If changed-files or file-diff returns an error or no
 changes, the diff is unavailable: report no findings, say in the summary that the diff was unavailable,
 and do not infer the change from the file contents, the pull request title or its description.
+
+When `review_from` in the message is not empty, the pull request is stacked on earlier work and the
+diff starts at that commit. The earlier commits are not under review, and the pull request's
+`changed_files` may name files the diff does not: go by changed-files and file-diff.

@@ -9,4 +9,5 @@ Load the finding-verification skill, then check every finding by its `id`: read 
 scenario, look for the reason it is fine, and decide confirmed, refuted or unverifiable with a
 confidence, and for a confirmed finding its severity by the skill's rubric. Use the repo-facts file-diff
 tool to see what the pull request changed and references to find the code that uses it. Return one check
-per finding with submit_output.
+per finding with submit_output. When `review_from` in the message is not empty, the diff starts at that
+commit: the pull request's earlier commits are not under review.

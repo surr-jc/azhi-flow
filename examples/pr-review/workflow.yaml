@@ -23,6 +23,7 @@ inputs:
     post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
     allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
     offer_merge: {type: boolean, default: false, title: Offer to merge a clean approved pull request (asks for approval in Slack first; off by default)}
+    diff_base: {type: string, pattern: "^([0-9a-f]{40}([0-9a-f]{24})?)?$", title: Review from this commit, description: "A full commit SHA the pull request's branch was built on. The review then covers only the commits after it, which is what a stacked pull request needs. Leave empty to review the whole pull request."}
   required: [repo, pr]
 config:
   # Filled in by the example install (setting slack_channel), or replace it with your channel ID.
@@ -53,9 +54,11 @@ nodes:
       ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
       # The base commit GitHub recorded for the PR, not the live base branch: once a PR is merged the
       # branch already contains its commits and the diff against it is empty.
-      base_ref: {ref: nodes.pr.output.base_sha}
+      # A stacked pull request is cut from another branch, so its diff against the base holds earlier
+      # work too: diff_base, when given, is the commit this pull request's own work starts from.
+      base_ref: {cel: "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"}
       credential: github-read-token
-    input: {map: "{'pr': nodes.pr.output}"}
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"}
     output_schema: schemas/findings.json
     timeout: 15m
     budget: {max_tool_calls: 15}
@@ -66,7 +69,7 @@ nodes:
     executor: opencode
     profile: security-reviewer@1
     workspace: *checkout
-    input: {map: "{'pr': nodes.pr.output}"}
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"}
     output_schema: schemas/findings.json
     timeout: 15m
     budget: {max_tool_calls: 15}
@@ -77,7 +80,7 @@ nodes:
     executor: opencode
     profile: tests-reviewer@1
     workspace: *checkout
-    input: {map: "{'pr': nodes.pr.output}"}
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"}
     output_schema: schemas/findings.json
     timeout: 15m
     budget: {max_tool_calls: 15}
@@ -88,7 +91,7 @@ nodes:
     executor: opencode
     profile: quality-reviewer@1
     workspace: *checkout
-    input: {map: "{'pr': nodes.pr.output}"}
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"}
     output_schema: schemas/findings.json
     timeout: 15m
     budget: {max_tool_calls: 15}
@@ -99,7 +102,7 @@ nodes:
     executor: opencode
     profile: finding-verifier@1
     workspace: *checkout
-    input: {map: "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"}
     output_schema: schemas/verification.json
     timeout: 25m
     budget: {max_tool_calls: 10}
