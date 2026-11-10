@@ -1,7 +1,10 @@
 {
   "type": "object",
   "properties": {
-    "summary": {"type": "string", "maxLength": 600},
+    "summary": {
+      "type": "string",
+      "maxLength": 600
+    },
     "questions": {
       "type": "array",
       "minItems": 0,
@@ -9,10 +12,25 @@
       "items": {
         "type": "object",
         "properties": {
-          "question": {"type": "string", "maxLength": 400},
-          "why": {"type": "string", "maxLength": 400}
+          "question": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          }
         },
-        "required": ["question", "why"],
+        "required": [
+          "question",
+          "why",
+          "recommendation"
+        ],
         "additionalProperties": false
       }
     },
@@ -23,21 +41,67 @@
       "items": {
         "type": "object",
         "properties": {
-          "name": {"type": "string", "maxLength": 120},
-          "delivers": {"type": "string", "maxLength": 800},
-          "cost": {"type": "string", "maxLength": 600},
-          "leaves_out": {"type": "string", "maxLength": 600},
-          "recommended": {"type": "boolean"},
-          "reason": {"type": "string", "maxLength": 600},
-          "counter": {"type": "string", "maxLength": 600}
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "delivers": {
+            "type": "string",
+            "maxLength": 800
+          },
+          "cost": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "leaves_out": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 600
+          },
+          "counter": {
+            "type": "string",
+            "maxLength": 600
+          }
         },
-        "required": ["name", "delivers", "cost", "leaves_out", "recommended"],
+        "required": [
+          "name",
+          "delivers",
+          "cost",
+          "leaves_out",
+          "recommended"
+        ],
         "additionalProperties": false
       }
     },
-    "assumptions": {"type": "array", "items": {"type": "string", "maxLength": 400}, "maxItems": 10},
-    "unknowns": {"type": "array", "items": {"type": "string", "maxLength": 400}, "maxItems": 10}
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 400
+      },
+      "maxItems": 10
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 400
+      },
+      "maxItems": 10
+    }
   },
-  "required": ["summary", "questions", "approaches", "assumptions", "unknowns"],
+  "required": [
+    "summary",
+    "questions",
+    "approaches",
+    "assumptions",
+    "unknowns"
+  ],
   "additionalProperties": false
 }

@@ -1,3 +1,4 @@
+import { Ajv2020 } from 'ajv/dist/2020.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,15 +32,27 @@ const PY: string[] = (() => {
   }
   throw new Error('no Python 3 found (tried python3, python, py -3)');
 })();
-// The worker runs scripts with UTF-8 forced: Python on Windows would otherwise read piped input in the legacy code page.
-const run = (script: string, input: unknown) =>
-  JSON.parse(
+const ajv = new Ajv2020({ allErrors: true, strict: false });
+/**
+ * Runs a script the way the worker does (UTF-8 forced: Python on Windows would otherwise read piped input in the legacy
+ * code page) and checks what it printed against the schema the package declares for it. The engine rejects an output its
+ * schema does not allow, so a script and a schema that disagree must fail here and not only in a run.
+ */
+const run = (script: string, input: unknown) => {
+  const out = JSON.parse(
     execFileSync(PY[0]!, [...PY.slice(1), join(PKG, 'scripts', script)], {
       input: JSON.stringify(input),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
     }).toString(),
   );
+  const schemaPath = join(PKG, 'schemas', script.replace(/\.py$/, '.json'));
+  if (existsSync(schemaPath)) {
+    const validate = ajv.compile(JSON.parse(readFileSync(schemaPath, 'utf8')));
+    if (!validate(out)) throw new Error(`${script} printed ${JSON.stringify(out).slice(0, 300)}, which ${schemaPath} refuses: ${ajv.errorsText(validate.errors)}`);
+  }
+  return out;
+};
 
 const files = (dir: string): string[] => readdirSync(dir).flatMap((f) => (statSync(join(dir, f)).isDirectory() ? files(join(dir, f)) : [join(dir, f)]));
 
@@ -148,12 +161,24 @@ describe('SDD Factory example: definition', () => {
     expect(planNodes.has('deliver_stories_21_story')).toBe(false);
   });
 
-  it('asks for the autonomy, supervised only, and the mode step always answers supervised', () => {
+  it('gives the planner the brainstorm questions with their recommendations, so an empty answer takes the recommendation', () => {
+    const input = byId.get('plan_release').input.map as string;
+    expect(input).toContain("'questions': nodes.brainstorm.output.questions");
+    expect(input).toContain("'answers':");
+    const answers = byId.get('brainstorm_review').decision_schema.properties.answers.description as string;
+    expect(answers).toContain('recommendation');
+  });
+
+  it('asks which mode to run in, supervised unless auto is chosen, and says what each means', () => {
     const a = byId.get('autonomy');
     expect(a).toMatchObject({ type: 'approval', role: 'author', expires_in: '72h', on_expiry: 'reject' });
     expect(a.decision_schema.additionalProperties).toBe(false);
-    expect(a.decision_schema.properties.mode).toMatchObject({ type: 'string', enum: ['supervised'], default: 'supervised' });
+    expect(a.decision_schema.properties.mode).toMatchObject({ type: 'string', enum: ['supervised', 'auto'], default: 'supervised' });
+    // Not choosing is supervised: an unattended run needs a clear yes.
     expect(a.decision_schema.required).toBeUndefined();
+    expect(a.message.cel).toContain('supervised');
+    expect(a.message.cel).toContain('auto');
+    expect(a.message.cel).toContain('Slack');
     expect(byId.get('has_stories').routes).toEqual({ yes: ['autonomy'], no: [] });
   });
 
@@ -487,8 +512,10 @@ describe('SDD Factory example: release_outcome.py', () => {
 });
 
 describe('SDD Factory example: mode.py', () => {
-  it('is supervised, whatever the approval holds', () => {
-    for (const data of [{ mode: 'supervised' }, {}, null, { mode: 'auto' }, { mode: 'AUTO' }, { mode: ['auto'] }, { mode: 1 }, 'auto', [], { mode: 'supervised ' }]) {
+  it('is auto only when the approval clearly says auto, and supervised for everything else', () => {
+    expect(run('mode.py', { data: { mode: 'auto' } })).toEqual({ mode: 'auto' });
+    expect(run('mode.py', { data: { mode: 'supervised' } })).toEqual({ mode: 'supervised' });
+    for (const data of [{}, null, { mode: 'AUTO' }, { mode: 'Auto' }, { mode: ' auto' }, { mode: 'auto ' }, { mode: ['auto'] }, { mode: 1 }, { mode: true }, 'auto', ['auto'], [], { mode: 'supervised ' }, { mode: 'unattended' }]) {
       expect(run('mode.py', { data }), JSON.stringify(data)).toEqual({ mode: 'supervised' });
     }
     expect(run('mode.py', {})).toEqual({ mode: 'supervised' });

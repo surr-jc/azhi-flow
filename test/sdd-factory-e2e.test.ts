@@ -26,7 +26,7 @@ const WRITE_TOKEN = 'ghp_write_factory_2';
 
 const brainstorm = {
   summary: 'Customers cannot pay by card yet.',
-  questions: [{ question: 'Which countries must be supported?', why: 'Decides the payment provider.' }],
+  questions: [{ question: 'Which countries must be supported?', why: 'Decides the payment provider.', recommendation: 'The UK only, to start' }],
   approaches: [{ name: 'Walking skeleton first', delivers: 'One card payment end to end.', cost: 'Little polish.', leaves_out: 'Refunds', recommended: true, reason: 'Smallest path a user can walk.', counter: 'Refunds wait.' }],
   assumptions: ['Cards only'],
   unknowns: ['Which provider'],
@@ -201,6 +201,8 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;
   const saved = process.env.AZHI_EGRESS_ALLOW;
   let factory: string;
+  /** What the person was shown at the brainstorm, in the last run started. */
+  let brainstormRequest: any;
 
   beforeAll(async () => {
     process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
@@ -238,13 +240,14 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
       await h.api.post(`/v1/versions/${v.version.id}/publish`, {});
     }
     const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: factory, inputs: { source: 'github', repo: REPO, base_branch: 'dev', goal: 'Let customers pay by card' } });
-    await waitForApprovalOn(h.api, run_id, 'brainstorm_review');
+    const asked = await waitForApprovalOn(h.api, run_id, 'brainstorm_review');
+    brainstormRequest = asked.approvals.find((a: any) => a.node_id === 'brainstorm_review').request;
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'brainstorm_review', decision: 'approved', data: { approach: 'Walking skeleton first', answers: 'UK only.' } });
     await waitForApprovalOn(h.api, run_id, 'prd_review');
     await h.api.post(`/v1/runs/${run_id}/approvals`, { node: 'prd_review', decision: 'approved', data: { drop } });
     return run_id;
   };
-  const approve = (run_id: string, node: string, decision: 'approved' | 'rejected' = 'approved') => h.api.post(`/v1/runs/${run_id}/approvals`, { node, decision });
+  const approve = (run_id: string, node: string, decision: 'approved' | 'rejected' = 'approved', data?: Record<string, unknown>) => h.api.post(`/v1/runs/${run_id}/approvals`, { node, decision, ...(data ? { data } : {}) });
   const out = (d: any, id: string) => d.attempts.filter((a: any) => a.node_id === id && a.state === 'succeeded').at(-1)?.output;
   const state = (d: any, id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.state ?? 'not run';
   const stories = (d: any) => d.attempts.filter((a: any) => /^deliver_stories_\d+_story$/.test(a.node_id) && a.state === 'succeeded').sort((a: any, b: any) => a.node_id.localeCompare(b.node_id, undefined, { numeric: true })).map((a: any) => a.output);
@@ -298,6 +301,24 @@ describe.skipIf(!up)('sdd-factory end to end (scripted agents, stand-in children
     expect(childrenOf(done, 'sdd-story').map((c: any) => c.state)).toEqual(['succeeded', 'succeeded', 'succeeded']);
     expect(childrenOf(done, 'ai-sdlc-factory-verify').map((c: any) => c.state)).toEqual(['succeeded']);
     expect(done.approvals.map((a: any) => a.node_id)).toEqual(['brainstorm_review', 'prd_review', 'autonomy']);
+  }, SLOW);
+
+  it('shows each brainstorm question with its recommendation, and runs every Story in the mode the person chose', async () => {
+    const run_id = await start({ split: 'split' }, '2');
+    expect(brainstormRequest.payload.questions).toEqual([{ question: 'Which countries must be supported?', why: 'Decides the payment provider.', recommendation: 'The UK only, to start' }]);
+    expect(brainstormRequest.message).toContain('question(s)');
+    const asked = await waitForApprovalOn(h.api, run_id, 'autonomy');
+    expect(asked.approvals.find((a: any) => a.node_id === 'autonomy').request.message).toContain('auto');
+    // Choosing auto is a decision of its own; the schema refuses anything else.
+    await expect(approve(run_id, 'autonomy', 'approved', { mode: 'unattended' })).rejects.toThrow(/decision schema/);
+    await approve(run_id, 'autonomy', 'approved', { mode: 'auto' });
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(out(done, 'mode')).toEqual({ mode: 'auto' });
+    const ran = stories(done);
+    expect(ran).toHaveLength(2);
+    for (const s of ran) expect(s.nodes.echo.mode).toBe('auto');
+    expect(out(done, 'summary')).toMatchObject({ status: 'delivered', signed_off: 2, total: 2 });
   }, SLOW);
 
   it('stops at the first Story that is not signed off: nothing is stacked on it, the release is not checked, and the summary names it', async () => {

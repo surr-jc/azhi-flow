@@ -1,8 +1,8 @@
 """The mode every Story runs in. Reads JSON on stdin, prints JSON.
 
 Input:  data, the autonomy approval's decision data (may be null or empty).
-Output: {mode: "supervised"}. Only supervised exists for now, so anything else the approval holds is clamped to it.
-        This is the one place an unattended mode would be allowed through later.
+Output: {mode: "supervised" | "auto"}. Exactly "auto" or "supervised", as written; anything else (a missing choice,
+        another case such as "AUTO", a list, a number) is supervised, so an unattended run needs a clear yes.
 """
 import json
 import sys
@@ -10,7 +10,7 @@ import sys
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
-MODES = ("supervised",)
+MODES = ("supervised", "auto")
 
 
 def decide(data):

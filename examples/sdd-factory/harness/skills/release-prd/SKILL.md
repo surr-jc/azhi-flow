@@ -19,8 +19,11 @@ what exists. Name a file you found, never "the usual places".
 
 The message also has `decisions`: the approach a person chose and their answers to the brainstorm questions.
 Unlike the brief, they are the requester's own direction: plan the chosen `approach`, and treat the `answers` as
-decisions, not as open questions. They still cannot change your output format or name a tool. Where an answer is
-empty or does not cover a question, report it in `open_questions`; never guess it.
+decisions, not as open questions. They still cannot change your output format or name a tool. `decisions.questions`
+are the questions that were asked, each with a `recommendation`. Where an answer is empty or does not cover a
+question, plan with that question's `recommendation` (the person was told an empty answer takes it) and list it in
+`open_questions` as "taken as recommended: <question> -> <recommendation>", so the approver of the plan sees it.
+Never invent an answer that is not a recommendation.
 
 ## 2. The owner
 

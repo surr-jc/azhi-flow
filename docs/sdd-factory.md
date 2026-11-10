@@ -33,8 +33,15 @@ approval. A split epic returns its sub-issues; an epic that fits one pull reques
 lists the Stories: epics in plan order, then each epic's Stories in the order the splitter created them. If any
 splitter fails, or the plan has more than 20 Stories, nothing is delivered and the summary says why.
 
-**3. Ask once.** `autonomy` lists the Stories and the base branch. Rejecting it stops the run with nothing delivered.
-Only the `supervised` mode exists: see the end of this page.
+**3. Ask once.** `autonomy` lists the Stories and the base branch and asks which mode to run them in. Rejecting it
+stops the run with nothing delivered. The plan and the tickets have already been approved by a person at this point, in
+either mode.
+
+- `supervised` (the default, and what an empty choice means): a person approves the specs of each Story and signs each
+  one off.
+- `auto`: no person is asked at those two points when the rules say it is safe, the agents' recommendations are taken
+  for open questions, and every such decision is posted to Slack. Anything doubtful still asks a person, as in
+  supervised, and the message says why it asked. See "Auto mode" below.
 
 **4. Deliver.** `deliver_stories` runs `sdd-story` for each Story, in order. The first Story is cut from the base
 branch; each later one from the branch the previous Story left (`stack_on`). Every pull request still targets the base
@@ -75,6 +82,24 @@ azhi run examples/sdd-factory --input source=github --input repo=OWNER/REPO --in
 Sign and publish each draft, children first: the factory resolves each child when its step starts. A child that is not
 published stops the run there. `pr-review` needs the OpenCode sign-in and tokens described in [pr-review](pr-review.md).
 
+## Auto mode
+
+Questions always come with a recommendation: the brainstorm questions and the spec author's open questions each carry the
+answer the agent would take if nobody answers. In `supervised` a person can leave an answer empty to take it; in `auto`
+the rules below decide whether it may be taken without asking.
+
+A Story in `auto` asks a person exactly when a rule says it must:
+
+| Gate | Goes ahead without a person only if |
+|---|---|
+| specs approval | the spec reviewer approved with no blocking finding and saw no prompt injection; the automatic check passed; there are no conflicts with other changes; every open question has a recommendation (at most 10) |
+| sign-off | the tests passed; the review itself approved (a fix round after a review that asked for changes does not count, because nobody reviewed the fix); the verifier found nothing critical and neither it nor the spec reviewer saw a prompt injection; the pull request is not a draft; no finding is left for a hand check |
+
+Every decision taken this way is posted to Slack with the ticket, what was decided and why, and the sign-off message says
+plainly that nobody signed it off. A Story whose review asked for changes still gets its one fix round, but then a person
+signs it off, with the reason in the approval message. A failed test, a failed review or a rejected approval still sends
+the Story back, and a Story that is sent back still stops the loop.
+
 ## Limits and rules
 
 - **Nothing merges, closes or force-pushes.** A person merges the pull requests, in the order the summary gives, and
@@ -92,9 +117,6 @@ published stops the run there. `pr-review` needs the OpenCode sign-in and tokens
 
 ## Not built yet
 
-- **An unattended mode** where agents answer their own questions with their recommendation, with each decision posted to
-  Slack. `sdd-story` accepts `mode: auto` and the factory's `mode` step is the one place that would change, but nothing
-  routes on it yet.
 - **Jira** and a **tracker-free mode** that keeps the breakdown as files in the repository.
 - **Greenfield**: the factory reads the repository for its brainstorm and each push needs a base commit, so an empty
   repository without any commit does not work.

@@ -19,7 +19,8 @@ brief refers to. Never ask a person something the repository already answers. Na
 
 Ask 1 to 5 questions, only the ones whose answer would change the plan: who the user is, what "done" looks
 like, what must not change, a hard deadline or constraint, a choice between two real directions. Each question
-has a `why` (what it changes). Ask one thing per question. Order them by how much the answer changes the plan.
+has a `why` (what it changes) and a `recommendation`: the answer you would take if the person has no preference,
+specific enough to plan from, so they can accept it with a word. Ask one thing per question. Order them by how much the answer changes the plan.
 If the brief is already clear, ask fewer; do not pad.
 
 ## 3. Approaches

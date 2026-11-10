@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-factory",
-    "definitionHash": "sha256:f953d2e6304ab1220fefd0b3f569c271bccbb33f5942f11f95f72fd9c3bce72a",
+    "definitionHash": "sha256:6ffce47272918f948e6048f3592dad3b5caf74100419234fb0cfd6b1e477f7f2",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -312,7 +312,7 @@
                 "type": "string",
                 "maxLength": 6000,
                 "title": "Answers",
-                "description": "One answer per question, in order. Leave empty when there were no questions. They are treated as decisions by the planner."
+                "description": "One answer per question, in order. Leave a question's answer empty to take its recommendation. They are treated as decisions by the planner."
               }
             },
             "required": [
@@ -350,10 +350,12 @@
         "id": "plan_release",
         "type": "agent",
         "deps": [
+          "brainstorm",
           "brainstorm_review",
           "brief"
         ],
         "dataDeps": [
+          "brainstorm",
           "brainstorm_review",
           "brief"
         ],
@@ -374,7 +376,7 @@
             "depth": 1
           },
           "input": {
-            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
+            "map": "{'brief': nodes.brief.output, 'repository': inputs.repo, 'limits': {'max_epics': 3}, 'decisions': {'questions': nodes.brainstorm.output.questions, 'approach': nodes.brainstorm_review.output.data.approach, 'answers': has(nodes.brainstorm_review.output.data.answers) ? nodes.brainstorm_review.output.data.answers : ''}}"
           },
           "output_schema": "schemas/prd.json",
           "timeout": "25m",
@@ -1252,7 +1254,7 @@
           "description": "A person confirms what will be delivered before the first Story starts; rejecting it stops the run with nothing delivered. Answer in mission control, with azhi approve, or from the Slack approval message.",
           "role": "author",
           "message": {
-            "cel": "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Reject to stop with nothing delivered.'"
+            "cel": "'Deliver ' + string(nodes.order.output.count) + ' Story(ies) from ' + inputs.repo + ' into ' + inputs.base_branch + '? Each becomes a branch stacked on the one before and a pull request into ' + inputs.base_branch + '. Choose the mode: supervised (a person approves the specs of each Story and signs each one off) or auto (the recommendations of the agents are taken where the rules say it is safe, every such decision is posted to Slack, and anything doubtful still asks). Leaving it empty is supervised. Reject to stop with nothing delivered.'"
           },
           "payload": {
             "map": "{'repository': inputs.repo, 'base_branch': inputs.base_branch, 'prd_title': nodes.plan_release.output.title, 'stories': nodes.order.output.stories}"
@@ -1263,11 +1265,12 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "supervised"
+                  "supervised",
+                  "auto"
                 ],
                 "default": "supervised",
                 "title": "Mode",
-                "description": "Every Story's specs and sign-off are approved by a person. An unattended mode that follows the agents' recommendations is not available yet."
+                "description": "supervised: a person approves every Story's specs and signs every Story off. auto: no person is asked at those two points when the rules say it is safe (reviewers approved, tests passed, nothing critical), the agents' recommendations are taken for open questions, and each decision is posted to Slack; anything doubtful still asks. The plan and the tickets were already approved by a person."
               }
             },
             "additionalProperties": false
@@ -1314,7 +1317,7 @@
         "def": {
           "id": "mode",
           "type": "script",
-          "description": "The mode every Story runs in. Always supervised for now; this is the one place an unattended mode would change.",
+          "description": "The mode every Story runs in - what the person chose, and supervised unless they clearly chose auto.",
           "runtime": "python",
           "entrypoint": "scripts/mode.py",
           "input": {

@@ -3,7 +3,8 @@
   "properties": {
     "mode": {
       "enum": [
-        "supervised"
+        "supervised",
+        "auto"
       ]
     }
   },
