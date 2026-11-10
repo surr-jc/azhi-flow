@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "description": "The ticket that ran, GitHub or files: the nine fields ticket.normalize returns.",
+  "properties": {
+    "source": {"type": "string"},
+    "key": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "maxLength": 200},
+    "description": {"type": "string"},
+    "priority": {"type": "string"},
+    "reporter": {"type": "string"},
+    "status": {"type": "string"},
+    "labels": {"type": "array", "maxItems": 50, "items": {"type": "string"}},
+    "url": {"type": "string"}
+  },
+  "required": ["source", "key", "title", "description", "priority", "reporter", "status", "labels", "url"],
+  "additionalProperties": false
+}

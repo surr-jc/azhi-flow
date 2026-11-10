@@ -81,11 +81,11 @@ describe('SDD Story example: definition', () => {
 
   it('takes stack_on and mode as inputs and keeps base_branch required', () => {
     const inputs = def.inputs as any;
-    expect(inputs.required).toEqual(expect.arrayContaining(['source', 'ticket', 'repo', 'base_branch']));
+    expect(inputs.required).toEqual(['source', 'repo', 'base_branch']);
     expect(inputs.required).not.toContain('stack_on');
     expect(inputs.properties.stack_on).toMatchObject({ type: 'string', maxLength: 200, pattern: '^[A-Za-z0-9._/-]*$' });
     expect(inputs.properties.mode).toMatchObject({ enum: ['supervised', 'auto'], default: 'supervised' });
-    expect(inputs.properties.source.enum).toEqual(['github']);
+    expect(inputs.properties.source.enum).toEqual(['github', 'files']);
   });
 
   it('uses the repository\'s own tests, not a fixed command', () => {
@@ -103,7 +103,7 @@ describe('SDD Story example: definition', () => {
   it('pushes before the review, has one review and one fix round, and drops the release approval', () => {
     expect(byId.has('release_approval')).toBe(false);
     expect(byId.get('release_gate').routes.ship).toEqual(['archive']);
-    expect(byId.get('archive_gate').routes.ok).toEqual(['push_branch']);
+    expect(byId.get('archive_gate').routes.ok).toEqual(['push_files']);
     const review = byId.get('review');
     expect(review).toMatchObject({ type: 'subworkflow', workflow: 'pr-review', on_failure: 'continue', timeout: '2h' });
     expect(review.input.offer_merge).toBe(false);
@@ -115,7 +115,7 @@ describe('SDD Story example: definition', () => {
     expect(byId.get('review_gate').default).toBe('unavailable');
     expect(byId.get('fix')).toMatchObject({ profile: 'fixer@1' });
     expect(byId.get('fix').workspace).toMatchObject({ mode: 'write', from: { ref: 'nodes.archive.output.workspace' } });
-    expect(byId.get('fix_gate').routes.ok).toEqual(expect.arrayContaining(['push_fix']));
+    expect(byId.get('fix_gate').routes.ok).toEqual(expect.arrayContaining(['push_fix_files', 'fix_done']));
     expect(byId.get('fix_gate').routes.fail).toEqual(['fix_fail_message']);
     // The findings are untrusted text: they are data in the agent's input, never a command.
     expect(JSON.stringify(byId.get('fix').input)).toContain('nodes.review_outcome.output.fix_now');
@@ -127,7 +127,8 @@ describe('SDD Story example: definition', () => {
     expect(byId.get('signoff')).toMatchObject({ type: 'approval', role: 'admin', expires_in: '72h', on_expiry: 'reject' });
     const label = byId.get('label_ticket');
     expect(label.tool).toBe('github.label-issue@1');
-    expect(label.depends_on).toEqual(['signoff_decision']);
+    expect(label.depends_on).toEqual(['label_choice']);
+    expect(byId.get('label_choice')).toMatchObject({ type: 'condition', expression: 'inputs.source', depends_on: ['signoff_decision'], routes: { github: ['label_ticket'], files: [] } });
     expect(label.guard).toContain("nodes.signoff_decision.output.decision == 'approved'");
     expect(label.guard).toContain('args.repo == inputs.repo');
     expect(label.guard).toContain('nodes.github_issue.output.number');
@@ -135,6 +136,8 @@ describe('SDD Story example: definition', () => {
     expect((def.config as any).signed_off_label).toBe('sdd-signed-off');
     expect(byId.get('story_notify').guard).toBe('args.channel == config.channel');
     expect(byId.get('summary').depends_on).toContain('story_notify');
+    // The announcement waits for the sign-off, not for the label, so a Story from files (no label) still announces.
+    expect(byId.get('story_notify').depends_on).toEqual(['signoff_decision']);
     // The payload says the fix was tested but not re-reviewed.
     expect(JSON.stringify(byId.get('signoff').payload)).toContain('tested but not reviewed again');
     expect(JSON.stringify(byId.get('signoff').message)).toContain('not reviewed again');
@@ -282,7 +285,8 @@ describe('SDD Story scripts: result.py', () => {
 describe('SDD Story scripts: fix_done.py, signoff_state.py and pick_change.py', () => {
   it('summarises the fix round as tested and not re-reviewed, with null for what is unknown', () => {
     const o = run('fix_done.py', { fix: { summary: 'Fixed the loop.', fixed: ['Off by one: bound'], skipped: [] }, tests: { status: 'passed', attempts: 2 }, pushed: { commit_sha: 'b'.repeat(40) } });
-    expect(o).toEqual({ ran: true, summary: 'Fixed the loop.', fixed: ['Off by one: bound'], skipped: [], tests_status: 'passed', tests_attempts: 2, commit_sha: 'b'.repeat(40), re_reviewed: false });
+    expect(o).toEqual({ ran: true, summary: 'Fixed the loop.', fixed: ['Off by one: bound'], skipped: [], tests_status: 'passed', tests_attempts: 2, commit_sha: 'b'.repeat(40), re_reviewed: false, extra_files_ignored: [] });
+    expect(run('fix_done.py', { extra_files_ignored: ['docs/release/r/a..b.md', 7] }).extra_files_ignored).toEqual(['docs/release/r/a..b.md']);
     expect(run('fix_done.py', {})).toMatchObject({ ran: true, summary: null, tests_status: null, tests_attempts: null, commit_sha: null, re_reviewed: false });
   });
 
@@ -591,5 +595,298 @@ describe('SDD Story scripts: signoff_auto.py and signoff_decision.py', () => {
     for (const input of [{ person: { decision: 'expired', by: 'alice' }, auto: null }, { person: { decision: 'approved' }, auto: null }, { person: null, auto: { decision: 'rejected', by: 'auto' } }, { person: null, auto: { decision: 'approved', by: 'alice' } }, { person: null, auto: null }, {}, [], null]) {
       expect(run('signoff_decision.py', input), JSON.stringify(input)).toEqual(none);
     }
+  });
+});
+
+// ---- source: files ---------------------------------------------------------------------------------------------------
+
+/** Runs a script that must refuse its input: it exits with an error and prints no result. */
+const refuses = (script: string, input: unknown): string => {
+  const r = spawnSync(PY[0]!, [...PY.slice(1), join(PKG, 'scripts', script)], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } });
+  expect(r.status, `${script} accepted ${JSON.stringify(input).slice(0, 200)}`).not.toBe(0);
+  expect(r.stdout).toBe('');
+  return r.stderr;
+};
+
+describe('SDD Story example: source files', () => {
+  const plan = compile(def, { pkg, catalog: staticCatalog(tools) }).plan!;
+  const deps = new Map(plan.nodes.map((n) => [n.id, n.deps]));
+
+  it('reads the ticket from one of two alternatives, joined by a step that reads only those two', () => {
+    expect(byId.get('source').routes).toEqual({ github: ['github_issue'], files: ['files_ticket'] });
+    expect(byId.get('intake')).toMatchObject({ type: 'script', merge: 'any', depends_on: ['intake_github', 'files_ticket'], output_schema: 'schemas/intake.json' });
+    expect(byId.get('intake_github')).toMatchObject({ type: 'tool', tool: 'ticket.normalize@1' });
+    // A join runs unless all its dependencies were skipped: it must read nothing else, least of all a step that always runs.
+    expect(deps.get('intake')).toEqual(['files_ticket', 'intake_github']);
+    expect(deps.get('change_id')).toEqual(['intake']);
+  });
+
+  it('reads the GitHub issue only on the github path', () => {
+    const readers = plan.nodes.filter((n) => n.deps.includes('github_issue') || n.deps.includes('intake_github') || n.deps.includes('label_ticket') || n.deps.includes('label_choice')).map((n) => n.id);
+    expect(readers.sort()).toEqual(['intake', 'intake_github', 'label_ticket']);
+    expect(deps.get('label_choice')).toEqual(['signoff_decision']);
+    expect(deps.get('label_ticket')).toEqual(expect.arrayContaining(['label_choice', 'github_issue']));
+  });
+
+  it('reaches story_notify, summary and result after a sign-off whichever source it came from', () => {
+    // After a sign-off these steps must not wait for anything only the github path runs.
+    for (const id of ['story_notify', 'summary', 'result', 'signoff', 'push_files', 'push_branch', 'open_pr', 'push_fix_files', 'push_fix', 'fix_done']) {
+      for (const github of ['github_issue', 'intake_github', 'label_ticket', 'label_choice']) expect(deps.get(id), `${id} reads ${github}`).not.toContain(github);
+    }
+    expect(deps.get('story_notify')).toEqual(expect.arrayContaining(['signoff_decision']));
+    expect(deps.get('story_notify')).not.toContain('files_ticket');
+    expect(deps.get('summary')).toContain('story_notify');
+    expect(deps.get('result')).toContain('summary');
+    expect(deps.get('result')).not.toContain('label_ticket');
+  });
+
+  it('takes the story_key, the story and the extra files as inputs, and requires them by source', () => {
+    const inputs = def.inputs as any;
+    expect(inputs.properties.story_key).toMatchObject({ type: 'string', pattern: '^([a-z0-9][a-z0-9-]{0,60})?$' });
+    expect(inputs.properties.story_title).toMatchObject({ type: 'string', maxLength: 200 });
+    expect(inputs.properties.story_body).toMatchObject({ type: 'string', maxLength: 19000 });
+    expect(inputs.properties.extra_files).toMatchObject({ type: 'array', maxItems: 3 });
+    expect(inputs.properties.extra_files.items).toMatchObject({ additionalProperties: false, required: ['path', 'content'] });
+    expect(inputs.properties.extra_files.items.properties.content.maxLength).toBe(60000);
+    expect(inputs.required).not.toContain('ticket');
+    expect(inputs.required).not.toContain('story_key');
+  });
+
+  it('puts the extra files in both pushes, and a ticket url in the pull request only when there is one', () => {
+    expect(byId.get('push_branch').arguments.files).toEqual({ ref: 'nodes.push_files.output.files' });
+    expect(byId.get('push_fix').arguments.files).toEqual({ ref: 'nodes.push_fix_files.output.files' });
+    expect(byId.get('push_files').input.map).toContain("'agent_files': nodes.archive.output.workspace.files");
+    expect(byId.get('push_fix_files').input.map).toContain("'agent_files': nodes.fix.output.workspace.files");
+    for (const id of ['push_files', 'push_fix_files']) {
+      expect(byId.get(id), id).toMatchObject({ type: 'script', entrypoint: 'scripts/push_files.py', output_schema: 'schemas/push_files.json' });
+      expect(byId.get(id).input.map, id).toContain("'extra_files': has(inputs.extra_files) ? inputs.extra_files : []");
+    }
+    // The guards are unchanged: pinned to the repository and branch, and to an approved decision.
+    for (const id of ['push_branch', 'push_fix']) expect(byId.get(id).guard, id).toBe("args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.specs_decision.output.by != null");
+    expect(JSON.stringify(byId.get('open_pr').arguments.body)).toContain("nodes.intake.output.url != '' ? ' ' + nodes.intake.output.url : ''");
+    expect(JSON.stringify(byId.get('signoff').payload)).toContain('extra_files_ignored');
+    expect(deps.get('signoff')).toEqual(expect.arrayContaining(['push_files']));
+  });
+});
+
+describe('SDD Story example: the input schema', () => {
+  const validate = ajv.compile(def.inputs as object);
+  const base = { repo: 'acme/shop', base_branch: 'dev' };
+  const gh = { ...base, source: 'github', ticket: 'acme/shop#42' };
+  const files = { ...base, source: 'files', ticket: '', story_key: 'my-release-s2', story_title: 'Apply the discount', story_body: '## Story\nAs a shopper...' };
+  const doc = { path: 'docs/release/my-release/breakdown.md', content: '# Breakdown\n' };
+  const ok = (input: unknown) => expect(validate(input), ajv.errorsText(validate.errors)).toBe(true);
+  const bad = (input: unknown) => expect(validate(input), JSON.stringify(input).slice(0, 200)).toBe(false);
+
+  it('accepts a github Story and a files Story', () => {
+    ok(gh);
+    ok(files);
+    ok({ ...files, ticket: undefined });
+    ok({ ...files, extra_files: [doc] });
+    ok({ ...gh, stack_on: 'azhi/my-release-s1', mode: 'auto' });
+  });
+
+  it('requires a ticket for github, and the key, title and body for files', () => {
+    bad({ ...gh, ticket: undefined });
+    bad({ ...gh, ticket: '' });
+    for (const k of ['story_key', 'story_title', 'story_body']) {
+      bad({ ...files, [k]: undefined });
+      bad({ ...files, [k]: '' });
+    }
+    bad({ ...base, source: 'jira', ticket: 'PAY-1' });
+    bad({ ...base, ticket: 'acme/shop#42' });
+  });
+
+  it('refuses a ticket on a files Story', () => {
+    bad({ ...files, ticket: 'acme/shop#42' });
+  });
+
+  it('validates the values that do not belong to the source when they are empty', () => {
+    ok({ ...gh, story_key: '', story_title: '', story_body: '', extra_files: [] });
+    ok({ ...files, ticket: '', stack_on: '', extra_files: [] });
+  });
+
+  it('limits the key, the title, the body and the extra files', () => {
+    ok({ ...files, story_key: 'a'.repeat(61) });
+    bad({ ...files, story_key: 'a'.repeat(62) });
+    for (const key of ['My-Release', '-s1', 'a/b', 'a#1', 'a b']) bad({ ...files, story_key: key });
+    ok({ ...files, story_title: 'x'.repeat(200), story_body: 'y'.repeat(19000) });
+    bad({ ...files, story_title: 'x'.repeat(201) });
+    bad({ ...files, story_body: 'y'.repeat(19001) });
+    ok({ ...files, extra_files: [doc, doc, doc] });
+    bad({ ...files, extra_files: [doc, doc, doc, doc] });
+    ok({ ...files, extra_files: [{ ...doc, content: 'c'.repeat(60000) }] });
+    bad({ ...files, extra_files: [{ ...doc, content: 'c'.repeat(60001) }] });
+    bad({ ...files, extra_files: [{ ...doc, extra: 1 }] });
+    bad({ ...files, extra_files: [{ path: doc.path }] });
+    for (const path of ['src/a.md', 'docs/release/a.md', 'docs/release/R1/a.md', 'docs/release/r1/a.txt', '/docs/release/r1/a.md', 'docs/release/r1/sub/a.md', 'docs/release/r1/a.md\n']) bad({ ...files, extra_files: [{ ...doc, path }] });
+  });
+});
+
+describe('SDD Story scripts: files_ticket.py', () => {
+  const input = (o: Record<string, unknown> = {}) => ({ key: 'my-release-s2', title: 'Apply the discount', body: '## Story\nAs a shopper I get 10% off.', ...o });
+
+  it('returns the nine fields of a ticket, with the key, one-line title and the body', () => {
+    expect(run('files_ticket.py', input())).toEqual({ source: 'files', key: 'my-release-s2', title: 'Apply the discount', description: '## Story\nAs a shopper I get 10% off.', priority: '', reporter: '', status: '', labels: [], url: '' });
+  });
+
+  it('produces what the change id and the branch name need from a key without # or /', () => {
+    const t = run('files_ticket.py', input());
+    const id = run('pick_change_id.py', { key: t.key, title: t.title });
+    expect(id.id).toBe('my-release-s2-apply-the-discount');
+    expect(`azhi/${t.key}`).toMatch(/^azhi\/[a-z0-9][a-z0-9-]*$/);
+    expect(`azhi/${t.key}`).toMatch(/^[A-Za-z0-9._/-]*$/);
+    for (const key of ['a', '0', 'a'.repeat(61), 's-1']) expect(run('files_ticket.py', input({ key })).key).toBe(key);
+  });
+
+  it('fails closed on a key that is not valid', () => {
+    for (const key of ['', 'My-Release', '-s1', 'a/b', 'a#1', 'a b', 'a'.repeat(62), '\u00fc', 'a\n', null, 7, undefined]) refuses('files_ticket.py', input({ key }));
+  });
+
+  it('fails closed on an empty or unreadable title', () => {
+    for (const title of ['', '   ', '<>', '\u0007\n\t', '\u200b', null, 5]) refuses('files_ticket.py', input({ title }));
+  });
+
+  it('fails closed on an empty or unreadable body', () => {
+    for (const body of ['', ' \n\t ', '\u0007', null, ['x']]) refuses('files_ticket.py', input({ body }));
+    for (const bad of [null, 'x', [], 3]) refuses('files_ticket.py', bad);
+    refuses('files_ticket.py', {});
+  });
+
+  it('cuts a 30000-character body to 20000 and a long title to 200', () => {
+    const o = run('files_ticket.py', input({ body: 'b'.repeat(30000), title: 't'.repeat(300) }));
+    expect(o.description).toHaveLength(20000);
+    expect(o.title).toHaveLength(200);
+  });
+
+  it('cleans a hostile title to one line without angle brackets or control characters', () => {
+    const o = run('files_ticket.py', input({ title: '<!channel>\nline\u0007two\u200b\r\n <@U123>\u0000end' }));
+    expect(o.title).toBe('!channel line two @U123 end');
+    expect(o.title).not.toMatch(/[<>\r\n\u0000-\u001f]/);
+  });
+
+  it('keeps the newlines and tabs of the body and removes its other control characters', () => {
+    const o = run('files_ticket.py', input({ body: 'a\u0007b\r\nc\td\re\u0000f\u200bg\u202eh' }));
+    expect(o.description).toBe('ab\nc\td\nefgh');
+  });
+});
+
+describe('SDD Story scripts: intake.py', () => {
+  const ticket = (o: Record<string, unknown> = {}) => ({ source: 'github', key: 'acme/shop#42', title: 'Apply the discount', description: 'Body', priority: 'high', reporter: 'ann', status: 'open', labels: ['bug'], url: 'https://github.com/acme/shop/issues/42', ...o });
+  const files = run('files_ticket.py', { key: 'my-release-s2', title: 'Apply the discount', body: 'Body' });
+
+  it('passes on the GitHub ticket, with its nine fields', () => {
+    expect(run('intake.py', { github: ticket(), files: null })).toEqual(ticket());
+  });
+
+  it('passes on the files ticket', () => {
+    expect(run('intake.py', { github: null, files })).toEqual(files);
+  });
+
+  it('keeps only the nine fields, with empty text and [] for what is missing', () => {
+    expect(run('intake.py', { github: { ...ticket(), extra: 'x' }, files: null })).not.toHaveProperty('extra');
+    expect(run('intake.py', { github: { key: 'acme/shop#1' } })).toEqual({ source: '', key: 'acme/shop#1', title: '', description: '', priority: '', reporter: '', status: '', labels: [], url: '' });
+    expect(run('intake.py', { github: ticket({ labels: ['a', 3, 'b'] }) }).labels).toEqual(['a', 'b']);
+    expect(run('intake.py', { github: ticket({ labels: 'bug', url: null }) })).toMatchObject({ labels: [], url: '' });
+  });
+
+  it('fails closed with neither ticket, both tickets, or a ticket without a key', () => {
+    refuses('intake.py', { github: null, files: null });
+    refuses('intake.py', {});
+    refuses('intake.py', { github: 'x', files: [] });
+    refuses('intake.py', { github: ticket(), files });
+    refuses('intake.py', { github: ticket({ key: '' }), files: null });
+    refuses('intake.py', { github: { title: 't' }, files: null });
+    refuses('intake.py', []);
+    refuses('intake.py', null);
+  });
+});
+
+describe('SDD Story scripts: push_files.py', () => {
+  const agent = (path: string, content = 'x') => ({ path, status: 'added', content, additions: 1, deletions: 0 });
+  const some = [agent('src/a.js'), agent('openspec/specs/cart/spec.md')];
+  const doc = (n = 1, o: Record<string, unknown> = {}) => ({ path: `docs/release/my-release/part-${n}.md`, content: `# Part ${n}\n`, ...o });
+  const pushed = (d: { path: string; content: string }) => ({ path: d.path, status: 'added', content: d.content, encoding: 'utf-8' });
+
+  it('passes the agent files on unchanged when there are no extras', () => {
+    for (const extra_files of [undefined, null, []]) expect(run('push_files.py', { agent_files: some, extra_files })).toEqual({ files: some, ignored: [] });
+  });
+
+  it('adds an extra as an added utf-8 file after the agent files', () => {
+    expect(run('push_files.py', { agent_files: some, extra_files: [doc()] })).toEqual({ files: [...some, pushed(doc())], ignored: [] });
+    expect(run('push_files.py', { agent_files: some, extra_files: [doc(1), doc(2), doc(3)] }).files).toHaveLength(5);
+  });
+
+  it('lets the extra win over an agent file at the same path', () => {
+    const o = run('push_files.py', { agent_files: [...some, agent('docs/release/my-release/part-1.md', 'agent text')], extra_files: [doc()] });
+    expect(o.files.filter((f: any) => f.path === doc().path)).toEqual([pushed(doc())]);
+    expect(o.files).toHaveLength(3);
+    expect(o.ignored).toEqual([]);
+  });
+
+  it('pushes no extra and lists every one when there are more than 3', () => {
+    const o = run('push_files.py', { agent_files: some, extra_files: [doc(1), doc(2), doc(3), doc(4)] });
+    expect(o.files).toEqual(some);
+    expect(o.ignored).toEqual([doc(1).path, doc(2).path, doc(3).path, doc(4).path]);
+    // Even an invalid one in the list: only its path, cleaned, is reported.
+    expect(run('push_files.py', { agent_files: some, extra_files: [doc(1), doc(2), doc(3), { path: 'a\u0007b', content: 5 }] }).ignored).toEqual([doc(1).path, doc(2).path, doc(3).path, 'a b']);
+  });
+
+  it('leaves out an extra whose path or content is not valid and lists its path, still pushing the valid ones', () => {
+    const bad = [
+      { path: 'docs/release/my-release/a..b.md', content: 'x' },
+      { path: 'docs/release/../secrets.md', content: 'x' },
+      { path: '/docs/release/my-release/a.md', content: 'x' },
+      { path: 'src/readme.md', content: 'x' },
+      { path: 'docs/release/a.md', content: 'x' },
+      { path: 'docs/release/My-Release/a.md', content: 'x' },
+      { path: 'docs/release/my-release/a.txt', content: 'x' },
+      { path: 'docs/release/my-release/a.md\n', content: 'x' },
+      { path: 'docs/release/my-release/big.md', content: 'x'.repeat(70000) },
+      { path: 'docs/release/my-release/num.md', content: 5 },
+      { path: 'docs/release/my-release/none.md' },
+      { content: 'x' },
+      'docs/release/my-release/str.md',
+      null,
+    ];
+    for (const b of bad) {
+      const o = run('push_files.py', { agent_files: some, extra_files: [b, doc()] });
+      expect(o.files, JSON.stringify(b).slice(0, 80)).toEqual([...some, pushed(doc())]);
+      expect(o.ignored, JSON.stringify(b).slice(0, 80)).toHaveLength(1);
+    }
+    const o = run('push_files.py', { agent_files: some, extra_files: [bad[0], bad[8]] });
+    expect(o).toEqual({ files: some, ignored: ['docs/release/my-release/a..b.md', 'docs/release/my-release/big.md'] });
+    expect(run('push_files.py', { agent_files: some, extra_files: [bad[11], bad[12]] }).ignored).toEqual(['(no path)', '(no path)']);
+    expect(run('push_files.py', { agent_files: some, extra_files: [{ path: 'src/\u0007\u202e.md', content: 'x' }] }).ignored).toEqual(['src/  .md']);
+    expect(run('push_files.py', { agent_files: some, extra_files: [{ path: 'p'.repeat(500), content: 'x' }] }).ignored[0]).toHaveLength(200);
+  });
+
+  it('accepts content of exactly 60000 characters, and pushes a repeated path once', () => {
+    expect(run('push_files.py', { agent_files: some, extra_files: [doc(1, { content: 'x'.repeat(60000) })] }).files).toHaveLength(3);
+    const o = run('push_files.py', { agent_files: some, extra_files: [doc(1), doc(1, { content: 'other' })] });
+    expect(o.files).toEqual([...some, pushed(doc(1))]);
+    expect(o.ignored).toEqual([doc(1).path]);
+  });
+
+  it('holds to the 300 files the push takes: the extras go in only if they all fit', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => agent(`src/f${i}.js`));
+    const fits = run('push_files.py', { agent_files: many(297), extra_files: [doc(1), doc(2), doc(3)] });
+    expect(fits.files).toHaveLength(300);
+    expect(fits.ignored).toEqual([]);
+    const over = run('push_files.py', { agent_files: many(299), extra_files: [doc(1), doc(2), doc(3)] });
+    expect(over.files).toEqual(many(299));
+    expect(over.ignored).toEqual([doc(1).path, doc(2).path, doc(3).path]);
+    // A collision frees a place: the agent's file at that path is replaced, not added to.
+    const swap = run('push_files.py', { agent_files: [...many(299), agent(doc(1).path, 'old')], extra_files: [doc(1)] });
+    expect(swap.files).toHaveLength(300);
+    expect(swap.ignored).toEqual([]);
+  });
+
+  it('stops when the agent files are not a list', () => {
+    for (const input of [{ extra_files: [doc()] }, { agent_files: 'x', extra_files: [] }, { agent_files: null }, [], null]) refuses('push_files.py', input);
+  });
+
+  it('reports an extra_files that is not a list and pushes none', () => {
+    expect(run('push_files.py', { agent_files: some, extra_files: 'docs/release/a/b.md' })).toEqual({ files: some, ignored: ['(extra_files is not a list)'] });
   });
 });

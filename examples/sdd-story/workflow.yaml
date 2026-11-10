@@ -1,7 +1,7 @@
 schema_version: "2.0"
 id: sdd-story
 name: "SDD Story: one ticket to a signed-off pull request"
-description: Takes one Story (a ticket) through a spec-driven delivery - an OpenSpec change a person approves,
+description: Takes one Story (a GitHub issue, or a title and body given as inputs when there is no tracker) through a spec-driven delivery - an OpenSpec change a person approves,
   a build with the repository's own tests, a checked archive - then pushes one branch cut from stack_on and
   opens a pull request into base_branch, has pr-review review it, runs one fix round for the findings, and
   waits for a person to sign it off. Nothing merges.
@@ -15,12 +15,14 @@ inputs:
       title: Source
       enum:
         - github
-      description: Where the ticket lives
+        - files
+      description: Where the Story comes from. github reads an issue and labels it when signed off. files takes
+        the Story from story_key, story_title and story_body, and reads or writes no tracker.
     ticket:
       type: string
       title: Ticket
       maxLength: 300
-      description: A GitHub issue such as acme/payments#42
+      description: A GitHub issue such as acme/payments#42. Required when the source is github, empty when it is files.
     repo:
       type: string
       title: Repository
@@ -48,11 +50,80 @@ inputs:
       default: supervised
       description: supervised asks a person at both approvals (the specs, the sign-off). auto decides them by
         rules when it is safe and says so in Slack, and asks a person otherwise. Only the exact word auto is auto.
+    story_key:
+      type: string
+      title: Story key
+      pattern: ^([a-z0-9][a-z0-9-]{0,60})?$
+      description: The Story's id when the source is files. It is the ticket key and the branch name azhi/<key>.
+        Lower-case letters, digits and hyphens.
+    story_title:
+      type: string
+      title: Story title
+      minLength: 0
+      maxLength: 200
+      description: The Story's title when the source is files.
+    story_body:
+      type: string
+      title: Story
+      minLength: 0
+      maxLength: 19000
+      description: The Story as Markdown when the source is files.
+    extra_files:
+      type: array
+      title: Extra files
+      maxItems: 3
+      description: Markdown files the pull request adds besides the change, for example the release breakdown.
+        Only paths such as docs/release/<release>/<name>.md are pushed.
+      items:
+        type: object
+        properties:
+          path:
+            type: string
+            pattern: ^docs/release/[a-z0-9][a-z0-9-]{0,60}/[A-Za-z0-9._-]{1,80}\.md$
+          content:
+            type: string
+            maxLength: 60000
+        required:
+          - path
+          - content
+        additionalProperties: false
   required:
     - source
-    - ticket
     - repo
     - base_branch
+  allOf:
+    - if:
+        required:
+          - source
+        properties:
+          source:
+            const: github
+      then:
+        required:
+          - ticket
+        properties:
+          ticket:
+            minLength: 1
+    - if:
+        required:
+          - source
+        properties:
+          source:
+            const: files
+      then:
+        required:
+          - story_key
+          - story_title
+          - story_body
+        properties:
+          ticket:
+            maxLength: 0
+          story_key:
+            minLength: 1
+          story_title:
+            minLength: 1
+          story_body:
+            minLength: 1
 config:
   channel: "{{slack_channel}}"
   # The label put on the ticket once a person has signed the pull request off.
@@ -61,11 +132,13 @@ config:
 nodes:
   - id: source
     type: condition
-    description: Read the ticket from GitHub.
+    description: Read the ticket from GitHub, or take the Story from the inputs when there is no tracker.
     expression: inputs.source
     routes:
       github:
         - github_issue
+      files:
+        - files_ticket
   - id: github_issue
     type: tool
     description: Read the GitHub issue and its first comments.
@@ -73,7 +146,19 @@ nodes:
     arguments:
       issue:
         ref: inputs.ticket
-  - id: intake
+  - id: files_ticket
+    type: script
+    description: Turn the Story inputs into one plain ticket (key, title, description). A key, title or body that is
+      not valid stops the Story.
+    runtime: python
+    entrypoint: scripts/files_ticket.py
+    input:
+      map: "{'key': has(inputs.story_key) ? inputs.story_key : '', 'title': has(inputs.story_title) ?
+        inputs.story_title : '', 'body': has(inputs.story_body) ? inputs.story_body : ''}"
+    output_schema: schemas/files_ticket.json
+    limits:
+      time: 1m
+  - id: intake_github
     type: tool
     description: Turn the GitHub issue into one plain ticket (key, title, description).
     tool: ticket.normalize@1
@@ -93,6 +178,22 @@ nodes:
       - status
       - labels
       - url
+  - id: intake
+    type: script
+    description: The ticket, whichever way it was read - the GitHub issue or the Story inputs. Reads only those two
+      steps, so it runs when either did.
+    runtime: python
+    entrypoint: scripts/intake.py
+    merge: any
+    depends_on:
+      - intake_github
+      - files_ticket
+    input:
+      map: "{'github': has(nodes.intake_github) ? nodes.intake_github.output : null, 'files':
+        has(nodes.files_ticket) ? nodes.files_ticket.output : null}"
+    output_schema: schemas/intake.json
+    limits:
+      time: 1m
   - id: change_id
     type: script
     description: Name the change (kebab-case, built only from [a-z0-9-]) and its change and archive folders.
@@ -520,7 +621,7 @@ nodes:
     expression: "nodes.archive_check.output.ok ? 'ok' : 'fail'"
     routes:
       ok:
-        - push_branch
+        - push_files
       fail:
         - archive_fail_message
     default: fail
@@ -540,6 +641,18 @@ nodes:
     message:
       ref: nodes.archive_fail_message.output.markdown
     guard: args.channel == config.channel
+  - id: push_files
+    type: script
+    description: The files to push - the archived change plus the extra files the Story carries into its pull
+      request (the release breakdown). An extra that is not valid is left out and listed, never a failure.
+    runtime: python
+    entrypoint: scripts/push_files.py
+    input:
+      map: "{'agent_files': nodes.archive.output.workspace.files, 'extra_files': has(inputs.extra_files) ?
+        inputs.extra_files : []}"
+    output_schema: schemas/push_files.json
+    limits:
+      time: 1m
   - id: push_branch
     type: tool
     description: Commit the change, with the merged specs and the archived folder, onto the commit the work
@@ -556,7 +669,7 @@ nodes:
         cel: "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id +
           ' (archived)\\nRefs: ' + nodes.intake.output.key"
       files:
-        ref: nodes.archive.output.workspace.files
+        ref: nodes.push_files.output.files
     guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key &&
       nodes.specs_decision.output.by != null
   - id: open_pr
@@ -577,7 +690,8 @@ nodes:
         cel: "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id +
           '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary +
           '\\n\\nSpecs approved by ' + nodes.specs_decision.output.by + '. Ticket: ' +
-          nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow
+          nodes.intake.output.key + (nodes.intake.output.url != '' ? ' ' + nodes.intake.output.url : '') +
+          '\\n\\n_Opened by Azhi Flow
           (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as
           done; nothing is merged._'"
       draft:
@@ -667,11 +781,23 @@ nodes:
     expression: "nodes.fix.output.workspace.tests.status == 'passed' ? 'ok' : 'fail'"
     routes:
       ok:
-        - push_fix
+        - push_fix_files
         - fix_done
       fail:
         - fix_fail_message
     default: fail
+  - id: push_fix_files
+    type: script
+    description: The files of the fix push - the whole fixed change plus the extra files again, since the re-push
+      replaces the branch's single commit.
+    runtime: python
+    entrypoint: scripts/push_files.py
+    input:
+      map: "{'agent_files': nodes.fix.output.workspace.files, 'extra_files': has(inputs.extra_files) ?
+        inputs.extra_files : []}"
+    output_schema: schemas/push_files.json
+    limits:
+      time: 1m
   - id: push_fix
     type: tool
     description: Push the fixed change to the same branch, onto the same base commit (the branch's single
@@ -688,7 +814,7 @@ nodes:
         cel: "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id +
           ' (archived)\\nRefs: ' + nodes.intake.output.key + '\\n\\nReview fixes: ' + nodes.fix.output.summary"
       files:
-        ref: nodes.fix.output.workspace.files
+        ref: nodes.push_fix_files.output.files
     guard: args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key &&
       nodes.specs_decision.output.by != null
   - id: fix_done
@@ -698,7 +824,7 @@ nodes:
     entrypoint: scripts/fix_done.py
     input:
       map: "{'fix': nodes.fix.output, 'tests': nodes.fix.output.workspace.tests, 'pushed':
-        nodes.push_fix.output}"
+        nodes.push_fix.output, 'extra_files_ignored': nodes.push_fix_files.output.ignored}"
     output_schema: schemas/fix_done.json
     limits:
       time: 1m
@@ -801,7 +927,8 @@ nodes:
         'verification': nodes.verify.output, 'deviations': nodes.apply.output.deviations, 'fix_round':
         nodes.signoff_state.output.fix, 'fix_round_ran': nodes.signoff_state.output.fix_ran,
         'fix_round_note': nodes.signoff_state.output.fix_ran ? 'The fix was tested but not reviewed again.' :
-        'No fix round ran.'}"
+        'No fix round ran.', 'extra_files_ignored': nodes.signoff_state.output.fix_ran ?
+        nodes.signoff_state.output.fix.extra_files_ignored : nodes.push_files.output.ignored}"
     decision_schema:
       type: object
       properties:
@@ -848,12 +975,23 @@ nodes:
     output_schema: schemas/signoff_decision.json
     limits:
       time: 1m
+  - id: label_choice
+    type: condition
+    description: Only a GitHub issue is labelled; a Story from files has no tracker to write to.
+    expression: inputs.source
+    depends_on:
+      - signoff_decision
+    routes:
+      github:
+        - label_ticket
+      files: []
+    default: files
   - id: label_ticket
     type: tool
     description: Label the ticket as signed off, once a person has signed the pull request off.
     tool: github.label-issue@1
     depends_on:
-      - signoff_decision
+      - label_choice
     arguments:
       repo:
         ref: inputs.repo
@@ -868,7 +1006,7 @@ nodes:
     description: Announce the signed-off pull request.
     channel: slack
     depends_on:
-      - label_ticket
+      - signoff_decision
     destination:
       ref: config.channel
     message:

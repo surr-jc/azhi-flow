@@ -433,7 +433,7 @@ describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-revie
     expect(labels(number)).toContain(LABEL);
     const pr = tool(done, 'open_pr');
     expect(out(done, 'result')).toEqual({ status: 'signed_off', reason: 'signed_off', branch: tool(done, 'push_branch').branch, head_sha: tool(done, 'push_branch').commit_sha, pr_number: pr.number, pr_url: pr.url });
-    const key = tool(done, 'intake').key as string;
+    const key = out(done, 'intake').key as string;
     const said = texts(key);
     expect(said.some((t) => t.includes('approved by rules') && t.includes('No open questions'))).toBe(true);
     expect(said.some((t) => t.includes('nobody signed this off') && t.includes(pr.url) && t.includes('Tests passed') && t.includes('no fix round was needed'))).toBe(true);
@@ -447,7 +447,7 @@ describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-revie
     expect(done.approvals).toEqual([]);
     expect(out(done, 'specs_gate')).toMatchObject({ route: 'auto' });
     expect(received(done).notes).toBe('Auto mode: no person was asked. Taken as recommended:\n1. Round up or down? -> Round half up to 2 places.');
-    const key = tool(done, 'intake').key as string;
+    const key = out(done, 'intake').key as string;
     expect(texts(key).some((t) => t.includes('1. Round up or down? -> Round half up to 2 places. (why: Totals are in cents)'))).toBe(true);
     expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
   }, SLOW);
@@ -576,5 +576,199 @@ describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-revie
     expect(done.approvals.map((a: any) => a.node_id)).toEqual(['proposal_approval', 'signoff']);
     expect(out(done, 'signoff_decision').by).not.toBe('auto');
     expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  // ---- source: files ----------------------------------------------------------------------------------------------
+
+  const DOC = { path: 'docs/release/my-release/breakdown.md', content: '# Release breakdown\n\n- S1 the cart\n- S2 the discount\n' };
+  const withDoc = (files: typeof ARCHIVE_FILES) => ({ ...contents(files), [DOC.path]: DOC.content });
+  let storyN = 0;
+  /** Publishes the review stand-in, then starts a Story that comes from its inputs: no tracker is read or written. */
+  const startFiles = async (s: Scenario, extra: Record<string, unknown> = {}) => {
+    const rv = await uploadDir(h.api, reviewPackage(s.review));
+    expect(rv.ok, JSON.stringify(rv.diagnostics)).toBe(true);
+    await h.api.post(`/v1/versions/${rv.version.id}/publish`, {});
+    const v = await uploadDir(h.api, storyPackage(s));
+    expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
+    const key = `my-release-s${++storyN}`;
+    const mark = gh.requests.length;
+    const inputs = { source: 'files', ticket: '', repo: REPO, base_branch: 'dev', story_key: key, story_title: 'Apply the discount', story_body: '## Story\nAs a shopper I get 10% off.\n\n- [ ] total applies it', extra_files: [DOC], ...extra };
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: v.version.id, inputs });
+    return { run_id, key, issueRequests: () => gh.requests.slice(mark).filter((r) => r.includes('/issues')) };
+  };
+
+  it('files: delivers a Story from its inputs and carries the document into the pull request, reading and labelling nothing', async () => {
+    const { run_id, key, issueRequests } = await startFiles(HAPPY);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    const branch = tool(sign, 'push_branch').branch as string;
+    expect(branch).toBe(`azhi/${key}`);
+    // The branch holds the agent's files AND the document, and the pull request goes into the base branch.
+    expect(gh.branchFiles(branch)).toEqual(withDoc(ARCHIVE_FILES));
+    expect(gh.git.pulls.filter((p) => p.head === branch)).toEqual([expect.objectContaining({ repo: REPO, head: branch, base: 'dev', draft: false })]);
+    const pr = tool(sign, 'open_pr');
+    expect(out(sign, 'intake')).toMatchObject({ source: 'files', key, title: 'Apply the discount', url: '', labels: [] });
+    expect(out(sign, 'push_files').ignored).toEqual([]);
+    const body = gh.git.pulls.find((p) => p.head === branch)!.body;
+    expect(body).toContain(`Ticket: ${key}\n\n_Opened by Azhi Flow`);
+    expect(sign.approvals.find((a: any) => a.node_id === 'signoff').request.payload).toMatchObject({ branch, extra_files_ignored: [], pull_request: { number: pr.number } });
+    await approve(run_id, 'signoff');
+
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.error).toBeNull();
+    expect(done.run.state).toBe('succeeded');
+    // No issue was read and no label call was made; the github-only steps never ran.
+    expect(issueRequests()).toEqual([]);
+    for (const id of ['github_issue', 'intake_github', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    for (const id of ['files_ticket', 'intake', 'push_files', 'push_branch', 'open_pr', 'review', 'signoff', 'signoff_decision', 'label_choice', 'story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+    expect(state(done, 'fix')).toBe('skipped');
+    expect(out(done, 'result')).toEqual({ status: 'signed_off', reason: 'signed_off', branch, head_sha: tool(done, 'push_branch').commit_sha, pr_number: pr.number, pr_url: pr.url });
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes(`Signed off ${key}`) && t.includes(pr.url))).toBe(true);
+    expect(done.children.map((c: any) => [c.workflow, c.state])).toEqual([['pr-review', 'succeeded']]);
+  }, SLOW);
+
+  it('files: a Story without extra files signs off and pushes only the agent files', async () => {
+    const { run_id } = await startFiles(HAPPY, { extra_files: [] });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    expect(gh.branchFiles(tool(sign, 'push_branch').branch)).toEqual(contents(ARCHIVE_FILES));
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('files: the fix round re-pushes the whole fixed change and the document is still on the branch', async () => {
+    const { run_id, key, issueRequests } = await startFiles({ ...HAPPY, review: 'findings' });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    const branch = tool(sign, 'push_branch').branch as string;
+    expect(branch).toBe(`azhi/${key}`);
+    expect(state(sign, 'fix')).toBe('succeeded');
+    expect(tool(sign, 'push_fix').commit_sha).not.toBe(tool(sign, 'push_branch').commit_sha);
+    expect(gh.git.refs.get(branch)).toBe(tool(sign, 'push_fix').commit_sha);
+    expect(gh.branchFiles(branch)).toEqual(withDoc(FIX_FILES));
+    expect(out(sign, 'push_fix_files').files.map((f: any) => f.path)).toContain(DOC.path);
+    expect(gh.git.pulls.filter((p) => p.head === branch)).toHaveLength(1);
+    const payload = sign.approvals.find((a: any) => a.node_id === 'signoff').request.payload;
+    expect(payload).toMatchObject({ fix_round_ran: true, extra_files_ignored: [], fix_round: { ran: true, tests_status: 'passed', extra_files_ignored: [] } });
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(issueRequests()).toEqual([]);
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off', branch, head_sha: tool(done, 'push_fix').commit_sha });
+    for (const id of ['story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+  }, SLOW);
+
+  it('files: an extra the script refuses is left out and listed at sign-off, and the Story still signs off', async () => {
+    // a..b.md matches the input schema's pattern but has "..", which push_files refuses; the second is a repeated path.
+    const refused = { path: 'docs/release/my-release/a..b.md', content: 'x' };
+    const { run_id } = await startFiles(HAPPY, { extra_files: [refused, DOC, { ...DOC, content: 'again' }] });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    const branch = tool(sign, 'push_branch').branch as string;
+    expect(gh.branchFiles(branch)).toEqual(withDoc(ARCHIVE_FILES));
+    expect(gh.branchFiles(branch)).not.toHaveProperty([refused.path]);
+    expect(sign.approvals.find((a: any) => a.node_id === 'signoff').request.payload.extra_files_ignored).toEqual([refused.path, DOC.path]);
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('files: an extra outside docs/release, or a fourth extra, is refused when the run starts: nothing is created', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const v = await uploadDir(h.api, storyPackage(HAPPY));
+    expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
+    const inputs = { source: 'files', ticket: '', repo: REPO, base_branch: 'dev', story_key: 'my-release-bad', story_title: 'T', story_body: 'B' };
+    await expect(h.api.post('/v1/runs', { version: v.version.id, inputs: { ...inputs, extra_files: [{ path: 'src/evil.md', content: 'x' }] } })).rejects.toThrow(/input schema/);
+    await expect(h.api.post('/v1/runs', { version: v.version.id, inputs: { ...inputs, extra_files: [DOC, DOC, DOC, DOC] } })).rejects.toThrow(/input schema/);
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+  }, SLOW);
+
+  it('files: a rejected sign-off sends the Story back as in github mode, with the branch and pull request reported', async () => {
+    const { run_id, issueRequests } = await startFiles(HAPPY);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    await waitForApprovalOn(h.api, run_id, 'signoff');
+    await approve(run_id, 'signoff', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['label_choice', 'label_ticket', 'story_notify', 'summary']) expect(state(done, id), id).toBe('skipped');
+    expect(issueRequests()).toEqual([]);
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'signoff_rejected', branch: tool(done, 'push_branch').branch, pr_number: expect.any(Number) });
+  }, SLOW);
+
+  it('files: rejected specs send the Story back with nothing built or pushed', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id } = await startFiles(HAPPY);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['apply', 'push_files', 'push_branch', 'open_pr', 'review']) expect(state(done, id), id).toBe('skipped');
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'specs_rejected', pr_number: null });
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+  }, SLOW);
+
+  it('files: auto mode works as with github - nobody is asked, the document is pushed, nothing is labelled', async () => {
+    const { run_id, key, issueRequests } = await startFiles(HAPPY, AUTO);
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.error).toBeNull();
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    expect(out(done, 'specs_gate')).toMatchObject({ route: 'auto' });
+    expect(out(done, 'signoff_gate')).toMatchObject({ route: 'auto' });
+    expect(out(done, 'signoff_decision')).toEqual({ decision: 'approved', by: 'auto' });
+    const branch = tool(done, 'push_branch').branch as string;
+    expect(branch).toBe(`azhi/${key}`);
+    expect(gh.branchFiles(branch)).toEqual(withDoc(ARCHIVE_FILES));
+    expect(issueRequests()).toEqual([]);
+    for (const id of ['signoff_notify', 'story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+    for (const id of ['github_issue', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    const pr = tool(done, 'open_pr');
+    expect(out(done, 'result')).toEqual({ status: 'signed_off', reason: 'signed_off', branch, head_sha: tool(done, 'push_branch').commit_sha, pr_number: pr.number, pr_url: pr.url });
+    expect(texts(key).some((t) => t.includes(`Signed off ${key} (auto)`))).toBe(true);
+  }, SLOW);
+
+  it('files: a Story title that is empty after cleaning fails the run closed, before anything is read or built', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id, issueRequests } = await startFiles(HAPPY, { story_title: '<>  ' });
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('failed');
+    expect(done.approvals).toEqual([]);
+    expect(state(done, 'files_ticket')).toBe('failed');
+    for (const id of ['intake', 'change_id', 'scan', 'propose', 'push_files', 'push_branch', 'open_pr']) expect(['skipped', 'not run'], id).toContain(state(done, id));
+    expect(issueRequests()).toEqual([]);
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+  }, SLOW);
+
+  it('files: a missing story title or body is refused when the run starts', async () => {
+    const v = await uploadDir(h.api, storyPackage(HAPPY));
+    expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
+    const inputs = { source: 'files', ticket: '', repo: REPO, base_branch: 'dev', story_key: 'my-release-bad', story_title: 'T', story_body: 'B' };
+    for (const over of [{ story_title: '' }, { story_title: undefined }, { story_body: '' }, { story_key: '' }, { ticket: 'acme/shop#12' }]) {
+      await expect(h.api.post('/v1/runs', { version: v.version.id, inputs: { ...inputs, ...over } }), JSON.stringify(over)).rejects.toThrow(/input schema/);
+    }
+    await expect(h.api.post('/v1/runs', { version: v.version.id, inputs: { source: 'github', repo: REPO, base_branch: 'dev', ticket: '' } })).rejects.toThrow(/input schema/);
+  }, SLOW);
+
+  it('github: a Story with the files-only inputs empty behaves as before - the issue is read and labelled, nothing extra is pushed', async () => {
+    const { run_id, number } = await start(HAPPY, { story_key: '', story_title: '', story_body: '', extra_files: [] });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    expect(gh.branchFiles(tool(sign, 'push_branch').branch)).toEqual(contents(ARCHIVE_FILES));
+    expect(out(sign, 'intake')).toMatchObject({ source: 'github', key: `${REPO}#${number}` });
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['files_ticket']) expect(state(done, id), id).toBe('skipped');
+    for (const id of ['github_issue', 'intake_github', 'label_choice', 'label_ticket', 'story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+    expect(labels(number)).toContain(LABEL);
+    expect(gh.requests.some((r) => r.includes(`/issues/${number}`))).toBe(true);
   }, SLOW);
 });

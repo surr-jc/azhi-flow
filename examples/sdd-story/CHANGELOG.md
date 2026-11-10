@@ -1,5 +1,15 @@
 # Changelog
 
+## Source files
+
+- `source: files` takes the Story from `story_key`, `story_title` and `story_body` for a release run without a
+  tracker: nothing is read from or written to a tracker. `ticket` is required only for `github`.
+- `extra_files` (up to 3 Markdown files under `docs/release/<release>/`) are added to the pull request by both
+  pushes (`push_files`, `push_fix_files`); invalid ones are left out and listed in the sign-off payload.
+- The tool step `intake` is now `intake_github`; `intake` is a script that joins it with `files_ticket`, so
+  `nodes.intake.output.*` reads as before. `label_ticket` runs behind `label_choice` (github only) and
+  `story_notify` waits for `signoff_decision`. `github` behaves as before.
+
 ## Auto mode
 
 - `mode: auto` decides the specs approval and the sign-off by rules when it is safe (`specs_gate`,

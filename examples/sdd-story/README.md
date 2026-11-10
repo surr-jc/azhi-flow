@@ -15,6 +15,31 @@ npx azhi run examples/sdd-story -i source=github -i ticket=OWNER/REPO#42 -i repo
 
 Install `pr-review` too: the `review` step runs it.
 
+## Source: github or files
+
+- `source: github` (default behaviour): `ticket` is a GitHub issue (`OWNER/REPO#N`). It is read, and labelled
+  `signed_off_label` once signed off.
+- `source: files`: a release run without a tracker. A parent workflow gives the Story as inputs and nothing is read
+  from or written to any tracker (no issue read, no label):
+  - `story_key` (required, `^[a-z0-9][a-z0-9-]{0,60}$`): the ticket key and the branch `azhi/<story_key>`, so the
+    next Story can use it as `stack_on`.
+  - `story_title` (required, up to 200 characters) and `story_body` (required, Markdown, up to 19000).
+  - `ticket` must be empty or absent. The GitHub-only inputs may be passed empty, and the files-only inputs
+    (`story_key`, `story_title`, `story_body`, `extra_files`) may be passed empty with `github`.
+  - `files_ticket.py` turns them into the same ticket `ticket.normalize` returns (the title becomes one line
+    without control characters or angle brackets, the body loses control characters other than newline and tab and
+    is cut to 20000). An invalid key, or an empty title or body, fails the run: the Story is not signed off.
+  - `intake` joins whichever ticket was read, so every step reads `nodes.intake.output` as before. The pull request
+    body and the Slack lines print the ticket url only when there is one.
+- `extra_files` (optional, up to 3 `{path, content}`): Markdown files the pull request adds besides the change, for
+  example the release breakdown, so the plan is reviewed in the first Story's pull request. `path` must match
+  `docs/release/<release>/<name>.md` and `content` is at most 60000 characters. `push_files.py` builds the push:
+  each valid extra is an added file, an agent file at the same path is dropped (the extra wins), and an extra that is
+  not valid (a `..` in the path, a repeated path, content that is not text) is left out and its path is listed in
+  the sign-off payload as `extra_files_ignored`: a documentation file never fails the Story. More than 3 extras, or
+  more than 300 files in the push with them, push none of them and list all of them. The fix round's re-push
+  replaces the branch's single commit, so `push_fix_files` adds the extras again. Works with either source.
+
 - `base_branch` is the branch the pull request targets. `stack_on` is the branch the work is cut from (the
   previous Story's `azhi/` branch); empty means `base_branch`. `mode` is `supervised` (default) or `auto`; see
   below.
@@ -49,7 +74,8 @@ Install `pr-review` too: the `review` step runs it.
   - `specs_decision` and `signoff_decision` join the person and the rules; the steps after read only those. A
     person who leaves the specs notes empty gets the recommended answers too, in supervised mode as well.
 - Result: `result` ends every route with `{status: signed_off | sent_back, reason, branch, head_sha, pr_number,
-  pr_url}` for a parent workflow to read. The signed-off ticket gets the `signed_off_label` label.
+  pr_url}` for a parent workflow to read. With `github`, the signed-off ticket gets the `signed_off_label` label (`label_choice`); with `files` there is
+  nothing to label. `story_notify` waits for the sign-off, not for the label.
 
 If the gate command in `workflow.yaml` needs rebuilding after a change to `scripts/gate.js`:
 `node examples/sdd-story/scripts/build_gate_commands.mjs --write`.

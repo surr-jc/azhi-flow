@@ -1,8 +1,10 @@
 """What the fix round did, for the sign-off. Reads JSON on stdin, prints JSON.
 
 Input:  fix, the fix agent's report {summary, fixed, skipped}; tests, the worker's test result for the fixed
-        checkout {status, attempts}; pushed, the re-push {commit_sha}.
-Output: {ran: true, summary, fixed, skipped, tests_status, tests_attempts, commit_sha, re_reviewed: false}.
+        checkout {status, attempts}; pushed, the re-push {commit_sha};
+        extra_files_ignored, the paths of the extra files the re-push left out (push_fix_files).
+Output: {ran: true, summary, fixed, skipped, tests_status, tests_attempts, commit_sha, re_reviewed: false,
+        extra_files_ignored}.
         The fix is tested, not re-reviewed; the sign-off says so. Unknown values are null.
 """
 import json
@@ -34,4 +36,5 @@ print(json.dumps({
     "tests_attempts": attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else None,
     "commit_sha": text_or_none(pushed.get("commit_sha"), 64),
     "re_reviewed": False,
+    "extra_files_ignored": texts(data.get("extra_files_ignored"), 200),
 }))

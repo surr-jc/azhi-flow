@@ -46,7 +46,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-story",
-    "definitionHash": "sha256:c534f7f592e15e06c81eae9617fd1cc504b07844eabe350f03e153958a4b7761",
+    "definitionHash": "sha256:081b140c705a8b5a5eaecd6bf57b24b593cbd1544faf67b3627e6526bc4e764e",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -54,15 +54,16 @@
           "type": "string",
           "title": "Source",
           "enum": [
-            "github"
+            "github",
+            "files"
           ],
-          "description": "Where the ticket lives"
+          "description": "Where the Story comes from. github reads an issue and labels it when signed off. files takes the Story from story_key, story_title and story_body, and reads or writes no tracker."
         },
         "ticket": {
           "type": "string",
           "title": "Ticket",
           "maxLength": 300,
-          "description": "A GitHub issue such as acme/payments#42"
+          "description": "A GitHub issue such as acme/payments#42. Required when the source is github, empty when it is files."
         },
         "repo": {
           "type": "string",
@@ -93,13 +94,113 @@
           ],
           "default": "supervised",
           "description": "supervised asks a person at both approvals (the specs, the sign-off). auto decides them by rules when it is safe and says so in Slack, and asks a person otherwise. Only the exact word auto is auto."
+        },
+        "story_key": {
+          "type": "string",
+          "title": "Story key",
+          "pattern": "^([a-z0-9][a-z0-9-]{0,60})?$",
+          "description": "The Story's id when the source is files. It is the ticket key and the branch name azhi/<key>. Lower-case letters, digits and hyphens."
+        },
+        "story_title": {
+          "type": "string",
+          "title": "Story title",
+          "minLength": 0,
+          "maxLength": 200,
+          "description": "The Story's title when the source is files."
+        },
+        "story_body": {
+          "type": "string",
+          "title": "Story",
+          "minLength": 0,
+          "maxLength": 19000,
+          "description": "The Story as Markdown when the source is files."
+        },
+        "extra_files": {
+          "type": "array",
+          "title": "Extra files",
+          "maxItems": 3,
+          "description": "Markdown files the pull request adds besides the change, for example the release breakdown. Only paths such as docs/release/<release>/<name>.md are pushed.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^docs/release/[a-z0-9][a-z0-9-]{0,60}/[A-Za-z0-9._-]{1,80}\\.md$"
+              },
+              "content": {
+                "type": "string",
+                "maxLength": 60000
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
         "source",
-        "ticket",
         "repo",
         "base_branch"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "ticket"
+            ],
+            "properties": {
+              "ticket": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "const": "files"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "story_key",
+              "story_title",
+              "story_body"
+            ],
+            "properties": {
+              "ticket": {
+                "maxLength": 0
+              },
+              "story_key": {
+                "minLength": 1
+              },
+              "story_title": {
+                "minLength": 1
+              },
+              "story_body": {
+                "minLength": 1
+              }
+            }
+          }
+        }
       ]
     },
     "config": {
@@ -118,11 +219,14 @@
         "def": {
           "id": "source",
           "type": "condition",
-          "description": "Read the ticket from GitHub.",
+          "description": "Read the ticket from GitHub, or take the Story from the inputs when there is no tracker.",
           "expression": "inputs.source",
           "routes": {
             "github": [
               "github_issue"
+            ],
+            "files": [
+              "files_ticket"
             ]
           }
         },
@@ -163,7 +267,35 @@
         }
       },
       {
-        "id": "intake",
+        "id": "files_ticket",
+        "type": "script",
+        "deps": [
+          "source"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "files_ticket",
+          "type": "script",
+          "description": "Turn the Story inputs into one plain ticket (key, title, description). A key, title or body that is not valid stops the Story.",
+          "runtime": "python",
+          "entrypoint": "scripts/files_ticket.py",
+          "input": {
+            "map": "{'key': has(inputs.story_key) ? inputs.story_key : '', 'title': has(inputs.story_title) ? inputs.story_title : '', 'body': has(inputs.story_body) ? inputs.story_body : ''}"
+          },
+          "output_schema": "schemas/files_ticket.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "source",
+          "route": "files"
+        }
+      },
+      {
+        "id": "intake_github",
         "type": "tool",
         "deps": [
           "github_issue"
@@ -172,7 +304,7 @@
           "github_issue"
         ],
         "def": {
-          "id": "intake",
+          "id": "intake_github",
           "type": "tool",
           "description": "Turn the GitHub issue into one plain ticket (key, title, description).",
           "tool": "ticket.normalize@1",
@@ -196,6 +328,39 @@
             "labels",
             "url"
           ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "intake",
+        "type": "script",
+        "deps": [
+          "files_ticket",
+          "intake_github"
+        ],
+        "dataDeps": [
+          "files_ticket",
+          "intake_github"
+        ],
+        "def": {
+          "id": "intake",
+          "type": "script",
+          "description": "The ticket, whichever way it was read - the GitHub issue or the Story inputs. Reads only those two steps, so it runs when either did.",
+          "runtime": "python",
+          "entrypoint": "scripts/intake.py",
+          "merge": "any",
+          "depends_on": [
+            "intake_github",
+            "files_ticket"
+          ],
+          "input": {
+            "map": "{'github': has(nodes.intake_github) ? nodes.intake_github.output : null, 'files': has(nodes.files_ticket) ? nodes.files_ticket.output : null}"
+          },
+          "output_schema": "schemas/intake.json",
+          "limits": {
+            "time": "1m"
+          }
         },
         "timeoutMs": 60000,
         "maxAttempts": 3
@@ -1383,7 +1548,7 @@
           "expression": "nodes.archive_check.output.ok ? 'ok' : 'fail'",
           "routes": {
             "ok": [
-              "push_branch"
+              "push_files"
             ],
             "fail": [
               "archive_fail_message"
@@ -1500,14 +1665,45 @@
         "maxAttempts": 3
       },
       {
+        "id": "push_files",
+        "type": "script",
+        "deps": [
+          "archive",
+          "archive_gate"
+        ],
+        "dataDeps": [
+          "archive"
+        ],
+        "def": {
+          "id": "push_files",
+          "type": "script",
+          "description": "The files to push - the archived change plus the extra files the Story carries into its pull request (the release breakdown). An extra that is not valid is left out and listed, never a failure.",
+          "runtime": "python",
+          "entrypoint": "scripts/push_files.py",
+          "input": {
+            "map": "{'agent_files': nodes.archive.output.workspace.files, 'extra_files': has(inputs.extra_files) ? inputs.extra_files : []}"
+          },
+          "output_schema": "schemas/push_files.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "archive_gate",
+          "route": "ok"
+        }
+      },
+      {
         "id": "push_branch",
         "type": "tool",
         "deps": [
           "apply",
           "archive",
-          "archive_gate",
           "change_id",
           "intake",
+          "push_files",
           "specs_decision"
         ],
         "dataDeps": [
@@ -1515,6 +1711,7 @@
           "archive",
           "change_id",
           "intake",
+          "push_files",
           "specs_decision"
         ],
         "def": {
@@ -1536,17 +1733,13 @@
               "cel": "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id + ' (archived)\\nRefs: ' + nodes.intake.output.key"
             },
             "files": {
-              "ref": "nodes.archive.output.workspace.files"
+              "ref": "nodes.push_files.output.files"
             }
           },
           "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.specs_decision.output.by != null"
         },
         "timeoutMs": 60000,
-        "maxAttempts": 3,
-        "route": {
-          "condition": "archive_gate",
-          "route": "ok"
-        }
+        "maxAttempts": 3
       },
       {
         "id": "open_pr",
@@ -1586,7 +1779,7 @@
               "ref": "nodes.apply.output.pr_title"
             },
             "body": {
-              "cel": "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id + '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary + '\\n\\nSpecs approved by ' + nodes.specs_decision.output.by + '. Ticket: ' + nodes.intake.output.key + ' ' + nodes.intake.output.url + '\\n\\n_Opened by Azhi Flow (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as done; nothing is merged._'"
+              "cel": "nodes.apply.output.pr_body + '\\n\\n## OpenSpec\\nChange `' + nodes.change_id.output.id + '` archived at `' + nodes.change_id.output.archive_dir + '`. ' + nodes.verify.output.summary + '\\n\\nSpecs approved by ' + nodes.specs_decision.output.by + '. Ticket: ' + nodes.intake.output.key + (nodes.intake.output.url != '' ? ' ' + nodes.intake.output.url : '') + '\\n\\n_Opened by Azhi Flow (sdd-story). It is reviewed by pr-review and signed off by a person before the Story counts as done; nothing is merged._'"
             },
             "draft": {
               "cel": "nodes.verify.output.issues.exists(i, i.level == 'CRITICAL') || nodes.verify.output.prompt_injection_detected"
@@ -1825,7 +2018,7 @@
           "expression": "nodes.fix.output.workspace.tests.status == 'passed' ? 'ok' : 'fail'",
           "routes": {
             "ok": [
-              "push_fix",
+              "push_fix_files",
               "fix_done"
             ],
             "fail": [
@@ -1846,6 +2039,37 @@
         "maxAttempts": 3
       },
       {
+        "id": "push_fix_files",
+        "type": "script",
+        "deps": [
+          "fix",
+          "fix_gate"
+        ],
+        "dataDeps": [
+          "fix"
+        ],
+        "def": {
+          "id": "push_fix_files",
+          "type": "script",
+          "description": "The files of the fix push - the whole fixed change plus the extra files again, since the re-push replaces the branch's single commit.",
+          "runtime": "python",
+          "entrypoint": "scripts/push_files.py",
+          "input": {
+            "map": "{'agent_files': nodes.fix.output.workspace.files, 'extra_files': has(inputs.extra_files) ? inputs.extra_files : []}"
+          },
+          "output_schema": "schemas/push_files.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "fix_gate",
+          "route": "ok"
+        }
+      },
+      {
         "id": "push_fix",
         "type": "tool",
         "deps": [
@@ -1853,8 +2077,8 @@
           "archive",
           "change_id",
           "fix",
-          "fix_gate",
           "intake",
+          "push_fix_files",
           "specs_decision"
         ],
         "dataDeps": [
@@ -1863,6 +2087,7 @@
           "change_id",
           "fix",
           "intake",
+          "push_fix_files",
           "specs_decision"
         ],
         "def": {
@@ -1884,17 +2109,13 @@
               "cel": "nodes.apply.output.commit_message + '\\n\\nOpenSpec change: ' + nodes.change_id.output.id + ' (archived)\\nRefs: ' + nodes.intake.output.key + '\\n\\nReview fixes: ' + nodes.fix.output.summary"
             },
             "files": {
-              "ref": "nodes.fix.output.workspace.files"
+              "ref": "nodes.push_fix_files.output.files"
             }
           },
           "guard": "args.repo == inputs.repo && args.branch == 'azhi/' + nodes.intake.output.key && nodes.specs_decision.output.by != null"
         },
         "timeoutMs": 60000,
-        "maxAttempts": 3,
-        "route": {
-          "condition": "fix_gate",
-          "route": "ok"
-        }
+        "maxAttempts": 3
       },
       {
         "id": "fix_done",
@@ -1902,11 +2123,13 @@
         "deps": [
           "fix",
           "fix_gate",
-          "push_fix"
+          "push_fix",
+          "push_fix_files"
         ],
         "dataDeps": [
           "fix",
-          "push_fix"
+          "push_fix",
+          "push_fix_files"
         ],
         "def": {
           "id": "fix_done",
@@ -1915,7 +2138,7 @@
           "runtime": "python",
           "entrypoint": "scripts/fix_done.py",
           "input": {
-            "map": "{'fix': nodes.fix.output, 'tests': nodes.fix.output.workspace.tests, 'pushed': nodes.push_fix.output}"
+            "map": "{'fix': nodes.fix.output, 'tests': nodes.fix.output.workspace.tests, 'pushed': nodes.push_fix.output, 'extra_files_ignored': nodes.push_fix_files.output.ignored}"
           },
           "output_schema": "schemas/fix_done.json",
           "limits": {
@@ -2241,6 +2464,7 @@
           "intake",
           "open_pr",
           "push_branch",
+          "push_files",
           "review_outcome",
           "signoff_choice",
           "signoff_gate",
@@ -2253,6 +2477,7 @@
           "intake",
           "open_pr",
           "push_branch",
+          "push_files",
           "review_outcome",
           "signoff_gate",
           "signoff_state",
@@ -2267,7 +2492,7 @@
             "cel": "'Sign off ' + nodes.intake.output.key + '? Pull request ' + nodes.open_pr.output.url + (nodes.open_pr.output.draft ? ' (a draft: the verifier found a CRITICAL issue or saw a prompt injection)' : '') + '. Tests ' + nodes.apply.output.workspace.tests.status + '. Review ' + nodes.review_outcome.output.status + ': ' + nodes.review_outcome.output.summary + ' ' + string(size(nodes.review_outcome.output.remaining)) + ' finding(s) remain. ' + nodes.verify.output.summary + (nodes.signoff_state.output.fix_ran ? ' A fix round ran and its tests passed, but the fix was not reviewed again.' : ' No fix round was needed.') + (has(inputs.mode) && inputs.mode == 'auto' && nodes.signoff_gate.output.reason != 'supervised' ? ' Asked although the run is unattended: ' + nodes.signoff_gate.output.reason_text : '')"
           },
           "payload": {
-            "map": "{'repository': inputs.repo, 'pull_request': {'number': nodes.open_pr.output.number, 'url': nodes.open_pr.output.url, 'draft': nodes.open_pr.output.draft}, 'branch': nodes.push_branch.output.branch, 'change_id': nodes.change_id.output.id, 'tests': {'status': nodes.apply.output.workspace.tests.status, 'attempts': nodes.apply.output.workspace.tests.attempts}, 'review': {'status': nodes.review_outcome.output.status, 'verdict': nodes.review_outcome.output.verdict, 'summary': nodes.review_outcome.output.summary}, 'remaining_findings': nodes.review_outcome.output.remaining, 'verification': nodes.verify.output, 'deviations': nodes.apply.output.deviations, 'fix_round': nodes.signoff_state.output.fix, 'fix_round_ran': nodes.signoff_state.output.fix_ran, 'fix_round_note': nodes.signoff_state.output.fix_ran ? 'The fix was tested but not reviewed again.' : 'No fix round ran.'}"
+            "map": "{'repository': inputs.repo, 'pull_request': {'number': nodes.open_pr.output.number, 'url': nodes.open_pr.output.url, 'draft': nodes.open_pr.output.draft}, 'branch': nodes.push_branch.output.branch, 'change_id': nodes.change_id.output.id, 'tests': {'status': nodes.apply.output.workspace.tests.status, 'attempts': nodes.apply.output.workspace.tests.attempts}, 'review': {'status': nodes.review_outcome.output.status, 'verdict': nodes.review_outcome.output.verdict, 'summary': nodes.review_outcome.output.summary}, 'remaining_findings': nodes.review_outcome.output.remaining, 'verification': nodes.verify.output, 'deviations': nodes.apply.output.deviations, 'fix_round': nodes.signoff_state.output.fix, 'fix_round_ran': nodes.signoff_state.output.fix_ran, 'fix_round_note': nodes.signoff_state.output.fix_ran ? 'The fix was tested but not reviewed again.' : 'No fix round ran.', 'extra_files_ignored': nodes.signoff_state.output.fix_ran ? nodes.signoff_state.output.fix.extra_files_ignored : nodes.push_files.output.ignored}"
           },
           "decision_schema": {
             "type": "object",
@@ -2422,10 +2647,45 @@
         "maxAttempts": 3
       },
       {
+        "id": "label_choice",
+        "type": "condition",
+        "deps": [
+          "signoff_decision"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "label_choice",
+          "type": "condition",
+          "description": "Only a GitHub issue is labelled; a Story from files has no tracker to write to.",
+          "expression": "inputs.source",
+          "depends_on": [
+            "signoff_decision"
+          ],
+          "routes": {
+            "github": [
+              "label_ticket"
+            ],
+            "files": []
+          },
+          "default": "files"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
         "id": "label_ticket",
         "type": "tool",
         "deps": [
           "github_issue",
+          "label_choice",
           "signoff_decision"
         ],
         "dataDeps": [
@@ -2438,7 +2698,7 @@
           "description": "Label the ticket as signed off, once a person has signed the pull request off.",
           "tool": "github.label-issue@1",
           "depends_on": [
-            "signoff_decision"
+            "label_choice"
           ],
           "arguments": {
             "repo": {
@@ -2454,7 +2714,11 @@
           "guard": "args.repo == inputs.repo && args.number == nodes.github_issue.output.number && nodes.signoff_decision.output.decision == 'approved'"
         },
         "timeoutMs": 60000,
-        "maxAttempts": 3
+        "maxAttempts": 3,
+        "route": {
+          "condition": "label_choice",
+          "route": "github"
+        }
       },
       {
         "id": "story_notify",
@@ -2463,7 +2727,6 @@
           "apply",
           "change_id",
           "intake",
-          "label_ticket",
           "open_pr",
           "review_outcome",
           "signoff_decision",
@@ -2484,7 +2747,7 @@
           "description": "Announce the signed-off pull request.",
           "channel": "slack",
           "depends_on": [
-            "label_ticket"
+            "signoff_decision"
           ],
           "destination": {
             "ref": "config.channel"
@@ -2680,6 +2943,7 @@
         "archive_gate": "output of tainted agent apply",
         "archive_fail_message": "output of tainted agent apply",
         "archive_fail_notify": "output of tainted agent apply",
+        "push_files": "output of tainted agent archive",
         "push_branch": "output of tainted agent apply",
         "open_pr": "output of tainted agent apply",
         "review": "output of a subworkflow is not marked trusted",
@@ -2687,6 +2951,7 @@
         "review_gate": "derived from review_outcome",
         "fix": "output of tainted agent fix",
         "fix_gate": "output of tainted agent fix",
+        "push_fix_files": "output of tainted agent fix",
         "push_fix": "output of tainted agent apply",
         "fix_done": "output of tainted agent fix",
         "review_fail_message": "output of tainted agent apply",
