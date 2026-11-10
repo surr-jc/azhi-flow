@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "description": "The proposal round that passed the check, plus `found`. When no round passed, only `found: false` is returned and nothing after the have_change gate runs.",
+  "properties": {
+    "found": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "change_id": {"type": "string"},
+    "bootstrapped": {"type": "boolean"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "open_questions": {"type": "array", "items": {"type": "string"}},
+    "conflicts": {"type": "array", "items": {"type": "string"}},
+    "workspace": {"type": "object"},
+    "check": {
+      "type": "object",
+      "description": "The deterministic check of the round that passed (check.json), so later steps do not read a step only one round runs.",
+      "properties": {
+        "ok": {"type": "boolean"},
+        "errors": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "deltas": {"type": "array", "items": {"type": "object", "properties": {"capability": {"type": "string"}, "op": {"type": "string"}, "requirement": {"type": "string"}}}},
+        "capabilities": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  },
+  "required": ["found"],
+  "additionalProperties": true
+}

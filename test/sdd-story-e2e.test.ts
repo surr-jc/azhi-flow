@@ -1,0 +1,399 @@
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parse, stringify } from 'yaml';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { startFakeGithub } from '../src/testing/fake-github.js';
+import type { ApiClient } from '../src/worker/api-client.js';
+import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
+
+/**
+ * examples/sdd-story on the engine: one Story from a ticket to a signed-off pull request, with a stand-in for
+ * `pr-review` as its child run. The graph is the package's own (routes, joins, approvals, the pushes and the pull
+ * request on a stand-in for GitHub, the label, Slack, `result`). What is replaced is every agent that needs a checkout:
+ * OpenCode cannot run on every host (the worker needs memory limits it cannot always enforce), and what the agents
+ * write is covered elsewhere. Each is swapped for a script that returns what the agent's schema describes, so these
+ * tests prove the wiring and nothing about the quality of the agents' work. Runs under `npm run test:local`.
+ */
+const up = await temporalAvailable();
+const PKG = 'examples/sdd-story';
+const REPO = 'acme/shop';
+const CHANNEL = 'C0STORY';
+const READ_TOKEN = 'ghp_read_story_1';
+const WRITE_TOKEN = 'ghp_write_story_2';
+const BASE_SHA = 'b'.repeat(40);
+const LABEL = 'sdd-signed-off';
+
+type ReviewKind = 'approved' | 'findings' | 'fail';
+interface Scenario {
+  /** Does the first proposal pass its check, and the revised one. */
+  check1: boolean;
+  check2: boolean;
+  /** The worker's test result for the build, and for the fix round. */
+  tests: 'passed' | 'failed';
+  fixTests: 'passed' | 'failed';
+  review: ReviewKind;
+}
+const HAPPY: Scenario = { check1: true, check2: true, tests: 'passed', fixTests: 'passed', review: 'approved' };
+
+const file = (path: string, content: string, status = 'added') => ({ path, status, content, additions: content.split('\n').length - 1, deletions: 0 });
+const PROPOSAL = file('openspec/changes/discount/proposal.md', '# Discount\n');
+const SRC = file('src/cart.js', 'export const total = 1;\n', 'modified');
+const SRC_FIXED = file('src/cart.js', 'export const total = 2;\n', 'modified');
+const SPEC = file('openspec/specs/cart/spec.md', '# cart\n');
+const ARCHIVED = file('openspec/changes/archive/2026-11-10-discount/proposal.md', '# Discount\n');
+const ARCHIVE_FILES = [SRC, SPEC, ARCHIVED];
+const FIX_FILES = [SRC_FIXED, SPEC, ARCHIVED];
+const contents = (files: typeof ARCHIVE_FILES) => Object.fromEntries(files.map((f) => [f.path, f.content]));
+
+const workspace = (files: Array<ReturnType<typeof file>>, tests?: { status: string; attempts: number }) => ({
+  repo: REPO,
+  base_sha: BASE_SHA,
+  files,
+  ...(tests ? { tests: { status: tests.status, exit_code: tests.status === 'passed' ? 0 : 1, attempts: tests.attempts } } : {}),
+  stats: { files: files.length },
+  diff: 'diff --git a/src/cart.js b/src/cart.js\n',
+});
+const check = (ok: boolean) => ({ ok, errors: ok ? [] : ['Requirement has no scenario'], warnings: [], deltas: [{ capability: 'cart', op: 'ADDED', requirement: 'Totals apply the discount' }], capabilities: ['cart'] });
+const proposal = (content: string) => ({ summary: 'Discount spec', change_id: 'discount', bootstrapped: false, capabilities: ['cart'], open_questions: [], conflicts: [], workspace: workspace([{ ...PROPOSAL, content }]) });
+
+/** What each agent (and each checker that reads a checkout) answers, by step id. */
+function answers(s: Scenario): Record<string, unknown> {
+  return {
+    scan: { has_openspec: true, has_config: true, has_specs: true, capabilities: [{ name: 'cart', requirements: ['Totals apply the discount'] }], active_changes: [], rules: [] },
+    propose: proposal('first'),
+    check_1: check(s.check1),
+    revise: proposal('revised'),
+    check_2: check(s.check2),
+    spec_review: { summary: 'Specs are testable.', approved: true, prompt_injection_detected: false, findings: [] },
+    apply: {
+      summary: 'total() applies the discount',
+      commit_message: 'fix(cart): apply the discount\n\nTotals ignored it.',
+      pr_title: 'fix(cart): apply the discount',
+      pr_body: '## Summary\nApply the discount.',
+      tasks_done: ['UPDATE src/cart.js'],
+      tests_added: ['10% off 20 is 18'],
+      deviations: [],
+      risks: [],
+      workspace: workspace([SRC, PROPOSAL], { status: s.tests, attempts: 2 }),
+    },
+    verify: { summary: 'Every requirement is implemented.', prompt_injection_detected: false, requirements: [], tasks_unticked: [], issues: [] },
+    archive: { summary: 'Merged the cart delta.', merged: [{ capability: 'cart', added: 1, modified: 0, removed: 0, renamed: 0 }], workspace: workspace(ARCHIVE_FILES) },
+    archive_check: check(true),
+    fix: { summary: 'Clamp the discount', fixed: ['No clamp'], skipped: [], prompt_injection_detected: false, workspace: workspace(FIX_FILES, { status: s.fixTests, attempts: 1 }) },
+  };
+}
+
+const python = (value: unknown) => `import json, sys\nsys.stdin.read()\nprint(json.dumps(json.loads(${JSON.stringify(JSON.stringify(value))})))\n`;
+
+/** An agent's schema with the checkout the worker would have added: the same fields, no `additionalProperties: false`. */
+const WORKSPACE_SCHEMA = {
+  type: 'object',
+  properties: {
+    repo: { type: 'string' },
+    base_sha: { type: 'string' },
+    files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, status: { type: 'string' }, content: { type: 'string' }, additions: { type: 'integer' }, deletions: { type: 'integer' } }, required: ['path', 'status'] } },
+    tests: { type: 'object', properties: { status: { type: 'string' }, exit_code: { type: 'integer' }, attempts: { type: 'integer' } } },
+    stats: { type: 'object', properties: { files: { type: 'integer' } } },
+    diff: { type: 'string' },
+  },
+};
+
+let nonce = 0;
+/** The package as it ships, with every agent swapped for a script that answers as the scenario says. */
+function storyPackage(s: Scenario): string {
+  const dir = mkdtempSync(join(tmpdir(), 'azhi-story-e2e-'));
+  cpSync(PKG, dir, { recursive: true });
+  const wfPath = join(dir, 'workflow.yaml');
+  const wf = parse(readFileSync(wfPath, 'utf8').replaceAll('{{slack_channel}}', CHANNEL));
+  const out = answers(s);
+  for (const n of wf.nodes) {
+    if (n.type === 'agent') {
+      const schema = JSON.parse(readFileSync(join(PKG, n.output_schema), 'utf8'));
+      delete schema.additionalProperties;
+      schema.properties = { ...schema.properties, workspace: WORKSPACE_SCHEMA };
+      writeFileSync(join(dir, `schemas/stub_${n.id}.json`), JSON.stringify(schema));
+      for (const k of ['executor', 'profile', 'workspace', 'timeout', 'budget']) delete n[k];
+      Object.assign(n, { type: 'script', runtime: 'python', entrypoint: `scripts/stub_${n.id}.py`, output_schema: `schemas/stub_${n.id}.json`, limits: { time: '1m' } });
+    } else if (out[n.id] === undefined || n.type !== 'script') continue;
+    else n.entrypoint = `scripts/stub_${n.id}.py`;
+    writeFileSync(join(dir, `scripts/stub_${n.id}.py`), python(out[n.id]));
+  }
+  writeFileSync(wfPath, `# scenario ${++nonce}\n${stringify(wf)}`);
+  return dir;
+}
+
+/** A stand-in for pr-review: it answers as the scenario says and echoes the inputs it was given. */
+function reviewPackage(kind: ReviewKind): string {
+  const dir = mkdtempSync(join(tmpdir(), 'azhi-review-stub-'));
+  mkdirSync(join(dir, 'scripts'));
+  writeFileSync(
+    join(dir, 'workflow.yaml'),
+    `# scenario ${++nonce}
+schema_version: "2.0"
+id: pr-review
+inputs:
+  type: object
+  properties:
+    repo: {type: string}
+    pr: {type: integer}
+    post: {type: boolean}
+    offer_merge: {type: boolean}
+    diff_base: {type: string}
+  required: [repo, pr]
+nodes:
+  - id: echo
+    type: script
+    runtime: python
+    entrypoint: scripts/echo.py
+    input: {map: "{'repo': inputs.repo, 'pr': inputs.pr, 'post': has(inputs.post) ? inputs.post : false, 'offer_merge': has(inputs.offer_merge) ? inputs.offer_merge : false, 'diff_base': has(inputs.diff_base) ? inputs.diff_base : ''}"}
+    output_schema: {type: object}
+  - id: summarize
+    type: script
+    runtime: python
+    entrypoint: scripts/summarize.py
+    retry: {max_attempts: 1}
+    input: {map: "{'pr': nodes.echo.output.pr}"}
+    output_schema: {type: object}
+`,
+  );
+  writeFileSync(join(dir, 'scripts/echo.py'), 'import json, sys\nprint(json.dumps(json.load(sys.stdin)))\n');
+  const finding = (triage: string, title: string) => ({ severity: triage === 'fix_now' ? 'major' : 'minor', triage, reviewer: 'correctness', path: 'src/cart.js', line: 3, title, detail: 'A discount above 100% makes the total negative.', confidence: 90 });
+  const verdicts = {
+    approved: { verdict: 'approve', summary: 'Looks good.', findings: [] },
+    findings: { verdict: 'request_changes', summary: 'One bug to fix.', findings: [finding('fix_now', 'No clamp'), finding('follow_up', 'Name the constant')] },
+  };
+  writeFileSync(join(dir, 'scripts/summarize.py'), kind === 'fail' ? 'raise SystemExit("the review failed")\n' : python(verdicts[kind]));
+  return dir;
+}
+
+async function waitForApprovalOn(api: ApiClient, runId: string, node: string) {
+  for (let i = 0; i < 600; i++) {
+    const d = await api.get<any>(`/v1/runs/${runId}`);
+    if (d.run.state === 'waiting' && d.run.flags?.waiting_reason?.reason === 'approval' && d.run.flags.waiting_reason.node === node) return d;
+    if (['failed', 'succeeded', 'cancelled', 'expired'].includes(d.run.state)) throw new Error(`run ended ${d.run.state} before waiting on ${node}: ${JSON.stringify(d.run.error)}`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`run ${runId} never waited on ${node}`);
+}
+
+const SLOW = 300_000;
+
+describe.skipIf(!up)('sdd-story end to end (agents replaced by scripts, pr-review replaced by a stand-in)', () => {
+  let h: Harness;
+  let gh: Awaited<ReturnType<typeof startFakeGithub>>;
+  const saved = process.env.AZHI_EGRESS_ALLOW;
+  let ticket = 11;
+
+  beforeAll(async () => {
+    process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
+    gh = await startFakeGithub(
+      { runs: [], pulls: [], issues: Array.from({ length: 20 }, (_, i) => ({ number: 12 + i, id: 5000 + i, repo: REPO, title: `Apply the discount ${12 + i}`, labels: [] as string[], body: 'Totals ignore the discount code.' })) },
+      { token: [READ_TOKEN, WRITE_TOKEN] },
+    );
+    h = await startHarness();
+    await h.api.put('/v1/secrets/github-read-token', { value: READ_TOKEN });
+    await h.api.put('/v1/secrets/github-write-token', { value: WRITE_TOKEN });
+    for (const t of parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools) {
+      if (t.transport?.config?.repos) t.transport.config = { ...t.transport.config, repos: [REPO], api_url: gh.url };
+      await h.api.post('/v1/tools', t);
+    }
+  }, 120_000);
+  afterAll(async () => {
+    if (saved === undefined) delete process.env.AZHI_EGRESS_ALLOW;
+    else process.env.AZHI_EGRESS_ALLOW = saved;
+    await h?.stop();
+    await gh?.stop();
+  });
+
+  /** Publishes the review stand-in, then starts a Story for the next ticket. */
+  const start = async (s: Scenario, extra: Record<string, unknown> = {}) => {
+    const rv = await uploadDir(h.api, reviewPackage(s.review));
+    expect(rv.ok, JSON.stringify(rv.diagnostics)).toBe(true);
+    await h.api.post(`/v1/versions/${rv.version.id}/publish`, {});
+    const v = await uploadDir(h.api, storyPackage(s));
+    expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
+    const number = ++ticket;
+    const { run_id } = await h.api.post<{ run_id: string }>('/v1/runs', { version: v.version.id, inputs: { source: 'github', ticket: `${REPO}#${number}`, repo: REPO, base_branch: 'dev', ...extra } });
+    return { run_id, number };
+  };
+  const approve = (run_id: string, node: string, decision: 'approved' | 'rejected' = 'approved') => h.api.post(`/v1/runs/${run_id}/approvals`, { node, decision });
+  const out = (d: any, id: string) => d.attempts.filter((a: any) => a.node_id === id && a.state === 'succeeded').at(-1)?.output;
+  /** A tool step's result: the attempt holds {action, output, observation}. */
+  const tool = (d: any, id: string) => out(d, id)?.output;
+  const state = (d: any, id: string) => d.attempts.filter((a: any) => a.node_id === id).at(-1)?.state ?? 'not run';
+  const labels = (n: number) => gh.issues.find((i) => i.number === n)!.labels;
+
+  it('replaces only the agents: the stand-in package has the same steps as the real one', () => {
+    const real = parse(readFileSync(`${PKG}/workflow.yaml`, 'utf8')).nodes as Array<{ id: string; type: string }>;
+    const stubbed = parse(readFileSync(join(storyPackage(HAPPY), 'workflow.yaml'), 'utf8')).nodes as Array<{ id: string; type: string }>;
+    expect(stubbed.map((n) => n.id)).toEqual(real.map((n) => n.id));
+    expect(stubbed.filter((n) => n.type === 'agent')).toEqual([]);
+    expect(real.filter((n) => n.type === 'agent').map((n) => n.id)).toEqual(['scan', 'propose', 'revise', 'spec_review', 'apply', 'verify', 'archive', 'fix']);
+  });
+
+  it('delivers a Story: specs approved, branch pushed, pull request into the base, review child, sign-off, label, result', async () => {
+    const { run_id, number } = await start(HAPPY, { stack_on: 'azhi/acme/shop-11' });
+
+    // The first proposal passes its check, so the second round never runs - and the steps after it still do.
+    const specs = await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    expect(specs.approvals[0].request.payload).toMatchObject({ change_id: out(specs, 'change_id').id });
+    expect(state(specs, 'pass_1')).toBe('succeeded');
+    for (const id of ['revise', 'check_2', 'pass_2']) expect(state(specs, id), id).toBe('skipped');
+    expect(gh.git.refs.size).toBe(0);
+    await approve(run_id, 'proposal_approval');
+
+    // Sign-off comes after the push, the pull request and the review, with all of them in front of the person.
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+    const branch = tool(sign, 'push_branch').branch as string;
+    expect(gh.branchFiles(branch)).toEqual(contents(ARCHIVE_FILES));
+    expect(gh.git.pulls).toHaveLength(1);
+    expect(gh.git.pulls[0]).toMatchObject({ repo: REPO, head: branch, base: 'dev', draft: false });
+    const pr = tool(sign, 'open_pr');
+    const review = out(sign, 'review');
+    expect(review).toMatchObject({ workflow: 'pr-review', state: 'succeeded' });
+    // The review is of this pull request, from the commit the branch was cut from, and it never offers to merge.
+    expect(review.nodes.echo).toEqual({ repo: REPO, pr: pr.number, post: true, offer_merge: false, diff_base: BASE_SHA });
+    const payload = sign.approvals.find((a: any) => a.node_id === 'signoff').request.payload;
+    expect(payload).toMatchObject({ pull_request: { number: pr.number, url: pr.url }, tests: { status: 'passed' }, review: { status: 'approved', verdict: 'approve' }, fix_round_ran: false, fix_round_note: 'No fix round ran.' });
+    expect(labels(number)).not.toContain(LABEL);
+    await approve(run_id, 'signoff');
+
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.error).toBeNull();
+    expect(done.run.state).toBe('succeeded');
+    expect(state(done, 'fix')).toBe('skipped');
+    for (const id of ['spec_review', 'apply', 'verify', 'archive', 'push_branch', 'open_pr', 'review', 'signoff', 'label_ticket', 'story_notify', 'summary', 'result']) expect(state(done, id), id).toBe('succeeded');
+    expect(out(done, 'spec_change').check).toMatchObject({ ok: true, errors: [] });
+    expect(labels(number)).toContain(LABEL);
+    expect(out(done, 'result')).toEqual({ status: 'signed_off', reason: 'signed_off', branch, head_sha: tool(done, 'push_branch').commit_sha, pr_number: pr.number, pr_url: pr.url });
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('Signed off') && t.includes(pr.url))).toBe(true);
+    // The pull request child is a run of its own, started by this one.
+    expect(done.children.map((c: any) => [c.workflow, c.state, c.parent_node_id])).toEqual([['pr-review', 'succeeded', 'review']]);
+  }, SLOW);
+
+  it('runs the second round when the first proposal fails its check, and carries that round on', async () => {
+    const { run_id } = await start({ ...HAPPY, check1: false });
+    const specs = await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    expect(state(specs, 'check_gate_1')).toBe('succeeded');
+    for (const id of ['revise', 'check_2', 'pass_2']) expect(state(specs, id), id).toBe('succeeded');
+    expect(state(specs, 'pass_1')).toBe('skipped');
+    expect(out(specs, 'spec_change').check).toMatchObject({ ok: true });
+    expect(out(specs, 'spec_change').workspace.files[0].content).toBe('revised');
+    await approve(run_id, 'proposal_approval');
+    await waitForApprovalOn(h.api, run_id, 'signoff');
+    await approve(run_id, 'signoff');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off' });
+  }, SLOW);
+
+  it('sends the Story back when neither proposal passes its check: nothing is built, pushed or opened', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id, number } = await start({ ...HAPPY, check1: false, check2: false });
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(done.approvals).toEqual([]);
+    for (const id of ['spec_review', 'proposal_approval', 'apply', 'push_branch', 'open_pr', 'review', 'signoff']) expect(state(done, id), id).toBe('skipped');
+    expect(out(done, 'result')).toEqual({ status: 'sent_back', reason: 'specs_invalid', branch: null, head_sha: null, pr_number: null, pr_url: null });
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+    expect(labels(number)).toEqual([]);
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('did not pass its check'))).toBe(true);
+  }, SLOW);
+
+  it('sends the Story back, with the reason, when a person rejects the specs', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id } = await start(HAPPY);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['apply', 'archive', 'push_branch', 'open_pr', 'review']) expect(state(done, id), id).toBe('skipped');
+    // A parent reads this step, so it must exist even when a person says no.
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'specs_rejected', pr_number: null });
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+  }, SLOW);
+
+  it('sends the Story back when the tests fail: no branch, no pull request, no review', async () => {
+    const before = [gh.git.refs.size, gh.git.pulls.length];
+    const { run_id } = await start({ ...HAPPY, tests: 'failed' });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(state(done, 'release_gate')).toBe('succeeded');
+    for (const id of ['archive', 'push_branch', 'open_pr', 'review', 'signoff']) expect(state(done, id), id).toBe('skipped');
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'tests_failed', pr_number: null });
+    expect([gh.git.refs.size, gh.git.pulls.length]).toEqual(before);
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('tests did not pass'))).toBe(true);
+  }, SLOW);
+
+  it('fixes the confirmed findings once, pushes the fix to the same branch, and says at sign-off that it was not reviewed again', async () => {
+    const { run_id, number } = await start({ ...HAPPY, review: 'findings' });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const sign = await waitForApprovalOn(h.api, run_id, 'signoff');
+
+    expect(out(sign, 'review_outcome')).toMatchObject({ status: 'findings', fix_now: [expect.objectContaining({ title: 'No clamp' })], remaining: [expect.objectContaining({ title: 'Name the constant' })] });
+    const branch = tool(sign, 'push_branch').branch as string;
+    // One pull request, one branch; the fix replaced the branch's commit, so its files are the whole fixed change.
+    expect(gh.git.pulls.filter((p) => p.head === branch)).toHaveLength(1);
+    expect(gh.branchFiles(branch)).toEqual(contents(FIX_FILES));
+    expect(tool(sign, 'push_fix').commit_sha).not.toBe(tool(sign, 'push_branch').commit_sha);
+    expect(gh.git.refs.get(branch)).toBe(tool(sign, 'push_fix').commit_sha);
+    const payload = sign.approvals.find((a: any) => a.node_id === 'signoff').request.payload;
+    expect(payload).toMatchObject({ review: { status: 'findings' }, fix_round_ran: true, fix_round_note: 'The fix was tested but not reviewed again.', fix_round: { ran: true, tests_status: 'passed', re_reviewed: false } });
+    expect(payload.remaining_findings).toHaveLength(1);
+    // The review ran once: there is no second review of the fix.
+    expect(sign.attempts.filter((a: any) => a.node_id === 'review')).toHaveLength(1);
+    await approve(run_id, 'signoff');
+
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(out(done, 'result')).toMatchObject({ status: 'signed_off', branch, head_sha: tool(done, 'push_fix').commit_sha });
+    expect(labels(number)).toContain(LABEL);
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('fix round ran, not reviewed again'))).toBe(true);
+  }, SLOW);
+
+  it('asks nobody to sign off a fix whose tests fail, and leaves the pushed branch as it was', async () => {
+    const { run_id } = await start({ ...HAPPY, review: 'findings', fixTests: 'failed' });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    const branch = tool(done, 'push_branch').branch as string;
+    expect(gh.branchFiles(branch)).toEqual(contents(ARCHIVE_FILES));
+    for (const id of ['push_fix', 'fix_done', 'signoff', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    expect(done.approvals.map((a: any) => a.node_id)).toEqual(['proposal_approval']);
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'fix_tests_failed', branch, pr_number: expect.any(Number) });
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('fix round failed its tests'))).toBe(true);
+  }, SLOW);
+
+  it('sends the Story back, without a sign-off, when the review child fails', async () => {
+    const { run_id } = await start({ ...HAPPY, review: 'fail' });
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    expect(out(done, 'review')).toMatchObject({ workflow: 'pr-review', state: 'failed', error: { class: expect.any(String) } });
+    expect(out(done, 'review_outcome')).toMatchObject({ status: 'unavailable', reason: 'review_did_not_succeed' });
+    for (const id of ['fix', 'signoff', 'label_ticket']) expect(state(done, id), id).toBe('skipped');
+    expect(done.approvals.map((a: any) => a.node_id)).toEqual(['proposal_approval']);
+    // The pull request exists and is reported, but it was not signed off.
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'review_unavailable', pr_number: expect.any(Number) });
+    expect(h.slack.messages.map((m) => m.text).some((t) => t.includes('review is unavailable'))).toBe(true);
+  }, SLOW);
+
+  it('sends the Story back, unlabelled, when a person rejects the sign-off', async () => {
+    const { run_id, number } = await start(HAPPY);
+    await waitForApprovalOn(h.api, run_id, 'proposal_approval');
+    await approve(run_id, 'proposal_approval');
+    await waitForApprovalOn(h.api, run_id, 'signoff');
+    await approve(run_id, 'signoff', 'rejected');
+    const done = await waitForRun(h.api, run_id, SLOW);
+    expect(done.run.state).toBe('succeeded');
+    for (const id of ['label_ticket', 'story_notify', 'summary']) expect(state(done, id), id).toBe('skipped');
+    expect(labels(number)).toEqual([]);
+    expect(out(done, 'result')).toMatchObject({ status: 'sent_back', reason: 'signoff_rejected', pr_number: expect.any(Number) });
+  }, SLOW);
+});

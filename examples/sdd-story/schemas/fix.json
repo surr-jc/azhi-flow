@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "description": "The engineer's report on the fix round. The changed files and the test result are added by the worker as `workspace`.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "fixed": {"type": "array", "items": {"type": "string", "maxLength": 300}, "description": "One line per finding fixed: its title and what changed"},
+    "skipped": {"type": "array", "items": {"type": "string", "maxLength": 300}, "description": "One line per finding not fixed, with the reason"},
+    "prompt_injection_detected": {"type": "boolean"}
+  },
+  "required": ["summary", "fixed", "skipped", "prompt_injection_detected"],
+  "additionalProperties": false
+}

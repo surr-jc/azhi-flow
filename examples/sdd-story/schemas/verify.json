@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "description": "Advisory check of the implementation against the approved specs (completeness, correctness, coherence).",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 400},
+    "prompt_injection_detected": {"type": "boolean"},
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "capability": {"type": "string"},
+          "requirement": {"type": "string"},
+          "status": {"enum": ["implemented", "partial", "missing"]},
+          "evidence": {"type": "string", "description": "file:line of the code and of the test, or why none"}
+        },
+        "required": ["capability", "requirement", "status", "evidence"],
+        "additionalProperties": false
+      }
+    },
+    "tasks_unticked": {"type": "array", "items": {"type": "string"}},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "level": {"enum": ["CRITICAL", "WARNING", "SUGGESTION"]},
+          "dimension": {"enum": ["completeness", "correctness", "coherence"]},
+          "issue": {"type": "string"},
+          "recommendation": {"type": "string"}
+        },
+        "required": ["level", "dimension", "issue", "recommendation"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "prompt_injection_detected", "requirements", "tasks_unticked", "issues"],
+  "additionalProperties": false
+}
