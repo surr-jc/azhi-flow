@@ -53,10 +53,10 @@ describe.skipIf(!up)('ai-sdlc-factory-verify end to end (scripted verifier, stan
   let gh: Awaited<ReturnType<typeof startFakeGithub>>;
   const saved = process.env.AZHI_EGRESS_ALLOW;
 
-  const start = async (output: unknown) => {
+  const start = async (output: unknown, extra: Record<string, unknown> = {}) => {
     const v = await uploadDir(h.api, scripted(output));
     expect(v.ok, JSON.stringify(v.diagnostics)).toBe(true);
-    return (await h.api.post<{ run_id: string }>('/v1/runs', { version: v.version.id, inputs })).run_id;
+    return (await h.api.post<{ run_id: string }>('/v1/runs', { version: v.version.id, inputs: { ...inputs, ...extra } })).run_id;
   };
   const slackSince = (n: number) => h.slack.messages.slice(n).map((m) => m.text);
 
@@ -112,6 +112,22 @@ describe.skipIf(!up)('ai-sdlc-factory-verify end to end (scripted verifier, stan
     expect(gh.created[0]!.body).toContain('No receipt page after payment');
     expect(gh.created[0]!.body).toContain('src/pay.ts');
     expect(done.attempts.find((a: any) => a.node_id === 'create_fix').state).toBe('succeeded');
+  });
+
+  it('gives the verdict and asks for no fix ticket when propose_fix is false', async () => {
+    const made = gh.created.length;
+    const before = h.slack.messages.length;
+    const run_id = await start({ method: 'read the code', journeys: [row('Checkout', 'fail', ['src/pay.ts'], 'No receipt page after payment')], invariants: [] }, { propose_fix: false });
+    const done = await waitForRun(h.api, run_id, 90_000);
+    expect(done.run.error).toBeNull();
+    expect(done.run.state).toBe('succeeded');
+    // The verdict still says the release failed and still names the ticket it would have proposed; only the question is gone.
+    expect(done.attempts.find((a: any) => a.node_id === 'verdict').output).toMatchObject({ overall: 'failed', propose_fix: true });
+    expect(done.approvals).toHaveLength(0);
+    expect(done.attempts.find((a: any) => a.node_id === 'fix_approval').state).toBe('skipped');
+    expect(done.attempts.find((a: any) => a.node_id === 'create_fix').state).toBe('skipped');
+    expect(gh.created).toHaveLength(made);
+    expect(slackSince(before).join('\n')).toContain('Release verification of acme/shop (dev): failed');
   });
 
   it('writes nothing when the person rejects the fix ticket', async () => {

@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory-verify",
-    "definitionHash": "sha256:51cbb1810b4d957be167bcc8f3abe642dc21ce0a95717f68a1ac35741da744c5",
+    "definitionHash": "sha256:1854fc8fe5190c59ebbf75404ec59f5a622ec09b128d2408051b1445b62007d8",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -34,6 +34,12 @@
           "minLength": 1,
           "maxLength": 12000,
           "description": "The release's user journeys (steps a user takes) and the invariants that must stay true, from the approved release plan"
+        },
+        "propose_fix": {
+          "type": "boolean",
+          "default": true,
+          "title": "Propose a fix ticket",
+          "description": "When something failed, ask a person to approve one fix ticket (on by default). Turn it off to get the verdict only, for example when another workflow reads it and decides what to do."
         }
       },
       "required": [
@@ -242,8 +248,8 @@
         "def": {
           "id": "needs_fix",
           "type": "condition",
-          "description": "Something failed - ask a person. Otherwise nothing is written.",
-          "expression": "nodes.verdict.output.propose_fix ? 'ask' : 'none'",
+          "description": "Something failed - ask a person, unless the run was started without a fix ticket (propose_fix false). Otherwise nothing is written.",
+          "expression": "nodes.verdict.output.propose_fix && !(has(inputs.propose_fix) && !inputs.propose_fix) ? 'ask' : 'none'",
           "routes": {
             "ask": [
               "fix_approval"

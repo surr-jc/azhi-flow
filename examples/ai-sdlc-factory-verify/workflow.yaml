@@ -22,6 +22,7 @@ inputs:
     repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "The GitHub repository to verify, owner/name"}
     staging_branch: {type: string, title: Staging branch, minLength: 1, maxLength: 200, description: "The branch the factory delivered to (for example dev)"}
     journeys: {type: string, title: Journeys and invariants, minLength: 1, maxLength: 12000, description: "The release's user journeys (steps a user takes) and the invariants that must stay true, from the approved release plan"}
+    propose_fix: {type: boolean, default: true, title: Propose a fix ticket, description: "When something failed, ask a person to approve one fix ticket (on by default). Turn it off to get the verdict only, for example when another workflow reads it and decides what to do."}
   required: [repo, staging_branch, journeys]
 config:
   # Filled in by the example install (setting slack_channel).
@@ -77,8 +78,8 @@ nodes:
 
   - id: needs_fix
     type: condition
-    description: Something failed - ask a person. Otherwise nothing is written.
-    expression: "nodes.verdict.output.propose_fix ? 'ask' : 'none'"
+    description: Something failed - ask a person, unless the run was started without a fix ticket (propose_fix false). Otherwise nothing is written.
+    expression: "nodes.verdict.output.propose_fix && !(has(inputs.propose_fix) && !inputs.propose_fix) ? 'ask' : 'none'"
     routes: {ask: [fix_approval], none: []}
     default: none
 
