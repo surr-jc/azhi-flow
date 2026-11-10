@@ -1,0 +1,23 @@
+# Admin configuration for the SDD breakdown example: `azhi example install sdd-breakdown --repo OWNER/REPO
+# --set slack_channel=C0123ABCD` (or the Examples page) fills in the settings; `azhi apply` works too once the
+# {{...}} values are replaced by hand.
+#
+# This package has no tools. It reads the repository through the analyst's checkout and returns the Stories as
+# data; it writes nothing to GitHub or anywhere else except one Slack notice.
+#
+# Secrets (values never go in a package or run state):
+#   github-read-token     fine-grained, read-only "Contents": the worker clones the repository for the analysis
+#   github-copilot-token  your GitHub Copilot sign-in; the analyst runs on a Copilot model through OpenCode
+#                         (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+#   slack-bot-token       posts the list of Stories (or why there are none) to the channel
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the result is posted to (the bot must be in it).
+    placeholder: C0123ABCD
+    required: true
+tools: []
+secrets:
+  - slack-bot-token
+  - github-read-token
+  - github-copilot-token

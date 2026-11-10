@@ -1,0 +1,569 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "plan": {
+    "format": "azhi-plan/1",
+    "compiler": "0.1.0",
+    "workflowId": "sdd-breakdown",
+    "definitionHash": "sha256:051c0ce5fcb52396ef86c8357a5c4113bd2db9766da07b31bf9833a4f60bb06a",
+    "inputsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "title": "Repository",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "The repository the epic is about, owner/name"
+        },
+        "text": {
+          "type": "string",
+          "title": "Epic",
+          "minLength": 1,
+          "maxLength": 20000,
+          "description": "The epic to size and split, as free text."
+        },
+        "base_branch": {
+          "type": "string",
+          "title": "Base branch",
+          "maxLength": 200,
+          "description": "Branch the analysis reads; leave empty for the default branch"
+        },
+        "epic": {
+          "type": "integer",
+          "title": "Epic number",
+          "minimum": 1,
+          "description": "The epic's number in the plan. Echoed back in the output."
+        },
+        "release": {
+          "type": "string",
+          "title": "Release",
+          "pattern": "^([a-z0-9][a-z0-9-]{0,60})?$",
+          "description": "The release id. Echoed back in the output."
+        }
+      },
+      "required": [
+        "repo",
+        "text"
+      ]
+    },
+    "config": {
+      "channel": "{{slack_channel}}",
+      "split_max_files": 5,
+      "split_sensitive_max_files": 2
+    },
+    "trigger": {
+      "manual": true
+    },
+    "nodes": [
+      {
+        "id": "ticket",
+        "type": "script",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "ticket",
+          "type": "script",
+          "description": "The epic text as one plain ticket (the first line is the title).",
+          "runtime": "python",
+          "entrypoint": "scripts/ticket.py",
+          "input": {
+            "map": "{'repo': inputs.repo, 'text': inputs.text}"
+          },
+          "output_schema": "schemas/ticket.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "analyze",
+        "type": "agent",
+        "deps": [
+          "ticket"
+        ],
+        "dataDeps": [
+          "ticket"
+        ],
+        "def": {
+          "id": "analyze",
+          "type": "agent",
+          "description": "Size the epic against the code - deliverables, files, sensitive areas, risk - and propose slices when it is wide (scope-analysis and definition-of-ready skills).",
+          "executor": "opencode",
+          "profile": "scope-analyst@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "has(inputs.base_branch) && inputs.base_branch != '' ? 'refs/heads/' + inputs.base_branch : 'HEAD'"
+            },
+            "credential": "github-read-token",
+            "depth": 1
+          },
+          "input": {
+            "map": "{'ticket': nodes.ticket.output, 'repository': inputs.repo, 'limits': {'split_max_files': config.split_max_files, 'split_sensitive_max_files': config.split_sensitive_max_files, 'max_slices': 6}}"
+          },
+          "output_schema": "schemas/scope.json",
+          "timeout": "25m",
+          "budget": {
+            "max_tool_calls": 12
+          }
+        },
+        "timeoutMs": 1500000,
+        "maxAttempts": 3,
+        "agentTools": []
+      },
+      {
+        "id": "scope_gate",
+        "type": "condition",
+        "deps": [
+          "analyze"
+        ],
+        "dataDeps": [
+          "analyze"
+        ],
+        "def": {
+          "id": "scope_gate",
+          "type": "condition",
+          "description": "Only a code change goes on; anything else stops here and returns no Stories.",
+          "expression": "nodes.analyze.output.is_code ? 'plan' : 'stop'",
+          "routes": {
+            "plan": [
+              "weight"
+            ],
+            "stop": [
+              "stop_message"
+            ]
+          },
+          "default": "stop"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "stop_message",
+        "type": "report",
+        "deps": [
+          "analyze",
+          "scope_gate",
+          "ticket"
+        ],
+        "dataDeps": [
+          "analyze",
+          "ticket"
+        ],
+        "def": {
+          "id": "stop_message",
+          "type": "report",
+          "description": "Why this is not something to split.",
+          "template": "templates/stop.md",
+          "input": {
+            "map": "{'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "scope_gate",
+          "route": "stop"
+        }
+      },
+      {
+        "id": "stop_notify",
+        "type": "notify",
+        "deps": [
+          "stop_message"
+        ],
+        "dataDeps": [
+          "stop_message"
+        ],
+        "def": {
+          "id": "stop_notify",
+          "type": "notify",
+          "description": "Tell the channel no Stories were produced, and why.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.stop_message.output.markdown"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "weight",
+        "type": "condition",
+        "deps": [
+          "analyze",
+          "scope_gate"
+        ],
+        "dataDeps": [
+          "analyze"
+        ],
+        "def": {
+          "id": "weight",
+          "type": "condition",
+          "description": "Single or split, by rules: more than one deliverable, more files than split_max_files, or a sensitive area in more than split_sensitive_max_files files - and only when the analyst found at least 2 slices.",
+          "expression": "size(nodes.analyze.output.slices) >= 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files || (nodes.analyze.output.touches_sensitive && nodes.analyze.output.est_files > config.split_sensitive_max_files)) ? 'split' : 'single'",
+          "routes": {
+            "single": [],
+            "split": []
+          },
+          "default": "single"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "scope_gate",
+          "route": "plan"
+        }
+      },
+      {
+        "id": "plan_review",
+        "type": "approval",
+        "deps": [
+          "analyze",
+          "ticket",
+          "weight"
+        ],
+        "dataDeps": [
+          "analyze",
+          "ticket",
+          "weight"
+        ],
+        "def": {
+          "id": "plan_review",
+          "type": "approval",
+          "description": "A person approves the plan before any Story is returned, and may leave slices out. Answer in mission control, with azhi approve, or from the Slack approval message.",
+          "role": "author",
+          "message": {
+            "cel": "nodes.weight.output.route == 'split' ? 'Split ' + nodes.ticket.output.title + ' into ' + string(size(nodes.analyze.output.slices)) + ' Stories? Name the slices to leave out, if any.' : 'Deliver ' + nodes.ticket.output.title + ' as one Story?'"
+          },
+          "payload": {
+            "map": "{'ticket': {'key': nodes.ticket.output.key, 'title': nodes.ticket.output.title, 'url': nodes.ticket.output.url}, 'decision': nodes.weight.output.route, 'analysis': {'summary': nodes.analyze.output.summary, 'deliverables': nodes.analyze.output.deliverables, 'est_files': nodes.analyze.output.est_files, 'touches_sensitive': nodes.analyze.output.touches_sensitive, 'has_migration': nodes.analyze.output.has_migration, 'risk': nodes.analyze.output.risk, 'reasons': nodes.analyze.output.reasons}, 'slices': nodes.analyze.output.slices, 'single': nodes.analyze.output.single, 'note': nodes.weight.output.route == 'single' && size(nodes.analyze.output.slices) < 2 && (size(nodes.analyze.output.deliverables) > 1 || nodes.analyze.output.est_files > config.split_max_files) ? 'The size rules say this is big, but no way to split it was found: it is treated as one Story.' : ''}"
+          },
+          "decision_schema": {
+            "type": "object",
+            "properties": {
+              "drop": {
+                "type": "string",
+                "maxLength": 40,
+                "pattern": "^[0-9, ]*$",
+                "title": "Slices to leave out",
+                "description": "Slice numbers from the plan, for example 2,4. Leave empty to keep them all. Applies to a split only."
+              }
+            },
+            "additionalProperties": false
+          },
+          "expires_in": "72h",
+          "on_expiry": "reject"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "decision": {
+              "enum": [
+                "approved",
+                "rejected"
+              ]
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "data": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 259200000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "final_plan",
+        "type": "script",
+        "deps": [
+          "analyze",
+          "plan_review",
+          "ticket",
+          "weight"
+        ],
+        "dataDeps": [
+          "analyze",
+          "plan_review",
+          "ticket",
+          "weight"
+        ],
+        "def": {
+          "id": "final_plan",
+          "type": "script",
+          "description": "The Stories after the approver's choices (slices left out are removed, the rest renumbered, dependencies noted).",
+          "runtime": "python",
+          "entrypoint": "scripts/final_plan.py",
+          "input": {
+            "map": "{'weight': nodes.weight.output.route, 'ticket': nodes.ticket.output, 'analysis': nodes.analyze.output, 'drop': has(nodes.plan_review.output.data.drop) ? nodes.plan_review.output.data.drop : ''}"
+          },
+          "output_schema": "schemas/final_plan.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "stories",
+        "type": "script",
+        "deps": [
+          "final_plan",
+          "stop_message"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "stop_message"
+        ],
+        "def": {
+          "id": "stories",
+          "type": "script",
+          "description": "The Stories to return, cleaned and cut - or status not_code, or none when every slice was left out.",
+          "runtime": "python",
+          "entrypoint": "scripts/stories.py",
+          "merge": "any",
+          "input": {
+            "map": "{'plan': has(nodes.final_plan) ? nodes.final_plan.output : null, 'stopped': has(nodes.stop_message), 'epic': has(inputs.epic) ? inputs.epic : null, 'release': has(inputs.release) && inputs.release != '' ? inputs.release : null}"
+          },
+          "output_schema": "schemas/stories.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "notify_gate",
+        "type": "condition",
+        "deps": [
+          "stories"
+        ],
+        "dataDeps": [
+          "stories"
+        ],
+        "def": {
+          "id": "notify_gate",
+          "type": "condition",
+          "description": "Post the list of Stories, unless the run stopped because this is not a code change (that notice was posted already).",
+          "expression": "nodes.stories.output.status == 'not_code' ? 'no' : 'yes'",
+          "routes": {
+            "yes": [
+              "notice"
+            ],
+            "no": []
+          },
+          "default": "no"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "notice",
+        "type": "script",
+        "deps": [
+          "final_plan",
+          "notify_gate",
+          "stories"
+        ],
+        "dataDeps": [
+          "final_plan",
+          "stories"
+        ],
+        "def": {
+          "id": "notice",
+          "type": "script",
+          "description": "The Slack message listing the Stories, from cleaned text.",
+          "runtime": "python",
+          "entrypoint": "scripts/notice.py",
+          "input": {
+            "map": "{'stories': nodes.stories.output, 'dropped': nodes.final_plan.output.dropped}"
+          },
+          "output_schema": "schemas/notice.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "notify_gate",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "notify",
+        "type": "notify",
+        "deps": [
+          "notice"
+        ],
+        "dataDeps": [
+          "notice"
+        ],
+        "def": {
+          "id": "notify",
+          "type": "notify",
+          "description": "Tell the channel which Stories were produced.",
+          "channel": "slack",
+          "destination": {
+            "ref": "config.channel"
+          },
+          "message": {
+            "ref": "nodes.notice.output.message"
+          },
+          "guard": "args.channel == config.channel"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "delivered": {
+              "type": "boolean"
+            },
+            "receipt": {
+              "type": "object"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      }
+    ],
+    "taint": {
+      "untrusted": {
+        "analyze": "output of tainted agent analyze",
+        "scope_gate": "output of tainted agent analyze",
+        "stop_message": "output of tainted agent analyze",
+        "stop_notify": "output of tainted agent analyze",
+        "weight": "output of tainted agent analyze",
+        "final_plan": "output of tainted agent analyze",
+        "stories": "output of tainted agent analyze",
+        "notify_gate": "output of tainted agent analyze",
+        "notice": "output of tainted agent analyze",
+        "notify": "output of tainted agent analyze"
+      },
+      "tainted": {
+        "analyze": "reads a cloned repository (its files are untrusted)"
+      },
+      "paths": [
+        {
+          "agent": "analyze",
+          "write": "stop_notify",
+          "path": [
+            "analyze",
+            "stop_message",
+            "stop_notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "analyze",
+          "write": "notify",
+          "path": [
+            "analyze",
+            "final_plan",
+            "notice",
+            "notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "analyze",
+          "write": "notify",
+          "path": [
+            "analyze",
+            "…",
+            "plan_review",
+            "…",
+            "notify"
+          ],
+          "gate": "approval"
+        }
+      ]
+    }
+  }
+}

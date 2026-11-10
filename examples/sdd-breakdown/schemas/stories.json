@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {"enum": ["ok", "none", "not_code"]},
+    "epic": {"type": ["integer", "null"], "minimum": 1},
+    "release": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]{0,60}$"},
+    "stories": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "slice": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "body": {"type": "string", "maxLength": 19000}
+        },
+        "required": ["slice", "title", "body"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["status", "epic", "release", "stories"],
+  "additionalProperties": false
+}

@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {"enum": ["ok", "none"]},
+    "epic_title": {"type": "string"},
+    "dropped": {"type": "array", "items": {"type": "integer"}},
+    "stories": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {"slice": {"type": "integer", "minimum": 1}, "title": {"type": "string"}, "body": {"type": "string"}},
+        "required": ["slice", "title", "body"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["mode", "epic_title", "dropped", "stories"],
+  "additionalProperties": false
+}
