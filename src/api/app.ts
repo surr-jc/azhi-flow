@@ -47,6 +47,7 @@ import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
 import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
+import { isHookPath, registerTriggerRoutes } from './triggers.js';
 import { registerAssetRoutes } from './assets.js';
 import { registerBundleRoutes } from './bundle.js';
 import { registerConnectionRoutes } from './connections.js';
@@ -116,7 +117,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS || (req.method === 'POST' && isHookPath(req.url))) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -138,6 +139,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerQuotaRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
+  registerTriggerRoutes(app, ctx, interpreterBuild);
   registerMcpRoutes(app, ctx);
   registerAssetRoutes(app, ctx);
   registerBundleRoutes(app, ctx);

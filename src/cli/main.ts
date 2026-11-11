@@ -1014,6 +1014,31 @@ program
     console.log(`schedule ${s.id}: next occurrence ${new Date(s.next_occurrence_at).toISOString()}`);
   });
 
+const triggerCmd = program.command('trigger').description('Event triggers: webhooks that start a workflow');
+triggerCmd
+  .command('list')
+  .description('Each trigger with its hook URL, state and last delivery')
+  .action(async () => {
+    const rows = await client().get<any[]>('/v1/triggers');
+    table([['TRIGGER', 'WORKFLOW', 'SOURCE', 'EVENTS', 'STATE', 'DELIVERIES', 'LAST', 'URL'], ...rows.map((t) => [t.id, t.workflow, t.source, t.events.join(',') || 'any', t.enabled ? 'on' : 'off', String(t.deliveries), t.last_delivery_at ? new Date(t.last_delivery_at).toISOString() : '-', t.url])]);
+  });
+triggerCmd
+  .command('deliveries')
+  .description('What happened to the last webhooks of a trigger, including those that started nothing')
+  .argument('<trigger>')
+  .action(async (id: string) => {
+    const rows = await client().get<any[]>(`/v1/triggers/${encodeURIComponent(id)}/deliveries`);
+    table([['RECEIVED', 'EVENT', 'OUTCOME', 'RUN', 'REASON'], ...rows.map((d) => [new Date(d.received_at).toISOString(), d.event ?? '-', d.outcome, d.run_id ?? '-', d.reason ?? ''])]);
+  });
+triggerCmd
+  .command('enable')
+  .argument('<trigger>')
+  .action(async (id: string) => void (await client().patch(`/v1/triggers/${encodeURIComponent(id)}`, { enabled: true })));
+triggerCmd
+  .command('disable')
+  .argument('<trigger>')
+  .action(async (id: string) => void (await client().patch(`/v1/triggers/${encodeURIComponent(id)}`, { enabled: false })));
+
 const users = program.command('user').description('Manage workspace users (admin)');
 users
   .command('add')

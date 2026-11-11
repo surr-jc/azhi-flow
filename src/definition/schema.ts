@@ -69,6 +69,22 @@ export const workflowSchema = {
           additionalProperties: false,
         },
         manual: { type: 'boolean' },
+        events: {
+          type: 'array',
+          maxItems: 10,
+          items: {
+            type: 'object',
+            properties: {
+              source: { enum: ['github', 'webhook'] },
+              on: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 80 }, maxItems: 20 },
+              when: { type: 'string', maxLength: 1000 },
+              inputs: { type: 'object', additionalProperties: { type: 'string' } },
+              secret: { type: 'string', minLength: 1, maxLength: 80 },
+            },
+            required: ['source'],
+            additionalProperties: false,
+          },
+        },
       },
       additionalProperties: false,
     },

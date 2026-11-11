@@ -89,6 +89,9 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
   checkout. At most 2 runs work on one repository at once (the rest wait in order); change it per
   workspace with `azhi settings concurrency` or the Workers page, or the server default with
   `AZHI_MAX_RUNS_PER_REPO` (0: no limit).
+- Event triggers: a workflow's `trigger.events` starts a run from a signed GitHub or generic webhook, with
+  payload values copied into inputs only at fixed paths and checked by the input schema. Every delivery,
+  including the ones that start nothing, is recorded. `azhi trigger list`; see [docs/triggers.md](docs/triggers.md).
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
 - The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to
@@ -329,6 +332,7 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |
 | `azhi schedule <workflow> --cron ... --timezone ...` | Set or change a schedule |
+| `azhi trigger list\|deliveries <id>\|enable <id>\|disable <id>` | Event triggers: the webhook URL of each, what happened to each delivery, and an on/off switch (admin) |
 | `azhi doctor` | Database, Temporal, workers online, live interpreter builds (max 3) |
 | `azhi server start [--roles ...]`, `azhi server migrate` | Run the server; roles: `api,interpreter,gateway,scheduler` |
 | `azhi worker start` | Run an execution worker on this host |

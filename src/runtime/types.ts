@@ -23,7 +23,7 @@ export interface RunSnapshot {
   package_hash: string;
   workflow_version_id: string;
   tool_revisions: Record<string, number>;
-  trigger: 'manual' | 'schedule' | 'api' | 'test' | 'subworkflow';
+  trigger: 'manual' | 'schedule' | 'api' | 'test' | 'subworkflow' | 'event';
   /** Set on a run started by a subworkflow node: the parent run and node, and the workflows above this one. */
   parent?: { run_id: string; node_id: string; chain: string[] };
   occurrence_id?: string;

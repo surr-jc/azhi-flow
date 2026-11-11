@@ -167,6 +167,29 @@ export interface ScheduleRow {
   last_run: { id: string; state: string; created_at: string } | null;
 }
 
+export interface TriggerRow {
+  id: string;
+  workflow: string;
+  source: 'github' | 'webhook';
+  events: string[];
+  filter: string | null;
+  input_map: Record<string, string>;
+  secret_name: string;
+  enabled: boolean;
+  deliveries: number;
+  last_delivery_at: string | null;
+  url: string;
+}
+
+export interface TriggerDelivery {
+  delivery_id: string;
+  event: string | null;
+  outcome: 'started' | 'duplicate' | 'ignored' | 'filtered' | 'refused' | 'received';
+  reason: string | null;
+  run_id: string | null;
+  received_at: string;
+}
+
 export interface WorkflowSummary {
   slug: string;
   latest: { id: string; version: number; draft: boolean; signed: boolean; created_at: string; name: string | null; description: string | null } | null;

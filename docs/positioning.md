@@ -138,7 +138,7 @@ Request
 | Capability resolution (`requires: issue-management` → Jira MCP or Linear MCP) | **Vision** | Tools are registered by name and revision |
 | Knowledge as a uniform interface for any node | **Partly built** | Datasets with hybrid retrieval and citations; Git, MCP resources, databases and web sources are not knowledge sources yet |
 | Token optimization as part of execution | **Partly built** | See the section above |
-| One execution graph for chat, automation and coding | **Partly built** | CLI, API, schedule and web entry points into one runtime; coding harnesses are nodes. No web chat or webhook triggers yet |
+| One execution graph for chat, automation and coding | **Partly built** | CLI, API, schedule and web entry points into one runtime; coding harnesses are nodes. Signed webhook triggers ([triggers.md](triggers.md)); no web chat yet |
 | Capability Graph (runtime builds the execution path from available capabilities, permissions, cost, health) | **Vision** | The run plan already evaluates requirements against executor capabilities, which is the seed of this |
 | Workflows exposed as MCP tools | **Vision** (pending) | none |
 
@@ -192,6 +192,6 @@ the roadmap, and should be claimed only as each piece ships.
    existing providers, with the choice recorded in the run plan.
 2. Streamable HTTP MCP and tool metadata (permissions, health, latency, cost) in the registry.
 3. A savings report with an explicit, per-workflow baseline definition.
-4. Web chat and webhook entry points into the same runtime.
+4. Web chat as an entry point into the same runtime (webhook triggers are built, see [triggers.md](triggers.md)).
 5. A container or hosted sandbox provider for coding steps, alongside the worker checkout.
 6. Capability resolution (`requires:`), then the Capability Graph built on the run plan.

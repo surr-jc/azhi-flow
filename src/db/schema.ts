@@ -128,6 +128,19 @@ export const workflowVersions = pgTable('workflow_versions', {
   createdAt: ts('created_at').notNull().defaultNow(),
 });
 
+export const triggers = pgTable('triggers', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  workflowId: text('workflow_id').notNull(),
+  source: text('source').notNull(),
+  events: text('events').array().notNull().default([]),
+  filter: text('filter'),
+  inputMap: jsonb('input_map').notNull().default({}),
+  secretName: text('secret_name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+});
+
 export const schedules = pgTable('schedules', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),

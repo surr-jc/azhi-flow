@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { parse as parseYamlValue } from 'yaml';
 import { checkCel, referencedNodes } from '../cel/evaluator.js';
+import { checkTriggerFilter, validEventPath } from '../cel/trigger.js';
 import type { Diagnostic } from '../definition/load.js';
 import type { PackageSource } from '../definition/package.js';
 import { isValueExpr, type JsonSchema, type NodeDef, type ParallelNode, type Value, type WorkflowDefinition } from '../definition/types.js';
@@ -137,6 +138,22 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
       }
     }
   }
+
+  const inputProps = ((def.inputs as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}) as Record<string, unknown>;
+  (def.trigger?.events ?? []).forEach((ev, i) => {
+    const at = `/trigger/events/${i}`;
+    if (ev.when !== undefined) {
+      const c = checkTriggerFilter(ev.when);
+      if (!c.valid) err('invalid_trigger_filter', `event trigger ${i + 1}: invalid 'when' expression: ${c.error}`, undefined, `${at}/when`);
+    }
+    for (const [name, path] of Object.entries(ev.inputs ?? {})) {
+      if (!validEventPath(path)) err('invalid_trigger_input', `event trigger ${i + 1}: '${path}' is not a payload path like event.pull_request.number`, undefined, `${at}/inputs/${name}`);
+      if (!(name in inputProps)) err('unknown_trigger_input', `event trigger ${i + 1}: '${name}' is not declared in the workflow's inputs`, undefined, `${at}/inputs/${name}`);
+    }
+    for (const name of (def.inputs as { required?: string[] } | undefined)?.required ?? []) {
+      if (!(name in (ev.inputs ?? {}))) warn('trigger_input_missing', `event trigger ${i + 1}: required input '${name}' is not mapped, so every delivery is refused`, undefined, `${at}/inputs`);
+    }
+  });
 
   for (const m of modelDefaultsProblems(def.model_defaults)) err('invalid_model_defaults', m, undefined, '/model_defaults');
 

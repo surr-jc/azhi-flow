@@ -9,6 +9,7 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { audit, loadCatalog } from './catalog.js';
 import type { AppContext } from './context.js';
+import { removeTriggers, syncTriggers } from './triggers.js';
 
 export interface VersionRow {
   id: string;
@@ -113,6 +114,7 @@ export async function publishVersion(ctx: AppContext, workspaceId: string, versi
   const version = (await getVersion(ctx, workspaceId, versionId))!;
   const schedule = version.definition.trigger?.schedule;
   if (schedule) await upsertSchedule(ctx, workspaceId, version.workflow_id, schedule.cron, schedule.timezone, {});
+  await syncTriggers(ctx, workspaceId, version.workflow_id, version.definition.trigger?.events);
   await audit(ctx, workspaceId, actor, 'workflow.published', { workflow: version.slug, version: version.version, package_hash: version.package_hash });
   return version;
 }
@@ -162,6 +164,7 @@ async function removeVersions(ctx: AppContext, workspaceId: string, workflowId: 
     const left = (await c.query(`SELECT count(*)::int AS n FROM workflow_versions WHERE workflow_id=$1`, [workflowId])).rows[0].n as number;
     const workflowGone = whole || left === 0;
     if (workflowGone) {
+      await removeTriggers(c, workflowId);
       await c.query(`DELETE FROM schedules WHERE workflow_id=$1`, [workflowId]);
       await c.query(`DELETE FROM budgets WHERE workflow_id=$1`, [workflowId]);
       await c.query(`DELETE FROM workflow_portable_assets WHERE workflow_id=$1`, [workflowId]);

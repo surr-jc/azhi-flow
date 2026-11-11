@@ -238,6 +238,24 @@ export type NodeDef =
   | ReportNode
   | NotifyNode;
 
+/**
+ * Starts a run when a signed webhook arrives. The payload is untrusted data: `inputs` copies scalar values from fixed
+ * paths (`event.a.b`) into the run's inputs, which the workflow's `inputs` schema then checks; nothing in the payload
+ * is ever a command, a tool name or a path.
+ */
+export interface TriggerEvent {
+  /** `github`: GitHub's `X-GitHub-Event` and `X-Hub-Signature-256`. `webhook`: `X-Azhi-Event` and `X-Azhi-Signature-256` (HMAC-SHA256 of the body). */
+  source: 'github' | 'webhook';
+  /** Event names, `pull_request.opened` for GitHub (event and action) or the `X-Azhi-Event` value. Absent: any event. */
+  on?: string[];
+  /** CEL over `event` (the payload); the run starts only when it is true. */
+  when?: string;
+  /** Run input name -> path into the payload, for example `event.pull_request.number`. */
+  inputs?: Record<string, string>;
+  /** Workspace secret that signs the deliveries. Default `webhook-secret`. */
+  secret?: string;
+}
+
 export interface WorkflowDefinition {
   schema_version: string;
   id: string;
@@ -246,6 +264,7 @@ export interface WorkflowDefinition {
   trigger?: {
     schedule?: { cron: string; timezone: string };
     manual?: boolean;
+    events?: TriggerEvent[];
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;

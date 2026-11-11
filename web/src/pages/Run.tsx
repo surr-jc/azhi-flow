@@ -148,7 +148,7 @@ export function RunPage({ id }: { id: string }) {
 }
 
 function runSentence(r: any): string {
-  const by = r.trigger === 'schedule' ? 'by its schedule' : r.trigger === 'test' ? 'as a test' : `from ${r.trigger}`;
+  const by = r.trigger === 'schedule' ? 'by its schedule' : r.trigger === 'event' ? 'by a webhook' : r.trigger === 'test' ? 'as a test' : `from ${r.trigger}`;
   const why = r.flags?.waiting_reason;
   switch (r.state) {
     case 'waiting':
