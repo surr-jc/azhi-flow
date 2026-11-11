@@ -131,13 +131,16 @@ export function WorkflowBuilder() {
   };
   // The assistant's hand-off (from storage) and `?prompt=` (the Toolbox) pre-fill the composer; neither is sent until the person does.
   const route = useRoute();
-  const [draft, setDraft] = useState(() => {
+  const [handoff] = useState(() => {
     try {
-      return sessionStorage.getItem(BUILDER_HANDOFF_KEY) ?? route.search.get('prompt') ?? '';
+      return sessionStorage.getItem(BUILDER_HANDOFF_KEY);
     } catch {
-      return route.search.get('prompt') ?? '';
+      return null;
     }
   });
+  const [draft, setDraft] = useState(() => handoff ?? route.search.get('prompt') ?? '');
+  // A hand-off arriving on top of an earlier conversation asks whether to clear it first.
+  const [askFresh, setAskFresh] = useState(() => Boolean(handoff) && state.messages.length > 0);
   // Cleared after mount (not while reading) so a repeated initialiser still sees it, and a reload does not refill it.
   useEffect(() => {
     try {
@@ -394,6 +397,7 @@ export function WorkflowBuilder() {
                 onContinue={(text) => { setAsking(false); submit(text); }}
               />
             ) : null}
+            {askFresh ? <FreshDialog onClear={() => { reset(); setAskFresh(false); composer.current?.focus(); }} onClose={() => setAskFresh(false)} /> : null}
             {picking ? <ToolPicker picked={pins} onDone={setPins} onClose={() => setPicking(false)} /> : null}
             {latest && state.shown !== latest.tool_use_id ? (
               <div className="draft-bar">
@@ -802,6 +806,27 @@ function RegisterDialog({ tools, busy, onRegistered, onClose, onContinue }: { to
       <div className="row dialog-actions">
         <button type="button" onClick={() => ref.current?.close()} disabled={reg.isPending}>Not now</button>
         <button ref={primary} type="button" className="primary" disabled={reg.isPending || busy} aria-busy={reg.isPending} onClick={() => reg.mutate()}>{reg.isPending ? 'Registering…' : 'Register and continue'}</button>
+      </div>
+    </dialog>
+  );
+}
+
+/** Asked when the assistant hands a new request to a builder that still holds an earlier conversation. */
+function FreshDialog({ onClear, onClose }: { onClear: () => void; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const primary = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (d && !d.open) d.showModal();
+    primary.current?.focus();
+  }, []);
+  return (
+    <dialog ref={ref} className="dialog" aria-labelledby="fresh-title" onClose={onClose}>
+      <h2 id="fresh-title">Start a new conversation?</h2>
+      <p className="muted small">The assistant sent a new request, and the builder still holds an earlier conversation. Clearing it discards that conversation and its drafts; published and saved workflows are not affected. The new request stays in the composer either way.</p>
+      <div className="row dialog-actions">
+        <button type="button" onClick={() => ref.current?.close()}>Keep the conversation</button>
+        <button ref={primary} type="button" className="danger" onClick={onClear}>Clear and start anew</button>
       </div>
     </dialog>
   );
