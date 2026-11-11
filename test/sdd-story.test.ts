@@ -739,6 +739,12 @@ describe('SDD Story scripts: files_ticket.py', () => {
     for (const key of ['a', '0', 'a'.repeat(61), 's-1']) expect(run('files_ticket.py', input({ key })).key).toBe(key);
   });
 
+  it('gives two Stories of one release different change ids even when the release part fills 48 characters', () => {
+    const release = 'static-greeting-page-with-remembered-lig-c94701';
+    const ids = ['s1', 's2'].map((n) => run('pick_change_id.py', { key: `${release}-${n}`, title: 'Add a page' }).id);
+    expect(ids).toEqual([`${release}-s1`, `${release}-s2`]);
+  });
+
   it('fails closed on a key that is not valid', () => {
     for (const key of ['', 'My-Release', '-s1', 'a/b', 'a#1', 'a b', 'a'.repeat(62), '\u00fc', 'a\n', null, 7, undefined]) refuses('files_ticket.py', input({ key }));
   });
