@@ -91,6 +91,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const workers = (
     await ctx.pool.query(`SELECT id, name, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds'`, [workspaceId])
   ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean }; features?: string[] } }>;
+  const localFolders = new Set((await ctx.pool.query(`SELECT name FROM local_folders WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const trust = await evaluateWorkerTrust(ctx, workspaceId, (version.signature as PackageSignature | null) ?? null, version.package_hash);
   const accepting = new Set(trust.workers.filter((w) => w.accepted).map((w) => w.worker));
 
@@ -142,15 +143,34 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
             ? { name: 'git on a worker', mark: 'native', detail: withGit.map((w) => `${w.name}: git ${w.capabilities.runtimes!.git!.version}`).join(', ') }
             : { name: 'git on a worker', mark: 'unsupported', detail: 'no online OpenCode worker has git' },
       );
-      if (ws.credential) {
-        if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
-        np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+      if (ws.local) {
+        // A local folder (docs/local-workspaces.md): registered by an admin, opened only by a worker started to allow it.
+        const registered = localFolders.has(ws.local);
+        np.requirements.push({ name: `local folder ${ws.local}`, mark: registered ? 'native' : 'unsupported', detail: registered ? 'registered in this workspace' : 'not registered; an admin adds it on the Workers page' });
+        const allowing = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_local'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker allows local folders', mark: 'unverified', detail: 'no worker online' }
+            : allowing.length
+              ? { name: 'worker allows local folders', mark: 'native', detail: allowing.map((w) => w.name).join(', ') }
+              : { name: 'worker allows local folders', mark: 'unsupported', detail: 'no online OpenCode worker was started with local folders allowed (azhi up --local-folders)' },
+        );
+        np.coverage.push({
+          action: 'works in a local folder',
+          enforcement: 'unobservable',
+          detail: `a git worktree of '${ws.local}' on the worker's machine, on the run's own branch (azhi/<run id>). It is not a temporary directory: it stays when the step and the run end, and the gateway cannot see what is read or written there. Hooks and host git config are off; nothing is merged or pushed`,
+        });
+      } else {
+        if (ws.credential) {
+          if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
+          np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+        }
+        np.coverage.push({
+          action: 'workspace clone',
+          enforcement: 'harness',
+          detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
+        });
       }
-      np.coverage.push({
-        action: 'workspace clone',
-        enforcement: 'harness',
-        detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
-      });
       const fromRef = ws.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
       if (fromRef) {
         const producer = fromRef.split('.')[1] ?? fromRef;
@@ -187,7 +207,9 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         np.coverage.push({
           action: 'edits in the checkout',
           enforcement: 'harness',
-          detail: 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
+          detail: ws.local
+            ? 'OpenCode may edit files inside the worktree only (no shell, external directories denied); the repository\'s git directory is outside it. The worker commits the change to the run\'s branch and returns it as this step\'s output. Nothing is pushed'
+            : 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
         });
       }
       if (ws.test) {

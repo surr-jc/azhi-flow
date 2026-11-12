@@ -184,6 +184,34 @@ export const runEvents = pgTable('run_events', {
   data: jsonb('data').notNull().default({}),
 });
 
+export const localFolders = pgTable(
+  'local_folders',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    path: text('path').notNull(),
+    createdBy: text('created_by'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.name] })],
+);
+
+export const runWorktrees = pgTable(
+  'run_worktrees',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    runId: text('run_id').notNull(),
+    folder: text('folder').notNull(),
+    path: text('path').notNull(),
+    branch: text('branch').notNull(),
+    baseSha: text('base_sha').notNull(),
+    workerId: text('worker_id'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    removedAt: ts('removed_at'),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.folder] })],
+);
+
 export const nodeAttempts = pgTable(
   'node_attempts',
   {

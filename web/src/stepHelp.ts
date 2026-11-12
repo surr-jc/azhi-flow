@@ -36,7 +36,7 @@ export const FIELD_HELP: Record<string, string> = {
   'script.context': 'Names of shared contexts (defined once in the workflow settings). Their values are added to this step\'s input; a key the step also writes itself is an error.',
   'report.context': 'Names of shared contexts (defined once in the workflow settings). Their values are added to this step\'s input; a key the step also writes itself is an error.',
   'agent.budget': 'Hard limits such as max_tool_calls, max_output_tokens and max_cost_usd. When one is hit the step stops and the run records why.',
-  'agent.workspace': 'Where it works: the repository, the ref to check out and the credential used to clone. The agent never sees the credential value.',
+  'agent.workspace': 'Where it works: the repository, the ref to check out and the credential used to clone (the agent never sees the credential value), or a local folder, where the run works in its own git worktree that stays after the run.',
   'script.runtime': 'The language the script runs in.',
   'script.entrypoint': 'The file in the package to run.',
   'script.input': 'The JSON the script receives.',
@@ -116,7 +116,7 @@ export function sentenceOf(step: Step, tools: ToolInfo[], after: string[]): stri
       const who = step.executor ? step.executor : 'the built-in model';
       const lim = step.budget?.max_tool_calls ? ` for up to ${step.budget.max_tool_calls} tool calls` : '';
       const tm = step.timeout ? ` and ${step.timeout}` : '';
-      const ws = step.workspace?.repo ? ' in its own checkout of the repository' : '';
+      const ws = step.workspace?.local ? ` in the run's worktree of the local folder ${step.workspace.local}` : step.workspace?.repo ? ' in its own checkout of the repository' : '';
       return `${lead}${who} runs ${step.profile ?? 'an agent'}${ws}${lim}${tm}, and must answer in the shape of ${typeof step.output_schema === 'string' ? step.output_schema : 'its output schema'}.`;
     }
     case 'script': return `${lead}Azhi runs ${step.entrypoint ?? 'a script'} with ${step.runtime ?? 'python'} in a sandbox.`;
@@ -189,7 +189,7 @@ export function keySettings(step: Step, tools: ToolInfo[]): KeySetting[] {
       add('Profile', brief(step.profile), ['profile']);
       add('Runs on', step.executor ? String(step.executor) : 'built-in model', ['executor']);
       add('Limits', limits([b.max_tool_calls !== undefined ? plural(b.max_tool_calls, 'tool call') : '', b.max_output_tokens ? `${b.max_output_tokens.toLocaleString('en')} tokens` : '', b.max_cost_usd ? `$${b.max_cost_usd}` : '']), ['timeout', 'budget']);
-      add('Works in', step.workspace ? `checkout of ${brief((step.workspace as Record<string, unknown>).repo) || 'a repository'}` : '', ['workspace']);
+      add('Works in', step.workspace ? ((step.workspace as Record<string, unknown>).local ? `worktree of local folder ${brief((step.workspace as Record<string, unknown>).local)}` : `checkout of ${brief((step.workspace as Record<string, unknown>).repo) || 'a repository'}`) : '', ['workspace']);
       add('Gets', gets.join(', '), ['input']);
       add('Returns', typeof step.output_schema === 'string' ? step.output_schema : step.output_schema ? 'inline schema' : '', ['output_schema']);
       add('Tools', brief(step.tools), ['tools']);

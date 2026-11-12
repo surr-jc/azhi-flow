@@ -25,7 +25,14 @@ export interface Continuation {
 }
 
 /** A workspace as the workflow sends it: the continuation is an artifact to fetch, never the files themselves. */
-export type HarnessWorkspace = Omit<WorkspaceSpec, 'continuation'> & { continuation?: { artifact: string; baseSha: string } };
+export type HarnessWorkspace = Omit<WorkspaceSpec, 'continuation'> & {
+  continuation?: { artifact: string; baseSha: string };
+  /**
+   * Set when the workspace is a local folder (docs/local-workspaces.md): the worker makes a worktree of `path`
+   * and clones nothing. `repo` is then only a label (`local:<name>`), and `host` is empty.
+   */
+  local?: { name: string; path: string };
+};
 
 /** Fetches a continuation's change with the run token and returns the spec `cloneWorkspace` takes. */
 export async function resolveWorkspace(w: HarnessWorkspace, api: Pick<ApiClient, 'raw'>): Promise<WorkspaceSpec> {

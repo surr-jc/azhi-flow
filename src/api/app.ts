@@ -51,6 +51,7 @@ import { isHookPath, registerTriggerRoutes } from './triggers.js';
 import { registerAssetRoutes } from './assets.js';
 import { registerBundleRoutes } from './bundle.js';
 import { registerConnectionRoutes } from './connections.js';
+import { registerLocalFolderRoutes } from './local-folders.js';
 import { registerToolboxRoutes } from './toolbox.js';
 
 declare module 'fastify' {
@@ -144,6 +145,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerAssetRoutes(app, ctx);
   registerBundleRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
+  registerLocalFolderRoutes(app, ctx);
   registerToolboxRoutes(app, ctx);
   registerAssistantRoutes(app, { ctx, temporal, interpreterBuild });
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));

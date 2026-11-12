@@ -10,6 +10,7 @@ import { loadToolRevision } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageFile } from '../server/packages.js';
 import { opencodeMajorSetting } from '../server/repo-slots.js';
+import { localFolderPath } from '../server/local-folders.js';
 import { resolveSecret } from '../server/secrets.js';
 import { profilePath } from '../compiler/compile.js';
 import { WORKSPACE_CHANGE_SCHEMA } from '../compiler/plan.js';
@@ -529,7 +530,10 @@ async function loadContinuation(ctx: AppContext, i: { runId: string; workspaceId
  * the system prompt, the input and retrieved excerpts as the prompt, the node's gateway tools.
  * The manifest adds one item for what the harness owns and Azhi cannot see.
  */
-export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write' }; workspaceFrom?: WorkspaceFrom }, executor: string) {
+export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write'; local?: string }; workspaceFrom?: WorkspaceFrom }, executor: string) {
+  // A local folder is named by the workflow; its path comes from the workspace's registry, here, and nowhere else.
+  const localPath = i.workspace?.local ? await localFolderPath(ctx, i.workspaceId, i.workspace.local) : undefined;
+  if (i.workspace?.local && !localPath) throw new AzhiError(ErrorClass.invalidInput, `local folder '${i.workspace.local}' is not registered in this workspace; an admin adds it on the Workers page`);
   const state = await agentBegin(ctx, i, { transcript: false });
   const continuation = i.workspaceFrom && i.workspace ? await loadContinuation(ctx, i, i.workspaceFrom, i.workspace.repo) : undefined;
   if (i.workspaceFrom && !i.workspace) throw new AzhiError(ErrorClass.invalidInput, 'workspace.from needs a workspace');
@@ -550,7 +554,9 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     const content = (await Promise.all(files.map(async (f) => `${f}\n${(await packageFile(ctx, i.workspaceId, i.packageHash, f)).toString('utf8')}`))).join('\n');
     items.push({ kind: 'instructions', source: `package: ${files.join(', ')}`, reason: 'OpenCode agent prompt, command template and skills (a skill enters the context only when the agent loads it)', tokens: estimateTokens(content), content_hash: `sha256:${sha256(content)}` });
   }
-  if (i.workspace) {
+  if (i.workspace?.local) {
+    items.push({ kind: 'input', source: `local folder ${i.workspace.local}@${i.workspace.ref}`, reason: "a git worktree of a folder on the worker's machine; the files the agent reads are untrusted and not observable here", tokens: 0, content_hash: 'unobservable' });
+  } else if (i.workspace) {
     items.push({ kind: 'input', source: `workspace ${i.workspace.repo}@${i.workspace.ref}${i.workspace.baseRef ? ` (base ${i.workspace.baseRef})` : ''}`, reason: 'cloned on the worker; the files the agent reads are untrusted and not observable here', tokens: 0, content_hash: 'unobservable' });
   }
   // Tells a continued agent what its checkout already holds; skills written for a fresh base would otherwise redo the change.
@@ -578,6 +584,7 @@ export async function harnessPrepare(ctx: AppContext, i: AgentBeginInput & { wor
     prompt: `${first && first.type === 'text' ? first.text : ''}${note}`,
     withheld: state.withheld ?? [],
     ...(continuation ? { continuation: { artifact: continuation.artifact, baseSha: continuation.baseSha, files: continuation.files.length } } : {}),
+    ...(i.workspace?.local && localPath ? { localFolder: { name: i.workspace.local, path: localPath } } : {}),
     tools: t.tools.filter((x) => x.name !== SUBMIT_TOOL).map((x) => ({ name: x.name, ref: t.toolRefs[x.name]!, description: x.description, input_schema: x.input_schema })),
     outputSchema: t.outputSchema,
     model: t.model,

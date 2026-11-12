@@ -1,0 +1,19 @@
+# Holds the run open at an approval, then works in a worktree of the local folder `shop`: for local workspaces.
+schema_version: "2.0"
+id: local-folder
+nodes:
+  - id: approve
+    type: approval
+    role: operator
+    message: Build it?
+    expires_in: 1h
+    on_expiry: reject
+  - id: build
+    type: agent
+    depends_on: [approve]
+    executor: opencode
+    profile: coder@1
+    workspace:
+      local: shop
+      mode: write
+    output_schema: schemas/out.json

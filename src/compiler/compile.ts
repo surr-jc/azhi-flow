@@ -385,6 +385,12 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         const profileText = opts.pkg?.readText(profilePath(n.profile));
         if (opts.pkg && profileText === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
         if (n.workspace && n.executor !== 'opencode') err('workspace_unsupported', `a workspace needs executor: opencode (got ${n.executor ?? 'model-agent'})`, n.id, 'workspace');
+        if (n.workspace?.local !== undefined) {
+          // The folder is named, never a path or a value: the path is set by an admin on the Workers page.
+          const clash = (['repo', 'host', 'credential', 'depth', 'merge_ref', 'from'] as const).filter((k) => n.workspace![k] !== undefined);
+          if (clash.length) err('workspace_local', `workspace.local works in a worktree of a local folder and clones nothing, so it cannot be combined with ${clash.join(', ')}`, n.id, 'workspace.local');
+          warn('workspace_local_folder', `workspace.local works in a folder on the worker's machine that stays after the run; filesystem isolation is not enforced for it`, n.id, 'workspace.local');
+        }
         if (n.workspace?.test && n.workspace.mode !== 'write') err('workspace_test_needs_write', 'workspace.test runs after the agent changes the checkout, so it needs mode: write', n.id, 'workspace.test');
         if (n.workspace?.test && /\{\{\w+\}\}/.test(n.workspace.test.command)) warn('unfilled_setting', `workspace.test.command is still a setting placeholder (${n.workspace.test.command}); the example install fills it, or edit it`, n.id, 'workspace.test.command');
         if (n.workspace?.test?.timeout) {

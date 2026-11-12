@@ -1057,11 +1057,14 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
 
 /**
  * The repository an OpenCode step reviews or works in: cloned by the worker into a fresh folder for
- * the step (isolated git settings, the credential only in the fetch) and deleted afterwards.
+ * the step (isolated git settings, the credential only in the fetch) and deleted afterwards. Or a
+ * local folder registered on the Workers page: the run then works in its own git worktree of it, which stays.
  */
 function WorkspaceFields({ value, changes, onChange }: { value: Record<string, any> | undefined; changes: Array<{ id: string; ref: string }>; onChange: (w: Record<string, any> | undefined) => void }) {
   const w = value ?? {};
   const fromRef: string = typeof w.from?.ref === 'string' ? w.from.ref : '';
+  const isLocal = w.local !== undefined;
+  const folders = useQuery({ queryKey: ['local-folders'], queryFn: () => api<{ folders: Array<{ name: string; path: string }> }>('/v1/local-folders'), enabled: Boolean(value) });
   const set = (k: string, v: unknown) => {
     const n = { ...w };
     if (v === undefined || v === '') delete n[k];
@@ -1073,9 +1076,40 @@ function WorkspaceFields({ value, changes, onChange }: { value: Record<string, a
       <legend>Workspace</legend>
       <label className="check">
         <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked ? { repo: { ref: 'inputs.repo' }, ref: { cel: "'refs/pull/' + string(inputs.pr) + '/head'" }, credential: 'github-read-token' } : undefined)} />
-        Clone a repository for this step
+        Give this step a repository to work in
       </label>
       {value ? (
+        <label>Where it works
+          <select
+            value={isLocal ? 'local' : 'clone'}
+            onChange={(e) =>
+              onChange(
+                e.target.value === 'local'
+                  ? { local: folders.data?.folders[0]?.name ?? '', ...(w.mode ? { mode: w.mode } : {}), ...(w.test ? { test: w.test } : {}) }
+                  : { repo: { ref: 'inputs.repo' }, ref: 'HEAD', credential: 'github-read-token', ...(w.mode ? { mode: w.mode } : {}), ...(w.test ? { test: w.test } : {}) },
+              )
+            }
+          >
+            <option value="clone">A fresh clone of a repository, deleted after the step</option>
+            <option value="local">A worktree of a local folder, kept after the run</option>
+          </select>
+        </label>
+      ) : null}
+      {value && isLocal ? (
+        <>
+          <label>Local folder
+            <select value={w.local ?? ''} onChange={(e) => onChange({ ...w, local: e.target.value })}>
+              {w.local ? null : <option value="">Choose a folder</option>}
+              {(folders.data?.folders ?? []).map((f) => <option key={f.name} value={f.name}>{f.name} ({f.path})</option>)}
+              {w.local && !(folders.data?.folders ?? []).some((f) => f.name === w.local) ? <option value={w.local}>{w.local} (not registered)</option> : null}
+            </select>
+            <span className="muted small">Folders are registered on the Workers page. The run works on its own branch in a worktree of the folder, on a worker started with local folders allowed. Nothing is merged or pushed.</span>
+          </label>
+          <ValueInput field={{ key: 'ref', label: 'Start from (optional)', kind: 'value', hint: 'A branch, tag or commit in the folder; HEAD when empty' }} value={w.ref} onChange={(v) => set('ref', v)} />
+          <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Kept as refs/azhi/base, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />
+        </>
+      ) : null}
+      {value && !isLocal ? (
         <>
           <ValueInput field={{ key: 'repo', label: 'Repository (owner/name)', kind: 'value', hint: 'For example {ref: inputs.repo} or acme/api' }} value={w.repo} onChange={(v) => set('repo', v)} />
           <ValueInput field={{ key: 'ref', label: 'Ref to check out', kind: 'value', hint: "A branch, tag or PR ref, for example {cel: \"'refs/pull/' + string(inputs.pr) + '/head'\"}" }} value={w.ref} onChange={(v) => set('ref', v)} />
@@ -1101,9 +1135,13 @@ function WorkspaceFields({ value, changes, onChange }: { value: Record<string, a
               <input type="number" min="1" value={typeof w.depth === 'number' ? w.depth : ''} onChange={(e) => set('depth', e.target.value === '' ? undefined : Number(e.target.value))} />
             </label>
           </div>
+        </>
+      ) : null}
+      {value ? (
+        <>
           <label className="check">
             <input type="checkbox" checked={w.mode === 'write'} onChange={(e) => onChange(e.target.checked ? { ...w, mode: 'write' } : (({ mode: _m, test: _t, ...rest }) => rest)(w))} />
-            Let the agent edit the checkout (the change comes back as the step's output; nothing is pushed)
+            {isLocal ? 'Let the agent edit the worktree (the change is committed to the run\'s branch and comes back as the step\'s output; nothing is pushed)' : 'Let the agent edit the checkout (the change comes back as the step\'s output; nothing is pushed)'}
           </label>
           {w.mode === 'write' ? (
             <label>Test command (runs on the worker after the edits; repository code)

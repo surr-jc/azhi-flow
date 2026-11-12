@@ -23,7 +23,75 @@ export function Workers() {
       )}
       <HarnessSdk />
       <RepoConcurrency />
+      <LocalFolders />
     </>
+  );
+}
+
+interface LocalFolderList { folders: Array<{ name: string; path: string; created_at: string }>; workers: string[] }
+
+/**
+ * Folders on a worker's machine that a workflow may work in (workspace.local). A workflow names one; the path is
+ * kept here. A browser cannot hand over a folder's full path, so it is typed.
+ */
+function LocalFolders() {
+  const me = useMe();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['local-folders'], queryFn: () => api<LocalFolderList>('/v1/local-folders'), refetchInterval: 5_000 });
+  const [name, setName] = useState('');
+  const [path, setPath] = useState('');
+  const done = () => qc.invalidateQueries({ queryKey: ['local-folders'] });
+  const save = useMutation({
+    mutationFn: () => api(`/v1/local-folders/${encodeURIComponent(name.trim())}`, { method: 'PUT', body: { path: path.trim() } }),
+    onSuccess: () => {
+      setName('');
+      setPath('');
+      return done();
+    },
+  });
+  const remove = useMutation({ mutationFn: (n: string) => api(`/v1/local-folders/${encodeURIComponent(n)}`, { method: 'DELETE' }), onSuccess: done });
+  const admin = atLeast(me.data?.role, 'admin');
+  const validName = /^[a-z0-9][a-z0-9-]{0,62}$/.test(name.trim());
+  const validPath = /^([A-Za-z]:[\\/]|\/)/.test(path.trim());
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (validName && validPath) save.mutate();
+  };
+  return (
+    <Panel title="Local folders">
+      <ErrorNote error={q.error ?? save.error ?? remove.error} />
+      {!q.data ? <Loading /> : (
+        <>
+          <p className="muted wk-lede">
+            A step can work in a git worktree of one of these folders instead of cloning a repository. The worktree stays after the run, so you can open it in your editor.
+            {' '}The path is on the worker's machine, and only a worker started with <code>azhi up --local-folders</code> uses it.
+            {' '}{q.data.workers.length ? <>Allowed on: <strong>{q.data.workers.join(', ')}</strong>.</> : <strong>No online worker allows local folders.</strong>}
+          </p>
+          <Table head={['Name', 'Folder', '']} empty="No local folder is registered.">
+            {q.data.folders.map((f) => (
+              <tr key={f.name}>
+                <td className="mono">{f.name}</td>
+                <td className="mono">{f.path}</td>
+                <td>{admin ? <button type="button" disabled={remove.isPending} onClick={() => remove.mutate(f.name)} aria-label={`Remove local folder ${f.name}`}>Remove</button> : null}</td>
+              </tr>
+            ))}
+          </Table>
+          {admin ? (
+            <form onSubmit={submit} className="wk-limit">
+              <div className="field">
+                <label htmlFor="local-folder-name">Add a folder</label>
+                <div className="wk-limit-row">
+                  <input id="local-folder-name" value={name} spellCheck={false} placeholder="name, for example shop" aria-label="Folder name" onChange={(e) => setName(e.target.value)} />
+                  <input value={path} spellCheck={false} placeholder="C:\code\shop or /home/me/code/shop" aria-label="Absolute path of the git repository" style={{ flex: 1, minWidth: '16rem' }} onChange={(e) => setPath(e.target.value)} />
+                  <button type="submit" className="primary" disabled={save.isPending || !validName || !validPath}>Add folder</button>
+                </div>
+                <span className="hint">The name is lower-case letters, digits and hyphens; workflows use it as <code>workspace.local</code>. The path is the top folder of a git repository. The worker checks it when a step starts.</span>
+              </div>
+            </form>
+          ) : <p className="muted">An admin can add or remove folders.</p>}
+        </>
+      )}
+    </Panel>
   );
 }
 

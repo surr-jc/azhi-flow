@@ -59,7 +59,7 @@ export interface Checkout {
 }
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const REF = /^(?!.*\.\.)(?!.*\/\/)(?!-)[A-Za-z0-9/_.-]{1,200}$/;
+export const REF = /^(?!.*\.\.)(?!.*\/\/)(?!-)[A-Za-z0-9/_.-]{1,200}$/;
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
 
 /** The environment every git command in a workspace runs with: nothing from the host but PATH. */
@@ -390,6 +390,6 @@ export function runWorkspaceTests(c: Checkout, o: { command: string; home: strin
   });
 }
 
-function invalid(message: string) {
+export function invalid(message: string) {
   return ApplicationFailure.create({ type: ErrorClass.invalidInput, message, nonRetryable: true });
 }

@@ -185,6 +185,7 @@ export const workflowSchema = {
           properties: {
             repo: { $ref: '#/$defs/value' },
             ref: { $ref: '#/$defs/value' },
+            local: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,62}$' },
             base_ref: { $ref: '#/$defs/value' },
             merge_ref: { $ref: '#/$defs/value' },
             from: { $ref: '#/$defs/value' },
@@ -204,7 +205,8 @@ export const workflowSchema = {
               additionalProperties: false,
             },
           },
-          required: ['repo', 'ref'],
+          // A clone needs repo and ref; a local folder needs neither (the compiler checks which one it is).
+          anyOf: [{ required: ['repo', 'ref'] }, { required: ['local'] }],
           additionalProperties: false,
         },
       },

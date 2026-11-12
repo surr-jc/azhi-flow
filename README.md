@@ -92,6 +92,9 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
 - Event triggers: a workflow's `trigger.events` starts a run from a signed GitHub or generic webhook, with
   payload values copied into inputs only at fixed paths and checked by the input schema. Every delivery,
   including the ones that start nothing, is recorded. `azhi trigger list`; see [docs/triggers.md](docs/triggers.md).
+- Local workspaces: with `azhi up --local-folders`, a step's `workspace.local` works in a git worktree of a
+  registered folder on the run's own branch, kept after the run and opened in VS Code from the run page.
+  Nothing is merged or pushed. See [docs/local-workspaces.md](docs/local-workspaces.md).
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
 - The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to

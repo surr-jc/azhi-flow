@@ -16,6 +16,8 @@ export interface LocalOptions {
   home?: string;
   port?: number;
   worker?: boolean;
+  /** Let the local worker work in git worktrees of local folders (workspace.local). */
+  localFolders?: boolean;
   log?: (m: string) => void;
 }
 
@@ -63,7 +65,7 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
     stops.unshift(() => server.stop());
     const token = readFileSync(server.localTokenFile!, 'utf8').trim();
     if (o.worker !== false) {
-      const worker = await startWorker({ apiUrl: server.url, token, temporalAddress: temporal.address, dataDir: join(home, 'worker'), trustPolicy: { kind: 'workspace-publishers' }, log });
+      const worker = await startWorker({ apiUrl: server.url, token, temporalAddress: temporal.address, dataDir: join(home, 'worker'), trustPolicy: { kind: 'workspace-publishers' }, ...(o.localFolders ? { localFolders: true } : {}), log });
       stops.unshift(() => worker.stop());
     }
     writeFileSync(pf, String(process.pid));

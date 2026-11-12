@@ -62,8 +62,9 @@ and SWC when the worker starts. A packaged app cannot depend on either. Phase 0 
   - the folder is chosen in the UI by the user, never taken from workflow, ticket, issue or PR text;
   - writes still go through the gateway and ledger; the approval gate and taint rule apply unchanged;
   - nothing merges, closes or force-pushes (project rule), so a git folder gets a branch, not a push to the default branch.
-  Open design question to settle in its own ticket: whether harness steps work in the folder directly or
-  in a git worktree of it. A worktree is the safer default.
+  Built, apart from the native folder dialog (the path is typed on the Workers page): see
+  [local-workspaces.md](local-workspaces.md). Harness steps work in a git worktree of the folder, on the
+  run's own branch, never in the folder itself.
 - Close the open items from the local-mode plan: single-process PGlite crash-durability test, macOS runs.
 
 ## Phase 4: packaging and CI (about 1 week)

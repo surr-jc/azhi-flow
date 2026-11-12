@@ -19,8 +19,10 @@ export interface WorkerCapabilities {
 /**
  * `workspace_continuation`: a workspace can start from an earlier step's change (`workspace.from`).
  * `workspace_merge`: a workspace can merge a second ref into the checked-out one (`workspace.merge_ref`).
+ * `workspace_local`: a workspace can be a git worktree of a local folder (`workspace.local`). Only a worker
+ * started with local folders allowed has it; it is never on by default.
  */
-export type WorkerFeature = 'workspace_continuation' | 'workspace_merge' | 'opencode_1' | 'opencode_2';
+export type WorkerFeature = 'workspace_continuation' | 'workspace_merge' | 'workspace_local' | 'opencode_1' | 'opencode_2';
 export const WORKER_FEATURES: WorkerFeature[] = ['workspace_continuation', 'workspace_merge'];
 
 function tryRun(cmd: string, args: string[]): string | undefined {

@@ -70,15 +70,25 @@ export interface AgentNode extends NodeCommon {
   /** Cap on the bytes of input that reach the model: fail (default) or withhold the largest fields. */
   context_budget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
   requires?: { enforced_restrictions?: boolean };
-  /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
+  /**
+   * A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after, or,
+   * with `local`, a git worktree of a folder on the worker's machine that stays after the run.
+   */
   workspace?: AgentWorkspace;
 }
 
 export interface AgentWorkspace {
-  /** `owner/name`. */
-  repo: Value;
-  /** The ref to check out, for example `refs/pull/7/head`. */
-  ref: Value;
+  /** `owner/name`. Required unless `local` is set. */
+  repo?: Value;
+  /** The ref to check out, for example `refs/pull/7/head`. Required unless `local` is set (then it defaults to HEAD). */
+  ref?: Value;
+  /**
+   * The name of a local folder registered in this workspace (Workers page). The run works in a git worktree
+   * of it on its own branch; nothing is cloned. A literal name, never a value: the path is set by an admin
+   * and never comes from workflow, ticket or pull request text. Not combined with `repo`, `host`,
+   * `credential`, `depth`, `merge_ref` or `from`.
+   */
+  local?: string;
   /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
   base_ref?: Value;
   /**

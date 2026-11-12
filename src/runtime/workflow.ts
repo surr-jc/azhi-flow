@@ -168,9 +168,10 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       const ws = def.workspace;
       const workspace = ws
         ? {
-            host: ws.host ?? 'https://github.com',
-            repo: String(resolveValue(ws.repo, s) ?? ''),
-            ref: String(resolveValue(ws.ref, s) ?? ''),
+            // A local folder clones nothing: `repo` is a label and the ref is read in the folder's own repository.
+            host: ws.local ? '' : (ws.host ?? 'https://github.com'),
+            repo: ws.local ? `local:${ws.local}` : String(resolveValue(ws.repo, s) ?? ''),
+            ref: ws.local && ws.ref === undefined ? 'HEAD' : String(resolveValue(ws.ref, s) ?? ''),
             ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
             ...(ws.merge_ref !== undefined ? { mergeRef: String(resolveValue(ws.merge_ref, s) ?? '') } : {}),
             ...(ws.credential ? { credential: ws.credential } : {}),
@@ -199,13 +200,14 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
-        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}) } } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}), ...(ws?.local ? { local: ws.local } : {}) } } : {}),
         ...(workspaceFrom ? { workspaceFrom } : {}),
       });
       await noteWithheld(node.id, prep.withheld);
       // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
       // A worker without merge support would ignore merge_ref and hand on the bare head with no conflicts in it.
-      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(workspace?.mergeRef ? ['workspace_merge'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
+      // Only a worker started with local folders allowed may open one; any other would try to clone the label.
+      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(workspace?.mergeRef ? ['workspace_merge'] : []), ...(ws?.local ? ['workspace_local'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
       const queue = await selectWorker(node.id, executor, 1, needs.length ? needs : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
@@ -228,7 +230,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
         profile: def.profile,
-        ...(workspace ? { workspace: { ...workspace, ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
+        ...(workspace ? { workspace: { ...workspace, ...(prep.localFolder ? { local: prep.localFolder } : {}), ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);

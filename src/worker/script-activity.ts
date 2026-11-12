@@ -25,6 +25,8 @@ export interface ScriptWorkerOptions {
   cacheDir: string;
   capabilities: WorkerCapabilities;
   pythonVersion: string;
+  /** Where runs' worktrees of local folders are kept. Set only on a worker started with local folders allowed. */
+  worktreeDir?: string;
   /** Called before a package's dependencies are prepared; throws to refuse it (worker trust policy). */
   verifyPackage?: (manifest: PackageManifest, packageHash: string) => Promise<void>;
 }

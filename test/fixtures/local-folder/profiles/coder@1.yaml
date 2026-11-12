@@ -1,0 +1,3 @@
+model: {provider: anthropic, name: default}
+max_output_tokens: 1000
+instructions: Build the change.

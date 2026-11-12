@@ -50,7 +50,7 @@ function access(n: PlanNode, ctx: LensContext): KeySetting[] {
     }
     case 'agent': {
       const ws = def.workspace as Record<string, any> | undefined;
-      rows.push({ label: 'Can', value: ws ? (ws.mode === 'write' ? 'edit a checkout' : 'read a checkout') : 'read what it is given', keys: [], tone: ws?.mode === 'write' ? 'warn' : 'ok' });
+      rows.push({ label: 'Can', value: ws ? (ws.local ? (ws.mode === 'write' ? `edit a worktree of local folder ${ws.local}` : `read a worktree of local folder ${ws.local}`) : ws.mode === 'write' ? 'edit a checkout' : 'read a checkout') : 'read what it is given', keys: [], tone: ws?.mode === 'write' || ws?.local ? 'warn' : 'ok' });
       if (ws?.credential) rows.push(...tokenRow(ctx, ws.credential, 'Clone token'));
       rows.push({ label: 'Tools', value: brief(def.tools) || 'none', keys: [] });
       if (def.datasets?.length) rows.push({ label: 'Knows', value: brief(def.datasets), keys: [] });

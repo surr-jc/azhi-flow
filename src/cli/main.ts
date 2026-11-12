@@ -1125,9 +1125,10 @@ program
   .description('Run Azhi on this machine without Docker: embedded database, Temporal dev server, server and a worker')
   .option('--port <port>', 'web and API port (default: $AZHI_PORT or 7400)')
   .option('--no-worker', 'do not start an execution worker')
-  .action(async (opts: { port?: string; worker: boolean }) => {
+  .option('--local-folders', 'let workflows work in git worktrees of local folders on this machine (workspace.local)')
+  .action(async (opts: { port?: string; worker: boolean; localFolders?: boolean }) => {
     const { startLocal } = await import('../local/up.js');
-    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker });
+    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker, ...(opts.localFolders ? { localFolders: true } : {}) });
     console.log(`\n${green('Azhi is running')} at ${h.url}`);
     console.log(`Web UI: ${h.url.replace(/\/$/, '')}/ui#token=${encodeURIComponent(h.token)}`);
     console.log(dim(`Data in ${(await import('../local/up.js')).localHome()}. Stop with Ctrl+C or 'azhi down'.\n`));
@@ -1180,15 +1181,47 @@ worker
   .option('--name <name>', 'worker name (default: hostname)')
   .option('--temporal <address>', 'Temporal address', process.env.AZHI_TEMPORAL_ADDRESS ?? 'localhost:7233')
   .option('--trust <policy>', 'whose packages this worker runs: self | authors:<user,...> | workspace-publishers', 'self')
-  .action(async (opts: { name?: string; temporal: string; trust: string }) => {
+  .option('--local-folders', 'let workflows work in git worktrees of local folders on this machine (workspace.local)')
+  .action(async (opts: { name?: string; temporal: string; trust: string; localFolders?: boolean }) => {
     const cfg = resolveCliConfig(program.opts());
-    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name, trustPolicy: parseTrustPolicy(opts.trust) });
+    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name, trustPolicy: parseTrustPolicy(opts.trust), ...(opts.localFolders ? { localFolders: true } : {}) });
     const shutdown = async () => {
       await w.stop();
       process.exit(0);
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+  });
+
+// Worktrees of local folders (docs/local-workspaces.md) live on this machine, so they are listed and removed here.
+const worktreeDir = async () => join((await import('../local/up.js')).localHome(), 'worker', 'worktrees');
+const worktree = program.command('worktree').description("Runs' git worktrees of local folders on this machine");
+worktree
+  .command('list')
+  .description('List the worktrees runs made on this machine')
+  .action(async () => {
+    const { listWorktrees } = await import('../worker/worktree.js');
+    const all = listWorktrees(await worktreeDir());
+    if (!all.length) return console.log('no worktrees');
+    for (const w of all) console.log(`${w.run}  ${w.folder}  ${w.branch}  ${w.path}`);
+  });
+worktree
+  .command('remove <run>')
+  .description("Remove a run's worktree folder. Its branch stays in the repository; nothing is merged or pushed")
+  .option('--folder <name>', 'only the worktree of this local folder')
+  .option('--force', 'remove it even with uncommitted or untracked files')
+  .action(async (run: string, opts: { folder?: string; force?: boolean }) => {
+    const { listWorktrees, removeWorktree } = await import('../worker/worktree.js');
+    const dir = await worktreeDir();
+    const mine = listWorktrees(dir).filter((w) => w.run === run && (!opts.folder || w.folder === opts.folder));
+    if (!mine.length) throw new Error(`no worktree of run ${run} on this machine`);
+    for (const w of mine) {
+      await removeWorktree(dir, w, { force: opts.force });
+      console.log(`removed ${w.path} (branch ${w.branch} is still in ${w.repo})`);
+      await client()
+        .post(`/v1/runs/${encodeURIComponent(run)}/worktrees/${encodeURIComponent(w.folder)}/removed`)
+        .catch((e: Error) => console.log(dim(`the server was not told: ${e.message}`)));
+    }
   });
 
 program.parseAsync(process.argv).catch((err: Error) => {

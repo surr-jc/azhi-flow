@@ -24,6 +24,7 @@ import { dcpNote, pathWithRipgrep, SEARCH_FIRST_GUIDANCE, tokenSavingOn, writeDc
 import { TranscriptSink } from './transcript.js';
 import { cloneWorkspace, collectChange, describeTestCommand, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
+import { openLocalWorkspace, type OpenLocalWorkspace } from './worktree.js';
 
 /**
  * The OpenCode 2 harness adapter, used when the worker sets AZHI_OPENCODE_MAJOR=2. Same isolation as the 1.x adapter
@@ -82,10 +83,17 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
   let transcript: Opencode2Transcript | undefined;
   let workspaceToken: string | undefined;
   let chatgptSignIn: ChatgptAuth | undefined;
+  let local: OpenLocalWorkspace | undefined;
   try {
     let project = join(root, 'project');
     let checkout: Checkout | undefined;
-    if (input.workspace) {
+    if (input.workspace?.local) {
+      // A local folder: the run's own worktree of it, kept after the step (docs/local-workspaces.md). Nothing is cloned.
+      const ws = input.workspace;
+      local = await openLocalWorkspace({ ...ws.local!, ref: ws.ref, baseRef: ws.baseRef, mode: ws.mode, test: ws.test }, { worktreeDir: o.worktreeDir, workerId: o.workerId, api: runApi, runId: input.runId, home, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
+      checkout = local.checkout;
+      project = checkout.dir;
+    } else if (input.workspace) {
       const token = (workspaceToken = input.workspace.credential
         ? (
             await runApi.get<{ value: string }>(`/v1/gateway/credentials/${encodeURIComponent(input.workspace.credential)}`).catch((e) => {
@@ -365,7 +373,7 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
             continue;
           }
         }
-        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' }, stepLimitReached });
+        const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: local?.record.branch ?? ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' }, stepLimitReached });
         sink.put({ id: 'workspace-change', kind: 'note', text: `Change: ${change.stats.files} file(s), +${change.stats.additions} -${change.stats.deletions}${change.files.length ? `\n${change.files.map((f) => `${f.status} ${f.path}`).join('\n')}` : ''}`, at: Date.now() });
         return await finish({ output: { ...(state.output as Record<string, unknown>), workspace: change } }, state);
       }
@@ -427,6 +435,8 @@ export async function runOpencode2(o: ScriptWorkerOptions & { capabilities: Work
     await sink?.close();
     if (chatgptSignIn && client && proc?.exitCode === null) await keepRenewedSignIn2(runApi, input.credential, client, chatgptSignIn);
     if (proc) await stopProcess(proc);
+    // The worktree stays; only the step's own folder (home, config) is deleted.
+    await local?.close(input.nodeId).catch(() => {});
     rmSync(root, { recursive: true, force: true });
   }
 }

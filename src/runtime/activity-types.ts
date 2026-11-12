@@ -85,7 +85,7 @@ export interface GatewayActivities {
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Harness executors: builds the same context as the model agent, for a worker to run. */
-  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write' }; workspaceFrom?: WorkspaceFrom }): Promise<HarnessPlan>;
+  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write'; local?: string }; workspaceFrom?: WorkspaceFrom }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */
@@ -145,6 +145,8 @@ export interface HarnessPlan {
   prompt: string;
   /** The change a `workspace.from` step continues from, stored as an artifact the worker fetches (never carried in history). */
   continuation?: { artifact: string; baseSha: string; files: number };
+  /** A `workspace.local` step's folder: the name the workflow gave and the path the workspace's registry holds for it. */
+  localFolder?: { name: string; path: string };
   /** Input fields the node's context_budget withheld from the prompt (hash and size only). */
   withheld?: Array<{ key: string; bytes: number; sha256: string }>;
   tools: Array<{ name: string; ref: string; description: string; input_schema: Record<string, unknown> }>;

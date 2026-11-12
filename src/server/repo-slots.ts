@@ -28,7 +28,8 @@ export function runRepos(plan: Pick<ExecutionPlan, 'nodes' | 'config'>, inputs: 
   const out = new Set<string>();
   for (const n of plan.nodes) {
     const ws = n.type === 'agent' ? (n.def as AgentNode).workspace : undefined;
-    if (!ws) continue;
+    // A local folder holds no slot: each run works in its own worktree of it.
+    if (!ws || ws.repo === undefined) continue;
     let repo: unknown;
     try {
       repo = resolveValue(ws.repo, { inputs, nodes: {}, config: plan.config });

@@ -15,6 +15,7 @@ import type { RunInput, RunSnapshot } from '../runtime/types.js';
 import { loadCatalog, loadToolRevision } from './catalog.js';
 import { resolveVersion } from './workflows.js';
 import { runRepos } from './repo-slots.js';
+import { runWorktrees } from './local-folders.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { contentHash } from '../lib/hash.js';
 import type { AppContext } from './context.js';
@@ -257,6 +258,7 @@ export async function getRunDetail(ctx: AppContext, workspaceId: string, runId: 
   return {
     run,
     children: children.rows,
+    worktrees: await runWorktrees(ctx, runId),
     loops: version ? loopRounds(version.plan, attempts.rows, usage.rows) : [],
     plan: (planned.rows[0]?.data as RunPlanReport | undefined) ?? null,
     approvals: requests.rows.map((r) => {

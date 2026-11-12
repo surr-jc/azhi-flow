@@ -21,6 +21,8 @@ export interface WorkerOptions {
   name?: string;
   dataDir?: string;
   trustPolicy?: Record<string, unknown>;
+  /** Let workflows work in git worktrees of local folders on this machine (workspace.local). Off unless set, or AZHI_LOCAL_FOLDERS=1. */
+  localFolders?: boolean;
   verifyPackage?: ScriptWorkerOptions['verifyPackage'];
   log?: (m: string) => void;
 }
@@ -63,7 +65,10 @@ export async function startWorker(o: WorkerOptions) {
       if (!t.ok) throw ApplicationFailure.create({ type: ErrorClass.workerTrustDenied, message: `worker refuses package: ${t.reason}`, nonRetryable: true });
     });
   const pythonVersion = process.env.AZHI_PYTHON_VERSION ?? '3.12';
-  const capabilities = detectCapabilities(pythonVersion);
+  const localFolders = o.localFolders ?? process.env.AZHI_LOCAL_FOLDERS === '1';
+  const worktreeDir = localFolders ? join(dataDir, 'worktrees') : undefined;
+  const detected = detectCapabilities(pythonVersion);
+  const capabilities = localFolders ? { ...detected, features: [...(detected.features ?? []), 'workspace_local' as const] } : detected;
   const name = o.name ?? hostname();
   const heartbeat = () =>
     api.post('/v1/workers/heartbeat', { id: workerId, name, task_queue: TASK_QUEUES.exec(workerId), capabilities, trust_policy: trustPolicy }).catch((e) => log(`heartbeat failed: ${(e as Error).message}`));
@@ -78,7 +83,7 @@ export async function startWorker(o: WorkerOptions) {
     taskQueue: TASK_QUEUES.exec(workerId),
     activities: {
       ...scriptActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage }),
-      ...harnessActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage }),
+      ...harnessActivities({ api, workerId, cacheDir: dataDir, capabilities, pythonVersion, verifyPackage, ...(worktreeDir ? { worktreeDir } : {}) }),
     },
     maxConcurrentActivityTaskExecutions: Number(process.env.AZHI_WORKER_CONCURRENCY ?? 4),
   });
