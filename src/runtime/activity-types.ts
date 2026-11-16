@@ -89,7 +89,7 @@ export interface GatewayActivities {
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */
-  prepareChildRun(input: { runId: string; workspaceId: string; nodeId: string; workflow: string; inputs: Record<string, unknown>; mock?: boolean }): Promise<{ run: RunInput; workflow: string; version: number }>;
+  prepareChildRun(input: { runId: string; workspaceId: string; nodeId: string; ordinal?: number; workflow: string; inputs: Record<string, unknown>; mock?: boolean }): Promise<{ run: RunInput; workflow: string; version: number }>;
   /** Subworkflow nodes: how the child ended and the outputs of its nodes that succeeded. */
   childResult(workspaceId: string, runId: string): Promise<{ state: string; error?: NodeError; nodes: Record<string, unknown> }>;
   /** Records the failure of an agent node on its attempt row. */

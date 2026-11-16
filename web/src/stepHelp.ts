@@ -49,7 +49,7 @@ export const FIELD_HELP: Record<string, string> = {
   'condition.routes': 'Route name to the steps that run only on that route.',
   'condition.default': 'The route taken when the expression returns something else.',
   'parallel.for_each': 'The list to go through, one run per item.',
-  'parallel.node': 'The step to run for each item.',
+  'parallel.node': 'The step to run for each item: a tool, a script, or a subworkflow (one child run per item).',
   'parallel.max_concurrency': 'How many items run at once.',
   'parallel.join': 'all waits for every item; any continues after the first success.',
   'loop.initial': 'The state the first iteration starts with.',

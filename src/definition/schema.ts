@@ -239,8 +239,15 @@ export const workflowSchema = {
         for_each: { $ref: '#/$defs/value' },
         node: {
           type: 'object',
-          properties: { type: { enum: ['tool', 'script'] } },
+          properties: { type: { enum: ['tool', 'script', 'subworkflow'] } },
           required: ['type'],
+          // A subworkflow body starts one child run per item; the node's timeout applies to each child.
+          if: { properties: { type: { const: 'subworkflow' } } },
+          then: {
+            properties: { type: { const: 'subworkflow' }, workflow: { type: 'string' }, input: { $ref: '#/$defs/value' }, on_failure: { enum: ['fail', 'continue'] }, description: { type: 'string' } },
+            required: ['workflow'],
+            additionalProperties: false,
+          },
         },
         max_concurrency: { type: 'integer', minimum: 1, maximum: 64 },
         max_items: { type: 'integer', minimum: 1, maximum: 10000 },

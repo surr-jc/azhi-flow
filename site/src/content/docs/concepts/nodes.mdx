@@ -13,7 +13,7 @@ JavaScript eval anywhere.
 | `agent` | Runs a profile (instructions, model, limits) on an executor, with gateway-only tools, validated output and a budget | **Yes** |
 | `retrieve` | Hybrid search over a knowledge dataset (`top_k`), returning excerpts with ids for citation | No (lexical-hash embedder in alpha) |
 | `condition` | Branches on a CEL expression | No |
-| `parallel` | Bounded fan-out of branches | No |
+| `parallel` | Bounded fan-out: one `tool` call, `script` or `subworkflow` child run per item of a list | No |
 | `loop` | Repeats one `tool` or `script`, up to `max_iterations`, until a CEL `exit` | No |
 | `subworkflow` | Runs a published workflow as a child run, with its own plan, ledger and run page | Depends on the child |
 | `approval` | Waits for a person to approve or reject, optionally with structured decision data | No |
@@ -74,5 +74,6 @@ iteration. Agents as a loop body, and several steps in one body, are not support
 
 The child is a run of its own, started as a Temporal child workflow. Cancelling the parent cancels the child.
 A workflow cannot call itself directly or through its chain, nesting stops at four levels, and the child's output
-is treated as untrusted for the [taint rule](/concepts/taint/). Parallel fan-out of subworkflows and quorum joins
+is treated as untrusted for the [taint rule](/concepts/taint/). A `parallel` node whose body is a
+`subworkflow` starts one child run per item of its list (`items` holds each child's output, in order). Quorum joins
 are not built.

@@ -168,7 +168,8 @@ CEL has `now`, `duration('24h')`, `timestamp(...)`, `size()`, `.filter()`, `.map
 - `condition`: `expression: "<CEL returning a route name>"`, `routes: {name: [node ids]}`,
   `default: <route>`. A node after alternative routes sets `merge: any`.
 - `parallel`: `for_each: <list value>`, `node: {type: tool|script, ...}` using `item`,
-  `max_concurrency`, `max_items`.
+  `max_concurrency`, `max_items`. The body may also be `{type: subworkflow, workflow, input, on_failure}`: one
+  child run per item, for a list known only at run time. Output `{items, completed, failed}`.
 - `loop`: `node: {type: tool|script, ...}` using `state` and `iteration`, `initial`,
   `max_iterations`, `exit: "<CEL on state>"`, `on_max: fail|continue`.
 - `subworkflow`: `workflow: <slug>` (a published workflow), `input: <value>`.

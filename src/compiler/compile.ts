@@ -475,7 +475,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         else if (n.node.type === 'script') {
           checkScript(n.node.runtime, n.node.entrypoint, n.id);
           inner = loadSchema(n.node.output_schema, n.id, 'node.output_schema');
-        }
+        } else inner = SUBWORKFLOW_OUTPUT_SCHEMA;
         outputSchema = {
           type: 'object',
           properties: { items: { type: 'array', items: inner ?? {} }, completed: { type: 'integer' }, failed: { type: 'integer' } },

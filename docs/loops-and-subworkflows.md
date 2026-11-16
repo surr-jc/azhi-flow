@@ -116,4 +116,26 @@ Runs a published workflow as a child run.
 - Guards: a workflow cannot call itself directly or through its chain, and nesting stops at four
   levels. The run plan shows a blocker (`subworkflow_missing`, `subworkflow_recursion`) for a
   target that is not published or that calls itself.
-- `parallel` fan-out of subworkflows and quorum joins are not built.
+- Fan-out: a `parallel` step may have a `subworkflow` body, which starts one child run per item of a list known only
+  at run time, in one step of the plan (see `examples/pr-conflict-sweep`):
+
+  ```yaml
+  - id: resolve_each
+    type: parallel
+    for_each: {ref: nodes.queue.output.items}
+    max_concurrency: 1        # children at a time; default 4
+    max_items: 20
+    timeout: 96h              # applies to each child
+    node:
+      type: subworkflow
+      workflow: pr-conflict-resolver
+      on_failure: continue
+      input: {repo: {ref: inputs.repo}, pr: {ref: item.number}}
+  ```
+
+  The body takes `workflow`, `input` and `on_failure` only, and reads `item`. Output: `{items, completed, failed}`,
+  where `items` holds each child's output in the order of the list. Without `on_failure: continue` the first child
+  that does not succeed fails the step; with it, that child is an item with its `state` and `error`, counts under
+  `failed`, and the rest still run. Each item's child is created once, so a retry reuses it. The output is untrusted,
+  as for any subworkflow. A `parallel` step is still not allowed inside a loop body.
+- Agent or approval bodies in `parallel`, and quorum joins, are not built.

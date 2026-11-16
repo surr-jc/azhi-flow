@@ -339,9 +339,9 @@ export function gatewayActivities(ctx: AppContext): GatewayActivities {
           version: target,
           inputs: input.inputs,
           trigger: 'subworkflow',
-          // The child acts as whoever the parent run acts as, and is idempotent per parent node.
+          // The child acts as whoever the parent run acts as, and is idempotent per parent node (per item of a parallel node).
           createdBy: parent.snapshot.principal?.userId ?? parent.created_by,
-          occurrenceId: `sub:${input.runId}:${input.nodeId}`,
+          occurrenceId: `sub:${input.runId}:${input.nodeId}${input.ordinal === undefined ? '' : `:${input.ordinal}`}`,
           interpreterBuild: parent.snapshot.interpreter_build,
           test: input.mock,
           parent: { run_id: input.runId, node_id: input.nodeId, chain },

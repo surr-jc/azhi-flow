@@ -133,8 +133,8 @@ The three workflows run the same on all three. Nothing in them depends on the op
   claim label until a person removes it.
 - **No event triggers.** Readiness runs on a schedule; a CI failure does not start it. Azhi has no webhook triggers yet.
 - **Order is enforced inside an epic, not between epics.** The plan says when an epic needs another merged first.
-- **No fan-out.** Azhi cannot loop agents or sub-workflows over a list, so each ticket is one scheduled run, not an
-  iteration of one run.
+- **No fan-out here.** Each ticket is one scheduled run, not an iteration of one run. (A `parallel` step can now start
+  one child run per item of a list, see `docs/loops-and-subworkflows.md`; the factory does not use it yet.)
 - **Jira.** The Jira tools go through `mcp-atlassian`; the result shape of `jira_search` is read defensively, and an
   unreadable one makes the lap idle (never a guess). The delivery reads a Jira ticket through the workspace tool
   `jira-ccp_get_issue` (see `sdlc-universal`). Check both on a throwaway project first.

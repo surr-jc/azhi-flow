@@ -134,10 +134,15 @@ export interface ConditionNode extends NodeCommon {
   default?: string;
 }
 
+/**
+ * Runs one tool call, script or child run (a `subworkflow` body) per item of `for_each`, at most `max_concurrency`
+ * at a time. The body sees `item`. Output: `{items, completed, failed}`, items in input order. A child that does not
+ * succeed under `on_failure: continue` is an item like any other (its state and error) and counts as failed.
+ */
 export interface ParallelNode extends NodeCommon {
   type: 'parallel';
   for_each: Value;
-  node: Omit<ToolNode, 'id'> | Omit<ScriptNode, 'id'>;
+  node: Omit<ToolNode, 'id'> | Omit<ScriptNode, 'id'> | Omit<SubworkflowNode, 'id'>;
   max_concurrency?: number;
   max_items?: number;
   join?: 'all' | 'any';

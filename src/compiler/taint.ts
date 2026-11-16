@@ -54,7 +54,7 @@ export function analyseTaint(nodes: PlanNode[], datasets: (ref: string) => Datas
     if (n.type === 'tool' && n.tool && !n.tool.outputTrusted) untrusted[n.id] = `output of ${n.tool.ref} is not marked trusted`;
     else if ((n.type === 'parallel' || n.type === 'loop') && (n.def as Partial<ParallelNode>).node?.type === 'tool' && n.tool && !n.tool.outputTrusted) untrusted[n.id] = `output of ${n.tool.ref} is not marked trusted`;
     // A child run may call untrusted tools and agents the parent cannot see into, so what comes back is untrusted.
-    else if (n.type === 'subworkflow') untrusted[n.id] = 'output of a subworkflow is not marked trusted';
+    else if (n.type === 'subworkflow' || (n.type === 'parallel' && (n.def as Partial<ParallelNode>).node?.type === 'subworkflow')) untrusted[n.id] = 'output of a subworkflow is not marked trusted';
     else if (n.type === 'retrieve') {
       const bad = (n.def as RetrieveNode).datasets.find((d) => datasets(d)?.trusted === false);
       if (bad) untrusted[n.id] = `dataset ${bad} is marked untrusted`;

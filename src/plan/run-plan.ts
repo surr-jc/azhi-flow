@@ -233,6 +233,21 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
     }
   };
 
+  /** A child workflow a step starts (a subworkflow step, or the body of a parallel step): published, and not this workflow. */
+  const childRequirement = async (workflow: string, nodeId: string, np: NodePlan) => {
+    const target = await resolveVersion(ctx, workspaceId, workflow);
+    if (!target || target.draft) {
+      np.requirements.push({ name: `subworkflow ${workflow}`, mark: 'unsupported', detail: 'no published version in this workspace' });
+      blockers.push({ code: 'subworkflow_missing', message: `subworkflow '${workflow}' has no published version`, node: nodeId });
+    } else if (target.slug === version.slug) {
+      np.requirements.push({ name: `subworkflow ${workflow}`, mark: 'unsupported', detail: 'a workflow cannot call itself' });
+      blockers.push({ code: 'subworkflow_recursion', message: `workflow '${version.slug}' calls itself`, node: nodeId });
+    } else {
+      np.requirements.push({ name: `subworkflow ${target.slug}`, mark: 'native', detail: `published version ${target.version}, resolved when the node starts` });
+    }
+    np.coverage.push({ action: 'child run', enforcement: 'enforced', detail: "its own run with its own plan, ledger and trust checks, acting as the parent's principal; its output is treated as untrusted" });
+  };
+
   for (const n of plan.nodes) {
     const np: NodePlan = { id: n.id, type: n.type, requirements: [], coverage: [] };
     if (plan.taint.tainted[n.id]) np.tainted = plan.taint.tainted[n.id];
@@ -259,6 +274,12 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         if ('rounds' in n.def) {
           // The join needs no worker: each round's steps are in the plan with their own requirements.
           np.coverage.push({ action: 'rounds', enforcement: 'enforced', detail: `at most ${(n.def as { max_iterations: number }).max_iterations} rounds, each step listed in this plan and able to run once per round; the first exit rule that holds ends the loop` });
+          break;
+        }
+        if ((n.def as { node?: { type?: string } }).node?.type === 'subworkflow') {
+          // One child run per item: the same requirement as a subworkflow step, and no worker of its own.
+          await childRequirement((n.def as unknown as { node: SubworkflowNode }).node.workflow, n.id, np);
+          np.coverage.push({ action: 'items', enforcement: 'enforced', detail: 'each item starts its own child run, at most max_concurrency at a time' });
           break;
         }
         if (n.tool) np.requirements.push(toolRequirement(n, n.tool.ref));
@@ -312,18 +333,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         break;
       }
       case 'subworkflow': {
-        const def = n.def as SubworkflowNode;
-        const target = await resolveVersion(ctx, workspaceId, def.workflow);
-        if (!target || target.draft) {
-          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'no published version in this workspace' });
-          blockers.push({ code: 'subworkflow_missing', message: `subworkflow '${def.workflow}' has no published version`, node: n.id });
-        } else if (target.slug === version.slug) {
-          np.requirements.push({ name: `subworkflow ${def.workflow}`, mark: 'unsupported', detail: 'a workflow cannot call itself' });
-          blockers.push({ code: 'subworkflow_recursion', message: `workflow '${version.slug}' calls itself`, node: n.id });
-        } else {
-          np.requirements.push({ name: `subworkflow ${target.slug}`, mark: 'native', detail: `published version ${target.version}, resolved when the node starts` });
-        }
-        np.coverage.push({ action: 'child run', enforcement: 'enforced', detail: "its own run with its own plan, ledger and trust checks, acting as the parent's principal; its output is treated as untrusted" });
+        await childRequirement((n.def as SubworkflowNode).workflow, n.id, np);
         break;
       }
       case 'retrieve':
@@ -357,7 +367,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
 
   const unique = new Map(blockers.map((b) => [`${b.code}:${b.node ?? ''}:${b.message}`, b]));
   const needsWorkers = plan.nodes.some(
-    (n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool) || (n.type === 'agent' && isHarness((n.def as AgentNode).executor ?? 'model-agent')),
+    (n) => n.type === 'script' || ((n.type === 'parallel' || n.type === 'loop') && !n.tool && (n.def as { node?: { type?: string } }).node?.type !== 'subworkflow') || (n.type === 'agent' && isHarness((n.def as AgentNode).executor ?? 'model-agent')),
   );
   const finalBlockers = [...unique.values()].filter((b) => b.code !== 'worker_trust_denied' || needsWorkers);
   return {

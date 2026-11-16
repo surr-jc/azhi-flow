@@ -405,6 +405,51 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     return r.output;
   };
 
+  /** One child run of a subworkflow step, or of one item of a parallel step (`ordinal`), and what it ended as. */
+  const runChild = async (node: PlanNode, def: Omit<SubworkflowNode, 'id'>, s: ValueScope, ordinal?: number) => {
+    const prep = await gateway(node).prepareChildRun({
+      runId,
+      workspaceId,
+      nodeId: node.id,
+      ...(ordinal === undefined ? {} : { ordinal }),
+      workflow: def.workflow,
+      inputs: ((await resolve(node, def.input, s)) ?? {}) as Record<string, unknown>,
+      mock: input.mockWrites,
+    });
+    // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
+    // With on_failure: continue a child that fails or times out is reported to the next steps instead of failing this run.
+    const lenient = def.on_failure === 'continue';
+    let childError: NodeError | undefined;
+    try {
+      await executeChild('azhiRun', {
+        workflowId: prep.run.runId,
+        taskQueue: workflowInfo().taskQueue,
+        args: [prep.run],
+        parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
+        workflowExecutionTimeout: node.timeoutMs + 60_000,
+      });
+    } catch (err) {
+      if (!lenient || isCancellation(err)) throw err;
+      childError = toNodeError(err);
+    }
+    const result = await gateway(node).childResult(workspaceId, prep.run.runId);
+    if (result.state !== 'succeeded' && lenient) {
+      // A child that died without recording an end state has not succeeded either.
+      const ended = ['failed', 'expired', 'cancelled', 'delivery_failed'].includes(result.state);
+      const state = ended ? result.state : 'failed';
+      const error = result.error ?? childError ?? { class: 'internal', message: `the child run ended ${result.state}` };
+      return { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state, error, nodes: result.nodes };
+    }
+    if (result.state !== 'succeeded') {
+      throw ApplicationFailure.create({
+        type: result.error?.class ?? 'internal',
+        message: `subworkflow '${prep.workflow}' (run ${prep.run.runId}) ended ${result.state}${result.error ? `: ${result.error.message}` : ''}`,
+        nonRetryable: true,
+      });
+    }
+    return { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state: result.state, nodes: result.nodes };
+  };
+
   /**
    * The end of a loop written out by the compiler: which rounds ran, read from their gates, with their steps' outputs.
    * The outputs are opened next to the artifact store and the result kept there when large, so later steps can read
@@ -504,10 +549,20 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             const i = next++;
             const itemScope = { ...s, item: items[i] };
             try {
-              results[i] =
-                def.node.type === 'tool'
-                  ? await runTool(node, def.node as Omit<ToolNode, 'id'>, itemScope, i)
-                  : await runScript(node, def.node as Omit<ScriptNode, 'id'>, resolveValue((def.node as ScriptNode).input, itemScope), i);
+              if (def.node.type === 'subworkflow') {
+                // A child kept under on_failure: continue is an item like any other, counted as failed.
+                const child = await runChild(node, def.node as Omit<SubworkflowNode, 'id'>, itemScope, i);
+                results[i] = child;
+                if (child.state !== 'succeeded') {
+                  failed++;
+                  continue;
+                }
+              } else {
+                results[i] =
+                  def.node.type === 'tool'
+                    ? await runTool(node, def.node as Omit<ToolNode, 'id'>, itemScope, i)
+                    : await runScript(node, def.node as Omit<ScriptNode, 'id'>, resolveValue((def.node as ScriptNode).input, itemScope), i);
+              }
               completed++;
               if (def.join === 'any') next = items.length;
             } catch (err) {
@@ -546,40 +601,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         return { output: { state: state ?? null, iterations, count: iterations.length, exited } };
       }
       case 'subworkflow': {
-        const def = node.def as SubworkflowNode;
-        const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: ((await resolve(node, def.input, s)) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
-        // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
-        // With on_failure: continue a child that fails or times out is reported to the next steps instead of failing this run.
-        const lenient = def.on_failure === 'continue';
-        let childError: NodeError | undefined;
-        try {
-          await executeChild('azhiRun', {
-            workflowId: prep.run.runId,
-            taskQueue: workflowInfo().taskQueue,
-            args: [prep.run],
-            parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
-            workflowExecutionTimeout: node.timeoutMs + 60_000,
-          });
-        } catch (err) {
-          if (!lenient || isCancellation(err)) throw err;
-          childError = toNodeError(err);
-        }
-        const result = await gateway(node).childResult(workspaceId, prep.run.runId);
-        if (result.state !== 'succeeded' && lenient) {
-          // A child that died without recording an end state has not succeeded either.
-          const ended = ['failed', 'expired', 'cancelled', 'delivery_failed'].includes(result.state);
-          const state = ended ? result.state : 'failed';
-          const error = result.error ?? childError ?? { class: 'internal', message: `the child run ended ${result.state}` };
-          return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state, error, nodes: result.nodes } };
-        }
-        if (result.state !== 'succeeded') {
-          throw ApplicationFailure.create({
-            type: result.error?.class ?? 'internal',
-            message: `subworkflow '${prep.workflow}' (run ${prep.run.runId}) ended ${result.state}${result.error ? `: ${result.error.message}` : ''}`,
-            nonRetryable: true,
-          });
-        }
-        return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state: result.state, nodes: result.nodes } };
+        return { output: await runChild(node, node.def as SubworkflowNode, s) };
       }
       case 'retrieve': {
         const def = node.def as RetrieveNode;
