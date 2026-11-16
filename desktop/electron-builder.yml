@@ -1,0 +1,33 @@
+appId: dev.azhiflow.desktop
+productName: Azhi Flow
+copyright: Apache-2.0
+directories:
+  output: out
+  buildResources: assets
+files:
+  - dist/**
+  - assets/icon.png
+  - package.json
+# The backend runs under the bundled Node, outside the asar archive, next to its own files.
+extraResources:
+  # node_modules is never copied by electron-builder; scripts/after-pack.cjs adds it.
+  - from: ../build/app
+    to: app
+  - from: resources/node
+    to: node
+  - from: resources/temporal
+    to: temporal
+asar: true
+afterPack: scripts/after-pack.cjs
+afterSign: scripts/mac-adhoc-sign.cjs
+mac:
+  target: [dmg, zip]
+  category: public.app-category.developer-tools
+  icon: assets/icon.png
+win:
+  target: nsis
+  icon: assets/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
