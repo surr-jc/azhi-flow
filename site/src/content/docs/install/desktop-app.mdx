@@ -1,0 +1,109 @@
+---
+title: Desktop app (beta)
+description: Install Azhi Flow on Windows or macOS from a downloaded installer. A window, tray icon and notifications around local mode, with no Node.js, Docker or terminal needed.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Beta, unsigned, one person on one machine">
+The first desktop build is `v0.1.0-beta.1`. It is **not code-signed**, so Windows and macOS ask you to confirm the
+first launch (steps below). The Windows app was tested end to end. The macOS builds are produced by CI and **have
+not been launched on a Mac yet**, so treat macOS as untested.
+</Aside>
+
+The desktop app is [local mode](/install/local-mode/) in a window. It starts the embedded database, Temporal's dev
+server, the Azhi server and a worker on your computer, and opens Mission Control. Everything is bundled: you do not
+install Node.js, Docker or npm. All data stays in `~/.azhi` (`%USERPROFILE%\.azhi` on Windows).
+
+## Install
+
+<Steps>
+
+1. Open the [Releases page](https://github.com/surr-jc/azhi-flow/releases) and download the installer for your
+   system from the newest `v0.1.0-beta.*` release (betas are marked **Pre-release**), plus `SHA256SUMS.txt`.
+
+   | System | File |
+   |---|---|
+   | Windows 10/11 (64-bit) | `Azhi.Flow.Setup.<version>.exe` |
+   | macOS, Apple Silicon (M1 and later) | `Azhi.Flow-<version>-arm64.dmg` |
+   | macOS, Intel | `Azhi.Flow-<version>.dmg` |
+
+   The installers are 420 to 510 MB because they include Node.js, the Temporal CLI, OpenCode and the Claude Agent
+   SDK runtime.
+
+2. Check the download against `SHA256SUMS.txt`.
+
+   <Tabs>
+   <TabItem label="Windows">
+   ```powershell
+   certutil -hashfile "Azhi.Flow.Setup.0.1.0-beta.1.exe" SHA256
+   ```
+   </TabItem>
+   <TabItem label="macOS">
+   ```bash
+   shasum -a 256 Azhi.Flow-0.1.0-beta.1-arm64.dmg
+   ```
+   </TabItem>
+   </Tabs>
+
+3. Install and open it. Because the build is unsigned, the first launch needs one extra step.
+
+   <Tabs>
+   <TabItem label="Windows">
+   Run the installer. SmartScreen shows **Windows protected your PC**: click **More info**, then **Run anyway**.
+   The app installs for your user (no administrator rights) and you can pick the folder.
+   </TabItem>
+   <TabItem label="macOS">
+   Open the `.dmg` and drag **Azhi Flow** to Applications. Gatekeeper blocks the first launch. Open **System
+   Settings, Privacy & Security**, scroll to the message about "Azhi Flow", and click **Open Anyway**. (macOS 15 and
+   later have no right-click Open shortcut.) From a terminal instead:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Azhi Flow.app"
+   ```
+   </TabItem>
+   </Tabs>
+
+4. Wait for the first start. A cold start takes up to a minute (the window says it is starting). When Mission
+   Control opens you are signed in as the local owner.
+
+</Steps>
+
+## What you get
+
+- **Tray icon.** Closing the window hides it; Azhi Flow keeps running so schedules and approvals still fire. Use the
+  tray icon to open it again or **Quit**, which stops everything cleanly.
+- **Notifications** when an approval is waiting for you.
+- **A missing-tools prompt**, once. If the worker cannot find Git, or Python or uv, the app tells you and links to the
+  installers. Workflows that need them say so in the run plan before they run. Git is needed for runs that work on a
+  repository; Python or uv for script steps; Bun is optional.
+- **An update notice.** About once a day the app asks GitHub for the latest release and links to it. It sends no user
+  data. It never updates itself, and it ignores pre-releases. Set `AZHI_DESKTOP_NO_UPDATE_CHECK=1` to turn it off.
+
+## Next steps
+
+Add a model credential and run something: [First run](/install/first-run/) and
+[Use a subscription, not API keys](/guides/subscriptions/). To work on a folder of your own, see
+[local workspaces](https://github.com/surr-jc/azhi-flow/blob/dev/docs/local-workspaces.md).
+
+## Files, logs and uninstalling
+
+| What | Where |
+|---|---|
+| Runs, database, secrets, settings | `~/.azhi` |
+| Desktop log | `~/.azhi/local/desktop.log` |
+| Local API and web UI | `http://127.0.0.1:7400` (`AZHI_PORT` changes it) |
+
+Uninstall like any app (Windows: Apps settings; macOS: drag to the Trash). Your data in `~/.azhi` is left in place;
+delete the folder yourself to remove it. The installer does not put an `azhi` command on your PATH. To use the CLI
+against the running app, run it from a [source checkout](/install/local-mode/); it finds the app on port 7400
+without a login.
+
+## Limits
+
+- One person on one machine, like all of local mode: a single-writer database and no second server on the same data.
+- Script memory limits (`limits.memory_mb`) are enforced on Linux only. Elsewhere the run plan warns that they are
+  not enforced.
+- If another Azhi is already running locally (`azhi up` in a terminal), the app tells you and does not start.
+- Windows on ARM and Linux have no desktop build. On Linux use [local mode](/install/local-mode/) or the
+  [team install](/install/linux/).

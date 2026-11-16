@@ -73,6 +73,7 @@ export default defineConfig({
           label: 'Setup guides',
           items: [
             { label: 'Choose an install', slug: 'install' },
+            { label: 'Desktop app (beta)', slug: 'install/desktop-app' },
             { label: 'Linux', slug: 'install/linux' },
             { label: 'macOS', slug: 'install/macos' },
             { label: 'Windows', slug: 'install/windows' },

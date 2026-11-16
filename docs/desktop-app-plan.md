@@ -1,6 +1,7 @@
 # Desktop app (macOS and Windows)
 
-Status: built on Windows (verified, see below); macOS written but not yet run. Updated 2026-11-16. Builds on step 6
+Status: first beta `v0.1.0-beta.1` tagged 2026-11-16 and built by CI for Windows x64 and macOS arm64 and x64 (a draft
+pre-release; installers are 421 MB, 482 MB and 508 MB). Verified by hand on Windows only; no macOS build has been launched. Builds on step 6
 of [local-mode-plan.md](local-mode-plan.md).
 
 ## Decisions

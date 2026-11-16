@@ -1,27 +1,27 @@
 ---
 title: Choose an install
-description: Pick between the team install (Docker) and local mode (no Docker), then follow the guide for Linux, macOS or Windows.
+description: Pick between the desktop app, the team install (Docker) and local mode (no Docker), then follow the guide for your system.
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Azhi Flow has two ways to run. They run the same code.
+Azhi Flow has three ways to run. They run the same code.
 
-| | Team install | Local mode (experimental) |
-|---|---|---|
-| For | A team, or anything you want to keep running | One person on one machine |
-| Parts | PostgreSQL 16 + pgvector, Temporal and the Azhi server in Docker, plus one or more **workers** | One process: embedded PostgreSQL (PGlite), Temporal's dev server, the server and a worker |
-| Needs | Git, Node.js 22+, Docker with Compose | Git, Node.js 22+ (Python for script nodes) |
-| Command | `deploy/install.sh` | `npx azhi up` |
-| Data | Docker volumes | `~/.azhi` (`%USERPROFILE%\.azhi` on Windows) |
+| | Desktop app (beta) | Team install | Local mode (experimental) |
+|---|---|---|---|
+| For | One person who wants an installer, not a terminal | A team, or anything you want to keep running | One person on one machine, from a checkout |
+| Parts | Local mode in a window with a tray icon and notifications | PostgreSQL 16 + pgvector, Temporal and the Azhi server in Docker, plus one or more **workers** | One process: embedded PostgreSQL (PGlite), Temporal's dev server, the server and a worker |
+| Needs | Nothing to install first (Git and Python or uv for the workflows that use them) | Git, Node.js 22+, Docker with Compose | Git, Node.js 22+ (Python for script nodes) |
+| Command | Run the installer | `deploy/install.sh` | `npx azhi up` |
+| Data | `~/.azhi` | Docker volumes | `~/.azhi` (`%USERPROFILE%\.azhi` on Windows) |
 
 ## Platform support
 
-| Platform | Team install | Local mode |
-|---|---|---|
-| Linux | **Server and workers** | Yes |
-| Windows 10/11 | Inside **WSL2** (Ubuntu) | Yes, native, no WSL |
-| macOS | Server in Docker, development worker. Tested and working; workers not certified. | Not yet tested |
+| Platform | Desktop app | Team install | Local mode |
+|---|---|---|---|
+| Linux | No build | **Server and workers** | Yes |
+| Windows 10/11 | Yes (x64, unsigned beta) | Inside **WSL2** (Ubuntu) | Yes, native, no WSL |
+| macOS | Built by CI (Apple Silicon and Intel), **not yet launched on a Mac** | Server in Docker, development worker. Tested and working; workers not certified. | Not yet tested |
 
 <Aside type="caution" title="Alpha caveat">
 Workers (the processes that run scripts and harnesses) are supported on **Linux only**. On Windows you work
@@ -53,6 +53,7 @@ migrations included). Image pulls were not measured; at 50 Mbit/s a cold install
 ## Pick your guide
 
 <CardGrid>
+  <LinkCard title="Desktop app (beta)" description="Download an installer for Windows or macOS. No Node.js or Docker." href="/install/desktop-app/" />
   <LinkCard title="Linux" description="Server with deploy/install.sh, then workers." href="/install/linux/" />
   <LinkCard title="macOS" description="Docker Desktop for the server, native CLI and development worker." href="/install/macos/" />
   <LinkCard title="Windows" description="WSL2 for the team install, or native local mode." href="/install/windows/" />

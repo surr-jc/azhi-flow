@@ -45,7 +45,9 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
 
 ## Quick look
 
-Local mode needs only Git and Node.js 22+ (experimental, one machine; the full install is [below](#install)):
+On Windows or macOS, the quickest start is the [desktop app](#desktop-app-beta): download an installer, no terminal
+(unsigned beta). Otherwise, local mode needs only Git and Node.js 22+ (experimental, one machine; the full install is
+[below](#install)):
 
 ```bash
 git clone https://github.com/surr-jc/azhi-flow
@@ -170,6 +172,7 @@ plus one or more **workers** that run scripts and harnesses. In the alpha, worke
 | Linux | Server and workers | [Linux](#linux) |
 | Windows 10/11 | Everything, inside WSL2 (Ubuntu) | [Windows](#windows-wsl2) |
 | macOS | Server and a development worker, not certified | [macOS](#macos) |
+| Windows 10/11 and macOS, one person | Desktop app, an unsigned beta (no Node or Docker needed) | [Desktop app](#desktop-app-beta) |
 
 Common requirements: Git, Node.js 22+ and Docker with the Compose plugin. For script nodes, add
 [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on each worker host.
@@ -201,9 +204,23 @@ process on the same data, and script memory limits only on Linux. macOS is not y
 (`npm ci` installs OpenCode; add ripgrep with `winget install BurntSushi.ripgrep.MSVC`, then
 `npx azhi setup` checks both); this is new and not yet checked by a live run on Windows.
 
-A desktop app for Windows and macOS (a window, tray icon and notifications around local mode, no Node or Docker
-needed; unsigned builds, macOS not yet run on a Mac) is built from `desktop/`; see [docs/install.md](docs/install.md#desktop-app-windows-and-macos-one-person-on-one-machine)
-and [docs/desktop-app-plan.md](docs/desktop-app-plan.md).
+### Desktop app (beta)
+
+For one person on one machine, with no terminal, Node.js or Docker: an installer that runs local mode in a window,
+with a tray icon (schedules and approvals keep running when the window is closed) and notifications for approvals.
+The first build is `v0.1.0-beta.1`. It is **not code-signed**, the Windows app was tested end to end, and the macOS
+builds are produced by CI but **have not been launched on a Mac yet**.
+
+1. Download the installer from the [Releases page](https://github.com/surr-jc/azhi-flow/releases) (betas are marked
+   Pre-release): `Azhi.Flow.Setup.<version>.exe` for Windows, `Azhi.Flow-<version>-arm64.dmg` for Apple Silicon
+   or `Azhi.Flow-<version>.dmg` for Intel Macs (420 to 510 MB), and check it against `SHA256SUMS.txt`.
+2. Windows: SmartScreen says "Windows protected your PC"; click *More info*, then *Run anyway*. macOS: open System
+   Settings, Privacy & Security, then *Open Anyway* (or `xattr -dr com.apple.quarantine "/Applications/Azhi Flow.app"`).
+3. The first start takes up to a minute. Data stays in `~/.azhi`; uninstalling leaves it in place.
+
+Details, limits and uninstalling: [docs/install.md](docs/install.md#desktop-app-windows-and-macos-one-person-on-one-machine)
+and the [install guide](https://surr-jc.github.io/azhi-flow/install/desktop-app/). Design and what was verified:
+[docs/desktop-app-plan.md](docs/desktop-app-plan.md). Developers build it with `npm run build:app` and `desktop/`.
 
 ### Linux
 

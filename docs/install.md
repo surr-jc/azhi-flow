@@ -73,14 +73,15 @@ dispatched and confirmed in the ledger and received by the fake.
 
 ## Desktop app (Windows and macOS, one person on one machine)
 
-A window, tray icon and notifications around [local mode](local-mode-plan.md): the server, a Temporal dev server and
+The current build is `v0.1.0-beta.1`, an unsigned beta. A window, tray icon and notifications around [local mode](local-mode-plan.md): the server, a Temporal dev server and
 a worker run on your computer with all data in `~/.azhi` (`%USERPROFILE%\.azhi` on Windows). No Docker, Node or
 npm is needed. Design and status: [desktop-app-plan.md](desktop-app-plan.md).
 
-1. Download the installer for your system from the
-   [latest release](https://github.com/surr-jc/azhi-flow/releases) (`Azhi Flow Setup <version>.exe`, or the `.dmg`
-   for Apple Silicon or Intel) and check it against `SHA256SUMS.txt`
-   (`certutil -hashfile "Azhi Flow Setup 0.1.0.exe" SHA256` on Windows, `shasum -a 256 <file>` on macOS).
+1. Download the installer for your system from the newest release on the
+   [Releases page](https://github.com/surr-jc/azhi-flow/releases) (betas are marked Pre-release):
+   `Azhi.Flow.Setup.<version>.exe` for Windows, `Azhi.Flow-<version>-arm64.dmg` for Apple Silicon or
+   `Azhi.Flow-<version>.dmg` for Intel (420 to 510 MB each). Check it against `SHA256SUMS.txt`
+   (`certutil -hashfile "Azhi.Flow.Setup.0.1.0-beta.1.exe" SHA256` on Windows, `shasum -a 256 <file>` on macOS).
 2. The builds are **not signed**, so the first launch needs one extra step:
    - **Windows:** SmartScreen shows "Windows protected your PC". Click *More info*, then *Run anyway*.
    - **macOS:** Gatekeeper blocks the app. Open System Settings, Privacy & Security, scroll to the message about
@@ -90,9 +91,10 @@ npm is needed. Design and status: [desktop-app-plan.md](desktop-app-plan.md).
    and links to their installers; workflows that need them say so before they run.
 
 Closing the window keeps Azhi Flow running in the tray (schedules and approvals still fire); use the tray icon's Quit
-to stop it. The `azhi` command line finds a running desktop app on port 7400 without a login. Logs are in
+to stop it. The installer does not put an `azhi` command on your PATH; run the CLI from a source checkout and it finds
+the running app on port 7400 without a login. Logs are in
 `~/.azhi/local/desktop.log`. Uninstalling the app leaves `~/.azhi` (your runs and settings) in place. The app checks
-GitHub once a day for a newer release and links to it; set `AZHI_DESKTOP_NO_UPDATE_CHECK=1` to turn that off. macOS
+GitHub once a day for a newer full release (pre-releases are ignored) and links to it; set `AZHI_DESKTOP_NO_UPDATE_CHECK=1` to turn that off. macOS
 builds are new and have not been run on a Mac yet; script memory limits (`limits.memory_mb`) are enforced on Linux only.
 
 ## Workers
