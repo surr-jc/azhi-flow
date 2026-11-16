@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, shell, Tray } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'node:fs';
 import { homedir } from 'node:os';
@@ -34,13 +34,24 @@ let session: Session | undefined;
 const state = createState(join(azhiHome, 'local', 'desktop-state.json'));
 const iconPath = join(__dirname, '..', 'assets', 'icon.png');
 
+// The logo of web/src/brand.tsx and its trace loader (web/src/components/LogoTraceLoader.tsx): the ழ glyph as one
+// line on the accent tile, a short segment circling it over the faint outline. Colours are the web UI's tokens.
+const GLYPH = 'M16 13 V36 H39.5 C44.5 36 48.5 31.5 48.5 24.5 C48.5 17.5 44.5 13 39.5 13 C34.5 13 30.5 17.5 30.5 24.5 V45 C30.5 49.5 27.5 52 24 52 C20.5 52 18.5 49.8 18.5 47.5';
 const SPLASH =
   'data:text/html;charset=utf-8,' +
   encodeURIComponent(
     '<!doctype html><meta charset="utf-8"><title>Azhi Flow</title><style>' +
-      ':root{color-scheme:light dark}body{margin:0;height:100vh;display:grid;place-items:center;' +
-      'font:15px system-ui,sans-serif;background:Canvas;color:CanvasText}p{opacity:.7}</style>' +
-      '<div><h2>Azhi Flow</h2><p>Starting the local server&hellip;</p></div>',
+      ':root{color-scheme:light dark;--bg:#f5f6f8;--ink:#13213b;--muted:#556072;--accent:#0e6f6a;--accent-ink:#ffffff}' +
+      '@media(prefers-color-scheme:dark){:root{--bg:#0e141b;--ink:#e6ecf3;--muted:#9aa7b8;--accent:#3cc0b4;--accent-ink:#062421}}' +
+      'body{margin:0;height:100vh;display:grid;place-items:center;font:15px system-ui,sans-serif;background:var(--bg);color:var(--ink)}' +
+      'div{display:flex;flex-direction:column;align-items:center;gap:20px}p{margin:0;color:var(--muted)}' +
+      '@keyframes trace{to{stroke-dashoffset:-1}}.t{animation:trace 1.4s linear infinite}' +
+      '@media(prefers-reduced-motion:reduce){.t{animation:none;stroke-dasharray:1 0}}</style>' +
+      '<div><svg viewBox="0 0 64 64" width="96" height="96" role="status" aria-label="Azhi Flow">' +
+      '<rect width="64" height="64" rx="15" fill="var(--accent)"/>' +
+      `<path d="${GLYPH}" fill="none" stroke="var(--accent-ink)" stroke-opacity=".3" stroke-width="3.25" stroke-linecap="round" stroke-linejoin="round"/>` +
+      `<path class="t" d="${GLYPH}" fill="none" stroke="var(--accent-ink)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="0.16 0.84"/>` +
+      '</svg><p>Starting the local server&hellip;</p></div>',
   );
 
 function openLog(): WriteStream {
@@ -119,7 +130,7 @@ function createWindow(): BrowserWindow {
     minWidth: 900,
     minHeight: 600,
     title: 'Azhi Flow',
-    backgroundColor: '#ffffff',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e141b' : '#f5f6f8',
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
   });
   w.setMenuBarVisibility(false);
