@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
+import { ensureToolPath } from '../lib/tool-path.js';
 
 /**
  * A secret can point at the GitHub CLI's login instead of holding a token. Its stored value is
@@ -45,6 +46,9 @@ export type GhRunner = (args: string[], timeoutMs: number, opts?: GhRunOptions) 
 
 const defaultRunner: GhRunner = (args, timeoutMs, opts = {}) =>
   new Promise((resolve, reject) => {
+    // A packaged desktop app has a short PATH (no Homebrew on macOS); look in the usual install folders too.
+    ensureToolPath();
+    if (opts.env) ensureToolPath(opts.env);
     const child = execFile(
       process.env.AZHI_GH_BIN || 'gh',
       args,
@@ -66,7 +70,7 @@ export function setGhRunnerForTests(r?: GhRunner) {
   cache.clear();
 }
 
-const INSTALL = 'Install the GitHub CLI on the machine the server runs on (Windows: winget install GitHub.cli), then run: gh auth login';
+const INSTALL = 'Install the GitHub CLI on the machine the server runs on (Windows: winget install GitHub.cli; macOS: brew install gh), then run: gh auth login';
 
 /** The token of the `gh` login for a host, cached for a minute. Errors say what to do about them. */
 export async function ghCliToken(host = 'github.com'): Promise<string> {

@@ -1,3 +1,4 @@
+import { ensureToolPath } from '../lib/tool-path.js';
 import { startLocal } from './up.js';
 
 /**
@@ -16,6 +17,8 @@ const send = (m: Record<string, unknown>) =>
   });
 
 async function main() {
+  // Started from Finder/Dock the app has a minimal PATH; add Homebrew and the other usual tool folders for gh, git, etc.
+  ensureToolPath();
   if (!process.send) {
     console.error('sidecar: start it with an IPC channel (the desktop app does); use `azhi up` from a terminal');
     process.exit(2);
