@@ -105,6 +105,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cat dist/SHA256SUMS-*.txt > SHA256SUMS.txt
+          # A tag with a suffix (v0.1.0-beta.1) is a pre-release.
+          PRE=""
+          case "${{ github.ref_name }}" in *-*) PRE="--prerelease" ;; esac
           gh release create "${{ github.ref_name }}" dist/*.exe dist/*.dmg dist/*.zip SHA256SUMS.txt \
-            --repo "${{ github.repository }}" --draft --title "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" --draft $PRE --title "${{ github.ref_name }}" \
             --notes "Unsigned desktop builds. See docs/install.md for the Gatekeeper and SmartScreen steps. Verify downloads against SHA256SUMS.txt."
