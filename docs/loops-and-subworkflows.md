@@ -31,9 +31,60 @@ Repeats one tool or script step, one iteration after another.
 - Each iteration is an ordinary script attempt (id `refine[i]`) or tool call with its own ledger
   ordinal, so writes inside a loop are deduplicated per iteration. Tool and script retries apply per
   iteration.
-- Taint: a loop over a tool is as trusted as that tool's output.
-- Not supported: agents as the loop body (an agent's transcript is keyed by node, not iteration),
-  and several steps in one body (use a subworkflow for that).
+- Taint: a loop over a tool is as trusted as that tool's output. A `guard` in the body runs before every
+  call and counts as the write's gate, in a `parallel` body too; the compiler checks it like any other guard.
+- A `node` loop cannot hold an agent or several steps (an agent's transcript is keyed by node, not
+  iteration). Use a `body` for that.
+
+### Several steps: `body`
+
+Repeats several steps, agents included. The compiler writes the rounds out as ordinary steps, so taint
+checks, the run plan, the ledger and resume treat them like any other step, and a resumed run keeps the
+rounds that finished.
+
+```yaml
+- id: attempt
+  type: loop
+  max_iterations: 2
+  on_max: continue             # or fail; default fail
+  initial:
+    change: {ref: nodes.triage.output.change}
+    feedback: null
+  body:
+    - {id: resolve, type: agent, profile: resolver@1, workspace: {from: {ref: state.change}, ...}, input: {map: "{'feedback': state.feedback}"}, ...}
+    - {id: review, type: agent, profile: reviewer@1, ...}
+  overrides: {2: {resolve: {profile: resolver@2}}}
+  exit:                        # the first that holds ends the loop; none means another round
+    - {when: nodes.review.output.prompt_injection_detected, outcome: stop, reason: Prompt injection reported}
+    - {when: nodes.review.output.approved, outcome: done, reason: Review approved}
+  next:                        # the next round's state, reading this round; a key left out keeps its value
+    change: {ref: nodes.resolve.output.workspace}
+    feedback: {cel: nodes.review.output.findings}
+```
+
+- Each round becomes `attempt_1_resolve`, `attempt_2_resolve` and so on, plus a gate `attempt_1_gate` that
+  applies `exit`. Inside the body, `nodes.<step>` means this round's step, `state.<key>` this round's state and
+  `iteration` the 0-based round. In `exit`, `iteration` is the number of rounds completed.
+- Later steps read only `nodes.attempt.output`, never a round's steps: `{outcome, reason, count, exited, last, rounds}`.
+  `outcome` is `done`, `stop`, `no_progress` or `exhausted`. `last.<step>` is the output from the last round, null if
+  that round skipped the step. `rounds` lists every round that ran. A large result is stored as one artifact.
+- Out of rounds with `on_max: fail` fails the run with `contract_violation`. `stop` and `no_progress` do not fail it:
+  later steps decide. An `exit` rule that reads a step its round can skip needs its route checked first, as rules are
+  tried in order.
+- A plain `{ref: state.x}` stays a plain ref when `x` is one, so `workspace.from` works. `has(state.x)` works only
+  when `x` is a plain ref, and a rule or input can always compare it with `null`.
+- A `context` in the body gets its own copy per round, so a bundle can read the round's steps and state.
+- `GET /v1/runs/:id` returns `loops`: per round its outcome, fixed reason, step states and usage (null when unknown).
+  A failed run has it too. The reason is text the author wrote, never ticket or repository text.
+- Not supported in a body yet: approvals, notifications, `parallel`, nested loops, and write tools (as a step or held
+  by an agent), since each round would repeat the write. A write-mode agent is allowed: it changes a checkout, and a
+  tool after the loop pushes it.
+- Rounds are capped at 5 when the body has an agent and 20 otherwise.
+- The compiler warns about `loop_self_graded` (only the step that made the change says it is done; the worker's
+  `workspace.tests` counts as independent), `loop_exit_may_skip` (a rule reads a step its round can skip, with no
+  `has()` or route check first) and `loop_next_may_skip` (`next` reads such a step and no rule ends that route).
+  These are warnings because a rule can be safe in a way the compiler cannot see. At run time the last two fail the
+  run with an error instead of choosing a route.
 
 ## Subworkflow
 
@@ -56,7 +107,10 @@ Runs a published workflow as a child run.
   as the parent run's principal, and is created once per parent node, so a retry reuses it.
 - Output: `{run_id, workflow, version, state, nodes}` where `nodes` maps each succeeded child node
   to its output, so `nodes.review.output.nodes.double.doubled` reads a child result. If the child
-  does not end `succeeded`, the node fails with the child's error class.
+  does not end `succeeded`, the node fails with the child's error class, unless it says `on_failure: continue`:
+  then the node completes with `state` (`failed`, `expired`, `cancelled` or `delivery_failed`) and `error` (`{class, message}`)
+  added to the output, and the nodes that succeeded are still in `nodes`. Cancelling the parent still cancels the run.
+  Steps after it must check `state` before reading `nodes`; the error message can quote untrusted text.
 - Taint: the output is treated as untrusted, since the child may call tools and agents the parent
   cannot see into.
 - Guards: a workflow cannot call itself directly or through its chain, and nesting stops at four

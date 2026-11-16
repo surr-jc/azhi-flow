@@ -62,7 +62,7 @@ export interface RunPlanReport {
   ok: boolean;
   nodes: NodePlan[];
   taint: TaintReport;
-  missing_grants: Array<{ kind: 'secret' | 'dataset' | 'tool'; name: string; node: string }>;
+  missing_grants: Array<{ kind: 'secret' | 'dataset' | 'tool'; name: string; node: string; optional?: boolean }>;
   worker_trust: Array<{ worker: string; name: string; policy: unknown; accepted: boolean; reason?: string }>;
   blockers: Blocker[];
 }
@@ -91,6 +91,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const workers = (
     await ctx.pool.query(`SELECT id, name, capabilities FROM workers WHERE workspace_id=$1 AND task_queue LIKE 'azhi-exec-%' AND last_heartbeat > now() - interval '30 seconds'`, [workspaceId])
   ).rows as Array<{ id: string; name: string; capabilities: { runtimes?: Record<string, { version: string }>; limits?: { memory?: boolean }; features?: string[] } }>;
+  const localFolders = new Set((await ctx.pool.query(`SELECT name FROM local_folders WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => r.name as string));
   const trust = await evaluateWorkerTrust(ctx, workspaceId, (version.signature as PackageSignature | null) ?? null, version.package_hash);
   const accepting = new Set(trust.workers.filter((w) => w.accepted).map((w) => w.worker));
 
@@ -101,11 +102,12 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
   const toolRequirement = (n: PlanNode, ref: string): Requirement => {
     const spec = catalog.get(ref);
     if (!spec) return { name: `tool ${ref}`, mark: 'unsupported', detail: 'not registered' };
-    if (spec.credential && !secrets.has(spec.credential)) missing.push({ kind: 'secret', name: spec.credential, node: n.id });
+    const absent = Boolean(spec.credential && !secrets.has(spec.credential));
+    if (absent) missing.push({ kind: 'secret', name: spec.credential!, node: n.id, ...(spec.credential_optional ? { optional: true } : {}) });
     return {
       name: `tool ${ref}`,
-      mark: spec.credential && !secrets.has(spec.credential) ? 'unsupported' : 'native',
-      detail: `${spec.effect} via ${spec.transport.kind}${spec.credential ? `, credential '${spec.credential}' ${secrets.has(spec.credential) ? 'set' : 'MISSING'}` : ''}`,
+      mark: absent && !spec.credential_optional ? 'unsupported' : 'native',
+      detail: `${spec.effect} via ${spec.transport.kind}${spec.credential ? `, credential '${spec.credential}' ${absent ? (spec.credential_optional ? 'not signed in (optional)' : 'MISSING') : 'set'}` : ''}`,
     };
   };
 
@@ -141,15 +143,34 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
             ? { name: 'git on a worker', mark: 'native', detail: withGit.map((w) => `${w.name}: git ${w.capabilities.runtimes!.git!.version}`).join(', ') }
             : { name: 'git on a worker', mark: 'unsupported', detail: 'no online OpenCode worker has git' },
       );
-      if (ws.credential) {
-        if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
-        np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+      if (ws.local) {
+        // A local folder (docs/local-workspaces.md): registered by an admin, opened only by a worker started to allow it.
+        const registered = localFolders.has(ws.local);
+        np.requirements.push({ name: `local folder ${ws.local}`, mark: registered ? 'native' : 'unsupported', detail: registered ? 'registered in this workspace' : 'not registered; an admin adds it on the Workers page' });
+        const allowing = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_local'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker allows local folders', mark: 'unverified', detail: 'no worker online' }
+            : allowing.length
+              ? { name: 'worker allows local folders', mark: 'native', detail: allowing.map((w) => w.name).join(', ') }
+              : { name: 'worker allows local folders', mark: 'unsupported', detail: 'no online OpenCode worker was started with local folders allowed (azhi up --local-folders)' },
+        );
+        np.coverage.push({
+          action: 'works in a local folder',
+          enforcement: 'unobservable',
+          detail: `a git worktree of '${ws.local}' on the worker's machine, on the run's own branch (azhi/<run id>). It is not a temporary directory: it stays when the step and the run end, and the gateway cannot see what is read or written there. Hooks and host git config are off; nothing is merged or pushed`,
+        });
+      } else {
+        if (ws.credential) {
+          if (!secrets.has(ws.credential)) missing.push({ kind: 'secret', name: ws.credential, node: nodeId });
+          np.requirements.push({ name: `workspace credential ${ws.credential}`, mark: secrets.has(ws.credential) ? 'native' : 'unsupported', detail: secrets.has(ws.credential) ? `sent only to ${ws.host ?? 'https://github.com'} during the fetch` : 'secret is not set' });
+        }
+        np.coverage.push({
+          action: 'workspace clone',
+          enforcement: 'harness',
+          detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
+        });
       }
-      np.coverage.push({
-        action: 'workspace clone',
-        enforcement: 'harness',
-        detail: `fresh temporary directory on the worker, isolated HOME and git config, credential ${ws.credential ? 'held in the fetch environment only, never written to the checkout' : 'none'}; deleted when the step ends`,
-      });
       const fromRef = ws.from !== undefined && typeof ws.from === 'object' && ws.from !== null && 'ref' in ws.from ? String(ws.from.ref) : undefined;
       if (fromRef) {
         const producer = fromRef.split('.')[1] ?? fromRef;
@@ -167,11 +188,28 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
           detail: `starts from the change step ${producer} made: the worker fetches that change's own base commit (not the step's ref, which may have moved on), checks every path, applies the files and commits them locally. The files are untrusted data from an agent; nothing is pushed`,
         });
       }
+      if (ws.merge_ref !== undefined) {
+        const merging = workers.filter((w) => w.capabilities.runtimes?.opencode && w.capabilities.features?.includes('workspace_merge'));
+        np.requirements.push(
+          !workers.length
+            ? { name: 'worker supports workspace merge', mark: 'unverified', detail: 'no worker online' }
+            : merging.length
+              ? { name: 'worker supports workspace merge', mark: 'native', detail: merging.map((w) => w.name).join(', ') }
+              : { name: 'worker supports workspace merge', mark: 'unsupported', detail: 'no online OpenCode worker has a build with workspace merge; upgrade the worker' },
+        );
+        np.coverage.push({
+          action: 'merges a ref into the checkout',
+          enforcement: 'harness',
+          detail: 'git merge --no-commit on the worker, with git hooks off and no host git config; conflicts stay in the tree as markers and the merge is never committed or pushed',
+        });
+      }
       if (ws.mode === 'write') {
         np.coverage.push({
           action: 'edits in the checkout',
           enforcement: 'harness',
-          detail: 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
+          detail: ws.local
+            ? 'OpenCode may edit files inside the worktree only (no shell, external directories denied); the repository\'s git directory is outside it. The worker commits the change to the run\'s branch and returns it as this step\'s output. Nothing is pushed'
+            : 'OpenCode may edit files inside the checkout only (no shell, external directories denied); git metadata is kept outside it. Nothing is pushed from the worker: the change comes back as this step\'s output for a later, gated write tool',
         });
       }
       if (ws.test) {
@@ -218,6 +256,11 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
       }
       case 'parallel':
       case 'loop':
+        if ('rounds' in n.def) {
+          // The join needs no worker: each round's steps are in the plan with their own requirements.
+          np.coverage.push({ action: 'rounds', enforcement: 'enforced', detail: `at most ${(n.def as { max_iterations: number }).max_iterations} rounds, each step listed in this plan and able to run once per round; the first exit rule that holds ends the loop` });
+          break;
+        }
         if (n.tool) np.requirements.push(toolRequirement(n, n.tool.ref));
         else np.requirements.push(...workerRequirements((n.def as unknown as { node: ScriptNode }).node.runtime));
         np.coverage.push(
@@ -228,7 +271,7 @@ export async function buildRunPlan(ctx: AppContext, workspaceId: string, version
         break;
       case 'agent': {
         const def = n.def as AgentNode;
-        const executor = def.executor ?? 'model-agent';
+        const executor = await runExecutor(ctx, workspaceId, version.package_hash, def, modelDefaults.from === 'run_choice' ? modelDefaults.value : undefined);
         np.executor = executor;
         const decl = EXECUTORS[executor];
         if (!decl) {
@@ -359,6 +402,24 @@ function modelOrigin(explicit: boolean, chosen: 'workflow_default' | 'run_choice
   return defaultName ? ` (${who})` : ` (${who} provider, its server default model)`;
 }
 
+/**
+ * The harness an agent step runs on: the one chosen for the run when it can drive the step's provider
+ * (and a step with a checkout stays on OpenCode), otherwise the step's own.
+ */
+async function runExecutor(ctx: AppContext, workspaceId: string, packageHash: string, def: AgentNode, choice?: ModelDefaults): Promise<string> {
+  const own = def.executor ?? 'model-agent';
+  if (!choice?.executor || !choice.provider) return own;
+  const path = profilePath(def.profile);
+  try {
+    const profile = applyModelDefaults(parseProfile((await packageFile(ctx, workspaceId, packageHash, path)).toString('utf8'), path), choice);
+    const provider = profile.model.provider;
+    const can = provider !== 'scripted' && EXECUTORS[choice.executor]?.providers.includes(provider) && (!def.workspace || choice.executor === 'opencode');
+    return can ? choice.executor : own;
+  } catch {
+    return own;
+  }
+}
+
 /** The model binding, credential and budget enforceability of a model-agent node. */
 async function modelRequirements(
   ctx: AppContext,
@@ -380,7 +441,7 @@ async function modelRequirements(
   } catch (e) {
     return [{ name: `profile ${def.profile}`, mark: 'unsupported', detail: (e as Error).message }];
   }
-  const chosen = usesDefaultModel(profile) && defaults?.provider ? defaultsFrom : undefined;
+  const chosen = (usesDefaultModel(profile) || defaults?.force) && profile.model.provider !== 'scripted' && defaults?.provider ? defaultsFrom : undefined;
   profile = applyModelDefaults(profile, defaults);
   const reqs: Requirement[] = [];
   if (np && profile.model.provider !== 'scripted') {

@@ -1,0 +1,22 @@
+{
+  "name": "azhi-flow-desktop",
+  "version": "0.1.0-beta.1",
+  "description": "Azhi Flow desktop app: a window, tray and notifications around the local backend.",
+  "license": "Apache-2.0",
+  "private": true,
+  "main": "dist/main.js",
+  "author": "Azhi Flow",
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "dev": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "fetch-runtime": "node ../scripts/fetch-runtime.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "electron": "45.3.3",
+    "electron-builder": "26.18.0",
+    "typescript": "5.9.3"
+  }
+}

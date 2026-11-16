@@ -42,6 +42,38 @@ describe('anthropic provider', () => {
     }
   });
 
+  it('retries a reply dropped mid-stream once, then names the cause', async () => {
+    let calls = 0;
+    let drops = 0;
+    const server = createServer((_req, res) => {
+      calls++;
+      if (calls > drops) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ model: 'm', stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }], usage: {} }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': '1000' });
+      res.write('{"model":');
+      setTimeout(() => res.destroy(), 20);
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const p = anthropicProvider({ apiUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, apiKey: 'k' });
+      const ask = () => p.complete({ model: 'm', system: 's', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [], maxTokens: 5 });
+      drops = 1;
+      expect((await ask()).content).toEqual([{ type: 'text', text: 'ok' }]);
+      expect(calls).toBe(2);
+      calls = 0;
+      drops = 2;
+      const err = await ask().catch((e) => e);
+      expect(calls).toBe(2);
+      expect(err.errorClass).toBe('transient');
+      expect(err.message).toMatch(/^anthropic closed the connection before the reply finished, twice \(HTTP 200\): \S/);
+    } finally {
+      server.close();
+    }
+  });
+
   it('classifies HTTP errors', async () => {
     const server = createServer((_req, res) => {
       res.statusCode = 401;

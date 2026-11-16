@@ -5,6 +5,7 @@
 schema_version: "2.0"
 id: context-review-revise
 name: Draft, critique and revise
+tags: [learn, demo]
 description: Gathers facts for a topic, drafts a short text, has it critiqued, and revises it. Shows a shared context, a cap on what a critic is sent, and a notes field that carries a hint from one step to the next.
 inputs:
   type: object

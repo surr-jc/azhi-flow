@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "description": "The Stories one sdd-breakdown run returned for an epic.",
+  "properties": {
+    "status": {"enum": ["ok", "failed"]},
+    "epic": {"type": ["integer", "null"]},
+    "stories": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "slice": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "body": {"type": "string", "minLength": 1, "maxLength": 19000}
+        },
+        "required": ["slice", "title", "body"],
+        "additionalProperties": false
+      }
+    },
+    "reason": {"type": "string"},
+    "last": {
+      "type": "boolean",
+      "description": "True when this was the last round that was meant to run: the loop ends after it. Unknown counts as last, so a loop whose input could not be read ends rather than goes on."
+    }
+  },
+  "required": ["status", "epic", "stories", "reason", "last"],
+  "additionalProperties": false
+}

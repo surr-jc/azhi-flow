@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "supervised",
+        "auto"
+      ]
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,224 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "approaches": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tradeoffs": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "tradeoffs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "recommended": {
+      "type": "string",
+      "description": "The chosen approach and why"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ]
+          },
+          "change": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "file:line of the existing code to mirror"
+          }
+        },
+        "required": [
+          "path",
+          "action",
+          "change"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "enum": [
+              "CREATE",
+              "UPDATE",
+              "ADD",
+              "REMOVE",
+              "REFACTOR",
+              "MIRROR"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "gotcha": {
+            "type": "string"
+          },
+          "satisfies": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "target",
+          "detail",
+          "satisfies"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test_plan": {
+      "type": "string"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "risk": {
+            "type": "string"
+          },
+          "mitigation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "risk",
+          "mitigation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "research": {
+            "type": "string",
+            "description": "What the repository and comparable systems do (path:line for the repository)"
+          },
+          "options": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "pros": {
+                  "type": "string"
+                },
+                "cons": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "pros",
+                "cons"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "recommended_default": {
+            "type": "string"
+          },
+          "counter_argument": {
+            "type": "string",
+            "description": "The strongest objection to the recommendation, and why it still wins"
+          },
+          "why": {
+            "type": "string",
+            "description": "The concrete cost of getting it wrong"
+          }
+        },
+        "required": [
+          "question",
+          "recommended_default"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "How likely a one-pass implementation is"
+    },
+    "touches_sensitive": {
+      "type": "boolean",
+      "description": "A planned file is auth, payments, secrets, a migration or schema, CI or governance config, or a public contract"
+    },
+    "has_migration": {
+      "type": "boolean"
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "risk_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The files or behaviours behind the rating"
+    }
+  },
+  "required": [
+    "summary",
+    "approaches",
+    "recommended",
+    "files",
+    "tasks",
+    "test_plan",
+    "risks",
+    "open_questions",
+    "confidence",
+    "touches_sensitive",
+    "has_migration",
+    "risk",
+    "risk_reasons"
+  ],
+  "additionalProperties": false
+}

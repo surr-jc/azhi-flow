@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "description": "The proposal round that passed the check, plus `found`. When no round passed, only `found: false` is returned and nothing after the have_change gate runs.",
+  "properties": {
+    "found": {"type": "boolean"},
+    "summary": {"type": "string"},
+    "change_id": {"type": "string"},
+    "bootstrapped": {"type": "boolean"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "open_questions": {"type": "array", "items": {"type": "string"}},
+    "conflicts": {"type": "array", "items": {"type": "string"}},
+    "workspace": {"type": "object"}
+  },
+  "required": ["found"],
+  "additionalProperties": true
+}

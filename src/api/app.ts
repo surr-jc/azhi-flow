@@ -8,16 +8,18 @@ import { TERMINAL_STATES } from '../runtime/types.js';
 import { callTool } from '../gateway/gateway.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
-import { audit, loadCatalog, registerTool, updateToolRepos } from '../server/catalog.js';
+import { audit, loadCatalog, registerTool, unregisterTool, updateToolRepos } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { packageManifest } from '../server/packages.js';
 import { addDocuments, createDataset, listDatasets, publishRevision, resolveDatasetRef, retrieve, revokeDocument, tagRevision } from '../knowledge/datasets.js';
 import { buildRunPlan } from '../plan/run-plan.js';
 import { registerModelOptionRoutes } from './model-options.js';
-import { MODEL_PROVIDERS, modelDefaultsProblems } from '../agents/profile.js';
+import { MODEL_PROVIDERS } from '../agents/profile.js';
+import { EXECUTORS } from '../executors/capabilities.js';
 import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
-import { createRun, getRunDetail, requestCancel, runEvents } from '../server/runs.js';
+import { getRunDetail, listRuns, requestCancel, resumeRun, runEvents } from '../server/runs.js';
+import { startRun, startRunBody } from '../server/start-run.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
@@ -32,19 +34,24 @@ import { newId } from '../lib/ids.js';
 import { checkSignature, registerPublisherKey, requireValidSignature, workspaceRoot } from '../server/trust.js';
 import { keyId } from '../security/signing.js';
 import { isWebPath, registerWebRoutes } from '../web/routes.js';
+import { registerAssistantRoutes } from './assistant.js';
 import { registerBuilderRoutes } from './builder.js';
 import { registerEditorRoutes } from './editor.js';
 import { registerExampleRoutes } from './examples.js';
 import { freshChatgptAuth, keepRenewedChatgptAuth, registerChatgptRoutes } from './chatgpt.js';
 import { registerCopilotRoutes } from './copilot.js';
 import { registerSigninRoutes } from './signins.js';
+import { registerQuotaRoutes } from './quota.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
 import { registerSlackRoutes, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
+import { isHookPath, registerTriggerRoutes } from './triggers.js';
 import { registerAssetRoutes } from './assets.js';
+import { registerBundleRoutes } from './bundle.js';
 import { registerConnectionRoutes } from './connections.js';
+import { registerLocalFolderRoutes } from './local-folders.js';
 import { registerToolboxRoutes } from './toolbox.js';
 
 declare module 'fastify' {
@@ -69,6 +76,34 @@ export interface ApiOptions {
   logger?: boolean;
 }
 
+interface GithubCliLogin {
+  host: string;
+  login: string | null;
+  scopes: string[];
+  warning?: string;
+}
+
+/** Reads the current CLI identity without exposing its token or changing stored secrets. */
+async function githubCliLogin(host: string): Promise<GithubCliLogin> {
+  const token = await ghCliToken(host);
+  const api = host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${host}/api/v3`;
+  await checkEgress(`${api}/user`);
+  const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
+    const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
+    throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
+  });
+  if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${host} (HTTP ${res.status}). Run on this machine: gh auth login`);
+  const who = (await res.json().catch(() => ({}))) as { login?: string };
+  const header = res.headers.get('x-oauth-scopes');
+  const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+  return {
+    host,
+    login: who.login ?? null,
+    scopes,
+    warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
+  };
+}
+
 export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: ApiOptions) {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 * 1024 });
 
@@ -83,7 +118,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS || (req.method === 'POST' && isHookPath(req.url))) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 
@@ -102,12 +137,17 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerCopilotRoutes(app, ctx);
   registerChatgptRoutes(app, ctx);
   registerSigninRoutes(app, ctx);
+  registerQuotaRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
   registerSlackRoutes(app, ctx, temporal);
+  registerTriggerRoutes(app, ctx, interpreterBuild);
   registerMcpRoutes(app, ctx);
   registerAssetRoutes(app, ctx);
+  registerBundleRoutes(app, ctx);
   registerConnectionRoutes(app, ctx);
+  registerLocalFolderRoutes(app, ctx);
   registerToolboxRoutes(app, ctx);
+  registerAssistantRoutes(app, { ctx, temporal, interpreterBuild });
   app.get('/healthz', async () => ({ ok: true, interpreter_build: interpreterBuild }));
 
   app.get('/v1/me', async (req) => req.principal);
@@ -188,9 +228,10 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
     // `provider` and `model` show the plan as it would be for a run that chooses them.
-    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional() }).parse(req.query ?? {});
-    if (q.model && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model needs provider');
-    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}) } : undefined);
+    const q = z.object({ provider: z.enum(MODEL_PROVIDERS).optional(), model: z.string().optional(), force: z.enum(['true', 'false']).optional(), executor: z.string().optional() }).parse(req.query ?? {});
+    if ((q.model || q.executor || q.force === 'true') && !q.provider) throw new AzhiError(ErrorClass.invalidInput, 'model, force and executor need provider');
+    if (q.executor && !EXECUTORS[q.executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${q.executor}`);
+    return buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, q.provider ? { provider: q.provider, ...(q.model ? { name: q.model } : {}), ...(q.force === 'true' ? { force: true } : {}), ...(q.executor ? { executor: q.executor } : {}) } : undefined);
   });
 
   // Checks the workflow against the systems it uses, before a run: tools, secrets, GitHub tokens
@@ -278,43 +319,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   app.post('/v1/runs', async (req, reply) => {
     const p = user(req);
     requireRole(p, 'operator');
-    const body = z
-      .object({
-        version: z.string(),
-        inputs: z.record(z.string(), z.unknown()).default({}),
-        test: z.boolean().optional(),
-        node: z.string().optional(),
-        fixtures: z.record(z.string(), z.unknown()).optional(),
-        /** Also check the tools, tokens and repositories live, and refuse the run if one fails. */
-        preflight: z.boolean().optional(),
-        /** Provider and model for steps whose profile says `name: default`; steps that name a model keep it. Overrides the workflow's model_defaults. */
-        model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional() }).strict().optional(),
-      })
-      .parse(req.body);
-    if (body.model_defaults) {
-      const problems = modelDefaultsProblems(body.model_defaults);
-      if (problems.length) throw new AzhiError(ErrorClass.invalidInput, problems.join('; '));
-    }
-    if (body.node && !body.test) throw new AzhiError(ErrorClass.invalidInput, 'running a single node requires test: true (writes are mocked)');
-    const v = await resolveVersion(ctx, p.workspaceId, body.version);
-    if (!v) throw notFound(`workflow version ${body.version}`);
-    // A run whose plan has blockers is refused before anything executes. Test runs are exempt:
-    // `azhi test-node` mocks writes and is how authors debug an incomplete setup.
-    const plan = await buildRunPlan(ctx, p.workspaceId, v, { userId: p.userId, role: p.role }, body.model_defaults);
-    if (!body.test) {
-      if (!plan.ok) {
-        const first = plan.blockers[0]!;
-        throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
-      }
-      if (body.preflight) {
-        const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role } });
-        if (!pre.ok) {
-          const failed = pre.checks.filter((c) => c.status === 'fail');
-          throw new AzhiError(ErrorClass.unsupportedCapability, `preflight failed: ${failed.map((c) => (c.node ? `${c.node}: ` : '') + c.message).join('; ')}`, { checks: pre.checks });
-        }
-      }
-    }
-    const r = await createRun(ctx, p.workspaceId, { version: v, inputs: body.inputs, trigger: body.test ? 'test' : 'api', test: body.test, createdBy: p.userId, interpreterBuild, plan, ...(body.model_defaults ? { modelDefaults: body.model_defaults } : {}), ...(body.node ? { testNode: { node: body.node, fixtures: body.fixtures ?? {} } } : {}) });
+    const r = await startRun(ctx, p, startRunBody.parse(req.body), interpreterBuild);
     return reply.status(202).send({ run_id: r.runId });
   });
 
@@ -333,18 +338,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         top_level: z.enum(['true', 'false']).optional(),
       })
       .parse(req.query);
-    const esc = q.q?.replace(/[\\%_]/g, (c) => `\\${c}`);
-    return (
-      await ctx.pool.query(
-        `SELECT r.id, r.state, r.flags, r.trigger, r.test, r.inputs, r.created_at, r.ended_at, r.snapshot->'parent'->>'run_id' AS parent_run_id, w.slug AS workflow, v.version FROM runs r
-         JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id
-         WHERE r.workspace_id=$1 AND ($3::text[] IS NULL OR r.state = ANY($3)) AND ($4::text IS NULL OR w.slug = $4) AND ($5::timestamptz IS NULL OR r.created_at < $5)
-           AND ($6::timestamptz IS NULL OR r.created_at >= $6) AND ($7::text IS NULL OR r.inputs::text ILIKE $7 OR r.id LIKE $8)
-           AND ($9::boolean IS NOT TRUE OR r.snapshot->'parent' IS NULL)
-         ORDER BY r.created_at DESC LIMIT $2`,
-        [p.workspaceId, q.limit, q.state ? q.state.split(',') : null, q.workflow ?? null, q.before ?? null, q.since ?? null, esc ? `%${esc}%` : null, esc ? `${esc}%` : null, q.top_level === 'true'],
-      )
-    ).rows;
+    return listRuns(ctx, p.workspaceId, { ...q, state: q.state?.split(','), top_level: q.top_level === 'true' });
   });
 
   app.get('/v1/runs/:id', async (req) => {
@@ -388,6 +382,18 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     requireRole(p, 'operator');
     await requestCancel(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId);
     return { ok: true };
+  });
+
+  // A new run that continues a failed, cancelled or expired one: steps that succeeded are carried over, not repeated.
+  app.post('/v1/runs/:id/resume', async (req, reply) => {
+    const p = user(req);
+    requireRole(p, 'operator');
+    // `version` (`latest`, a number, `slug@n`) continues the run on a fixed version of its workflow if that is not too different;
+    // `dry_run` answers what would be kept without starting anything.
+    const b = z.object({ from_node: z.string().optional(), version: z.union([z.string(), z.number().int().positive()]).transform(String).optional(), dry_run: z.boolean().optional() }).parse(req.body ?? {});
+    const r = await resumeRun(ctx, p.workspaceId, (req.params as { id: string }).id, p.userId, interpreterBuild, { fromNode: b.from_node, version: b.version, dryRun: b.dry_run });
+    if (b.dry_run) return { version: r.version, ...r.check };
+    return reply.status(202).send({ run_id: r.runId, carried: r.carried, rerun: r.rerun, version: r.version, warnings: r.check.warnings });
   });
 
   // Knowledge datasets (spec section 11)
@@ -548,6 +554,13 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
     return registerTool(ctx, p.workspaceId, spec, p.userId);
   });
 
+  // Unregisters a tool for new workflows; runs that already pinned a revision keep running on it.
+  app.delete('/v1/tools/:ref', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    return unregisterTool(ctx, p.workspaceId, decodeURIComponent((req.params as { ref: string }).ref), p.userId);
+  });
+
   app.get('/v1/secrets', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
@@ -563,6 +576,11 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
 
   // Points GitHub secrets at the GitHub CLI's login (`gh auth login` on this machine) instead of a stored
   // token: the token is asked of `gh` each time a step needs it and is never stored.
+  app.get('/v1/github/cli-login', async (req) => {
+    user(req);
+    return githubCliLogin('github.com');
+  });
+
   app.post('/v1/github/cli-login', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
@@ -572,24 +590,11 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
         host: z.string().regex(/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\d{1,5})?$/).default('github.com'),
       })
       .parse(req.body ?? {});
-    const token = await ghCliToken(b.host);
-    const api = b.host.toLowerCase() === 'github.com' ? 'https://api.github.com' : `https://${b.host}/api/v3`;
-    await checkEgress(`${api}/user`);
-    const res = await fetch(`${api}/user`, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'azhi-flow' }, signal: AbortSignal.timeout(10_000) }).catch((e: unknown) => {
-      const why = (e as { cause?: { code?: string } }).cause?.code ?? (e as Error).message;
-      throw new AzhiError(ErrorClass.transient, `The server could not reach ${new URL(api).host} (${why}). Check that the computer the server runs on is online and can resolve that name (VPN, proxy or DNS), then try again.`);
-    });
-    if (!res.ok) throw new AzhiError(ErrorClass.authorization, `GitHub does not accept the GitHub CLI's token for ${b.host} (HTTP ${res.status}). Run on this machine: gh auth login`);
-    const who = (await res.json().catch(() => ({}))) as { login?: string };
-    const header = res.headers.get('x-oauth-scopes');
-    const scopes = header === null ? [] : header.split(',').map((x) => x.trim()).filter(Boolean);
+    const login = await githubCliLogin(b.host);
     for (const name of b.secrets) await setSecret(ctx, p.workspaceId, name, ghCliPointer(b.host), p.userId);
     return {
-      host: b.host,
-      login: who.login ?? null,
-      scopes,
+      ...login,
       secrets: b.secrets,
-      warning: scopes.length && !scopes.includes('repo') ? 'This sign-in lacks the "repo" scope, so private repositories and pushes will fail. Run: gh auth refresh -s repo' : undefined,
     };
   });
 

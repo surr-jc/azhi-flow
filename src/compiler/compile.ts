@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { parse as parseYamlValue } from 'yaml';
 import { checkCel, referencedNodes } from '../cel/evaluator.js';
+import { checkTriggerFilter, validEventPath } from '../cel/trigger.js';
 import type { Diagnostic } from '../definition/load.js';
 import type { PackageSource } from '../definition/package.js';
 import { isValueExpr, type JsonSchema, type NodeDef, type ParallelNode, type Value, type WorkflowDefinition } from '../definition/types.js';
@@ -24,6 +25,7 @@ import {
 import { compatible, projectSchema, resolvePath, schemaOfLiteral, typesOf } from './schema-path.js';
 import { analyseTaint, type DatasetInfo } from './taint.js';
 import { expandContexts, skipCauses, skipCoupling } from './contexts.js';
+import { expandLoops } from './loops.js';
 
 export interface CompileOptions {
   pkg?: PackageSource;
@@ -70,7 +72,7 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'tool':
       return { arguments: n.arguments as Value };
     case 'agent':
-      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.from': n.workspace.from } : { input: n.input };
+      return n.workspace ? { input: n.input, 'workspace.repo': n.workspace.repo, 'workspace.ref': n.workspace.ref, 'workspace.base_ref': n.workspace.base_ref, 'workspace.merge_ref': n.workspace.merge_ref, 'workspace.from': n.workspace.from } : { input: n.input };
     case 'script':
     case 'subworkflow':
       return { input: n.input };
@@ -79,6 +81,8 @@ export function nodeValues(n: NodeDef): Record<string, Value | undefined> {
     case 'parallel':
       return { for_each: n.for_each, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'loop':
+      if ('rounds' in n) return { rounds: n.rounds as unknown as Value };
+      if ('body' in n) return {};
       return { initial: n.initial, ...prefixed('node', nodeValues({ ...(n.node as any), id: `${n.id}_item` })) };
     case 'approval':
       return { message: n.message, payload: n.payload };
@@ -99,7 +103,11 @@ function nodeCel(n: NodeDef): Array<{ path: string; text: string }> {
   const out: Array<{ path: string; text: string }> = [];
   if (n.type === 'condition') out.push({ path: 'expression', text: n.expression });
   if ((n.type === 'notify' || n.type === 'tool') && n.guard) out.push({ path: 'guard', text: n.guard });
-  if (n.type === 'loop') out.push({ path: 'exit', text: n.exit });
+  if (n.type === 'parallel' || (n.type === 'loop' && 'node' in n)) {
+    if (n.type === 'loop') out.push({ path: 'exit', text: n.exit });
+    const guard = (n.node as { guard?: string }).guard;
+    if (guard) out.push({ path: 'node.guard', text: guard });
+  }
   return out;
 }
 
@@ -109,9 +117,12 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
   const warn = (code: string, message: string, node?: string, path?: string) => diags.push({ severity: 'warning', code, message, node, path });
   const supported = opts.supportedNodeTypes ?? ALPHA_NODE_TYPES;
 
-  // Context bundles are written into the steps' inputs first, so everything below (refs, types, ordering, taint)
-  // sees an ordinary input. `authored` stays what the definition hash and signing cover.
-  const expansion = expandContexts(authored);
+  // Multi-step loops are written out first, then context bundles into the steps' inputs, so everything below (refs,
+  // types, ordering, taint) sees ordinary steps with ordinary inputs. `authored` stays what the definition hash and signing cover.
+  const loops = expandLoops(authored);
+  diags.push(...loops.diagnostics);
+  if (loops.diagnostics.some((d) => d.severity === 'error')) return { ok: false, diagnostics: diags };
+  const expansion = expandContexts(loops.def);
   const def = expansion.def;
   diags.push(...expansion.diagnostics);
 
@@ -127,6 +138,22 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
       }
     }
   }
+
+  const inputProps = ((def.inputs as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}) as Record<string, unknown>;
+  (def.trigger?.events ?? []).forEach((ev, i) => {
+    const at = `/trigger/events/${i}`;
+    if (ev.when !== undefined) {
+      const c = checkTriggerFilter(ev.when);
+      if (!c.valid) err('invalid_trigger_filter', `event trigger ${i + 1}: invalid 'when' expression: ${c.error}`, undefined, `${at}/when`);
+    }
+    for (const [name, path] of Object.entries(ev.inputs ?? {})) {
+      if (!validEventPath(path)) err('invalid_trigger_input', `event trigger ${i + 1}: '${path}' is not a payload path like event.pull_request.number`, undefined, `${at}/inputs/${name}`);
+      if (!(name in inputProps)) err('unknown_trigger_input', `event trigger ${i + 1}: '${name}' is not declared in the workflow's inputs`, undefined, `${at}/inputs/${name}`);
+    }
+    for (const name of (def.inputs as { required?: string[] } | undefined)?.required ?? []) {
+      if (!(name in (ev.inputs ?? {}))) warn('trigger_input_missing', `event trigger ${i + 1}: required input '${name}' is not mapped, so every delivery is refused`, undefined, `${at}/inputs`);
+    }
+  });
 
   for (const m of modelDefaultsProblems(def.model_defaults)) err('invalid_model_defaults', m, undefined, '/model_defaults');
 
@@ -144,7 +171,8 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
   const dataDeps = new Map<string, Set<string>>(def.nodes.map((n) => [n.id, new Set<string>()]));
   for (const n of def.nodes) {
     for (const d of n.depends_on ?? []) if (!byId.has(d)) err('unknown_dependency', `depends_on '${d}' is not a node`, n.id);
-    if (n.merge && n.type === 'condition') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
+    // Only the gate a loop generates may merge: it must still decide when an inner route skipped part of its round.
+    if (n.merge && n.type === 'condition' && loops.origins.get(n.id)?.step !== 'gate') err('invalid_merge', 'a condition node cannot merge branches; merge in the node after it', n.id);
   }
   const routeOf = new Map<string, { condition: string; route: string }>();
   for (const n of def.nodes) {
@@ -266,7 +294,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
     return undefined;
   };
 
-  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || n.type === 'loop') && n.node.type === 'tool'))) {
+  if (!opts.catalog && def.nodes.some((n) => n.type === 'tool' || ((n.type === 'parallel' || (n.type === 'loop' && 'node' in n)) && n.node.type === 'tool'))) {
     warn('catalog_unavailable', 'tool catalog not available: tool references, arguments and projections were not checked');
   }
 
@@ -357,6 +385,12 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         const profileText = opts.pkg?.readText(profilePath(n.profile));
         if (opts.pkg && profileText === undefined) err('missing_file', `agent profile '${n.profile}' is not in the package (expected ${profilePath(n.profile)})`, n.id, 'profile');
         if (n.workspace && n.executor !== 'opencode') err('workspace_unsupported', `a workspace needs executor: opencode (got ${n.executor ?? 'model-agent'})`, n.id, 'workspace');
+        if (n.workspace?.local !== undefined) {
+          // The folder is named, never a path or a value: the path is set by an admin on the Workers page.
+          const clash = (['repo', 'host', 'credential', 'depth', 'merge_ref', 'from'] as const).filter((k) => n.workspace![k] !== undefined);
+          if (clash.length) err('workspace_local', `workspace.local works in a worktree of a local folder and clones nothing, so it cannot be combined with ${clash.join(', ')}`, n.id, 'workspace.local');
+          warn('workspace_local_folder', `workspace.local works in a folder on the worker's machine that stays after the run; filesystem isolation is not enforced for it`, n.id, 'workspace.local');
+        }
         if (n.workspace?.test && n.workspace.mode !== 'write') err('workspace_test_needs_write', 'workspace.test runs after the agent changes the checkout, so it needs mode: write', n.id, 'workspace.test');
         if (n.workspace?.test && /\{\{\w+\}\}/.test(n.workspace.test.command)) warn('unfilled_setting', `workspace.test.command is still a setting placeholder (${n.workspace.test.command}); the example install fills it, or edit it`, n.id, 'workspace.test.command');
         if (n.workspace?.test?.timeout) {
@@ -365,6 +399,10 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
           } catch {
             err('invalid_duration', `invalid workspace.test.timeout '${n.workspace.test.timeout}'`, n.id, 'workspace.test.timeout');
           }
+        }
+        if (n.workspace?.merge_ref !== undefined) {
+          const clash = [n.workspace.base_ref !== undefined && 'base_ref', n.workspace.from !== undefined && 'from', n.workspace.depth !== undefined && 'depth'].filter(Boolean);
+          if (clash.length) err('workspace_merge_ref', `workspace.merge_ref needs the full history and starts from the checked-out ref, so it cannot be combined with ${clash.join(', ')}`, n.id, 'workspace.merge_ref');
         }
         const from = n.workspace?.from;
         if (from !== undefined) {
@@ -377,9 +415,9 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
             const t = refTypes.get('workspace.from');
             const props = (t as { properties?: Record<string, unknown> } | undefined)?.properties;
             if (!t) warn('workspace_from_untyped', `workspace.from '${plain}' has no declared type, so it is checked when the step runs (it must carry base_sha and files)`, n.id, 'workspace.from');
-            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with base_sha and files)`, n.id, 'workspace.from');
-            else if (props && (!('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
-              err('workspace_from_type', `workspace.from '${plain}' does not carry base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
+            else if (!compatible(t, WORKSPACE_CHANGE_SCHEMA)) err('workspace_from_type', `workspace.from '${plain}' is ${typesOf(t).join('|')}, not a workspace change (an object with repo, base_sha and files)`, n.id, 'workspace.from');
+            else if (props && (!('repo' in props) || !('base_sha' in props) || !('files' in props)) && !(t as { additionalProperties?: unknown }).additionalProperties) {
+              err('workspace_from_type', `workspace.from '${plain}' does not carry repo, base_sha and files; point it at the 'workspace' field of the step that made the change`, n.id, 'workspace.from');
             }
           }
         }
@@ -445,6 +483,24 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         break;
       }
       case 'loop': {
+        if ('rounds' in n) {
+          // Later steps are type-checked against the steps of the body. A step whose round skipped it is null.
+          const stepOf = (ref: Value) => outputs.get((ref as { ref: string }).ref.split('.')[1]!) ?? {};
+          const steps = { type: 'object', properties: Object.fromEntries(Object.entries(n.rounds[0]!.steps).map(([k, v]) => [k, stepOf(v)])) };
+          outputSchema = {
+            type: 'object',
+            properties: {
+              outcome: { type: 'string' },
+              reason: { type: ['string', 'null'] },
+              count: { type: 'integer' },
+              exited: { type: 'boolean' },
+              last: steps,
+              rounds: { type: 'array', items: { type: 'object', properties: { round: { type: 'integer' }, outcome: { type: 'string' }, steps } } },
+            },
+          };
+          break;
+        }
+        if ('body' in n) break;
         let inner: JsonSchema | undefined;
         if (n.node.type === 'tool') inner = checkTool(n.node.tool, n.node.arguments, n.node.project, 'node.arguments');
         else if (n.node.type === 'script') {
@@ -464,6 +520,15 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
         outputSchema = undefined;
     }
     outputs.set(id, refSchema ?? outputSchema);
+
+    // Each round would repeat a write, and a rejection partway needs rules of its own. Reads and checkouts can repeat.
+    if (loops.origins.has(id)) {
+      const tool = toolInfo as PlanNode['tool'];
+      if (tool && tool.effect !== 'read') err('loop_body_write', `step '${id}' in a loop calls ${tool.ref}, a write tool. Write after the loop, from what its output says`, id, 'tool');
+      for (const t of agentToolsById.get(id) ?? []) {
+        if (t.effect !== 'read') err('loop_body_write', `agent '${id}' in a loop holds ${t.ref}, a write tool, which each round could call again. Write after the loop, from what its output says`, id, 'tools');
+      }
+    }
 
     const timeout = n.type === 'script' && n.limits?.time ? n.limits.time : n.type === 'approval' && n.expires_in ? n.expires_in : n.timeout;
     let timeoutMs = DEFAULT_TIMEOUTS[n.type];
@@ -486,6 +551,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
       maxAttempts: n.retry?.max_attempts ?? 3,
       ...(toolInfo ? { tool: toolInfo } : {}),
       ...(routeOf.has(id) ? { route: routeOf.get(id)! } : {}),
+      ...(loops.origins.has(id) ? { loop: loops.origins.get(id)! } : {}),
       ...(agentToolsById.has(id) ? { agentTools: agentToolsById.get(id)! } : {}),
     });
   }
@@ -513,7 +579,7 @@ export function compile(authored: WorkflowDefinition, opts: CompileOptions = {})
     const ownDeps = new Map<string, Set<string>>();
     const ownData = new Map<string, Set<string>>();
     for (const c of consumers) {
-      const original = authored.nodes.find((x) => x.id === c)!;
+      const original = loops.def.nodes.find((x) => x.id === c)!;
       const data = new Set<string>();
       for (const v of Object.values(nodeValues(original))) for (const t of targetsOf(v)) data.add(t);
       ownData.set(c, data);

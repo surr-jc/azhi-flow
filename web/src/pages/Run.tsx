@@ -6,14 +6,40 @@ import { atLeast } from '../api';
 import { Link, useRoute } from '../router';
 import { ago, Badge, ErrorNote, Json, Loading, money, num, PageHead, Panel, RunLink, StateBadge, Table, useConfirm, when } from '../ui';
 import { Formatted, Markdown, plainText } from '../components/Rich';
+import { ResumeDialog } from '../components/ResumeDialog';
 import { ApprovalCard } from './Approvals';
 import { duration } from './Overview';
-import { AgentActivityPanel, useTranscript, type TranscriptEntry } from './AgentActivity';
-import { Feed, FeedEmpty, FeedItem, offsetOf, type FeedTone } from '../components/ActivityFeed';
+import { useTranscript, type TranscriptEntry } from './AgentActivity';
+import { ActivityLog, describe, summarise, type RunEvent } from './ActivityLog';
 import { Icon } from '../icons';
 import { nodeStates, TYPE, WorkflowCanvas, type NodeRunState, type PlanNode } from '../components/WorkflowCanvas';
 
-interface RunEvent { seq: number; at: string; kind: string; node_id: string | null; data: Record<string, any> }
+/** A run's git worktree of a local folder (workspace.local), as the worker reported it. */
+interface RunWorktree { folder: string; path: string; branch: string; base_sha: string; removed_at: string | null }
+
+/** VS Code's link to a folder. The path is on the worker's machine: the link works where the browser and the worker are the same machine. */
+export const vscodeUrl = (path: string) =>
+  `vscode://file/${path.replace(/\\/g, '/').replace(/^\//, '').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:')}`;
+
+function Worktrees({ runId, worktrees }: { runId: string; worktrees: RunWorktree[] }) {
+  return (
+    <Panel title="Worktree">
+      <Table head={['Local folder', 'Worktree', 'Branch', 'Started from']}>
+        {worktrees.map((w) => (
+          <tr key={w.folder}>
+            <td className="mono">{w.folder} {w.removed_at ? <Badge tone="idle">removed</Badge> : null}</td>
+            <td className="mono">{w.removed_at ? w.path : <a href={vscodeUrl(w.path)} title="Open in VS Code">{w.path}</a>}</td>
+            <td className="mono">{w.branch}</td>
+            <td className="mono" title={w.base_sha}>{w.base_sha.slice(0, 12)}</td>
+          </tr>
+        ))}
+      </Table>
+      <p className="muted small">
+        This run works in its own git worktree, on the worker's machine. It holds code written by an agent, and it stays until you remove it with <code>azhi worktree remove {runId}</code>. The branch is kept; nothing is merged or pushed.
+      </p>
+    </Panel>
+  );
+}
 
 export function RunPage({ id }: { id: string }) {
   const qc = useQueryClient();
@@ -25,14 +51,9 @@ export function RunPage({ id }: { id: string }) {
   const version = useQuery({ queryKey: ['version', versionId], queryFn: () => api<any>(`/v1/versions/${encodeURIComponent(versionId)}`), enabled: Boolean(versionId), staleTime: Infinity });
   const approvals = useQuery({ queryKey: ['approvals'], queryFn: () => api<Approval[]>('/v1/approvals'), refetchInterval: 5_000 });
   const { events, live } = useRunEvents(id, () => void qc.invalidateQueries({ queryKey: ['run', id] }));
-  const [tab, setTab] = useState('timeline');
+  const [tab, setTab] = useState('log');
+  // The step the activity log opens and scrolls to, when the canvas asks for one.
   const [agentNode, setAgentNode] = useState<string | null>(null);
-  // A run with agent steps opens on what its agents are doing.
-  const hasAgents = Boolean(version.data?.plan?.nodes?.some((n: PlanNode) => n.type === 'agent'));
-  const picked = useRef(false);
-  useEffect(() => {
-    if (hasAgents && !picked.current) setTab('agent');
-  }, [hasAgents]);
   // Replay: the index of the event the canvas shows the run at, or null to follow the run live.
   const [cursor, setCursor] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -74,16 +95,18 @@ export function RunPage({ id }: { id: string }) {
     onSuccess: (r) => navigate(`/ui/runs/${encodeURIComponent(r.run_id)}`),
   });
 
+  const [resuming, setResuming] = useState(false);
+
   if (detail.error) return <ErrorNote error={detail.error} />;
-  if (!detail.data) return <Loading />;
+  if (!detail.data) return <Loading variant="page" />;
   const d = detail.data;
   const r = d.run;
   const open = !TERMINAL.includes(r.state);
   const flags = Object.entries(r.flags ?? {}).filter(([, v]) => v) as Array<[string, any]>;
   const operator = atLeast(me.data?.role, 'operator');
   const waiting = (approvals.data ?? []).filter((a) => a.run_id === id);
+  const worktrees = ((d.worktrees ?? []) as RunWorktree[]).filter((w) => !w.removed_at);
   const show = (k: string, node?: string) => {
-    picked.current = true;
     setTab(k);
     if (node) setAgentNode(node);
     requestAnimationFrame(() => document.getElementById('run-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
@@ -99,14 +122,24 @@ export function RunPage({ id }: { id: string }) {
         title={<>{r.workflow} <span className="muted" style={{ fontWeight: 400 }}>v{r.workflow_version}</span></>}
         sub={<><StateBadge state={r.state} />{r.test ? <> <Badge tone="idle">test run</Badge></> : null} {runSentence(r)}</>}
         actions={
-          operator ? (
+          <>
+            {worktrees.map((w) => (
+              <a key={w.folder} className="button" href={vscodeUrl(w.path)} title={`Opens ${w.path} in VS Code on this machine`}>
+                {worktrees.length > 1 ? `Open ${w.folder} in VS Code` : 'Open in VS Code'}
+              </a>
+            ))}
+            {operator ? (
             <>
               {open && r.state !== 'cancelling' ? <button className="danger" disabled={cancel.isPending} onClick={async () => (await ask({ title: `Cancel run ${r.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && cancel.mutate()}>Cancel run</button> : null}
+              {!open && !d.run.test && ['failed', 'cancelled', 'expired'].includes(r.state) ? <button className="primary" onClick={() => setResuming(true)} title="Start a new run that keeps every step that already succeeded and runs the rest, on this version or a fixed one">Resume</button> : null}
               {!open && !d.run.snapshot?.test_node ? <button disabled={rerun.isPending} onClick={() => rerun.mutate()} title="Start a new run of the same version with the same inputs">Run again</button> : null}
             </>
-          ) : null
+            ) : null}
+          </>
         }
       />
+      {(d.worktrees ?? []).length ? <Worktrees runId={r.id} worktrees={d.worktrees} /> : null}
+      {resuming ? <ResumeDialog runId={r.id} workflow={r.workflow} current={r.workflow_version} onClose={() => setResuming(false)} onStarted={(rid) => navigate(`/ui/runs/${encodeURIComponent(rid)}`)} /> : null}
       <ErrorNote error={cancel.error ?? rerun.error} />
       {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
@@ -139,10 +172,10 @@ export function RunPage({ id }: { id: string }) {
       ) : null}
       <div id="run-detail" style={{ scrollMarginTop: 112 }}>
         <div className="tabs" role="tablist">
-          {Object.entries(TABS).filter(([k]) => k !== 'agent' || hasAgents).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => { picked.current = true; setTab(k); }}>{label}</button>)}
+          {Object.entries(TABS).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}</button>)}
         </div>
         <div className="tab" role="tabpanel">
-          {tab === 'agent' ? <AgentActivityPanel onEvents={() => show('timeline')} runId={id} nodes={version.data?.plan?.nodes ?? []} detail={d} open={open} node={agentNode} onNode={setAgentNode} /> : tab === 'timeline' ? <Timeline events={events} /> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
+          {tab === 'log' ? <Panel><ActivityLog runId={id} events={events} nodes={version.data?.plan?.nodes ?? []} detail={d} open={open} focus={agentNode} /></Panel> : tab === 'inputs' ? <InputsTab detail={d} /> : tab === 'ledger' ? <Ledger detail={d} /> : tab === 'coverage' ? <Coverage plan={d.plan} /> : tab === 'context' ? <Context detail={d} /> : <UsageTab usage={d.usage} />}
         </div>
       </div>
     </>
@@ -150,7 +183,7 @@ export function RunPage({ id }: { id: string }) {
 }
 
 function runSentence(r: any): string {
-  const by = r.trigger === 'schedule' ? 'by its schedule' : r.trigger === 'test' ? 'as a test' : `from ${r.trigger}`;
+  const by = r.trigger === 'schedule' ? 'by its schedule' : r.trigger === 'event' ? 'by a webhook' : r.trigger === 'test' ? 'as a test' : `from ${r.trigger}`;
   const why = r.flags?.waiting_reason;
   switch (r.state) {
     case 'waiting':
@@ -395,19 +428,39 @@ function Drawer({ nodes, detail: d, show, className, onHide }: { nodes: PlanNode
     context: String(items),
   };
   const more = (k: string, label: string) => <button type="button" className="link small" onClick={() => show(k)}>{label}</button>;
+  const strip = useRef<HTMLDivElement>(null);
+  const [edge, setEdge] = useState({ left: false, right: false });
+  const measure = () => {
+    const el = strip.current;
+    if (el) setEdge({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+  };
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [d]);
+  useEffect(() => {
+    strip.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [tab]);
+  const nudge = (dir: -1 | 1) => strip.current?.scrollBy({ left: dir * 120, behavior: 'smooth' });
   return (
     <aside className={className} aria-label="Run evidence">
       <div className="atlas-head">
-        <div className="atlas-tabs" role="tablist">
+        {edge.left ? <button type="button" className="atlas-hide" onClick={() => nudge(-1)} aria-label="Scroll tabs left"><Icon name="chevron-left" size={16} /></button> : null}
+        <div className="atlas-tabs" role="tablist" ref={strip} onScroll={measure}>
           {Object.entries(DRAWER).map(([k, label]) => (
             <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{label}{count[k] ? <span> {count[k]}</span> : null}</button>
           ))}
         </div>
+        {edge.right ? <button type="button" className="atlas-hide" onClick={() => nudge(1)} aria-label="Scroll tabs right"><Icon name="chevron-right" size={16} /></button> : null}
         {onHide ? <button type="button" className="atlas-hide" onClick={onHide} aria-label="Hide run details" title="Hide run details"><Icon name="close" size={16} /></button> : null}
       </div>
       <div className="atlas-panel" role="tabpanel">
         {tab === 'steps' ? (
-          <><Steps nodes={nodes} detail={d} onAgent={(n) => show('agent', n)} />{more('inputs', 'Inputs and outputs')}</>
+          <><Steps nodes={nodes} detail={d} onAgent={(n) => show('log', n)} />{more('inputs', 'Inputs and outputs')}</>
         ) : tab === 'ledger' ? (
           <>
             {d.actions.length ? (
@@ -480,7 +533,7 @@ function Replay({ events, cursor, playing, onCursor, onPlay }: { events: RunEven
   );
 }
 
-const TABS: Record<string, string> = { agent: 'Agent activity', timeline: 'Event log', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
+const TABS: Record<string, string> = { log: 'Activity log', inputs: 'Inputs and outputs', ledger: 'Action ledger', coverage: 'Policy coverage', context: 'Context manifest', usage: 'Usage' };
 
 /** Follows the SSE stream, resuming from the last event ID after a disconnect. */
 function useRunEvents(id: string, onEvent: () => void) {
@@ -550,78 +603,6 @@ function useRunEvents(id: string, onEvent: () => void) {
     };
   }, [id]);
   return { events, live };
-}
-
-function summarise(ev: RunEvent) {
-  const d = ev.data ?? {};
-  if (ev.kind === 'run.planned') return `run plan recorded: ${d.ok ? 'no blockers' : `${d.blockers?.length} blocker(s)`}, ${d.nodes?.length ?? 0} nodes`;
-  const s = JSON.stringify(d);
-  return s === '{}' ? '' : s.length > 160 ? s.slice(0, 159) + '…' : s;
-}
-
-/** An event in plain words, with the icon and tone that carry its meaning besides colour. */
-function describe(ev: RunEvent): { icon: string; tone: FeedTone; text: string; group: 'steps' | 'approvals' | 'problems' | 'run' } {
-  const n = ev.node_id ?? 'The step';
-  switch (ev.kind) {
-    case 'run.queued': return { icon: 'clock', tone: 'idle', text: 'Run queued', group: 'run' };
-    case 'run.held': return { icon: 'clock', tone: 'wait', text: `Waiting for a free slot on ${ev.data?.repo ?? 'its repository'}: ${ev.data?.running?.length ?? ev.data?.limit} run(s) already working on it (limit ${ev.data?.limit})`, group: 'run' };
-    case 'run.started': case 'run.start': return { icon: 'play', tone: 'run', text: 'Run started', group: 'run' };
-    case 'run.planned': return { icon: 'approval', tone: 'idle', text: `Run plan recorded: ${ev.data?.ok ? 'no blockers' : `${ev.data?.blockers?.length ?? 0} blocker(s)`}`, group: 'run' };
-    case 'run.waiting': return { icon: 'clock', tone: 'wait', text: 'Run is waiting', group: 'run' };
-    case 'run.resumed': return { icon: 'play', tone: 'run', text: 'Run resumed', group: 'run' };
-    case 'run.succeeded': return { icon: 'check', tone: 'ok', text: 'Run finished', group: 'run' };
-    case 'run.failed': return { icon: 'alert', tone: 'bad', text: 'Run failed', group: 'problems' };
-    case 'run.cancel': case 'run.cancel_requested': return { icon: 'close', tone: 'wait', text: 'Cancel requested', group: 'run' };
-    case 'node.running': return { icon: 'step', tone: 'run', text: `${n} started`, group: 'steps' };
-    case 'node.succeeded': return { icon: 'check', tone: 'ok', text: `${n} finished${ev.data?.route !== undefined ? `, chose ${ev.data.route}` : ''}`, group: 'steps' };
-    case 'node.failed': return { icon: 'alert', tone: 'bad', text: `${n} failed${ev.data?.error?.message ? `: ${ev.data.error.message}` : ''}`, group: 'problems' };
-    case 'node.skipped': return { icon: 'step', tone: 'idle', text: `${n} skipped`, group: 'steps' };
-    case 'approval.requested': return { icon: 'gate', tone: 'wait', text: `${n} is waiting for a person to decide`, group: 'approvals' };
-    case 'approval.decided': case 'approval.submitted': return { icon: 'check', tone: 'ok', text: `${n} was decided`, group: 'approvals' };
-    case 'action.outcome_unknown': return { icon: 'alert', tone: 'bad', text: `${n}: a write has an unknown outcome and needs a person to confirm`, group: 'problems' };
-    default: return { icon: 'step', tone: ev.kind.endsWith('failed') ? 'bad' : 'idle', text: ev.kind.replaceAll('.', ' ').replaceAll('_', ' '), group: ev.kind.endsWith('failed') ? 'problems' : 'run' };
-  }
-}
-
-type EventFilter = 'all' | 'steps' | 'approvals' | 'problems';
-function Timeline({ events }: { events: RunEvent[] }) {
-  const [filter, setFilter] = useState<EventFilter>('all');
-  const [q, setQ] = useState('');
-  const [newestFirst, setNewestFirst] = useState(false);
-  if (!events.length) return <FeedEmpty title="Waiting for the first event" text="Events appear here as the run progresses: steps starting and finishing, approvals, and problems." />;
-  const start = new Date(events[0]!.at).getTime();
-  const rows = events.map((e) => ({ e, d: describe(e) }));
-  const needle = q.trim().toLowerCase();
-  const shown = rows.filter(({ e, d }) => (filter === 'all' || d.group === filter || (filter === 'steps' && d.group === 'run')) && (!needle || `${d.text} ${e.node_id ?? ''} ${e.kind}`.toLowerCase().includes(needle)));
-  const list = newestFirst ? [...shown].reverse() : shown;
-  const count = (f: EventFilter) => (f === 'all' ? rows.length : rows.filter(({ d }) => d.group === f).length);
-  return (
-    <div className="aa">
-      <div className="aa-tools">
-        <div className="seg" role="group" aria-label="Show">
-          {([['all', 'All'], ['steps', 'Steps'], ['approvals', 'Approvals'], ['problems', 'Problems']] as Array<[EventFilter, string]>).map(([f, label]) => <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}>{label}{f !== 'all' ? <span className="aa-n"> {count(f)}</span> : null}</button>)}
-        </div>
-        <label className="aa-q"><Icon name="search" size={16} /><input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search events" aria-label="Search events" autoComplete="off" /></label>
-        <div className="seg" role="group" aria-label="Order">
-          <button type="button" aria-pressed={!newestFirst} onClick={() => setNewestFirst(false)}>Oldest first</button>
-          <button type="button" aria-pressed={newestFirst} onClick={() => setNewestFirst(true)}>Newest first</button>
-        </div>
-      </div>
-      {!list.length ? <FeedEmpty title="No events match" text="Try a broader search, or show every event." action="Clear filters" onAction={() => { setFilter('all'); setQ(''); }} /> : (
-        <Feed label="Run events">
-          {list.map(({ e, d }) => (
-            <FeedItem key={e.seq} icon={d.icon} tone={d.tone} offset={offsetOf(new Date(e.at).getTime(), start)} offsetTitle={new Date(e.at).toLocaleTimeString()}>
-              <div className="af-line">
-                <span className="af-line-text">{d.text}</span>
-                <span className="muted small">{new Date(e.at).toLocaleTimeString()}</span>
-              </div>
-              {summarise(e) ? <details className="af-quiet af-raw"><summary><span className="muted small">Details</span></summary><pre className="code">{e.kind} #{e.seq}{'\n'}{summarise(e)}</pre></details> : null}
-            </FeedItem>
-          ))}
-        </Feed>
-      )}
-    </div>
-  );
 }
 
 function InputsTab({ detail: d }: { detail: any }) {

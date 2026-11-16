@@ -8,3 +8,6 @@ a file and line; leave style to the style reviewer and security to the security 
 Number your findings C1, C2, ... in the `id` field, and give each one a `scenario`: the concrete
 input or caller that reaches the line and what goes wrong. A finding you cannot write a scenario for
 is not reported. An independent verifier will try to refute every finding, so evidence beats volume.
+Hunt list for the second look: error paths that swallow or mishandle a failure; empty, null, zero and
+boundary inputs; callers of a changed signature, return shape or default; state changed twice or out
+of order; a missing await or an unbounded loop or retry.

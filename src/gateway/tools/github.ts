@@ -1,6 +1,7 @@
 import { ErrorClass } from '../../lib/errors.js';
 import { checkEgress } from '../egress.js';
 import { SendError } from '../ledger.js';
+import { ghApi } from '../../server/gh-cli.js';
 
 /**
  * Read-only GitHub tools for the flagship workflow (`builtin` transports `github.ci-runs`,
@@ -25,6 +26,13 @@ export interface GithubConfig {
   sticky?: string;
   /** How the merge tool merges: `merge`, `squash` (default) or `rebase`. */
   merge_method?: string;
+  /**
+   * When the API call fails, try it once more through `gh api`. `network`: only after a connection or certificate
+   * failure, with the same token (gh uses the Windows certificate store and system proxy; Node does not). `login`:
+   * also after a rejected or missing token, as gh's own login, which may be a broader identity. Default `off`.
+   * Writes are retried only where nothing can have been applied. The server's AZHI_GH_FALLBACK=off turns it off.
+   */
+  cli_fallback?: 'off' | 'network' | 'login';
 }
 
 const MAX_PAGES = 3;
@@ -39,38 +47,140 @@ async function get(cfg: GithubConfig, token: string | undefined, path: string, t
   return request(cfg, token, 'GET', path, undefined, timeoutMs);
 }
 
+/** Why a call did not get an answer it can use. Decides whether the GitHub CLI may try it (see `fallbackFor`). */
+export type FailureKind = 'connect' | 'tls' | 'reset' | 'timeout' | 'auth' | 'no-token' | 'http';
+
+const CONNECT_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+const TLS_CODES = new Set(['UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID']);
+
+/** Node's fetch hides the real reason in `cause.code`; a timeout or abort is named on the error itself. */
+function fetchFailureKind(err: unknown): FailureKind {
+  const e = err as { name?: string; code?: unknown; cause?: { code?: unknown } };
+  if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return 'timeout';
+  const code = String(e?.cause?.code ?? e?.code ?? '');
+  if (CONNECT_CODES.has(code)) return 'connect';
+  if (TLS_CODES.has(code) || code.startsWith('ERR_TLS')) return 'tls';
+  // Anything else (a reset, a closed socket, an unknown code) may have happened after the request was sent.
+  return 'reset';
+}
+
+/** A 401, or a 403 that asks for SSO, is rejected by GitHub before it applies anything; any other answer is final. */
+function httpFailureKind(status: number, header: (name: string) => string | null): FailureKind {
+  if (status === 401) return 'auth';
+  if (status === 403 && header('x-github-sso') && header('x-ratelimit-remaining') !== '0') return 'auth';
+  return 'http';
+}
+
+type FallbackMode = 'off' | 'network' | 'login';
+
+function fallbackMode(cfg: GithubConfig): FallbackMode {
+  if (process.env.AZHI_GH_FALLBACK === 'off') return 'off';
+  const mode = cfg.cli_fallback ?? 'off';
+  if (mode !== 'off' && mode !== 'network' && mode !== 'login') throw new SendError(`cli_fallback must be off, network or login, got '${String(mode).slice(0, 40)}'`, true, ErrorClass.invalidInput);
+  return mode;
+}
+
+/**
+ * May the GitHub CLI try this call after the API failed? Never when the failure leaves a write possibly applied
+ * (a reset or timeout on anything but a read), and never for a definite answer (404, a rate limit, a 5xx): the
+ * ledger's lookup, or the caller's own retry, handles those. A connection or certificate failure sent nothing;
+ * a 401 or SSO 403 changed nothing; both are safe for writes.
+ */
+export function fallbackFor(method: string, kind: FailureKind, mode: FallbackMode): boolean {
+  if (mode === 'off') return false;
+  switch (kind) {
+    case 'connect':
+    case 'tls':
+      return true;
+    case 'reset':
+      return method === 'GET';
+    case 'auth':
+    case 'no-token':
+      return mode === 'login';
+    default:
+      return false;
+  }
+}
+
+/** The error for a non-2xx answer, the same whether Node or `gh` got it. */
+function httpError(cfg: GithubConfig, status: number, header: (name: string) => string | null, text: string, method = '', path = ''): SendError {
+  const limited = status === 429 || (status === 403 && header('x-ratelimit-remaining') === '0');
+  const definite = status >= 400 && status < 500 && status !== 408 && !limited;
+  const cls = status === 401 || (status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
+  const sso = header('x-github-sso');
+  const hint =
+    status === 404
+      ? ` (GitHub answers 404 when the pull request or repository does not exist, and also when this token cannot see the repository: check the number, then that the token's resource owner is the organization and that it is approved and SSO-authorized. Test it with: curl -H "Authorization: Bearer $TOKEN" ${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}/repos/OWNER/REPO)`
+      : status === 403 && sso
+        ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
+        : '';
+  // A 5xx with no body says nothing about which call failed: name it, and the id GitHub support can look up.
+  const id = header('x-github-request-id');
+  const where = status >= 500 && !text.trim() && method ? `(empty response to ${method} ${path.split('?')[0]}${id ? `, request id ${id}` : ''})` : '';
+  return new SendError(`GitHub HTTP ${status}: ${text.slice(0, 200)}${hint}${where}`, definite, cls, status);
+}
+
+/** The host name `gh --hostname` takes for this API address. */
+function ghHost(cfg: GithubConfig): string {
+  const u = new URL(cfg.api_url ?? 'https://api.github.com');
+  return u.hostname === 'api.github.com' ? 'github.com' : u.host;
+}
+
+interface Reply {
+  status: number;
+  ok: boolean;
+  header(name: string): string | null;
+  text: string;
+}
+
 async function request(cfg: GithubConfig, token: string | undefined, method: 'GET' | 'POST' | 'PATCH' | 'PUT', path: string, body: unknown, timeoutMs: number): Promise<any> {
-  if (!token) throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
+  const mode = fallbackMode(cfg);
+  if (!token && mode !== 'login') throw new SendError('the GitHub tools need a token credential', true, ErrorClass.authorization);
   const url = `${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}${path}`;
+  // First for both paths: a host the egress rules block is never reached through gh either.
   await checkEgress(url);
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method,
-      headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    // A POST whose response was lost may have landed: not definite, so the ledger looks it up.
-    throw new SendError(`GitHub request failed: ${(err as Error).message}`, false);
+  let reply: Reply | undefined;
+  let kind: FailureKind | undefined;
+  let netError: Error | undefined;
+  if (!token) kind = 'no-token';
+  else {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'x-github-api-version': '2022-11-28', 'user-agent': 'azhi-flow', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      reply = { status: res.status, ok: res.ok, header: (n) => res.headers.get(n), text: await res.text() };
+      if (!reply.ok) kind = httpFailureKind(reply.status, reply.header);
+    } catch (err) {
+      netError = err as Error;
+      kind = fetchFailureKind(err);
+    }
   }
-  const text = await res.text();
-  if (!res.ok) {
-    const limited = res.status === 429 || (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0');
-    const definite = res.status >= 400 && res.status < 500 && res.status !== 408 && !limited;
-    const cls = res.status === 401 || (res.status === 403 && !limited) ? ErrorClass.authorization : definite ? ErrorClass.invalidInput : ErrorClass.transient;
-    const sso = res.headers.get('x-github-sso');
-    const hint =
-      res.status === 404
-        ? ` (GitHub answers 404 when the pull request or repository does not exist, and also when this token cannot see the repository: check the number, then that the token's resource owner is the organization and that it is approved and SSO-authorized. Test it with: curl -H "Authorization: Bearer $TOKEN" ${(cfg.api_url ?? 'https://api.github.com').replace(/\/$/, '')}/repos/OWNER/REPO)`
-        : res.status === 403 && sso
-          ? ` (the organization requires SSO: authorize the token for it, ${sso.replace(/^required;\s*url=/, '')})`
-          : '';
-    throw new SendError(`GitHub HTTP ${res.status}: ${text.slice(0, 200)}${hint}`, definite, cls);
+  let note = '';
+  if (kind && fallbackFor(method, kind, mode)) {
+    try {
+      // After a network failure gh uses the same token (only its network stack differs); after a rejected or missing token, its own login.
+      const r = await ghApi({ host: ghHost(cfg), method, path, body, token: kind === 'auth' || kind === 'no-token' ? undefined : token, timeoutMs });
+      reply = { status: r.status, ok: r.status >= 200 && r.status < 300, header: r.header, text: r.text };
+      netError = undefined;
+      process.stderr.write(`azhi: GitHub ${method} ${path.split('?')[0]} went through the GitHub CLI (API ${kind})\n`);
+    } catch (err) {
+      note = ` (gh fallback unavailable: ${(err as Error).message})`;
+    }
+  }
+  // A POST whose response was lost may have landed: not definite, so the ledger looks it up.
+  if (!reply) {
+    if (netError) throw new SendError(`GitHub request failed: ${netError.message}${note}`, false);
+    throw new SendError(`the GitHub tools need a token credential${note}`, true, ErrorClass.authorization);
+  }
+  if (!reply.ok) {
+    const e = httpError(cfg, reply.status, reply.header, reply.text, method, path);
+    throw note ? new SendError(`${e.message}${note}`, e.definite, e.errorClass, e.status) : e;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(reply.text);
   } catch {
     throw new SendError('GitHub returned a response that is not JSON', false);
   }
@@ -193,9 +303,32 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
     base_sha: String(pr.base?.sha ?? ''),
     head_ref: String(pr.head?.ref ?? ''),
     head_sha: String(pr.head?.sha ?? ''),
+    // A deleted fork has no head repo: it counts as a fork, so nothing is ever pushed on its behalf.
+    head_repo: String(pr.head?.repo?.full_name ?? ''),
+    head_is_fork: !pr.head?.repo || String(pr.head.repo.full_name ?? '').toLowerCase() !== String(pr.base?.repo?.full_name ?? '').toLowerCase(),
+    maintainer_can_modify: Boolean(pr.maintainer_can_modify),
     additions: Number(pr.additions ?? 0),
     deletions: Number(pr.deletions ?? 0),
     changed_files: files.map((f: any) => ({ path: String(f.filename), status: String(f.status), additions: Number(f.additions ?? 0), deletions: Number(f.deletions ?? 0) })),
+  };
+}
+
+/** Inline review comments on one pull request (`github.review-comments`), mapped to the declared shape. Thread resolution needs GraphQL, so it is left out. */
+export async function reviewComments(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  const found = await pages(cfg, token, `/repos/${repo}/pulls/${number}/comments`, undefined, timeoutMs);
+  return {
+    comments: found.map((c: any) => ({
+      id: c.id,
+      body: String(c.body ?? '').slice(0, MAX_BODY),
+      path: String(c.path ?? ''),
+      line: c.line ?? c.original_line ?? null,
+      author: String(c.user?.login ?? ''),
+      author_is_bot: c.user?.type === 'Bot',
+      created_at: String(c.created_at ?? ''),
+      in_reply_to_id: c.in_reply_to_id ?? null,
+    })),
   };
 }
 
@@ -369,12 +502,28 @@ interface PushFile {
  * write-mode workspace step returns (path, status, mode, content, encoding). The branch is created, or
  * moved when Azhi made its current commit (a re-run after a send-back); a branch someone else made is
  * refused. The commit message carries the ledger action ID as a trailer, which the lookup finds.
+ *
+ * With `merge_parent` (a full commit SHA that must exist in the repository) the commit is a merge of
+ * `[base_sha, merge_parent]` whose tree is `base_sha` plus `files`; the caller supplies the resolved tree.
+ * Only the new commit gets the second parent: the branch is still an `azhi/` branch.
  */
-export async function pushBranch(cfg: GithubConfig, args: { repo?: unknown; branch?: unknown; base_sha?: unknown; message?: unknown; files?: unknown }, token: string | undefined, key: string, timeoutMs: number) {
+export async function pushBranch(
+  cfg: GithubConfig,
+  args: { repo?: unknown; branch?: unknown; base_sha?: unknown; message?: unknown; files?: unknown; merge_parent?: unknown },
+  token: string | undefined,
+  key: string,
+  timeoutMs: number,
+  /** Waits between tries of a blob, tree or commit call (tests shorten them). */
+  retryWaitsMs: number[] = GIT_OBJECT_RETRY_WAITS_MS,
+) {
+  const deadline = Date.now() + timeoutMs;
   const repo = argRepo(cfg, args.repo);
   const branch = branchName(cfg, args.branch);
   const base = String(args.base_sha ?? '');
   if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(base)) throw new SendError(`base_sha must be a full commit SHA, got '${base.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  const mergeParent = args.merge_parent === undefined || args.merge_parent === null ? undefined : String(args.merge_parent);
+  if (mergeParent !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(mergeParent)) throw new SendError(`merge_parent must be a full commit SHA, got '${mergeParent.slice(0, 80)}'`, true, ErrorClass.invalidInput);
+  if (mergeParent === base) throw new SendError('merge_parent is the same commit as base_sha', true, ErrorClass.invalidInput);
   const files = Array.isArray(args.files) ? (args.files as PushFile[]) : [];
   if (!files.length) throw new SendError('there are no changed files to push', true, ErrorClass.invalidInput);
   if (files.length > MAX_PUSH_FILES) throw new SendError(`at most ${MAX_PUSH_FILES} files per push, got ${files.length}`, true, ErrorClass.invalidInput);
@@ -406,19 +555,45 @@ export async function pushBranch(cfg: GithubConfig, args: { repo?: unknown; bran
     }
   }
   const baseCommit = await get(cfg, token, `/repos/${repo}/git/commits/${base}`, timeoutMs);
+  // A wrong or foreign SHA fails here, before a blob is created, rather than as a 422 on the commit.
+  if (mergeParent && !(await getOrNull(cfg, token, `/repos/${repo}/git/commits/${mergeParent}`, timeoutMs))) {
+    throw new SendError(`merge_parent ${mergeParent.slice(0, 12)} is not a commit in ${repo}`, true, ErrorClass.invalidInput);
+  }
   const tree: Array<Record<string, unknown>> = [];
   for (const e of entries) {
     if ('deleted' in e) tree.push({ path: e.path, mode: '100644', type: 'blob', sha: null });
     else {
-      const blob = await request(cfg, token, 'POST', `/repos/${repo}/git/blobs`, { content: e.content, encoding: e.encoding }, timeoutMs);
+      const blob = await createGitObject(cfg, token, `/repos/${repo}/git/blobs`, { content: e.content, encoding: e.encoding }, deadline, retryWaitsMs);
       tree.push({ path: e.path, mode: e.mode, type: 'blob', sha: String(blob.sha) });
     }
   }
-  const newTree = await request(cfg, token, 'POST', `/repos/${repo}/git/trees`, { base_tree: String(baseCommit.tree?.sha ?? ''), tree }, timeoutMs);
-  const commit = await request(cfg, token, 'POST', `/repos/${repo}/git/commits`, { message, tree: String(newTree.sha), parents: [base] }, timeoutMs);
+  const newTree = await createGitObject(cfg, token, `/repos/${repo}/git/trees`, { base_tree: String(baseCommit.tree?.sha ?? ''), tree }, deadline, retryWaitsMs);
+  const commit = await createGitObject(cfg, token, `/repos/${repo}/git/commits`, { message, tree: String(newTree.sha), parents: mergeParent ? [base, mergeParent] : [base] }, deadline, retryWaitsMs);
+  // The ref is the only write anyone can see, so it is sent once: the ledger decides what a failure there means.
   if (existing) await request(cfg, token, 'PATCH', `/repos/${repo}/git/refs/heads/${branch}`, { sha: String(commit.sha), force: true }, timeoutMs);
   else await request(cfg, token, 'POST', `/repos/${repo}/git/refs`, { ref: `refs/heads/${branch}`, sha: String(commit.sha) }, timeoutMs);
   return pushResult(cfg, repo, branch, commit, base, entries.length, !existing);
+}
+
+const GIT_OBJECT_RETRY_WAITS_MS = [1000, 2000, 4000];
+
+/**
+ * POSTs a blob, tree or commit, and repeats it when GitHub answers 5xx (it does so now and then, and the same
+ * content goes through on the next try). These only create objects no branch points at, and a blob or tree is
+ * content-addressed, so a repeat is harmless; the ref is not retried because it is what makes a push visible.
+ * 4xx, rate limits and network errors are not repeated. The tool's `timeoutMs` is one budget for the whole push,
+ * so a try starts only if its wait fits before `deadline`, and gets the time that is left.
+ */
+async function createGitObject(cfg: GithubConfig, token: string | undefined, path: string, body: unknown, deadline: number, waitsMs: number[]): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await request(cfg, token, 'POST', path, body, Math.max(1, deadline - Date.now()));
+    } catch (err) {
+      const wait = waitsMs[attempt];
+      if (!(err instanceof SendError) || !err.status || err.status < 500 || wait === undefined || Date.now() + wait >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
 }
 
 /** The web address of the repository's host, from a commit's html_url (GitHub Enterprise included). */

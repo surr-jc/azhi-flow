@@ -31,6 +31,8 @@ export interface ToolSpec {
   transport: ToolTransport;
   /** Name of a workspace secret, resolved at execution time; never stored in packages. */
   credential?: string;
+  /** The credential may be absent at run start: the person is asked to sign in then, and the tool fails only if it is called without it. */
+  credential_optional?: boolean;
   timeout?: string;
   rate_limit?: { per_minute: number };
   access?: { roles?: string[] };
@@ -40,6 +42,8 @@ export interface ToolSpec {
   safe_for_tainted?: boolean;
   /** Fields of a response that identify the source system, used for as-of records. */
   source?: string;
+  /** Set on the last revision of a tool an admin unregistered: new workflows no longer find it, pinned revisions still resolve. */
+  retired?: boolean;
 }
 
 export function toolRef(spec: Pick<ToolSpec, 'id' | 'version'>): string {

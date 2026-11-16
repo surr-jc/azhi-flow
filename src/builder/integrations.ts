@@ -1,8 +1,11 @@
 import { OPENCODE_READ_TOOLS } from '../agents/profile.js';
 import { checkEgress } from '../gateway/egress.js';
+import { toolRef } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { addMcpServer, listAssets, validateAsset, type AssetKind, type AssetScope, type PortableDefinition } from '../server/assets.js';
+import { loadCatalog } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
+import { discoverMcpTools } from '../server/mcp.js';
 import { defaultDeps, marketConfig, resolve, search, sourcesFor, type MarketDeps, type MarketKind } from '../server/marketplace.js';
 
 /**
@@ -30,6 +33,42 @@ export async function checkMcpConnectionProposal(ctx: AppContext, workspaceId: s
   if (!errors.length && (await ctx.pool.query(`SELECT 1 FROM mcp_connections WHERE workspace_id=$1 AND name=$2`, [workspaceId, name])).rows.length) errors.push(`a gateway connection named '${name}' already exists; pick another name or use the existing one`);
   if (errors.length) throw new AzhiError(ErrorClass.invalidInput, `The MCP connection is not valid yet. Fix these and propose it again: ${errors.join('; ')}`);
   return { name, url, auth_kind };
+}
+
+/** A gateway connection by name or id; the gateway itself addresses it by id. */
+export async function findConnection(ctx: AppContext, workspaceId: string, ref: string): Promise<{ id: string; name: string; status: string }> {
+  const r = (await ctx.pool.query(`SELECT id, name, status FROM mcp_connections WHERE workspace_id=$1 AND (id=$2 OR name=$2) LIMIT 1`, [workspaceId, ref])).rows[0];
+  if (!r) throw new Error(`no gateway MCP connection '${ref}'; see gateway_mcp_connections in workspace_overview, or propose_mcp_connection to add one`);
+  if (r.status !== 'ready') throw new Error(`gateway connection '${r.name}' is ${r.status}, not ready: an admin must finish signing in on the Toolbox page before its tools can be listed or registered`);
+  return r;
+}
+
+/** What a ready connection's server offers right now, with the full schemas, each tool marked with the registered tool that already wraps it. */
+export async function connectionTools(ctx: AppContext, workspaceId: string, ref: string) {
+  const conn = await findConnection(ctx, workspaceId, ref);
+  const offered = await discoverMcpTools(ctx, workspaceId, conn.id).catch((e: Error) => { throw new Error(`could not list the tools of '${conn.name}': ${e.message}`); });
+  const registered = (await loadCatalog(ctx, workspaceId)).list().filter((t) => t.transport.kind === 'mcp-streamable-http' && (t.transport.connection === conn.id || t.transport.connection === conn.name));
+  return {
+    connection: { id: conn.id, name: conn.name },
+    tools: offered.map((t) => {
+      const reg = registered.find((r) => r.transport.kind === 'mcp-streamable-http' && r.transport.tool === t.name);
+      return { ...t, ...(reg ? { registered_as: toolRef(reg), effect: reg.effect } : {}) };
+    }),
+  };
+}
+
+/** The same, compact enough for the model to scan: argument names instead of schemas, long descriptions clipped. */
+export async function listConnectionTools(ctx: AppContext, workspaceId: string, ref: string) {
+  const { connection, tools } = await connectionTools(ctx, workspaceId, ref);
+  return {
+    connection,
+    tools: tools.map(({ input_schema, description, ...t }) => ({
+      ...t,
+      description: description.length > 400 ? `${description.slice(0, 400)}…` : description,
+      arguments: Object.keys((input_schema as { properties?: object }).properties ?? {}),
+      required: ((input_schema as { required?: unknown }).required as string[] | undefined) ?? [],
+    })),
+  };
 }
 
 /** An MCP server the builder proposes to add to the library; nothing is stored until a person confirms. */
@@ -86,7 +125,7 @@ export async function integrationsOverview(ctx: AppContext, workspaceId: string)
       note: 'Built-in OpenCode tools a profile may allow under harness.opencode.tools (read-only). Skills load with the skill tool; MCP servers run on the worker as harness.opencode.mcp.',
     },
     marketplace: { enabled: cfg.enabled, how_to_search: 'call find_integrations with the requirement as the query' },
-    library_note: 'Library MCP servers with status published can be used in a workflow. Draft ones must be published first. Gateway connections are used through registered tools (propose_tool).',
+    library_note: 'Library MCP servers with status published can be used in a workflow. Draft ones must be published first. Gateway connections are used through registered tools: list_mcp_tools shows what a ready connection offers, and propose_tool registers the ones a workflow needs.',
   };
 }
 

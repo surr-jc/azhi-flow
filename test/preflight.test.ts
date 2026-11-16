@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { registerExampleRoutes } from '../src/api/examples.js';
 import { migrate } from '../src/db/migrate.js';
 import { preflight } from '../src/plan/preflight.js';
+import { loadToolRevision, registerTool } from '../src/server/catalog.js';
 import { createContext } from '../src/server/context.js';
 import { setSecret } from '../src/server/secrets.js';
 import { getVersion } from '../src/server/workflows.js';
@@ -95,5 +96,18 @@ describe('workflow preflight', () => {
     const r = await run({ repo: 'acme/payments', pr: 7 });
     const f = failures(r).find((c) => c.kind === 'slack')!;
     expect(f.message).toContain('invalid_auth');
+  });
+
+  it('asks for an optional sign-in without blocking the run', async () => {
+    const spec = (await loadToolRevision(ctx, WS, 'github.get-pull-request@1', undefined))!;
+    const { revision: _r, ...cur } = spec;
+    await registerTool(ctx, WS, { ...cur, credential: 'optional-sign-in', credential_optional: true }, 'usr_test');
+    const r = await run({ repo: 'acme/payments', pr: 7 });
+    expect(failures(r).some((c) => c.target === 'optional-sign-in')).toBe(false);
+    const w = r.checks.find((c) => c.target === 'optional-sign-in')!;
+    expect(w).toMatchObject({ status: 'warn', kind: 'secret', optional: true, node: 'pr' });
+    // Required again: the same missing secret blocks.
+    await registerTool(ctx, WS, { ...cur, credential: 'optional-sign-in' }, 'usr_test');
+    expect(failures(await run({ repo: 'acme/payments', pr: 7 })).some((c) => c.target === 'optional-sign-in')).toBe(true);
   });
 });

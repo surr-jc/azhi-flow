@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "description": "The spec author's report. The files it wrote are added by the worker as `workspace`.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "change_id": {"type": "string", "maxLength": 60},
+    "bootstrapped": {"type": "boolean", "description": "True when it created the openspec/ skeleton because the repository had none"},
+    "capabilities": {"type": "array", "items": {"type": "string"}},
+    "open_questions": {"type": "array", "items": {"type": "string"}},
+    "conflicts": {"type": "array", "items": {"type": "string"}, "description": "Active changes that touch the same requirements"}
+  },
+  "required": ["summary", "change_id", "bootstrapped", "capabilities", "open_questions", "conflicts"],
+  "additionalProperties": false
+}

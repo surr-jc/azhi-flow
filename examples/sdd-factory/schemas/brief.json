@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": {"enum": ["ticket", "text"]},
+    "source": {"type": "string"},
+    "key": {"type": "string"},
+    "title": {"type": "string"},
+    "text": {"type": "string"},
+    "truncated": {"type": "boolean"}
+  },
+  "required": ["kind", "source", "key", "title", "text"]
+}

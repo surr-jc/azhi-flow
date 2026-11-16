@@ -12,8 +12,9 @@ out). A step that names its own provider and model keeps them, whatever is chose
 |---|---|
 | Workflow editor, Workflow panel: **Default provider and model** | Saved in the workflow as `model_defaults: {provider, name}`; every run of that version uses it |
 | Workflow page, **Start run**: **Model for this run** | Overrides the workflow's default for this one run (and its subworkflows). Remembered in the browser. **Test run** and **Rerun** keep it |
-| CLI | `azhi run ... --provider github-copilot --model gpt-5.6-terra`; `azhi plan ... --provider anthropic` shows the plan under a choice |
-| API | `POST /v1/runs` with `model_defaults: {provider, name?}`; `GET /v1/versions/:id/plan?provider=&model=`; `GET /v1/model-options` and `/v1/model-options/models?provider=` list the providers (ready or not) and models |
+| Start run: **Harness** | Shown once a provider is chosen; every agent step it can drive with that provider runs on it (a step with a checkout stays on OpenCode). Choosing a provider in this panel applies to every step, including steps that name their own model |
+| CLI | `azhi run ... --provider github-copilot --model gpt-5.6-terra` (add `--force-model` to replace steps that name their own model, `--executor opencode` for the harness); `azhi plan ... --provider anthropic` shows the plan under a choice |
+| API | `POST /v1/runs` with `model_defaults: {provider, name?, force?, executor?}`; `GET /v1/versions/:id/plan?provider=&model=&force=&executor=`; `GET /v1/model-options` and `/v1/model-options/models?provider=` list the providers (ready or not) and models |
 
 Precedence, highest first: the run's choice, the workflow's `model_defaults`, the server's default for
 the profile's own provider.

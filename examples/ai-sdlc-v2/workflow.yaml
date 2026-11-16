@@ -1,6 +1,7 @@
 schema_version: "2.0"
 id: ai-sdlc-v2
 name: "AI-SDLC v2: governed delivery with a cost ceiling"
+tags: [delivery, sdlc, github]
 description: Preflight on the base branch, one planning pass, one build-and-test loop, one
   independent review with a single fix round, release approval with an evidence record, then a
   pushed branch and a pull request.

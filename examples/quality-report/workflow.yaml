@@ -3,6 +3,7 @@
 schema_version: "2.0"
 id: quality-report
 name: Weekly quality report
+tags: [report, metrics]
 trigger:
   schedule: {cron: "0 8 * * 1", timezone: "Asia/Kolkata"}
   manual: true

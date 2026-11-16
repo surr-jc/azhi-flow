@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review",
-    "definitionHash": "sha256:4b70e3931d8918221ed5d0bce7f5b78cefafd0e55a7ff18ad8d2674242981107",
+    "definitionHash": "sha256:6fbc97d9f12590486c32a64ad68456a7fe77633961dc02ebbef29794e2908ed2",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -38,6 +38,12 @@
           "type": "boolean",
           "default": false,
           "title": "Offer to merge a clean approved pull request (asks for approval in Slack first; off by default)"
+        },
+        "diff_base": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{40}([0-9a-f]{24})?)?$",
+          "title": "Review from this commit",
+          "description": "A full commit SHA the pull request's branch was built on. The review then covers only the commits after it, which is what a stacked pull request needs. Leave empty to review the whole pull request."
         }
       },
       "required": [
@@ -135,17 +141,17 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -180,17 +186,17 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -225,17 +231,17 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -270,17 +276,17 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"
           },
           "output_schema": "schemas/findings.json",
           "timeout": "15m",
           "budget": {
-            "max_tool_calls": 10
+            "max_tool_calls": 15
           }
         },
         "timeoutMs": 900000,
@@ -322,12 +328,12 @@
               "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
             },
             "base_ref": {
-              "ref": "nodes.pr.output.base_sha"
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
             },
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output, 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'findings': [nodes.correctness.output, nodes.security.output, nodes.tests.output, nodes.quality.output]}"
           },
           "output_schema": "schemas/verification.json",
           "timeout": "25m",

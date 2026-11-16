@@ -28,7 +28,8 @@ export function runRepos(plan: Pick<ExecutionPlan, 'nodes' | 'config'>, inputs: 
   const out = new Set<string>();
   for (const n of plan.nodes) {
     const ws = n.type === 'agent' ? (n.def as AgentNode).workspace : undefined;
-    if (!ws) continue;
+    // A local folder holds no slot: each run works in its own worktree of it.
+    if (!ws || ws.repo === undefined) continue;
     let repo: unknown;
     try {
       repo = resolveValue(ws.repo, { inputs, nodes: {}, config: plan.config });
@@ -46,6 +47,12 @@ export async function concurrencySettings(ctx: AppContext, workspaceId: string):
   const v = (await ctx.pool.query(`SELECT settings->'concurrency'->'max_runs_per_repo' AS m FROM workspaces WHERE id=$1`, [workspaceId])).rows[0]?.m;
   if (Number.isInteger(v) && v >= 0) return { max_runs_per_repo: v, source: 'workspace' };
   return { max_runs_per_repo: ctx.settings.maxRunsPerRepo, source: 'server' };
+}
+
+/** The OpenCode major every OpenCode step of the workspace runs on (1 or 2), or null to leave it to the worker's own default. */
+export async function opencodeMajorSetting(ctx: AppContext, workspaceId: string): Promise<1 | 2 | null> {
+  const v = (await ctx.pool.query(`SELECT settings->'harness'->'opencode_major' AS m FROM workspaces WHERE id=$1`, [workspaceId])).rows[0]?.m;
+  return v === 1 || v === 2 ? v : null;
 }
 
 export type Admission = { ok: true } | { ok: false; repo: string; limit: number; holders: string[] };

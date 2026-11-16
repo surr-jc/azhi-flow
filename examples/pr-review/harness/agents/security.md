@@ -10,3 +10,6 @@ If the diff is unavailable (an error or no changes), report no findings and say 
 Number your findings S1, S2, ... in the `id` field, and give each one a `scenario`: the concrete
 input or caller that reaches the line and what goes wrong. A finding you cannot write a scenario for
 is not reported. An independent verifier will try to refute every finding, so evidence beats volume.
+Hunt list for the second look: untrusted text reaching a shell, query, path, URL or template; a new
+route, tool or action with no authorisation check; secrets or tokens in logs and error messages; a
+widened allow-list, permission, token scope or CI privilege; a new dependency or an unpinned version.

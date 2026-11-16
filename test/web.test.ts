@@ -83,8 +83,10 @@ describe.skipIf(!up)('mission control', () => {
     const d = await h.api.get<any>(`/v1/runs/${run_id}`);
     expect(d.approvals[0]).toMatchObject({ decision: 'approved', data: { note: 'looks right' } });
 
-    const timeline = await page.locator('.tab').innerText();
-    expect(timeline).toContain('approval.decided');
+    // The activity log starts collapsed: open the approval step, then its decision.
+    await page.locator('#al-approve').getByRole('button', { name: /approve/ }).first().click();
+    await page.locator('#al-approve').getByRole('button', { name: /Decided: approved/ }).click();
+    expect(await page.locator('.tab').innerText()).toContain('approval.decided');
     await page.getByRole('tab', { name: 'Action ledger' }).click();
     expect(await page.locator('.tab').innerText()).toMatch(/slack\.post-message@1[\s\S]*confirmed/);
     await page.getByRole('tab', { name: 'Policy coverage' }).click();
@@ -212,6 +214,29 @@ describe.skipIf(!up)('mission control', () => {
     expect(JSON.stringify(await h.api.get('/v1/secrets'))).not.toContain('sk-super-secret-value');
     const audit = await h.api.get<any[]>('/v1/audit');
     expect(audit.some((e) => e.kind === 'secret.changed' && e.data.name === 'ui-test-key')).toBe(true);
+    await page.close();
+  });
+
+  it('shows the GitHub CLI profile and replaces it with its API error when it cannot be read', async () => {
+    const page = await browser.newPage();
+    let lookups = 0;
+    await page.route('**/v1/github/cli-login', async (route) => {
+      lookups++;
+      if (lookups === 1) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ host: 'github.com', login: 'octo-profile', scopes: ['repo', 'read:org'] }) });
+      } else {
+        await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ message: 'The GitHub CLI is not signed in to github.com. Run: gh auth login' }) });
+      }
+    });
+    await page.goto(`${h.server.url}/ui#token=${encodeURIComponent(token)}`);
+    await page.waitForFunction(() => !location.hash);
+    await page.getByLabel('GitHub CLI profile').getByText('GitHub: octo-profile').waitFor();
+    await page.getByLabel('GitHub CLI profile').getByText('Scopes: repo, read:org').waitFor();
+
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.getByRole('alert').filter({ hasText: 'GitHub CLI is not signed in' }).waitFor();
+    expect(await page.getByLabel('GitHub CLI profile').count()).toBe(0);
+    expect(await page.getByText('octo-profile').count()).toBe(0);
     await page.close();
   });
 

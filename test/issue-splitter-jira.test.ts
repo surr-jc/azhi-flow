@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { PYTHON } from './helpers/python.js';
 import { describe, expect, it } from 'vitest';
 import { evaluateCel } from '../src/cel/evaluator.js';
 import { compile } from '../src/compiler/compile.js';
@@ -19,7 +20,7 @@ const pkg = packageFromDirectory(PKG);
 const tools = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools;
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
 const node = (id: string) => def.nodes.find((n) => n.id === id) as any;
-const py = (script: string, input: unknown) => JSON.parse(execFileSync('python3', [join(PKG, 'scripts', script)], { input: JSON.stringify(input) }).toString());
+const py = (script: string, input: unknown) => JSON.parse(execFileSync(PYTHON[0]!, [...PYTHON.slice(1), join(PKG, 'scripts', script)], { input: JSON.stringify(input) }).toString());
 const compiled = () => compile(def, { pkg, catalog: staticCatalog(tools) });
 
 describe('Jira issue splitter: definition', () => {

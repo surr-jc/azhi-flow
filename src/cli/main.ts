@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -17,14 +18,18 @@ import { ALL_ROLES, startServer, type ServerRole } from '../server/server.js';
 import { ApiClient } from '../worker/api-client.js';
 import { startWorker } from '../worker/worker.js';
 import { apiClient, resolveCliConfig, saveCliConfig } from './client-config.js';
+import { opencodeAuthFile, opencodeCandidates } from '../lib/opencode-auth.js';
 import { printContext, printInspect } from './inspect.js';
 import { publisherKey, signForUpload } from './signing-client.js';
 import { signPackage } from '../security/signing.js';
 import { parseTrustPolicy } from '../security/signing.js';
 import type { RunPlanReport } from '../plan/run-plan.js';
+import type { ResumeCheck } from '../plan/resume-check.js';
 import { bold, dim, green, printDiagnostics, printPlan, red, table, yellow } from './output.js';
 
-const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0');
+const program = new Command('azhi').description('Azhi Flow: governed, durable agent workflows').version('0.1.0', '-V');
+// `--version` belongs to `resume` and `tool` when it follows them; Commander would take it for the root's anywhere in the arguments.
+if (process.argv[2] === '--version') process.argv[2] = '-V';
 program.option('--url <url>', 'server URL (default: $AZHI_URL, saved login, or the local server)').option('--token <token>', 'API token');
 
 const client = () => apiClient(program.opts());
@@ -137,13 +142,15 @@ program
   .option('--published', 'run a published version (workflow, workflow@3) instead of uploading')
   .option('--provider <provider>', 'provider for steps whose profile says `name: default` (anthropic, openai, github-copilot or openai-chatgpt); steps that name a model keep it')
   .option('--model <id>', 'model for those steps (needs --provider); without it the provider\'s server default model')
+  .option('--force-model', 'also replace the model of steps whose profile names its own (needs --provider)')
+  .option('--executor <id>', 'run every agent step that can on this harness, e.g. opencode (needs --provider)')
   .option('--no-preflight', 'start without first checking secrets, tools and GitHub access')
   .option('-w, --wait', 'wait for the run to finish and print the result')
-  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string; preflight?: boolean }) => {
-    if (opts.model && !opts.provider) throw new Error('--model needs --provider');
+  .action(async (path: string, opts: { input?: string[]; inputs?: string; published?: boolean; wait?: boolean; provider?: string; model?: string; forceModel?: boolean; executor?: string; preflight?: boolean }) => {
+    if ((opts.model || opts.forceModel || opts.executor) && !opts.provider) throw new Error('--model, --force-model and --executor need --provider');
     const version = opts.published ? path : (await upload(path)).id;
     const api = client();
-    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.preflight === false ? {} : { preflight: true }), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}) } } : {}) });
+    const { run_id } = await api.post<{ run_id: string }>('/v1/runs', { version, inputs: parseInputs(opts.input, opts.inputs), ...(opts.preflight === false ? {} : { preflight: true }), ...(opts.provider ? { model_defaults: { provider: opts.provider, ...(opts.model ? { name: opts.model } : {}), ...(opts.forceModel ? { force: true } : {}), ...(opts.executor ? { executor: opts.executor } : {}) } } : {}) });
     console.log(`run ${bold(run_id)} queued`);
     if (!opts.wait) return;
     let cursor = 0;
@@ -253,6 +260,29 @@ program
   });
 
 program
+  .command('resume')
+  .description('Continue a failed, cancelled or expired run as a new run: steps that succeeded are not repeated')
+  .argument('<run-id>')
+  .option('--from <node>', 'also rerun this step and everything after it')
+  .option('--version <n|latest>', 'continue on this version of the workflow (after fixing a step); refused if it differs too much from the run')
+  .option('--check', 'show what would be kept and rerun, without starting a run')
+  .action(async (runId: string, opts: { from?: string; version?: string; check?: boolean }) => {
+    const body = { ...(opts.from ? { from_node: opts.from } : {}), ...(opts.version ? { version: opts.version } : {}) };
+    if (opts.check) {
+      const c = await client().post<ResumeCheckReply>(`/v1/runs/${runId}/resume`, { ...body, dry_run: true });
+      console.log(`${c.version.workflow}@${c.version.from_version} -> @${c.version.version}`);
+      table([['STEP', 'CHANGE', 'WAS', 'THEN'], ...c.steps.map((s) => [s.id, s.change, s.was, s.action + (s.reason ? ` (${s.reason})` : '')])]);
+      for (const w of c.warnings) console.log(`warning: ${w}`);
+      console.log(c.possible ? `can resume: ${c.carried.length} step(s) kept, ${c.rerun.length} to run${c.deviation === null ? '' : `, deviation ${Math.round(c.deviation * 100)}%`}` : `cannot resume: ${c.reason}`);
+      if (!c.possible) process.exitCode = 1;
+      return;
+    }
+    const r = await client().post<{ run_id: string; carried: string[]; rerun: string[]; version: { workflow: string; version: number; from_version: number }; warnings?: string[] }>(`/v1/runs/${runId}/resume`, body);
+    console.log(`run ${bold(r.run_id)} queued on ${r.version.workflow}@${r.version.version}: ${r.carried.length} step(s) carried over from ${runId}, ${r.rerun.length} to run`);
+    for (const w of r.warnings ?? []) console.log(`warning: ${w}`);
+  });
+
+program
   .command('cancel')
   .description('Cancel a run')
   .argument('<run-id>')
@@ -325,6 +355,8 @@ program
   });
 
 const example = program.command('example').description('Set up the example workflows that ship with the server');
+
+type ResumeCheckReply = ResumeCheck & { version: { workflow: string; version: number; from_version: number } };
 
 interface ExampleNeeds {
   id: string;
@@ -504,6 +536,51 @@ copilot
     }
   });
 
+/** OpenCode's github-copilot sign-ins, noting on stderr why there are none. */
+function fileCandidates(file: string) {
+  const r = opencodeCandidates(file);
+  if (r.problem) console.error(dim(r.problem));
+  return r.candidates;
+}
+
+copilot
+  .command('sync')
+  .description('Keep the Copilot sign-in in step with OpenCode: re-imports from its auth.json whenever the sign-in there changes (once, or with --watch for as long as it runs)')
+  .option('--file <path>', 'OpenCode auth.json (default: ~/.local/share/opencode/auth.json)')
+  .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
+  .option('--watch', 'keep running and import again each time OpenCode signs in')
+  .option('--interval <seconds>', 'how often to look at the file with --watch', '5')
+  .action(async (opts: { file?: string; secret: string; watch?: boolean; interval: string }) => {
+    const file = opts.file ?? opencodeAuthFile();
+    // Only a fingerprint of the sign-in is kept in memory, to tell when OpenCode has written a new one.
+    let last = '';
+    const syncOnce = async (): Promise<boolean> => {
+      const candidates = fileCandidates(file);
+      if (!candidates.length) return false;
+      const fingerprint = createHash('sha256').update(candidates.map((c) => c.auth).join('\n')).digest('hex');
+      if (fingerprint === last) return true;
+      const r = await client().post<{ version?: number; from: string | null; tried: Array<{ name: string; ok: boolean; message: string }> }>('/v1/copilot/import', { secret: opts.secret, candidates });
+      if (!r.from) {
+        for (const t of r.tried) console.error(`  ${red('failed')} ${t.name}: ${t.message}`);
+        console.error(red('OpenCode\'s sign-in is not accepted by GitHub Copilot, so the saved one is unchanged. Sign in again with: opencode auth login'));
+        return false;
+      }
+      last = fingerprint;
+      console.log(`${green('synced')} ${r.from}; saved as secret ${opts.secret} (version ${r.version})`);
+      return true;
+    };
+    const ok = await syncOnce().catch((e) => (console.error(red((e as Error).message)), false));
+    if (!opts.watch) {
+      if (!ok) process.exitCode = 1;
+      return;
+    }
+    const every = Math.max(1, Number(opts.interval) || 5) * 1000;
+    console.log(dim(`watching ${file} every ${every / 1000}s; Ctrl+C to stop`));
+    // A failed round (server down, token rejected) is reported and tried again at the next change or tick.
+    setInterval(() => void syncOnce().catch((e) => console.error(red((e as Error).message))), every);
+    await new Promise(() => {});
+  });
+
 copilot
   .command('import')
   .description('Reuse a GitHub Copilot sign-in this machine already has (OpenCode\'s auth.json, GITHUB_TOKEN, the gh tool): tries each and keeps the one Copilot accepts; nothing is printed')
@@ -511,24 +588,8 @@ copilot
   .option('--secret <name>', 'secret to store it in', 'github-copilot-token')
   .option('--enterprise-url <host>', 'GitHub Enterprise address, when the sign-in does not name it')
   .action(async (opts: { file?: string; secret: string; enterpriseUrl?: string }) => {
-    const candidates: Array<{ name: string; auth: string }> = [];
-    const file = opts.file ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json');
-    if (existsSync(file)) {
-      try {
-        const j = JSON.parse(readFileSync(file, 'utf8'));
-        for (const k of Object.keys(j).filter((x) => x.startsWith('github-copilot'))) {
-          const e = j[k];
-          const label = `OpenCode auth.json: ${k}${e?.enterpriseUrl ? ` (${e.enterpriseUrl})` : ''}`;
-          candidates.push({ name: label, auth: JSON.stringify({ [k]: e }) });
-          // Some OpenCode versions send the entry's `access` token rather than `refresh`.
-          if (typeof e?.access === 'string' && e.access && e.access !== e.refresh) candidates.push({ name: `${label}, its access token`, auth: JSON.stringify({ [k]: { ...e, refresh: e.access } }) });
-        }
-      } catch {
-        console.error(dim(`${file} is not JSON; skipped`));
-      }
-    } else {
-      console.error(dim(`no OpenCode sign-in file at ${file}`));
-    }
+    const file = opts.file ?? opencodeAuthFile();
+    const candidates = fileCandidates(file);
     for (const v of ['GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN']) if (process.env[v]?.trim()) candidates.push({ name: `environment variable ${v}`, auth: process.env[v]!.trim() });
     try {
       const t = execFileSync('gh', ['auth', 'token'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15_000 }).trim();
@@ -953,6 +1014,31 @@ program
     console.log(`schedule ${s.id}: next occurrence ${new Date(s.next_occurrence_at).toISOString()}`);
   });
 
+const triggerCmd = program.command('trigger').description('Event triggers: webhooks that start a workflow');
+triggerCmd
+  .command('list')
+  .description('Each trigger with its hook URL, state and last delivery')
+  .action(async () => {
+    const rows = await client().get<any[]>('/v1/triggers');
+    table([['TRIGGER', 'WORKFLOW', 'SOURCE', 'EVENTS', 'STATE', 'DELIVERIES', 'LAST', 'URL'], ...rows.map((t) => [t.id, t.workflow, t.source, t.events.join(',') || 'any', t.enabled ? 'on' : 'off', String(t.deliveries), t.last_delivery_at ? new Date(t.last_delivery_at).toISOString() : '-', t.url])]);
+  });
+triggerCmd
+  .command('deliveries')
+  .description('What happened to the last webhooks of a trigger, including those that started nothing')
+  .argument('<trigger>')
+  .action(async (id: string) => {
+    const rows = await client().get<any[]>(`/v1/triggers/${encodeURIComponent(id)}/deliveries`);
+    table([['RECEIVED', 'EVENT', 'OUTCOME', 'RUN', 'REASON'], ...rows.map((d) => [new Date(d.received_at).toISOString(), d.event ?? '-', d.outcome, d.run_id ?? '-', d.reason ?? ''])]);
+  });
+triggerCmd
+  .command('enable')
+  .argument('<trigger>')
+  .action(async (id: string) => void (await client().patch(`/v1/triggers/${encodeURIComponent(id)}`, { enabled: true })));
+triggerCmd
+  .command('disable')
+  .argument('<trigger>')
+  .action(async (id: string) => void (await client().patch(`/v1/triggers/${encodeURIComponent(id)}`, { enabled: false })));
+
 const users = program.command('user').description('Manage workspace users (admin)');
 users
   .command('add')
@@ -1039,9 +1125,10 @@ program
   .description('Run Azhi on this machine without Docker: embedded database, Temporal dev server, server and a worker')
   .option('--port <port>', 'web and API port (default: $AZHI_PORT or 7400)')
   .option('--no-worker', 'do not start an execution worker')
-  .action(async (opts: { port?: string; worker: boolean }) => {
+  .option('--local-folders', 'let workflows work in git worktrees of local folders on this machine (workspace.local)')
+  .action(async (opts: { port?: string; worker: boolean; localFolders?: boolean }) => {
     const { startLocal } = await import('../local/up.js');
-    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker });
+    const h = await startLocal({ port: opts.port ? Number(opts.port) : undefined, worker: opts.worker, ...(opts.localFolders ? { localFolders: true } : {}) });
     console.log(`\n${green('Azhi is running')} at ${h.url}`);
     console.log(`Web UI: ${h.url.replace(/\/$/, '')}/ui#token=${encodeURIComponent(h.token)}`);
     console.log(dim(`Data in ${(await import('../local/up.js')).localHome()}. Stop with Ctrl+C or 'azhi down'.\n`));
@@ -1094,15 +1181,47 @@ worker
   .option('--name <name>', 'worker name (default: hostname)')
   .option('--temporal <address>', 'Temporal address', process.env.AZHI_TEMPORAL_ADDRESS ?? 'localhost:7233')
   .option('--trust <policy>', 'whose packages this worker runs: self | authors:<user,...> | workspace-publishers', 'self')
-  .action(async (opts: { name?: string; temporal: string; trust: string }) => {
+  .option('--local-folders', 'let workflows work in git worktrees of local folders on this machine (workspace.local)')
+  .action(async (opts: { name?: string; temporal: string; trust: string; localFolders?: boolean }) => {
     const cfg = resolveCliConfig(program.opts());
-    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name, trustPolicy: parseTrustPolicy(opts.trust) });
+    const w = await startWorker({ apiUrl: cfg.url, token: cfg.token, temporalAddress: opts.temporal, name: opts.name, trustPolicy: parseTrustPolicy(opts.trust), ...(opts.localFolders ? { localFolders: true } : {}) });
     const shutdown = async () => {
       await w.stop();
       process.exit(0);
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+  });
+
+// Worktrees of local folders (docs/local-workspaces.md) live on this machine, so they are listed and removed here.
+const worktreeDir = async () => join((await import('../local/up.js')).localHome(), 'worker', 'worktrees');
+const worktree = program.command('worktree').description("Runs' git worktrees of local folders on this machine");
+worktree
+  .command('list')
+  .description('List the worktrees runs made on this machine')
+  .action(async () => {
+    const { listWorktrees } = await import('../worker/worktree.js');
+    const all = listWorktrees(await worktreeDir());
+    if (!all.length) return console.log('no worktrees');
+    for (const w of all) console.log(`${w.run}  ${w.folder}  ${w.branch}  ${w.path}`);
+  });
+worktree
+  .command('remove <run>')
+  .description("Remove a run's worktree folder. Its branch stays in the repository; nothing is merged or pushed")
+  .option('--folder <name>', 'only the worktree of this local folder')
+  .option('--force', 'remove it even with uncommitted or untracked files')
+  .action(async (run: string, opts: { folder?: string; force?: boolean }) => {
+    const { listWorktrees, removeWorktree } = await import('../worker/worktree.js');
+    const dir = await worktreeDir();
+    const mine = listWorktrees(dir).filter((w) => w.run === run && (!opts.folder || w.folder === opts.folder));
+    if (!mine.length) throw new Error(`no worktree of run ${run} on this machine`);
+    for (const w of mine) {
+      await removeWorktree(dir, w, { force: opts.force });
+      console.log(`removed ${w.path} (branch ${w.branch} is still in ${w.repo})`);
+      await client()
+        .post(`/v1/runs/${encodeURIComponent(run)}/worktrees/${encodeURIComponent(w.folder)}/removed`)
+        .catch((e: Error) => console.log(dim(`the server was not told: ${e.message}`)));
+    }
   });
 
 program.parseAsync(process.argv).catch((err: Error) => {

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "description": "Who approves the specs. Input that cannot be read is ask.",
+  "properties": {
+    "route": {"enum": ["ask", "auto"]},
+    "reason": {"enum": ["supervised", "review_not_approved", "prompt_injection", "check_failed", "conflicts", "no_recommendation", "unreadable", "auto"]},
+    "reason_text": {"type": "string"}
+  },
+  "required": ["route", "reason", "reason_text"],
+  "additionalProperties": false
+}

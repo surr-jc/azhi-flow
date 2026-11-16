@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "description": "The engineer's report. The change itself (files, diff, tests) is added by the worker as `workspace`.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "commit_message": {"type": "string", "maxLength": 2000, "description": "Conventional commit: a type(scope): subject line, a blank line, then what and why"},
+    "pr_title": {"type": "string", "maxLength": 120},
+    "pr_body": {"type": "string", "maxLength": 20000, "description": "Markdown: summary, what changed, notes for the reviewer (deviations)"},
+    "tasks_done": {"type": "array", "items": {"type": "string"}},
+    "tests_added": {"type": "array", "items": {"type": "string"}},
+    "deviations": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["summary", "commit_message", "pr_title", "pr_body", "tasks_done", "tests_added", "deviations", "risks"],
+  "additionalProperties": false
+}

@@ -21,6 +21,13 @@ export interface WorkspaceSpec {
   repo: string;
   ref: string;
   baseRef?: string;
+  /**
+   * A ref merged into `ref` (`git merge --no-commit`) before the step starts, for example the base branch into a
+   * pull request's head. Conflicts are left in the tree as markers. Needs the full history, so not combined with
+   * `depth`, `baseRef` or `continuation`. The change a write-mode step hands on is then measured from this ref's
+   * tip, so it is the pull request's own change plus the resolutions, however far the base has moved.
+   */
+  mergeRef?: string;
   credential?: string;
   depth?: number;
   /** `write`: the agent may edit the checkout, and its git metadata is kept outside it. */
@@ -34,16 +41,25 @@ export interface WorkspaceSpec {
   continuation?: Continuation;
 }
 
+/** What a `mergeRef` merge found: the tip that was merged in, the head it was merged into, and the unmerged paths. */
+export interface MergeInfo {
+  base_sha: string;
+  head_sha: string;
+  conflicts: Array<{ path: string; kind: 'both_modified' | 'both_added' | 'deleted_by_us' | 'deleted_by_them' | 'added_by_us' | 'added_by_them' }>;
+}
+
 export interface Checkout {
   dir: string;
+  /** The commit changes are measured from: the checked-out ref, or the merged ref's tip when `mergeRef` is set. */
   head: string;
   base?: string;
+  merge?: MergeInfo;
   /** Write mode: the git directory, outside the checkout so the agent's edits cannot reach it. */
   gitDir?: string;
 }
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-const REF = /^(?!.*\.\.)(?!.*\/\/)(?!-)[A-Za-z0-9/_.-]{1,200}$/;
+export const REF = /^(?!.*\.\.)(?!.*\/\/)(?!-)[A-Za-z0-9/_.-]{1,200}$/;
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
 
 /** The environment every git command in a workspace runs with: nothing from the host but PATH. */
@@ -55,7 +71,7 @@ export function isolatedGitEnv(home: string): NodeJS.ProcessEnv {
     // Windows: git and an MCP server need the system variables to start and reach the network; the home folder is the step's.
     ...(process.platform === 'win32' ? { ...windowsSystemEnv(), USERPROFILE: home } : {}),
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
     GIT_ALLOW_PROTOCOL: 'https:http',
@@ -64,6 +80,21 @@ export function isolatedGitEnv(home: string): NodeJS.ProcessEnv {
   };
 }
 
+/** What git says when the ref or repository does not exist: asking again cannot help. */
+const PERMANENT_FETCH_FAILURE = /couldn't find remote ref|not our ref|repository '.*' not found|returned error: 404/i;
+
+/** Waits `ms`, or less if the signal aborts. */
+const pause = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done);
+  });
+
 export function workspaceUrl(spec: WorkspaceSpec): string {
   const host = spec.host.replace(/\/+$/, '');
   if (!host.startsWith('https://') && !LOOPBACK.test(`${host}/`)) throw invalid(`workspace host must be https:// (or http:// on loopback), got ${spec.host}`);
@@ -71,7 +102,7 @@ export function workspaceUrl(spec: WorkspaceSpec): string {
   return `${host}/${spec.repo}.git`;
 }
 
-export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; home: string; token?: string; timeoutMs: number; signal?: AbortSignal }): Promise<Checkout> {
+export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; home: string; token?: string; timeoutMs: number; signal?: AbortSignal; /** Waits between fetch attempts (tests shorten them). */ fetchRetryWaitsMs?: number[] }): Promise<Checkout> {
   const url = workspaceUrl(spec);
   for (const [name, ref] of [['ref', spec.ref], ['base_ref', spec.baseRef]] as const) {
     if (ref !== undefined && !REF.test(ref)) throw invalid(`workspace ${name} '${ref}' is not a plain git ref`);
@@ -80,6 +111,10 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     if (spec.baseRef !== undefined) throw invalid('a workspace cannot continue from an earlier change and also set base_ref');
     validateContinuation(spec.continuation);
   }
+  if (spec.mergeRef !== undefined) {
+    if (!REF.test(spec.mergeRef)) throw invalid(`workspace merge_ref '${spec.mergeRef}' is not a plain git ref`);
+    if (spec.continuation || spec.baseRef !== undefined || spec.depth) throw invalid('a workspace that merges a ref (merge_ref) needs the full history, so it cannot also set base_ref or depth, or continue from an earlier change');
+  }
   const dir = join(o.root, 'repo');
   mkdirSync(dir);
   const base = { ...isolatedGitEnv(o.home), GIT_ALLOW_PROTOCOL: new URL(url).protocol.replace(':', '') };
@@ -87,11 +122,11 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     GIT_CONFIG_COUNT: String(pairs.length),
     ...Object.fromEntries(pairs.flatMap(([k, v], i) => [[`GIT_CONFIG_KEY_${i}`, k], [`GIT_CONFIG_VALUE_${i}`, v]])),
   });
-  const always: Array<[string, string]> = [['core.hooksPath', process.platform === 'win32' ? 'NUL' : '/dev/null'], ['core.symlinks', 'false'], ['credential.helper', ''], ['advice.detachedHead', 'false']];
+  const always: Array<[string, string]> = [['core.hooksPath', '/dev/null'], ['core.symlinks', 'false'], ['credential.helper', ''], ['advice.detachedHead', 'false']];
   const scrub = (s: string) => (o.token ? s.split(o.token).join('***') : s);
-  const git = (args: string[], env: NodeJS.ProcessEnv) =>
+  const git = (args: string[], env: NodeJS.ProcessEnv, timeoutMs = o.timeoutMs) =>
     new Promise<string>((resolve, reject) => {
-      execFile('git', args, { cwd: dir, env, timeout: o.timeoutMs, signal: o.signal, maxBuffer: 1 << 20, windowsHide: true }, (err, stdout, stderr) => {
+      execFile('git', args, { cwd: dir, env, timeout: timeoutMs, signal: o.signal, maxBuffer: 1 << 20, windowsHide: true }, (err, stdout, stderr) => {
         if (!err) return resolve(stdout.trim());
         const denied = /could not read Username|authentication failed|returned error: 40[13]/i.test(stderr);
         reject(ApplicationFailure.create({ type: denied ? ErrorClass.authorization : ErrorClass.transient, message: scrub(`git ${args[0]} failed: ${stderr.trim().slice(-500) || err.message}`), nonRetryable: denied }));
@@ -103,11 +138,29 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   await git(['config', 'core.symlinks', 'false'], { ...base, ...config(always) });
   const auth: Array<[string, string]> = o.token ? [[`http.${new URL(url).origin}/.extraHeader`, `Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`]] : [];
   // A continuation starts from the commit its change was made against, however far the branch has moved since.
-  const refspecs = [`+${spec.continuation?.baseSha ?? spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : [])];
+  const refspecs = [`+${spec.continuation?.baseSha ?? spec.ref}:refs/azhi/head`, ...(spec.baseRef ? [`+${spec.baseRef}:refs/azhi/base`] : []), ...(spec.mergeRef ? [`+${spec.mergeRef}:refs/azhi/merge`] : [])];
   // A transfer under 1 KB/s for 60 s is stalled, not slow: fail it as transient so the retry starts now, not after the step timeout.
   const stall: Array<[string, string]> = [['http.lowSpeedLimit', '1000'], ['http.lowSpeedTime', '60']];
   // Fetch by URL: no remote is configured, so neither the URL nor the header is written to .git/config.
-  await git(['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs], { ...base, ...config([...always, ...stall, ...auth]) });
+  const fetchArgs = ['fetch', '-q', '--no-tags', '--no-recurse-submodules', ...(spec.depth ? [`--depth=${spec.depth}`] : []), url, ...refspecs];
+  const fetchEnv = { ...base, ...config([...always, ...stall, ...auth]) };
+  // The fetch is retried here, not by the step: a dropped connection (a full-history fetch on a loaded machine) is
+  // common and costs only a repeat of the fetch, while a harness step is never retried because that would run its agent again.
+  // `timeoutMs` is the budget for the fetch as a whole; a missing ref or repository, a refused token and a cancellation are final.
+  const waits = o.fetchRetryWaitsMs ?? [2000, 5000];
+  const deadline = Date.now() + o.timeoutMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await git(fetchArgs, fetchEnv, Math.max(1, deadline - Date.now()));
+      break;
+    } catch (e) {
+      const wait = waits[attempt];
+      const final = e instanceof ApplicationFailure && (e.nonRetryable || PERMANENT_FETCH_FAILURE.test(e.message));
+      if (wait === undefined || final || o.signal?.aborted || deadline - Date.now() <= wait) throw e;
+      await pause(wait, o.signal);
+      if (o.signal?.aborted) throw e;
+    }
+  }
   await git(['checkout', '-q', '--detach', 'refs/azhi/head'], { ...base, ...config(always) });
   const head = await git(['rev-parse', 'HEAD'], { ...base, ...config(always) });
   const baseSha = spec.baseRef ? await git(['rev-parse', 'refs/azhi/base'], { ...base, ...config(always) }) : undefined;
@@ -115,6 +168,30 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
   // diff: stop here rather than let agents review an empty change.
   if (baseSha && (baseSha === head || (await git(['merge-base', '--is-ancestor', head, baseSha], { ...base, ...config(always) }).then(() => true, () => false)))) {
     throw ApplicationFailure.create({ type: ErrorClass.invalidInput, nonRetryable: true, message: `workspace ref ${spec.ref} (${head.slice(0, 12)}) is already contained in base_ref ${spec.baseRef}, so there is no change to work on; was the pull request merged?` });
+  }
+  let merge: MergeInfo | undefined;
+  if (spec.mergeRef) {
+    const mergeSha = await git(['rev-parse', 'refs/azhi/merge'], { ...base, ...config(always) });
+    if (mergeSha === head || (await git(['merge-base', '--is-ancestor', mergeSha, head], { ...base, ...config(always) }).then(() => true, () => false))) {
+      throw invalid(`workspace ref ${spec.ref} (${head.slice(0, 12)}) already contains merge_ref ${spec.mergeRef}, so there is nothing to merge`);
+    }
+    const identity = { GIT_AUTHOR_NAME: 'azhi', GIT_AUTHOR_EMAIL: 'azhi@localhost', GIT_COMMITTER_NAME: 'azhi', GIT_COMMITTER_EMAIL: 'azhi@localhost' };
+    const local = { ...base, ...config([...always, ['merge.conflictStyle', 'diff3'], ['core.quotePath', 'false']]), ...identity };
+    // Conflicts make git exit 1 and are expected; they show as unmerged index entries. Any other failure has none.
+    let mergeError: unknown;
+    await git(['merge', '--no-commit', '--no-ff', '--no-verify', 'refs/azhi/merge'], local).catch((e) => {
+      mergeError = e;
+    });
+    const stages = new Map<string, Set<number>>();
+    for (const rec of (await git(['ls-files', '-u', '-z'], local)).split('\0')) {
+      const m = /^\d+ [0-9a-f]+ ([123])\t(.+)$/s.exec(rec);
+      if (m) stages.set(m[2]!, (stages.get(m[2]!) ?? new Set()).add(Number(m[1])));
+    }
+    if (mergeError && !stages.size) throw invalid(`git could not merge ${spec.mergeRef} into ${spec.ref}: ${(mergeError as Error).message}`);
+    // Stage 1 is the common ancestor, 2 the checked-out ref ("ours"), 3 the merged ref ("theirs").
+    const kind = (s: Set<number>): MergeInfo['conflicts'][number]['kind'] =>
+      s.has(1) ? (s.has(2) && s.has(3) ? 'both_modified' : s.has(3) ? 'deleted_by_us' : 'deleted_by_them') : s.has(2) && s.has(3) ? 'both_added' : s.has(2) ? 'added_by_us' : 'added_by_them';
+    merge = { base_sha: mergeSha, head_sha: head, conflicts: [...stages].map(([path, s]) => ({ path, kind: kind(s) })).sort((a, b) => a.path.localeCompare(b.path)) };
   }
   if (spec.continuation) {
     const { baseSha: from, files } = spec.continuation;
@@ -134,12 +211,14 @@ export async function cloneWorkspace(spec: WorkspaceSpec, o: { root: string; hom
     renameSync(join(dir, '.git'), gitDir);
     return { dir, head, gitDir, base: from };
   }
-  if (spec.mode !== 'write') return { dir, head, ...(baseSha ? { base: baseSha } : {}) };
+  // After a merge, changes are measured from the merged ref's tip (see `mergeRef`).
+  const start = merge ? { head: merge.base_sha, merge } : { head };
+  if (spec.mode !== 'write') return { dir, ...start, ...(baseSha ? { base: baseSha } : {}) };
   // An agent that may write files must not be able to write git's own files (hooks, config, filters run
   // commands): the git directory moves out of the folder it edits.
   const gitDir = join(o.root, 'git');
   renameSync(join(dir, '.git'), gitDir);
-  return { dir, head, gitDir, ...(baseSha ? { base: baseSha } : {}) };
+  return { dir, ...start, gitDir, ...(baseSha ? { base: baseSha } : {}) };
 }
 
 /** Changed files Azhi hands on (and the most it will carry in a step's output). */
@@ -156,6 +235,8 @@ export interface WorkspaceChange {
   tests: { status: 'passed' | 'failed' | 'not_run'; command: string; exit_code: number | null; attempts: number; output: string };
   /** True when the agent hit its step limit and was asked to wrap up, so the change may be unfinished. */
   step_limit_reached?: boolean;
+  /** Set when the checkout was a `mergeRef` merge: what was merged and which paths conflicted. */
+  merge?: MergeInfo;
 }
 
 /**
@@ -163,7 +244,7 @@ export interface WorkspaceChange {
  * isolated environment, and the settings that would run commands (hooks, fsmonitor) switched off.
  */
 function workGit(c: Checkout, home: string, timeoutMs: number) {
-  const pairs: Array<[string, string]> = [['core.hooksPath', process.platform === 'win32' ? 'NUL' : '/dev/null'], ['core.fsmonitor', 'false'], ['core.symlinks', 'false'], ['core.autocrlf', 'false'], ['core.quotePath', 'false']];
+  const pairs: Array<[string, string]> = [['core.hooksPath', '/dev/null'], ['core.fsmonitor', 'false'], ['core.symlinks', 'false'], ['core.autocrlf', 'false'], ['core.quotePath', 'false']];
   const env = {
     ...isolatedGitEnv(home),
     GIT_DIR: c.gitDir!,
@@ -241,6 +322,7 @@ export async function collectChange(c: Checkout, home: string, tree: string, met
     stats: { files: files.length, additions: files.reduce((s, f) => s + f.additions, 0), deletions: files.reduce((s, f) => s + f.deletions, 0) },
     tests: meta.tests,
     ...(meta.stepLimitReached ? { step_limit_reached: true } : {}),
+    ...(c.merge ? { merge: c.merge } : {}),
   };
 }
 
@@ -308,6 +390,6 @@ export function runWorkspaceTests(c: Checkout, o: { command: string; home: strin
   });
 }
 
-function invalid(message: string) {
+export function invalid(message: string) {
   return ApplicationFailure.create({ type: ErrorClass.invalidInput, message, nonRetryable: true });
 }

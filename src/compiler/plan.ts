@@ -19,6 +19,8 @@ export interface PlanNode {
   maxAttempts: number;
   tool?: { ref: string; effect: EffectClass; revision?: number; outputTrusted: boolean; safeForTainted: boolean };
   route?: { condition: string; route: string };
+  /** Only for a step written out from a loop's body: the loop, the round (from 1), and the body step or `gate`. */
+  loop?: { loop: string; round: number; step: string };
   /** Agent nodes: the tools the agent may call, as registered. */
   agentTools?: Array<{ ref: string; effect: EffectClass; outputTrusted: boolean; safeForTainted: boolean; revision?: number }>;
 }
@@ -67,6 +69,8 @@ export const SUBWORKFLOW_OUTPUT_SCHEMA: JsonSchema = {
     workflow: { type: 'string' },
     version: { type: 'integer' },
     state: { type: 'string' },
+    /** Only when the child did not succeed and the node says `on_failure: continue`. */
+    error: { type: 'object' },
     nodes: { type: 'object' },
   },
 };
@@ -100,6 +104,14 @@ export const WORKSPACE_CHANGE_SCHEMA: JsonSchema = {
     diff: { type: 'string' },
     diff_truncated: { type: 'boolean' },
     step_limit_reached: { type: 'boolean' },
+    merge: {
+      type: 'object',
+      properties: {
+        base_sha: { type: 'string' },
+        head_sha: { type: 'string' },
+        conflicts: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, kind: { type: 'string' } } } },
+      },
+    },
     stats: { type: 'object', properties: { files: { type: 'integer' }, additions: { type: 'integer' }, deletions: { type: 'integer' } } },
     tests: {
       type: 'object',

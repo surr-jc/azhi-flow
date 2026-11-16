@@ -1,6 +1,7 @@
 schema_version: "2.0"
 id: sdlc-universal
 name: "SDLC universal: Jira, GitHub and Confluence to a reviewed pull request"
+tags: [delivery, sdlc, github, jira]
 description: Intake from a Jira ticket or GitHub issue (plus an optional
   Confluence page), readiness check, base-branch preflight, one planning pass,
   build with the repository's own tests, one independent review with a single
@@ -66,8 +67,8 @@ nodes:
         - jira_issue
   - id: jira_issue
     type: tool
-    description: Read the Jira ticket through the workspace's jira-ccp tool.
-    tool: jira-ccp_get_issue@1
+    description: Read the Jira ticket through the Atlassian MCP server.
+    tool: jira.get-issue@1
     arguments:
       issue_key:
         ref: inputs.ticket

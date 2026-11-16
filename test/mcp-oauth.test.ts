@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { registerMcpRoutes } from '../src/api/mcp.js';
-import { checkMcpConnectionProposal } from '../src/builder/integrations.js';
+import { checkToolProposal, registerProposedTool } from '../src/builder/builder.js';
+import { checkMcpConnectionProposal, listConnectionTools } from '../src/builder/integrations.js';
 import { migrate } from '../src/db/migrate.js';
 import { createContext, type AppContext } from '../src/server/context.js';
 import { discoverMcpTools } from '../src/server/mcp.js';
@@ -203,6 +204,29 @@ describe('remote MCP OAuth by discovery', () => {
     const made = await create({ auth_kind: 'none', name: 'taken' });
     expect(made.status).toBe(200);
     await expect(checkMcpConnectionProposal(ctx, WS, { name: 'taken', url: 'https://mcp.example.com/mcp' })).rejects.toThrow(/already exists/);
+  });
+
+  it('gives the builder the connection\'s real tools, and registers only what the server offers', async () => {
+    fx = await startMcpOAuthServer();
+    const id = await signedIn({ name: 'wiki' });
+    const listed = await listConnectionTools(ctx, WS, 'wiki');
+    expect(listed).toEqual({ connection: { id, name: 'wiki' }, tools: [{ name: 'search', description: 'Search pages', arguments: ['q'], required: [] }] });
+
+    // The model's own schema and the connection's name are replaced by the server's schema and the connection id.
+    const spec = { id: 'wiki_search', version: 1, description: 'Search the wiki', effect: 'read', transport: { kind: 'mcp-streamable-http', connection: 'wiki', tool: 'search' }, input_schema: { type: 'object', properties: { invented: { type: 'string' } } } };
+    const checked = await checkToolProposal(ctx, WS, spec);
+    expect(checked.spec).toMatchObject({ transport: { kind: 'mcp-streamable-http', connection: id, tool: 'search' }, input_schema: { type: 'object', properties: { q: { type: 'string' } } }, output_schema: { type: 'object' } });
+    await expect(checkToolProposal(ctx, WS, { ...spec, transport: { ...spec.transport, tool: 'made_up' } })).rejects.toThrow(/does not offer a tool named 'made_up'.*search/);
+    await expect(checkToolProposal(ctx, WS, { ...spec, transport: { ...spec.transport, connection: 'nope' } })).rejects.toThrow(/no gateway MCP connection 'nope'/);
+
+    // A connection still waiting for sign-in has nothing to list.
+    const waiting = await create({ name: 'pending' });
+    await expect(listConnectionTools(ctx, WS, waiting.body.name)).rejects.toThrow(/not ready/);
+
+    // Once registered, the builder is pointed at the existing ref instead of a duplicate.
+    await registerProposedTool(ctx, WS, spec, 'usr_admin');
+    await expect(checkToolProposal(ctx, WS, { ...spec, id: 'wiki_search_2' })).rejects.toThrow(/already registered as wiki_search@1/);
+    expect((await listConnectionTools(ctx, WS, 'wiki')).tools[0]).toMatchObject({ registered_as: 'wiki_search@1', effect: 'read' });
   });
 
   it('deletes a connection with no registered actions and refuses one that has some', async () => {

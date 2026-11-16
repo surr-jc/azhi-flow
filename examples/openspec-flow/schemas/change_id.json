@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "change_dir": {"type": "string"},
+    "archive_dir": {"type": "string"}
+  },
+  "required": ["id", "date", "change_dir", "archive_dir"],
+  "additionalProperties": false
+}

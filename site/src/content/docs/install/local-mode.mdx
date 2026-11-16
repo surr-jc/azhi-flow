@@ -9,6 +9,9 @@ import { Aside } from '@astrojs/starlight/components';
 Local mode is for one person on one machine. The team install stays the supported production setup.
 </Aside>
 
+Prefer an installer to a terminal? The [desktop app](/install/desktop-app/) (Windows and macOS, unsigned beta) runs
+this same code in a window, with Node.js and Temporal bundled. This page is for running it from a checkout.
+
 `azhi up` starts, in one process:
 
 - an **embedded PostgreSQL** (PGlite, real Postgres compiled to WebAssembly, with pgvector),
@@ -56,7 +59,7 @@ Set the model the same way (`AZHI_ANTHROPIC_MODEL`) before `azhi up`.
 | Memory limits | `limits.memory_mb` is enforced only on Linux |
 | macOS | Not yet tested |
 | OpenCode on native Windows | New and not yet checked by a live run. `npm ci` installs OpenCode; add ripgrep, then `npx azhi setup` checks both |
-| Packaging | There is no global npm package yet; run from a checkout |
+| Packaging | There is no global npm package; run from a checkout, or use the [desktop app](/install/desktop-app/) |
 
 ## Platform status
 

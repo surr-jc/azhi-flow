@@ -17,6 +17,7 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
   const [error, setError] = useState<unknown>();
   const [enterprise, setEnterprise] = useState('');
   const [pasted, setPasted] = useState('');
+  const [syncing, setSyncing] = useState(false);
   const [check, setCheck] = useState<{ ok: boolean; message: string }>();
   const done = useRef(onDone);
   done.current = onDone;
@@ -94,6 +95,31 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
     }
   };
 
+  // The server reads OpenCode's auth.json on its own machine; the file never passes through the browser.
+  const syncOpencode = async () => {
+    setError(undefined);
+    setSyncing(true);
+    try {
+      const r = await api<{ from: string | null; check?: { ok: boolean; message: string }; tried: Array<{ name: string; message: string }> }>('/v1/copilot/import', {
+        method: 'POST',
+        body: { secret, from_opencode: true, ...(enterprise.trim() ? { enterprise_url: enterprise.trim() } : {}) },
+      });
+      if (!r.from || !r.check) {
+        setCheck({ ok: false, message: `OpenCode's sign-in is not accepted by GitHub Copilot, so nothing was saved. ${r.tried.map((t) => t.message).join(' ')}`.trim() });
+        return;
+      }
+      setCheck(r.check);
+      setState('done');
+      void qc.invalidateQueries({ queryKey: ['secrets'] });
+      void qc.invalidateQueries({ queryKey: ['examples'] });
+      done.current?.();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div className="copilot-login">
       {state === 'waiting' && started ? (
@@ -108,6 +134,9 @@ export function CopilotLogin({ secret = 'github-copilot-token', onDone }: { secr
       )}
       {state !== 'waiting' ? (
         <>
+          <button type="button" className="small" disabled={syncing} onClick={() => void syncOpencode()} title="Reads OpenCode's auth.json on the machine running the Azhi server and keeps the sign-in Copilot accepts">
+            {syncing ? 'Syncing…' : 'Sync with OpenCode'}
+          </button>
           <button type="button" className="small" onClick={() => void verify()}>Check sign-in</button>
           <details>
             <summary className="small">Company GitHub address, or reuse OpenCode's sign-in</summary>

@@ -10,6 +10,7 @@
 schema_version: "2.0"
 id: issue-investigation
 name: Issue root-cause analysis (OpenCode)
+tags: [investigation, rca, github]
 description: Investigates a GitHub issue in an isolated checkout, writes an evidence-backed root-cause analysis with a proposed fix, and can post it on the issue after approval.
 trigger:
   manual: true

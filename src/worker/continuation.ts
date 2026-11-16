@@ -1,5 +1,5 @@
 import { ApplicationFailure } from '@temporalio/common';
-import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ErrorClass } from '../lib/errors.js';
 import type { ApiClient } from './api-client.js';
@@ -25,7 +25,14 @@ export interface Continuation {
 }
 
 /** A workspace as the workflow sends it: the continuation is an artifact to fetch, never the files themselves. */
-export type HarnessWorkspace = Omit<WorkspaceSpec, 'continuation'> & { continuation?: { artifact: string; baseSha: string } };
+export type HarnessWorkspace = Omit<WorkspaceSpec, 'continuation'> & {
+  continuation?: { artifact: string; baseSha: string };
+  /**
+   * Set when the workspace is a local folder (docs/local-workspaces.md): the worker makes a worktree of `path`
+   * and clones nothing. `repo` is then only a label (`local:<name>`), and `host` is empty.
+   */
+  local?: { name: string; path: string };
+};
 
 /** Fetches a continuation's change with the run token and returns the spec `cloneWorkspace` takes. */
 export async function resolveWorkspace(w: HarnessWorkspace, api: Pick<ApiClient, 'raw'>): Promise<WorkspaceSpec> {
@@ -147,5 +154,7 @@ export function applyContinuation(dir: string, files: ContinuationFile[]): void 
     if (f.status === 'modified' && !exists) throw invalid(`the change modifies '${f.path}', which is not in the base commit; the change does not match its base_sha`);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, f.encoding === 'base64' ? Buffer.from(f.content!, 'base64') : Buffer.from(f.content!, 'utf8'));
+    // A file system that keeps modes must agree with the recorded one, or git sees (or drops) a mode change.
+    if (process.platform !== 'win32') chmodSync(target, f.mode === '100755' ? 0o755 : 0o644);
   }
 }

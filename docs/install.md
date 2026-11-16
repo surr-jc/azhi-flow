@@ -71,6 +71,32 @@ The same install then ran the CI digest example end to end with a native worker 
 Slack API (`AZHI_SLACK_API_URL=http://host.docker.internal:<port>/api`): the post was planned,
 dispatched and confirmed in the ledger and received by the fake.
 
+## Desktop app (Windows and macOS, one person on one machine)
+
+The current build is `v0.1.0-beta.1`, an unsigned beta. A window, tray icon and notifications around [local mode](local-mode-plan.md): the server, a Temporal dev server and
+a worker run on your computer with all data in `~/.azhi` (`%USERPROFILE%\.azhi` on Windows). No Docker, Node or
+npm is needed. Design and status: [desktop-app-plan.md](desktop-app-plan.md).
+
+1. Download the installer for your system from the newest release on the
+   [Releases page](https://github.com/surr-jc/azhi-flow/releases) (betas are marked Pre-release):
+   `Azhi.Flow.Setup.<version>.exe` for Windows, `Azhi.Flow-<version>-arm64.dmg` for Apple Silicon or
+   `Azhi.Flow-<version>.dmg` for Intel (420 to 510 MB each). Check it against `SHA256SUMS.txt`
+   (`certutil -hashfile "Azhi.Flow.Setup.0.1.0-beta.1.exe" SHA256` on Windows, `shasum -a 256 <file>` on macOS).
+2. The builds are **not signed**, so the first launch needs one extra step:
+   - **Windows:** SmartScreen shows "Windows protected your PC". Click *More info*, then *Run anyway*.
+   - **macOS:** Gatekeeper blocks the app. Open System Settings, Privacy & Security, scroll to the message about
+     "Azhi Flow", and click *Open Anyway* (macOS 15 and later have no right-click shortcut). From a terminal:
+     `xattr -dr com.apple.quarantine "/Applications/Azhi Flow.app"`.
+3. The first start takes up to a minute (the window says so). If Git, Python or uv are missing the app tells you once
+   and links to their installers; workflows that need them say so before they run.
+
+Closing the window keeps Azhi Flow running in the tray (schedules and approvals still fire); use the tray icon's Quit
+to stop it. The installer does not put an `azhi` command on your PATH; run the CLI from a source checkout and it finds
+the running app on port 7400 without a login. Logs are in
+`~/.azhi/local/desktop.log`. Uninstalling the app leaves `~/.azhi` (your runs and settings) in place. The app checks
+GitHub once a day for a newer full release (pre-releases are ignored) and links to it; set `AZHI_DESKTOP_NO_UPDATE_CHECK=1` to turn that off. macOS
+builds are new and have not been run on a Mac yet; script memory limits (`limits.memory_mb`) are enforced on Linux only.
+
 ## Workers
 
 On each Linux host that should run scripts or OpenCode nodes:
@@ -130,7 +156,9 @@ steps; a step's Agent activity says when DCP is on, its limits, and each time it
 the limits a worker will use and flags a bad value, which would otherwise fail OpenCode steps that load DCP.
 
 **OpenCode 2 (preview, off by default).** A worker started with `AZHI_OPENCODE_MAJOR=2` runs OpenCode steps on
-OpenCode 2 instead of the pinned 1.x, through its own adapter. `npx azhi setup --opencode2` installs the pinned
+OpenCode 2 instead of the pinned 1.x, through its own adapter. An admin can instead choose the version for every
+workflow in the workspace on the Workers page (OpenCode SDK); a worker advertises each major it has installed, and
+steps wait for a worker that has the chosen one. Left on "Worker default", `AZHI_OPENCODE_MAJOR` decides. `npx azhi setup --opencode2` installs the pinned
 `@opencode/cli` into the tools folder (about 250 MB; it is not an npm dependency of Azhi), or set
 `AZHI_OPENCODE2_BIN`. Steps keep the same isolation, gateway bridge, profile harness, write mode and token saving.
 Differences: Copilot and ChatGPT sign-ins go in through OpenCode 2's credential API and sit in the step's own

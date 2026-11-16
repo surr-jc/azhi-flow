@@ -18,6 +18,7 @@
 schema_version: "2.0"
 id: issue-splitter-jira
 name: Issue splitter (Jira)
+tags: [planning, sizing, jira]
 description: Size a Jira issue or a request against the code and, when it is too big for one pull request, split it into ordered sub-tasks after a person approves the plan; otherwise mark it ready.
 trigger:
   manual: true

@@ -1,9 +1,12 @@
 # AI SDLC Factory
 
-Three workflows that run the delivery loop of a "software factory" on top of what Azhi already has: plan a release
+Four workflows that run the delivery loop of a "software factory" on top of what Azhi already has: plan a release
 with a person, split it into dependency-ordered tickets, let a scheduled lap deliver one ticket at a time into a pull
 request on a staging branch, and grade the repository's readiness so a broken CI is noticed and proposed as a ticket.
 Tickets come from **Jira or GitHub**; the code, CI and pull requests are always on GitHub.
+
+To deliver a whole release in one run instead of one ticket per scheduled lap, see [sdd-factory](sdd-factory.md): it
+plans, splits and delivers every Story in order as stacked pull requests.
 
 The shape follows Cole Medin's software factory (his video on wrapping a factory with Port, and
 <https://github.com/coleam00/ai-software-factory>), adapted to Azhi's rules: **nothing merges, closes or force-pushes**,
@@ -14,6 +17,7 @@ every write sits behind a gate, and ticket text is data.
 | `ai-sdlc-factory-plan` | a release plan (PRD) with a person, then tickets with their order | manual |
 | `ai-sdlc-factory` | one lap: pick, claim, deliver one ticket into a pull request, report | schedule |
 | `ai-sdlc-factory-readiness` | bronze, silver or gold scorecard; proposes a fix ticket when CI is red | schedule |
+| `ai-sdlc-factory-verify` | checks the release's journeys and invariants against the merged staging branch; proposes one fix ticket | manual |
 
 ```
 plan       ticket/goal ─ brief ─ plan_release (agent) ─ prd_review (a person) ─ epics ─ issue-splitter / issue-splitter-jira  × up to 3 epics
@@ -30,7 +34,9 @@ readiness  files + ci + open ticket ─ score (rules) ─ scorecard ─ Slack �
 ## The loop, step by step
 
 **1. Plan (`ai-sdlc-factory-plan`).** Give it a ticket (a Jira key, or `owner/name#42`), a goal typed as text, or both.
-An agent (skill `release-prd`) reads the repository on the staging branch and writes the release plan: the problem,
+First a *brainstorm*: an agent (skill `brainstorm-requirements`) reads the repository and prepares up to five questions
+only a person can answer and two or three approaches (one recommended, with the argument against it). A person answers
+and picks an approach (`brainstorm_review`); rejecting stops the run with nothing planned. Then an agent (skill `release-prd`) reads the repository on the staging branch and writes the release plan: the problem,
 goals and non-goals, the **invariants** the product must keep, the **user journeys** a tester walks, the owner (from
 CODEOWNERS, or null when there is none), and up to three **epics**; the first makes the product runnable end to end. A
 person approves the plan and may leave epics out. Each remaining epic then goes through the published
@@ -49,6 +55,8 @@ makes up to six slices, so a release comes to about 10 to 18 tickets.
 4. *Deliver.* The published [`sdlc-universal`](ai-sdlc.md) workflow does the work: readiness check, preflight, plan,
    build and test with the repository's own commands, one independent review, a release approval, then a pushed
    `azhi/` branch and a pull request into the **staging branch** (`staging_branch`).
+   [`sdlc-lean`](../examples/sdlc-lean/README.md) is the same delivery with fewer steps (about five model turns, no
+   untested builds); the lap calls `sdlc-universal`, and it can be pointed at `sdlc-lean` by changing the `deliver` node.
 5. *Outcome.* A pull request opened is reported. A delivery that ended without one (tests failed, nothing changed, a
    blocker) is reported and the ticket gets `factory-needs-owner`, so laps skip it until a person acts.
 
@@ -65,6 +73,13 @@ and no ticket is open for it (`ci-failing` label, or the JQL for Jira), a person
 with the `ready`, `priority` and `ci-failing` labels. The next lap picks a `priority` ticket first, so a broken CI is
 fixed before new work, with a person approving the ticket and again at the delivery's release approval.
 
+**4. Verify (`ai-sdlc-factory-verify`).** After a batch of pull requests is merged into staging, give it the release's
+journeys and invariants (from the approved plan). An agent (skill `journey-verification`) reads the staging branch and
+says pass, fail or unavailable for each, with a file as evidence. Rules then grade the release: a pass without a file is
+`unavailable`, no CI runs is not a green CI, and `verified` needs no failure, nothing unavailable and CI green on the
+branch. A failure posts to Slack and, after a person approves, creates one fix ticket (`ready`, `priority`,
+`release-verify`) that the next lap picks first. This is a read of the code, not a run of the product.
+
 ## Install and run
 
 ```bash
@@ -73,6 +88,7 @@ azhi example install issue-splitter --repo OWNER/REPO --set slack_channel=C0123A
 azhi example install ai-sdlc-factory-plan --repo OWNER/REPO
 azhi example install ai-sdlc-factory --repo OWNER/REPO --set slack_channel=C0123ABCD
 azhi example install ai-sdlc-factory-readiness --repo OWNER/REPO --set slack_channel=C0123ABCD
+azhi example install ai-sdlc-factory-verify --repo OWNER/REPO --set slack_channel=C0123ABCD
 ```
 
 Sign and publish each draft, and publish the delivery and the splitter first: the plan and the lap run them as child
@@ -107,12 +123,14 @@ The three workflows run the same on all three. Nothing in them depends on the op
 
 ## What this does not do (yet)
 
-- **No merge, no close.** A person merges each pull request into staging, batch-validates there, and sends what is
+- **No merge, no close.** A person merges each pull request into staging, runs the verify workflow there, and sends what is
   wrong back as new tickets. GitHub does not close an issue when a pull request merges into a branch other than the
   default one, so a person **closes each slice's issue** after merging it: that is what releases the slices that depend
   on it. (When staging is the default branch, `Closes #N` in the pull request does it.)
-- **A failed or rejected delivery cannot label its ticket.** A child run that does not succeed fails the lap, so the
-  claim label stays and the ticket is skipped until a person removes it.
+- **A failed delivery is sent back, not lost.** The lap runs the delivery with `on_failure: continue`, so a child run
+  that fails, expires or is rejected ends the lap normally: the ticket gets `factory-needs-owner` and the report names
+  the failure class. A lap that is itself cancelled, or that dies between the claim and the outcome, still leaves the
+  claim label until a person removes it.
 - **No event triggers.** Readiness runs on a schedule; a CI failure does not start it. Azhi has no webhook triggers yet.
 - **Order is enforced inside an epic, not between epics.** The plan says when an epic needs another merged first.
 - **No fan-out.** Azhi cannot loop agents or sub-workflows over a list, so each ticket is one scheduled run, not an

@@ -14,7 +14,7 @@ export async function loadCatalog(ctx: AppContext, workspaceId: string): Promise
     )
   ).rows as Array<{ revision: number; spec: ToolSpec }>;
   const specs = new Map<string, ToolSpec>(BUILTIN_TOOLS.map((t) => [toolRef(t), t]));
-  for (const r of rows) specs.set(toolRef(r.spec), { ...r.spec, revision: r.revision });
+  for (const r of rows) if (!r.spec.retired) specs.set(toolRef(r.spec), { ...r.spec, revision: r.revision });
   return {
     get: (ref) => specs.get(ref),
     list: () => [...specs.values()],
@@ -34,7 +34,22 @@ export async function loadToolRevision(ctx: AppContext, workspaceId: string, ref
     revision === undefined ? [workspaceId, id, version] : [workspaceId, id, version, revision],
   );
   const row = r.rows[0];
-  return row ? { ...(row.spec as ToolSpec), revision: row.revision } : undefined;
+  // A run's pinned revision still resolves after the tool is unregistered; looking up the latest does not.
+  if (!row || (revision === undefined && row.spec.retired)) return undefined;
+  return { ...(row.spec as ToolSpec), revision: row.revision };
+}
+
+/**
+ * Unregisters a tool: a final revision marked retired. Runs that pinned an earlier revision keep it;
+ * new workflows no longer find the tool. Registering the same tool@version again brings it back.
+ */
+export async function unregisterTool(ctx: AppContext, workspaceId: string, ref: string, actor: string): Promise<{ ref: string; revision: number }> {
+  if (BUILTIN_TOOLS.some((t) => toolRef(t) === ref)) throw new AzhiError(ErrorClass.invalidInput, `${ref} is built in and cannot be unregistered`);
+  const spec = await loadToolRevision(ctx, workspaceId, ref, undefined);
+  if (!spec) throw new AzhiError(ErrorClass.invalidInput, `${ref} is not a registered tool`);
+  const r = await registerTool(ctx, workspaceId, { ...spec, retired: true }, actor);
+  await audit(ctx, workspaceId, actor, 'tool.unregistered', { tool: ref, revision: r.revision });
+  return { ref, revision: r.revision };
 }
 
 /** Registers a tool. A changed spec creates a new revision; an identical one is a no-op. */

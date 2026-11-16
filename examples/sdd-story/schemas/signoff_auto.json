@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {"enum": ["approved"]},
+    "by": {"enum": ["auto"]},
+    "slack": {"type": "string"}
+  },
+  "required": ["decision", "by", "slack"],
+  "additionalProperties": false
+}

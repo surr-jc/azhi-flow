@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { cleanCopilotToken } from '../lib/copilot-token.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
+import { opencodeAuthFile, opencodeCandidates } from '../lib/opencode-auth.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret, setSecret } from '../server/secrets.js';
@@ -292,9 +293,16 @@ export function registerCopilotRoutes(app: FastifyInstance, ctx: AppContext) {
         auth: z.string().min(2).max(20_000).optional(),
         /** Several sign-ins to try (from OpenCode's file, the environment, the gh tool); the first that Copilot accepts is stored. */
         candidates: z.array(z.object({ name: z.string().max(80), auth: z.string().min(2).max(20_000) })).min(1).max(8).optional(),
+        /** Read OpenCode's auth.json on the machine this server runs on (always its own default path, never one a caller names). */
+        from_opencode: z.boolean().optional(),
         enterprise_url: z.string().max(200).optional(),
       })
       .parse(req.body ?? {});
+    if (b.from_opencode && !b.auth && !b.candidates) {
+      const found = opencodeCandidates(opencodeAuthFile());
+      if (!found.candidates.length) throw new AzhiError(ErrorClass.invalidInput, `${found.problem ?? 'no OpenCode sign-in found'} (on the machine running the Azhi server). Sign in with: opencode auth login`);
+      b.candidates = found.candidates.slice(0, 8);
+    }
     if (!b.auth && !b.candidates) throw new AzhiError(ErrorClass.invalidInput, 'give auth (a sign-in) or candidates (several to try)');
     const store = async (auth: string) => {
       const si = signIn(auth);

@@ -176,8 +176,8 @@ function Card({ data }: NodeProps<Node<CardData>>) {
         <dl className="wf-rows">
           {rows.length ? rows.map((r) => (
             <div key={r.label} className={r.changed ? 'changed' : undefined}>
-              <dt>{r.label}</dt>
-              <dd className={r.tone ? `tone-${r.tone}` : undefined}>{r.value}</dd>
+              <dt title={r.label}>{r.label}</dt>
+              <dd className={r.tone ? `tone-${r.tone}` : undefined} title={r.value}>{r.value}</dd>
             </div>
           )) : <div><dt>Settings</dt><dd>none yet</dd></div>}
         </dl>
@@ -369,6 +369,12 @@ export function WorkflowCanvas({ nodes: planNodes, detail, plan, height: fixed, 
     ...(full && !lit(n) ? { className: 'dim' } : {}),
     width: W,
     height: H,
+    // The nodes are rebuilt on every render without `measured`, which makes React Flow forget the
+    // measured handle positions and drop the links until the next resize. Declared, they always draw.
+    handles: [
+      { type: 'target', position: Position.Left, x: 0, y: H / 2 - 0.5, width: 1, height: 1 },
+      { type: 'source', position: Position.Right, x: W - 1, y: H / 2 - 0.5, width: 1, height: 1 },
+    ],
     ariaLabel: `${n.id}, ${TYPE[n.type]?.label ?? n.type}${live ? `, ${states[n.id]?.state ?? 'pending'}` : ''}`,
   }));
 

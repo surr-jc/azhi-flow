@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "description": "Who signs the pull request off. Input that cannot be read is ask.",
+  "properties": {
+    "route": {"enum": ["ask", "auto"]},
+    "reason": {"enum": ["supervised", "tests_not_passed", "review_not_clean", "fix_not_reviewed", "critical_issue", "prompt_injection", "draft_pull_request", "needs_hand_check", "unreadable", "auto"]},
+    "reason_text": {"type": "string"}
+  },
+  "required": ["route", "reason", "reason_text"],
+  "additionalProperties": false
+}

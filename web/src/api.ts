@@ -52,6 +52,30 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   return body as T;
 }
 
+/** Sends a file as the raw request body (a workflow bundle zip) and reads the JSON answer. */
+export async function apiUpload<T = any>(path: string, file: Blob, type = 'application/zip'): Promise<T> {
+  const res = await fetch(path, { method: 'POST', headers: { authorization: `Bearer ${token()}`, 'content-type': type }, body: file });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(body.message ?? `HTTP ${res.status}`, res.status, body.details);
+  return body as T;
+}
+
+/** Fetches a file with the token and saves it under the name the server suggests. */
+export async function apiDownload(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, { headers: { authorization: `Bearer ${token()}` } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(body.message ?? `HTTP ${res.status}`, res.status, body.details);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export const isAuthError = (e: unknown) => e instanceof ApiError && (e.status === 401 || (e.status === 403 && /token/i.test(e.message)));
 
 export const RANK: Record<string, number> = { viewer: 0, operator: 1, author: 2, admin: 3, owner: 4 };
@@ -143,9 +167,34 @@ export interface ScheduleRow {
   last_run: { id: string; state: string; created_at: string } | null;
 }
 
+export interface TriggerRow {
+  id: string;
+  workflow: string;
+  source: 'github' | 'webhook';
+  events: string[];
+  filter: string | null;
+  input_map: Record<string, string>;
+  secret_name: string;
+  enabled: boolean;
+  deliveries: number;
+  last_delivery_at: string | null;
+  url: string;
+}
+
+export interface TriggerDelivery {
+  delivery_id: string;
+  event: string | null;
+  outcome: 'started' | 'duplicate' | 'ignored' | 'filtered' | 'refused' | 'received';
+  reason: string | null;
+  run_id: string | null;
+  received_at: string;
+}
+
 export interface WorkflowSummary {
   slug: string;
-  latest: { id: string; version: number; draft: boolean; signed: boolean; created_at: string; name: string | null; description: string | null } | null;
+  latest: { id: string; version: number; draft: boolean; signed: boolean; created_at: string; name: string | null; description: string | null; tags: string[] } | null;
+  /** Picked from the latest version's tags; null when no tag names a category. */
+  category: string | null;
   published: { id: string; version: number; signed: boolean; created_at: string } | null;
   schedule: { id: string; cron: string; timezone: string; enabled: boolean; next_occurrence_at: string | null } | null;
   last_run: { id: string; state: string; created_at: string } | null;
@@ -171,12 +220,13 @@ export interface RunPlan {
   ok: boolean;
   nodes: Array<{ id: string; type: string; executor?: string; requirements: Array<{ name: string; mark: string; detail: string }>; coverage: Array<{ action: string; enforcement: string; detail: string }>; tainted?: string; model?: { provider: string; name: string | null; source: 'profile' | 'server_default' | 'workflow_default' | 'run_choice' } }>;
   blockers: Array<{ code: string; message: string; node?: string }>;
-  missing_grants: Array<{ kind: string; name: string; node: string }>;
+  missing_grants: Array<{ kind: string; name: string; node: string; optional?: boolean }>;
 }
 
 export interface PreflightCheck {
   id: string;
   kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  optional?: boolean;
   status: 'ok' | 'warn' | 'fail' | 'skipped';
   target: string;
   node?: string;

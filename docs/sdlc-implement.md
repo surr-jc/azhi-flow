@@ -88,7 +88,12 @@ workspace:
   `azhi/acme/shop-42`). A branch whose last commit Azhi did not make is refused; Azhi's own branch is
   moved (a re-run after a send-back). The commit message ends with an `Azhi-Action:` trailer, which
   the ledger uses to find a push whose response was lost. Paths must be plain repository paths
-  (no `..`, no `.git`), only modes 100644 and 100755.
+  (no `..`, no `.git`), only modes 100644 and 100755. A blob, tree or commit call that GitHub answers
+  with a 5xx is repeated (up to 4 tries, waiting 1 s, 2 s, 4 s, within the tool's timeout); the ref is
+  sent once, and 4xx answers and rate limits are not repeated. The optional `merge_parent` (a full commit
+  SHA that exists in the repository, checked before anything is written) makes the commit a merge with
+  parents `[base_sha, merge_parent]`; without it the commit has the single parent `base_sha`. The PR conflict
+  resolver uses it.
 - `github.create-pull-request` (write-dedupable) opens a pull request from an `azhi/` branch, or
   returns the one already open for it; an empty `base` means the default branch.
 - Both use the `github-write-token` secret and only the repositories given at install, and both run

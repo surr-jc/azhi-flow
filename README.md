@@ -11,6 +11,11 @@ Azhi Flow is a self-hosted, open-source (Apache-2.0) AI agent workflow orchestra
 Temporal. It runs code, AI agents, MCP tools, knowledge retrieval and human approvals as nodes of one durable
 workflow, with an audit ledger, cost tracking and a taint rule that blocks unsafe writes.
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+[![Docs](https://img.shields.io/badge/docs-surr--jc.github.io%2Fazhi--flow-informational.svg)](https://surr-jc.github.io/azhi-flow/)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
+
 **Documentation: [surr-jc.github.io/azhi-flow](https://surr-jc.github.io/azhi-flow/)**
 
 Every run shows what the agent saw, what it was allowed to do, what it actually did, and what it cost,
@@ -19,6 +24,41 @@ Plan for the design.
 
 What Azhi is, the problems it solves, cost and token optimization, and how it compares with
 OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/positioning.md).
+
+## Contents
+
+[Why Azhi Flow](#why-azhi-flow) · [Quick look](#quick-look) · [Status](#status) · [What works today](#what-works-today) ·
+[Install](#install) · [Quick start (local development)](#quick-start-local-development) · [CLI](#cli) ·
+[Tests](#tests) · [Repository layout](#repository-layout) · [Contributing](#contributing) · [License](#license)
+
+## Why Azhi Flow
+
+- **Durable.** Runs execute on Temporal, so a crash mid-run resumes instead of repeating work. Killing the
+  process mid-Slack-post produces exactly one message.
+- **Governed.** A run plan marks every requirement native, bridged, unsupported or unverified before anything
+  executes, and runs with blockers are refused. Uploads are signed, and an ungated write after an agent that
+  read untrusted data fails to compile (the taint rule).
+- **Honest.** Usage, cost and coverage are `null` when unknown, never guessed. Each run records what the agent
+  saw, what it was allowed to do, what it did and what it cost.
+- **Mixed nodes.** Code, agents, MCP tools, knowledge retrieval and human approvals are all nodes of one
+  workflow, with a model agent or OpenCode as the executor.
+
+## Quick look
+
+On Windows or macOS, the quickest start is the [desktop app](#desktop-app-beta): download an installer, no terminal
+(unsigned beta). Otherwise, local mode needs only Git and Node.js 22+ (experimental, one machine; the full install is
+[below](#install)):
+
+```bash
+git clone https://github.com/surr-jc/azhi-flow
+cd azhi-flow
+npm ci
+npx azhi up        # prints the web UI link; Ctrl+C or `npx azhi down` to stop
+```
+
+Then open the printed link for Mission Control, or try an example such as the AI-SDLC v2 delivery workflow
+(a GitHub issue to a pull request, with human approvals): `npx azhi example install ai-sdlc-v2 --repo OWNER/REPO`.
+Every command is listed in the [CLI](#cli) section and in the [docs](https://surr-jc.github.io/azhi-flow/).
 
 ## Status
 
@@ -51,6 +91,12 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   checkout. At most 2 runs work on one repository at once (the rest wait in order); change it per
   workspace with `azhi settings concurrency` or the Workers page, or the server default with
   `AZHI_MAX_RUNS_PER_REPO` (0: no limit).
+- Event triggers: a workflow's `trigger.events` starts a run from a signed GitHub or generic webhook, with
+  payload values copied into inputs only at fixed paths and checked by the input schema. Every delivery,
+  including the ones that start nothing, is recorded. `azhi trigger list`; see [docs/triggers.md](docs/triggers.md).
+- Local workspaces: with `azhi up --local-folders`, a step's `workspace.local` works in a git worktree of a
+  registered folder on the run's own branch, kept after the run and opened in VS Code from the run page.
+  Nothing is merged or pushed. See [docs/local-workspaces.md](docs/local-workspaces.md).
 - Approvals (`azhi approve`), knowledge datasets with hybrid retrieval and citations, and
   `azhi test-node` for one node on fixtures with writes mocked.
 - The flagship weekly quality report (`azhi init`): Slack messages with numbered citations to
@@ -63,7 +109,9 @@ OpenCode, VS Code agent mode and other harnesses: [docs/positioning.md](docs/pos
   with the project's tests, has an independent reviewer and a verifier challenge it with one fix round,
   and after a person approves the release pushes an `azhi/` branch and opens a pull request that says how
   much was verified. `azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...`. See
-  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). The earlier delivery workflows
+  [examples/ai-sdlc-v2/README.md](examples/ai-sdlc-v2/README.md). A spec-first variant,
+  `examples/openspec-flow`, runs the OpenSpec lifecycle (propose, approve the specs, build, verify, approve the
+  release, archive) with a deterministic spec check and a checked archive; see [docs/openspec-flow.md](docs/openspec-flow.md). The earlier delivery workflows
   (`sdlc`, `sdlc-implement`, `ai-sdlc`) are no longer offered; they live on as test fixtures under
   `test/fixtures/examples/`, and their docs ([sdlc](docs/sdlc.md), [sdlc-implement](docs/sdlc-implement.md),
   [ai-sdlc](docs/ai-sdlc.md)) remain for the engine features they describe.
@@ -124,6 +172,7 @@ plus one or more **workers** that run scripts and harnesses. In the alpha, worke
 | Linux | Server and workers | [Linux](#linux) |
 | Windows 10/11 | Everything, inside WSL2 (Ubuntu) | [Windows](#windows-wsl2) |
 | macOS | Server and a development worker, not certified | [macOS](#macos) |
+| Windows 10/11 and macOS, one person | Desktop app, an unsigned beta (no Node or Docker needed) | [Desktop app](#desktop-app-beta) |
 
 Common requirements: Git, Node.js 22+ and Docker with the Compose plugin. For script nodes, add
 [uv](https://docs.astral.sh/uv/) (Python 3.12) and/or [Bun](https://bun.sh) on each worker host.
@@ -154,6 +203,24 @@ process on the same data, and script memory limits only on Linux. macOS is not y
 [docs/local-mode-plan.md](docs/local-mode-plan.md). OpenCode steps also run on native Windows
 (`npm ci` installs OpenCode; add ripgrep with `winget install BurntSushi.ripgrep.MSVC`, then
 `npx azhi setup` checks both); this is new and not yet checked by a live run on Windows.
+
+### Desktop app (beta)
+
+For one person on one machine, with no terminal, Node.js or Docker: an installer that runs local mode in a window,
+with a tray icon (schedules and approvals keep running when the window is closed) and notifications for approvals.
+The first build is `v0.1.0-beta.1`. It is **not code-signed**, the Windows app was tested end to end, and the macOS
+builds are produced by CI but **have not been launched on a Mac yet**.
+
+1. Download the installer from the [Releases page](https://github.com/surr-jc/azhi-flow/releases) (betas are marked
+   Pre-release): `Azhi.Flow.Setup.<version>.exe` for Windows, `Azhi.Flow-<version>-arm64.dmg` for Apple Silicon
+   or `Azhi.Flow-<version>.dmg` for Intel Macs (420 to 510 MB), and check it against `SHA256SUMS.txt`.
+2. Windows: SmartScreen says "Windows protected your PC"; click *More info*, then *Run anyway*. macOS: open System
+   Settings, Privacy & Security, then *Open Anyway* (or `xattr -dr com.apple.quarantine "/Applications/Azhi Flow.app"`).
+3. The first start takes up to a minute. Data stays in `~/.azhi`; uninstalling leaves it in place.
+
+Details, limits and uninstalling: [docs/install.md](docs/install.md#desktop-app-windows-and-macos-one-person-on-one-machine)
+and the [install guide](https://surr-jc.github.io/azhi-flow/install/desktop-app/). Design and what was verified:
+[docs/desktop-app-plan.md](docs/desktop-app-plan.md). Developers build it with `npm run build:app` and `desktop/`.
 
 ### Linux
 
@@ -284,10 +351,12 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 | `azhi dataset create/add/publish/tag/revoke/search/list` | Knowledge datasets (Markdown and text) |
 | `azhi user add/list` | Workspace users and their API tokens |
 | `azhi runs`, `azhi cancel <run>` | List and cancel runs |
+| `azhi resume <run> [--from <step>] [--version <n\|latest>] [--check]` | Continue a failed, cancelled or expired run as a new run: steps that succeeded are carried over with their outputs and not repeated (a pushed branch or a sent message is not done twice); `--from` also reruns that step and everything after it. `--version` continues on a fixed version of the workflow: steps whose definition or files changed, and what depends on them, run again, the rest keep their output; it is refused when more than half of the steps that had succeeded would run again, or the run's inputs no longer fit. `--check` shows the comparison without starting a run. Mission control: **Resume** on the run page, with a version picker and the same comparison |
 | `azhi apply <config>` | Register tools and schedules from an admin config; report missing secrets |
 | `azhi settings concurrency [--max-runs-per-repo n\|default]` | Show or set how many runs may work on one repository at once, and which runs hold or wait for a slot |
 | `azhi secret set <name>` | Store an encrypted workspace secret |
 | `azhi schedule <workflow> --cron ... --timezone ...` | Set or change a schedule |
+| `azhi trigger list\|deliveries <id>\|enable <id>\|disable <id>` | Event triggers: the webhook URL of each, what happened to each delivery, and an on/off switch (admin) |
 | `azhi doctor` | Database, Temporal, workers online, live interpreter builds (max 3) |
 | `azhi server start [--roles ...]`, `azhi server migrate` | Run the server; roles: `api,interpreter,gateway,scheduler` |
 | `azhi worker start` | Run an execution worker on this host |
@@ -300,6 +369,19 @@ To run the server in Docker instead: `docker compose -f deploy/docker-compose.ym
 npm run typecheck
 npm test     # unit tests; end-to-end tests run when Temporal is reachable on AZHI_TEMPORAL_ADDRESS
 ```
+
+A full run takes several minutes, so send its output to a file instead of piping it through `grep | head` (a pipe shows
+nothing until the run ends). The Temporal-backed tests wait on gRPC deadlines when no server is up, so start one first and
+keep it running in its own terminal:
+
+```bash
+temporal server start-dev                      # terminal 1, leave running
+npm run test:local > /tmp/t.log 2>&1           # terminal 2
+grep -aE "FAIL|Test Files|Tests " /tmp/t.log | sort -u
+```
+
+On Windows `npm run test:local` works as is (it uses `cross-env`). In WSL, install and run from a WSL-native clone
+(`~/azhi-flow`), not `/mnt/c`: Windows-installed `node_modules` have the wrong native binaries and `/mnt/c` I/O is slow.
 
 End-to-end tests create a fresh database per file on `AZHI_TEST_DATABASE_URL`
 (default `postgres://azhi:azhi@localhost:5433/azhi`). `test/gate1.test.ts` is the phase 1 gate and `test/gate2.test.ts` the phase 2 gate
@@ -341,6 +423,13 @@ src/
   worker/     Execution worker and script runtimes
 test/         Unit and end-to-end tests
 ```
+
+## Contributing
+
+Work on `dev`; pull requests target `dev`. Use conventional commits (`feat:`, `fix:`, `docs:`) and run
+`npm run typecheck` and `npm run test:local` (vitest on PGlite, no Docker needed) before opening one.
+Ticket, issue and PR text is treated as untrusted data and is never turned into a command. The development
+workflow and token rules are in [docs/dev-workflow.md](docs/dev-workflow.md).
 
 ## License
 

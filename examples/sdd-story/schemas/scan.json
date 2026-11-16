@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "description": "What the repository already specifies, read from openspec/ at the base branch.",
+  "properties": {
+    "has_openspec": {"type": "boolean", "description": "True when an openspec/ folder exists at all (any file under it)"},
+    "has_config": {"type": "boolean", "description": "True when openspec/config.yaml exists"},
+    "has_specs": {"type": "boolean", "description": "True when openspec/specs/ exists"},
+    "capabilities": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "maxLength": 100, "description": "The folder name under openspec/specs/"},
+          "requirements": {"type": "array", "items": {"type": "string"}, "description": "Each `### Requirement:` name, exactly as written"}
+        },
+        "required": ["name", "requirements"],
+        "additionalProperties": false
+      }
+    },
+    "active_changes": {"type": "array", "items": {"type": "string"}, "description": "Folder names under openspec/changes/ other than archive"},
+    "rules": {"type": "array", "items": {"type": "string"}, "description": "Checkable project rules from openspec/config.yaml, project.md, AGENTS.md or CLAUDE.md, each in one sentence"}
+  },
+  "required": ["has_openspec", "has_config", "has_specs", "capabilities", "active_changes", "rules"],
+  "additionalProperties": false
+}

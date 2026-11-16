@@ -15,6 +15,7 @@
 schema_version: "2.0"
 id: ai-sdlc-factory
 name: AI SDLC Factory - one lap
+tags: [delivery, factory, github, jira]
 description: Pick the next unblocked ticket from GitHub or Jira by priority and dependencies, claim it, deliver it through sdlc-universal into a pull request on the staging branch, and report. Nothing merges.
 trigger:
   manual: true
@@ -118,6 +119,7 @@ nodes:
     type: subworkflow
     description: Deliver the ticket through the published sdlc-universal workflow (plan, build, test, review, release approval, pull request into the staging branch).
     workflow: sdlc-universal
+    on_failure: continue
     merge: any
     depends_on: [claim_github, claim_jira]
     input:

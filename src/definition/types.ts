@@ -70,17 +70,33 @@ export interface AgentNode extends NodeCommon {
   /** Cap on the bytes of input that reach the model: fail (default) or withhold the largest fields. */
   context_budget?: { max_item_bytes?: number; max_input_bytes?: number; on_exceed?: 'fail' | 'withhold' };
   requires?: { enforced_restrictions?: boolean };
-  /** A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after. */
+  /**
+   * A git checkout the harness works in (OpenCode only): cloned fresh on the worker and deleted after, or,
+   * with `local`, a git worktree of a folder on the worker's machine that stays after the run.
+   */
   workspace?: AgentWorkspace;
 }
 
 export interface AgentWorkspace {
-  /** `owner/name`. */
-  repo: Value;
-  /** The ref to check out, for example `refs/pull/7/head`. */
-  ref: Value;
+  /** `owner/name`. Required unless `local` is set. */
+  repo?: Value;
+  /** The ref to check out, for example `refs/pull/7/head`. Required unless `local` is set (then it defaults to HEAD). */
+  ref?: Value;
+  /**
+   * The name of a local folder registered in this workspace (Workers page). The run works in a git worktree
+   * of it on its own branch; nothing is cloned. A literal name, never a value: the path is set by an admin
+   * and never comes from workflow, ticket or pull request text. Not combined with `repo`, `host`,
+   * `credential`, `depth`, `merge_ref` or `from`.
+   */
+  local?: string;
   /** A second ref fetched as `refs/azhi/base`, so tools can diff against it. */
   base_ref?: Value;
+  /**
+   * A ref merged into `ref` before the step starts (`git merge --no-commit`), for example `refs/heads/main` into a
+   * pull request's head. Conflicts are left as markers. Needs full history (no `depth`), and cannot be combined
+   * with `base_ref` or `from`. A write-mode step's change is then measured from this ref's tip.
+   */
+  merge_ref?: Value;
   /**
    * Continue from an earlier change: a plain `{ref: nodes.<id>.output...}` to a workspace change (the `workspace`
    * field of a write-mode step, or anything shaped like it). The worker checks out the change's own `base_sha`
@@ -143,10 +159,50 @@ export interface LoopNode extends NodeCommon {
   on_max?: 'fail' | 'continue';
 }
 
+export interface LoopExitRule {
+  /** CEL over the round's steps and its state. The first rule that holds ends the loop; none means another round. */
+  when: string;
+  outcome: 'done' | 'stop' | 'no_progress';
+  /** Fixed text written by the author: it never carries ticket or repository text. */
+  reason?: string;
+}
+
+/**
+ * Repeats several steps, agents included, as a loop the compiler writes out: every round becomes ordinary steps and a
+ * gate, and this node becomes the join later steps read (see compiler/loops.ts). It never reaches the interpreter.
+ */
+export interface LoopBlockNode extends NodeCommon {
+  type: 'loop';
+  max_iterations: number;
+  on_max?: 'fail' | 'continue';
+  /** The state of round 1. Inside the body, `state.<key>` is replaced by its value for that round. */
+  initial?: Record<string, Value>;
+  body: NodeDef[];
+  /** Per round (1-based), per step: fields that replace the step's own, for example a stronger profile. */
+  overrides?: Record<number, Record<string, Record<string, unknown>>>;
+  exit: LoopExitRule[];
+  /** The state of the next round, reading this round's steps. A key left out keeps its value. */
+  next?: Record<string, Value>;
+}
+
+/** What a LoopBlockNode compiles to, once its rounds have settled. Only the compiler writes one. */
+export interface LoopJoinNode extends NodeCommon {
+  type: 'loop';
+  merge: 'any';
+  depends_on: string[];
+  max_iterations: number;
+  on_max?: 'fail' | 'continue';
+  reasons: Record<string, string>;
+  /** `required`: the steps no route inside the round can skip, so a round that ran must have run them. */
+  rounds: Array<{ gate: string; required: string[]; steps: Record<string, Value> }>;
+}
+
 export interface SubworkflowNode extends NodeCommon {
   type: 'subworkflow';
   workflow: string;
   input?: Value;
+  /** `continue`: a child that does not succeed completes this node with its state and error instead of failing the run. Default `fail`. */
+  on_failure?: 'fail' | 'continue';
 }
 
 export interface ApprovalNode extends NodeCommon {
@@ -185,19 +241,42 @@ export type NodeDef =
   | ConditionNode
   | ParallelNode
   | LoopNode
+  | LoopBlockNode
+  | LoopJoinNode
   | SubworkflowNode
   | ApprovalNode
   | ReportNode
   | NotifyNode;
+
+/**
+ * Starts a run when a signed webhook arrives. The payload is untrusted data: `inputs` copies scalar values from fixed
+ * paths (`event.a.b`) into the run's inputs, which the workflow's `inputs` schema then checks; nothing in the payload
+ * is ever a command, a tool name or a path.
+ */
+export interface TriggerEvent {
+  /** `github`: GitHub's `X-GitHub-Event` and `X-Hub-Signature-256`. `webhook`: `X-Azhi-Event` and `X-Azhi-Signature-256` (HMAC-SHA256 of the body). */
+  source: 'github' | 'webhook';
+  /** Event names, `pull_request.opened` for GitHub (event and action) or the `X-Azhi-Event` value. Absent: any event. */
+  on?: string[];
+  /** CEL over `event` (the payload); the run starts only when it is true. */
+  when?: string;
+  /** Run input name -> path into the payload, for example `event.pull_request.number`. */
+  inputs?: Record<string, string>;
+  /** Workspace secret that signs the deliveries. Default `webhook-secret`. */
+  secret?: string;
+}
 
 export interface WorkflowDefinition {
   schema_version: string;
   id: string;
   name?: string;
   description?: string;
+  /** Lowercase labels; the first one a category knows picks the workflow's category. */
+  tags?: string[];
   trigger?: {
     schedule?: { cron: string; timezone: string };
     manual?: boolean;
+    events?: TriggerEvent[];
   };
   inputs?: JsonSchema;
   config?: Record<string, unknown>;

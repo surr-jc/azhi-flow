@@ -25,6 +25,7 @@ import { readProfileHarness, writeOpencodeSetup } from './opencode-setup.js';
 import { preparePackage, type ScriptWorkerOptions } from './script-activity.js';
 import { cloneWorkspace, collectChange, describeTestCommand, isolatedGitEnv, restoreTree, runWorkspaceTests, stageChange, type Checkout, type WorkspaceChange } from './workspace.js';
 import { resolveWorkspace, type HarnessWorkspace } from './continuation.js';
+import { openLocalWorkspace, type OpenLocalWorkspace } from './worktree.js';
 import { OpencodeTranscript } from './opencode-transcript.js';
 import { TranscriptSink } from './transcript.js';
 
@@ -48,6 +49,8 @@ export interface HarnessInput {
   /** Which harness runs the node; OpenCode when absent (older histories). */
   executor?: 'opencode' | 'claude-agent-sdk' | 'codex';
   provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt';
+  /** OpenCode only: the major the workspace chose; the worker's default when absent. */
+  opencodeMajor?: 1 | 2;
   runToken: string;
   /** Workspace secret holding the provider key; fetched with the run token, never put in history. */
   credential: string;
@@ -105,9 +108,11 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
     async runHarness(input: HarnessInput): Promise<HarnessResult> {
       if (input.executor === 'claude-agent-sdk') return runClaudeAgentSdk(o, input);
       if (input.executor === 'codex') return runCodex(o, input);
-      const oc = o.capabilities.runtimes.opencode;
-      if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: 'this worker has no OpenCode', nonRetryable: true });
-      if (oc.major === 2) return runOpencode2(o, input);
+      // The workspace's choice wins; otherwise the worker's own default (AZHI_OPENCODE_MAJOR).
+      const want = input.opencodeMajor ?? o.capabilities.runtimes.opencode?.major ?? 1;
+      const oc = o.capabilities.opencodeMajors?.[want] ?? (o.capabilities.runtimes.opencode && (o.capabilities.runtimes.opencode.major ?? 1) === want ? o.capabilities.runtimes.opencode : undefined);
+      if (!oc) throw ApplicationFailure.create({ type: ErrorClass.unsupportedCapability, message: `this worker has no OpenCode ${want}.x`, nonRetryable: true });
+      if (want === 2) return runOpencode2(o, input, oc);
       // Same trust check as scripts: the package's profile is what the harness runs.
       const pkg = await preparePackage(o, input.packageHash);
       const profileHarness = input.profile ? readProfileHarness(pkg.dir, input.profile) : undefined;
@@ -131,11 +136,18 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
       let transcript: OpencodeTranscript | undefined;
       let workspaceToken: string | undefined;
       let chatgptSignIn: ChatgptAuth | undefined;
+      let local: OpenLocalWorkspace | undefined;
       try {
         // The step's directory: a fresh checkout when the node has a workspace, else an empty folder.
         let project = join(root, 'project');
         let checkout: Checkout | undefined;
-        if (input.workspace) {
+        if (input.workspace?.local) {
+          // A local folder: the run's own worktree of it, kept after the step (docs/local-workspaces.md). Nothing is cloned.
+          const ws = input.workspace;
+          local = await openLocalWorkspace({ ...ws.local!, ref: ws.ref, baseRef: ws.baseRef, mode: ws.mode, test: ws.test }, { worktreeDir: o.worktreeDir, workerId: o.workerId, api: runApi, runId: input.runId, home, timeoutMs: Math.min(input.timeoutMs, 600_000), signal: ctx.cancellationSignal });
+          checkout = local.checkout;
+          project = checkout.dir;
+        } else if (input.workspace) {
           const token = (workspaceToken = input.workspace.credential
             ? (
                 await runApi.get<{ value: string }>(`/v1/gateway/credentials/${encodeURIComponent(input.workspace.credential)}`).catch((e) => {
@@ -402,7 +414,7 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
                 continue;
               }
             }
-            const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' } });
+            const change = await collectChange(checkout, home, tree, { repo: ws.repo, ref: local?.record.branch ?? ws.ref, tests: lastTest ?? { status: 'not_run', command: '', exit_code: null, attempts: 0, output: '' } });
             sink.put({ id: 'workspace-change', kind: 'note', text: `Change: ${change.stats.files} file(s), +${change.stats.additions} -${change.stats.deletions}${change.files.length ? `\n${change.files.map((f) => `${f.status} ${f.path}`).join('\n')}` : ''}`, at: Date.now() });
             return await finish(client, session.id, { output: { ...(state.output as Record<string, unknown>), workspace: change } }, state);
           }
@@ -447,6 +459,8 @@ export function harnessActivities(o: ScriptWorkerOptions & { capabilities: Worke
         await sink?.close();
         if (proc) await stopProcess(proc);
         if (chatgptSignIn) await keepRenewedSignIn(runApi, input.credential, home, chatgptSignIn);
+        // The worktree stays; only the step's own folder (home, config) is deleted.
+        await local?.close(input.nodeId).catch(() => {});
         rmSync(root, { recursive: true, force: true });
       }
     },

@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "ran": {"type": "boolean"},
+    "summary": {"type": ["string", "null"]},
+    "fixed": {"type": "array", "items": {"type": "string"}},
+    "skipped": {"type": "array", "items": {"type": "string"}},
+    "tests_status": {"type": ["string", "null"]},
+    "tests_attempts": {"type": ["integer", "null"]},
+    "commit_sha": {"type": ["string", "null"]},
+    "re_reviewed": {"type": "boolean"},
+    "extra_files_ignored": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["ran", "summary", "fixed", "skipped", "tests_status", "tests_attempts", "commit_sha", "re_reviewed", "extra_files_ignored"],
+  "additionalProperties": false
+}

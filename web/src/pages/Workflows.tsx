@@ -11,6 +11,8 @@ import { workflowCategory } from './Examples';
 import { PlanDock, type DockTab } from '../components/PlanDock';
 import { ModelChoice, ModelSteps, type ModelValue } from '../components/ModelChoice';
 import { Popup } from '../components/Popup';
+import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { UndoNotice } from '../components/UndoNotice';
 import { StepPanel } from '../components/StepDrawer';
 import { SettingsBody, SettingsDock, type PortableAsset, type SectionId, type SettingsData, type ToolRow, type VersionRow } from '../components/WorkflowSettings';
 import { nodeStates, WorkflowCanvas, type PlanNode } from '../components/WorkflowCanvas';
@@ -25,15 +27,17 @@ export function Workflows() {
   const [category, setCategory] = useState('');
   const needle = search.trim().toLowerCase();
   const all = q.data ?? [];
-  const categories = [...new Set(all.map((w) => workflowCategory(w.slug)))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
-  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w.slug) === c).length;
-  const shown = all.filter((w) => (!category || workflowCategory(w.slug) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''}`.toLowerCase().includes(needle)));
+  const categories = [...new Set(all.map(workflowCategory))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w) === c).length;
+  const shown = all.filter((w) => (!category || workflowCategory(w) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''} ${(w.latest?.tags ?? []).join(' ')}`.toLowerCase().includes(needle)));
+  // With no category picked the list is laid out under one heading per category.
+  const groups = category || categories.length < 2 ? [{ name: '', items: shown }] : categories.map((c) => ({ name: c, items: shown.filter((w) => workflowCategory(w) === c) })).filter((g) => g.items.length);
   return (
     <>
       <PageHead
         title="Workflows"
         sub={<>Build one by describing it in chat, upload a package as a draft, or sign and publish it with <code>azhi publish</code>.</>}
-        actions={atLeast(me.data?.role, 'author') ? <><Link to="/ui/workflows/new" className="button primary">Build with chat</Link> <Link to="/ui/examples" className="button">Browse the marketplace</Link> <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link></> : undefined}
+        actions={atLeast(me.data?.role, 'author') ? <><Link to="/ui/workflows/new" className="button primary">Build with chat</Link> <Link to="/ui/examples" className="button">Browse the marketplace</Link> <Link to="/ui/workflows/upload" className="button">Upload a workflow</Link>{isAdmin ? <> <Link to="/ui/workflows/import" className="button">Import a bundle</Link></> : null}</> : undefined}
       />
       <ErrorNote error={q.error} />
       {!q.data ? <Loading /> : !q.data.length ? (
@@ -41,7 +45,7 @@ export function Workflows() {
       ) : (
         <>
           <div className="wfl-filters">
-            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search by name or tag" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
             {categories.length > 1 ? (
               <div className="tpl-cats" role="group" aria-label="Category">
                 {['', ...categories].map((c) => (
@@ -53,9 +57,14 @@ export function Workflows() {
             ) : null}
           </div>
           <p className="sr-only" role="status">{shown.length} workflow{shown.length === 1 ? '' : 's'} shown</p>
-          <div className="wfl-grid">
-            {shown.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} />)}
-          </div>
+          {groups.map((g) => (
+            <section key={g.name || 'all'} className="wfl-group" aria-label={g.name || undefined}>
+              {g.name ? <h2 className="wfl-group-head">{g.name} <span className="tpl-count">{g.items.length}</span></h2> : null}
+              <div className="wfl-grid">
+                {g.items.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} onTag={setSearch} />)}
+              </div>
+            </section>
+          ))}
           {!shown.length ? (
             <div className="empty"><p className="empty-title">No workflows match.</p><button type="button" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button></div>
           ) : null}
@@ -65,20 +74,25 @@ export function Workflows() {
   );
 }
 
-function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) {
+function WorkflowCard({ w, isAdmin, onTag }: { w: WorkflowSummary; isAdmin: boolean; onTag: (tag: string) => void }) {
   const href = `/ui/workflows/${encodeURIComponent(w.slug)}`;
   const name = w.latest?.name ?? w.slug;
   return (
     <article className="wfl-card">
       <header className="wfl-head">
         <div className="wfl-title">
-          <span className="tpl-cat-label">{workflowCategory(w.slug)}</span>
-          <h2><Link to={href}>{name}</Link></h2>
+          <span className="tpl-cat-label">{workflowCategory(w)}</span>
+          <h3><Link to={href}>{name}</Link></h3>
           <span className="muted small mono">{w.slug}</span>
         </div>
         {w.last_run ? <StateBadge state={w.last_run.state} /> : <Badge tone="idle">never run</Badge>}
       </header>
       <p className={`wfl-desc ${w.latest?.description ? 'muted' : 'faint'}`}>{w.latest?.description ?? 'No description.'}</p>
+      {w.latest?.tags?.length ? (
+        <div className="wfl-tags" role="group" aria-label="Tags">
+          {w.latest.tags.map((t) => <button key={t} type="button" className="wfl-tag" title={`Show workflows tagged ${t}`} onClick={() => onTag(t)}>{t}</button>)}
+        </div>
+      ) : null}
       <dl className="wfl-facts">
         <div>
           <dt>Published</dt>
@@ -138,14 +152,18 @@ function DeleteAction({ slug, version, onDeleted, compact }: { slug: string; ver
       onDeleted?.();
     },
   });
-  const confirmDelete = async () => (await ask({ title: `Delete ${what}?`, text: 'This cannot be undone.', confirm: `Delete ${version ? `v${version.version}` : slug}` })) && remove.mutate();
+  // Holding the button replaces the confirm dialog; the DELETE only goes out once the undo window lapses.
+  const [undoing, setUndoing] = useState(false);
+  const commit = useCallback(() => { setUndoing(false); remove.mutate(); }, [remove]);
   const label = version ? `Delete v${version.version}` : `Delete ${slug}`;
   return (
     <>
-      {compact ? (
-        <button type="button" className="small danger" disabled={remove.isPending} aria-label={label} onClick={() => void confirmDelete()}>Delete</button>
+      {undoing ? (
+        <UndoNotice message={`Deleting ${version ? `v${version.version}` : slug}`} onExpire={commit} onUndo={() => setUndoing(false)} />
+      ) : compact ? (
+        <HoldToConfirmButton className="small" disabled={remove.isPending} aria-label={`Hold to ${label.toLowerCase()}`} onConfirm={() => setUndoing(true)}>Hold to delete</HoldToConfirmButton>
       ) : (
-        <button type="button" className="tb-btn" disabled={remove.isPending} aria-label={label} data-tip={label} onClick={() => void confirmDelete()}><Icon name="trash" /></button>
+        <HoldToConfirmButton className="tb-btn" disabled={remove.isPending} aria-label={`Hold to ${label.toLowerCase()}`} data-tip={`Hold to ${label.toLowerCase()}`} onConfirm={() => setUndoing(true)}><Icon name="trash" /></HoldToConfirmButton>
       )}
       {dialog}
       {remove.error ? <span className="warn-text small" role="alert">{(remove.error as Error).message}</span> : null}
@@ -290,7 +308,7 @@ export function WorkflowPage({ slug }: { slug: string }) {
       ) : null}
       {starting ? (
         <Popup title="Start a run" sub={`${def?.name ?? slug} · v${current.version}`} size="narrow" onClose={() => setStarting(false)}>
-          <StartRun versionId={current.id} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
+          <StartRun versionId={current.id} slug={slug} draft={current.draft} schema={version.data?.plan?.inputsSchema ?? def?.inputs} plan={plan.data} workflowDefault={def?.model_defaults} />
         </Popup>
       ) : null}
       {plan.error ? <ErrorNote error={plan.error} /> : null}
@@ -303,20 +321,22 @@ export function WorkflowPage({ slug }: { slug: string }) {
 }
 
 const CHOICE_KEY = 'azhi-run-model';
-function loadChoice(): ModelValue {
+/** The run's choice: one provider, model and harness for every agent step. */
+type RunChoice = ModelValue & { executor?: string };
+function loadChoice(): RunChoice {
   try {
     const v = JSON.parse(localStorage.getItem(CHOICE_KEY) ?? '{}');
-    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}) } : {};
+    return v && typeof v.provider === 'string' ? { provider: v.provider, ...(typeof v.name === 'string' ? { name: v.name } : {}), ...(typeof v.executor === 'string' && v.executor ? { executor: v.executor } : {}) } : {};
   } catch {
     return {};
   }
 }
 
-function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
+function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflowDefault }: { versionId: string; slug: string; draft: boolean; schema: any; plan?: RunPlan; workflowDefault?: ModelValue }) {
   const { navigate } = useRoute();
   // The provider and model for this run's default-model steps; empty keeps the workflow's own default.
-  const [choice, setChoice] = useState<ModelValue>(loadChoice);
-  const pick = (v: ModelValue) => {
+  const [choice, setChoice] = useState<RunChoice>(loadChoice);
+  const remember = (v: RunChoice) => {
     setChoice(v);
     try {
       localStorage.setItem(CHOICE_KEY, JSON.stringify(v));
@@ -324,15 +344,18 @@ function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefaul
       /* the choice just is not remembered */
     }
   };
+  // The harness only means something under a provider, so clearing the provider clears it.
+  const pick = (v: ModelValue) => remember(v.provider ? { ...v, ...(choice.executor ? { executor: choice.executor } : {}) } : {});
+  const executors = useQuery({ queryKey: ['executors'], queryFn: () => api<{ executors: Array<{ id: string }> }>('/v1/executors'), staleTime: 5 * 60_000 });
   const chosenPlan = useQuery({
-    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? ''],
-    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}`),
+    queryKey: ['plan', versionId, choice.provider ?? '', choice.name ?? '', choice.executor ?? ''],
+    queryFn: () => api<RunPlan>(`/v1/versions/${encodeURIComponent(versionId)}/plan?provider=${encodeURIComponent(choice.provider!)}${choice.name ? `&model=${encodeURIComponent(choice.name)}` : ''}&force=true${choice.executor ? `&executor=${encodeURIComponent(choice.executor)}` : ''}`),
     enabled: Boolean(choice.provider),
     staleTime: 0,
   });
   // With a choice the plan is the one under that choice (its blockers included).
   const plan = choice.provider ? chosenPlan.data ?? workflowPlan : workflowPlan;
-  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}) } } : {};
+  const modelBody = choice.provider ? { model_defaults: { provider: choice.provider, ...(choice.name ? { name: choice.name } : {}), force: true, ...(choice.executor ? { executor: choice.executor } : {}) } } : {};
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [formError, setFormError] = useState<string>();
   // The inputs the checks use settle half a second after typing stops.
@@ -374,13 +397,22 @@ function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefaul
     <form onSubmit={(e) => { e.preventDefault(); go(false); }}>
       <SchemaFields schema={schema} values={values} onChange={setValues} />
       <section className="model-choice" aria-label="Choice for this run">
-        <h3>Model for this run</h3>
+        <h3>Models and harness for this run</h3>
         <ModelChoice
           nameBase="run"
           value={choice}
           onChange={pick}
-          noneLabel={workflowDefault?.provider ? `The workflow's default (${workflowDefault.provider}${workflowDefault.name ? `, ${workflowDefault.name}` : ''})` : 'Each step\'s own default (set on the server)'}
+          noneLabel={workflowDefault?.provider ? `As the workflow is set (${workflowDefault.provider}${workflowDefault.name ? `, ${workflowDefault.name}` : ''})` : 'As the workflow is set'}
         />
+        {choice.provider ? (
+          <label>
+            <span className="muted small">Harness</span>
+            <select name="run-executor" value={choice.executor ?? ''} onChange={(e) => remember({ ...choice, executor: e.target.value || undefined })}>
+              <option value="">As each step is set</option>
+              {(executors.data?.executors ?? []).map((e) => <option key={e.id} value={e.id}>{e.id}</option>)}
+            </select>
+          </label>
+        ) : null}
         <details className="small">
           <summary>Which model each step will use</summary>
           <ModelSteps plan={plan} />
@@ -394,7 +426,10 @@ function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefaul
           <div key={c.id} className="pf-line bad"><Badge tone="bad">{c.node ?? c.kind}</Badge> {c.message}{c.fix ? <div className="muted small">{c.fix}</div> : null}</div>
         ))}
         {warned.map((c) => (
-          <div key={c.id} className="pf-line warn"><Badge tone="warn">{c.node ?? c.kind}</Badge> {c.message}</div>
+          <div key={c.id} className="pf-line warn">
+            <Badge tone="warn">{c.node ?? c.kind}</Badge> {c.message}
+            {c.optional && c.kind === 'secret' ? <SignIn name={c.target} onDone={() => void pre.refetch()} /> : null}
+          </div>
         ))}
         {pre.data ? (
           <details className="small">
@@ -415,5 +450,24 @@ function StartRun({ versionId, draft, schema, plan: workflowPlan, workflowDefaul
       {formError ? <div className="error">{formError}</div> : null}
       <ErrorNote error={start.error} />
     </form>
+  );
+}
+
+/** Optional sign-in at the start of a run: saves the secret a step needs, or the run starts without it. */
+function SignIn({ name, onDone }: { name: string; onDone: () => void }) {
+  const [value, setValue] = useState('');
+  const save = useMutation({
+    mutationFn: () => api(`/v1/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { value: value.trim() } }),
+    onSuccess: () => {
+      setValue('');
+      onDone();
+    },
+  });
+  return (
+    <div className="row small">
+      <input type="password" autoComplete="off" aria-label={`Value for ${name}`} placeholder={`Paste ${name} (optional)`} value={value} onChange={(e) => setValue(e.target.value)} />
+      <button type="button" disabled={!value.trim() || save.isPending} onClick={() => save.mutate()}>Sign in</button>
+      <ErrorNote error={save.error} />
+    </div>
   );
 }

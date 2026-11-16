@@ -23,7 +23,7 @@ export interface RunSnapshot {
   package_hash: string;
   workflow_version_id: string;
   tool_revisions: Record<string, number>;
-  trigger: 'manual' | 'schedule' | 'api' | 'test' | 'subworkflow';
+  trigger: 'manual' | 'schedule' | 'api' | 'test' | 'subworkflow' | 'event';
   /** Set on a run started by a subworkflow node: the parent run and node, and the workflows above this one. */
   parent?: { run_id: string; node_id: string; chain: string[] };
   occurrence_id?: string;
@@ -38,7 +38,11 @@ export interface RunSnapshot {
   /** Provider and model for agent steps whose profile says `name: default`: the run's choice, else the workflow's. */
   /** Set when the defaults were chosen for this run (not taken from the workflow), so subworkflows inherit them. */
   model_defaults_chosen?: boolean;
-  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string };
+  model_defaults?: { provider?: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt'; name?: string; force?: boolean; executor?: string };
+  /** A run resumed from an earlier one: the steps that already succeeded there and are not run again. */
+  resume?: { from_run: string; nodes: string[] };
+  /** The harness this run's choice gave each agent step, where it differs from the step's own; fixed when the run is created. */
+  run_executors?: Record<string, string>;
 }
 
 export interface RunInput {

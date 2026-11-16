@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import type { JsonSchema, RunPlan, ScheduleRow } from '../api';
-import { api, atLeast } from '../api';
+import { api, apiDownload, atLeast } from '../api';
 import { ScheduleForm, WorkflowFiles } from '../pages/Authoring';
 import { Link } from '../router';
 import { Badge, Loading, Table, when } from '../ui';
@@ -271,6 +271,7 @@ function Section({ data: d, id, onClose }: { data: SettingsData; id: SectionId; 
           {d.version.draft ? <p className={author ? 'muted' : 'warn-note'}>This version is a draft. {author ? 'Sign and publish it from the buttons at the top of the page.' : 'An author publishes it.'}</p> : null}
           <h3 className="section">Files in this version</h3>
           <WorkflowFiles versionId={d.version.id} />
+          {author ? <ExportBundle slug={d.slug} /> : null}
           <p className="small"><button type="button" className="linkish" onClick={onClose}>Close settings</button></p>
         </>
       );
@@ -326,6 +327,31 @@ function Connections({ d, admin }: { d: SettingsData; admin: boolean }) {
         </div>
       ) : null}
       <p><Link to="/ui/tools">All tools</Link></p>
+    </>
+  );
+}
+
+/**
+ * Downloads the workflow with everything it uses (package, tools, library assets, datasets, harness
+ * files) as one zip, ready for Import a bundle on another Azhi Flow. Secret values are never included.
+ */
+function ExportBundle({ slug }: { slug: string }) {
+  const [state, setState] = useState<{ busy?: boolean; error?: string }>({});
+  const run = async () => {
+    setState({ busy: true });
+    try {
+      await apiDownload(`/v1/workflows/${encodeURIComponent(slug)}/export`, `${slug}.azhi.zip`);
+      setState({});
+    } catch (e) {
+      setState({ error: (e as Error).message });
+    }
+  };
+  return (
+    <>
+      <h3 className="section">Export</h3>
+      <p className="muted">One zip with the latest version's files, the tools it calls, attached library items (MCP servers, agents, skills, commands), the datasets it reads, and OpenCode and Claude Code files. Secret values stay behind; the bundle lists only their names. Import it on another Azhi Flow from the Workflows page.</p>
+      <p><button type="button" disabled={state.busy} onClick={run}>{state.busy ? 'Preparing…' : 'Export bundle (.zip)'}</button></p>
+      {state.error ? <div className="error" role="alert">{state.error}</div> : null}
     </>
   );
 }

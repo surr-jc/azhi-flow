@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { bootstrapLocal } from '../src/api/auth.js';
 import { applyChange, checkProposal, readWorkflow } from '../src/builder/builder.js';
@@ -16,7 +17,7 @@ import { uploadPackage } from '../src/server/workflows.js';
  * definition first, the harness skills, an index of anything not loaded), and a change sends only
  * the files that differ; every other file of the current version is kept.
  */
-const dir = new URL('../examples/sdlc-universal/', import.meta.url).pathname;
+const dir = fileURLToPath(new URL('../examples/sdlc-universal/', import.meta.url));
 const planner = 'profiles/planner@1.yaml';
 
 describe('builder edits an existing workflow', () => {
@@ -38,7 +39,9 @@ describe('builder edits an existing workflow', () => {
     expect(text.indexOf('=== workflow.yaml ===')).toBeLessThan(text.indexOf(`=== ${planner} ===`));
     expect(text).toContain('=== harness/skills/code-review/SKILL.md ===');
     expect(text).toContain('## Files');
-    expect(text).not.toContain('size budget');
+    // The package is larger than one read loads: what does not fit is indexed with how to read it, never dropped.
+    expect(text).toMatch(/^- profiles\/planner@1\.yaml \(\d+ bytes\): loaded$/m);
+    for (const m of text.matchAll(/^- (\S+) \(\d+ bytes\): not loaded \(size budget\)(.*)$/gm)) expect(m[2]).toContain('read_workflow_file');
     expect(text.length).toBeLessThan(200_000);
 
     const changed = readFileSync(`${dir}${planner}`, 'utf8') + '# edited\n';

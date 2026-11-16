@@ -128,6 +128,19 @@ export const workflowVersions = pgTable('workflow_versions', {
   createdAt: ts('created_at').notNull().defaultNow(),
 });
 
+export const triggers = pgTable('triggers', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  workflowId: text('workflow_id').notNull(),
+  source: text('source').notNull(),
+  events: text('events').array().notNull().default([]),
+  filter: text('filter'),
+  inputMap: jsonb('input_map').notNull().default({}),
+  secretName: text('secret_name').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: ts('created_at').notNull().defaultNow(),
+});
+
 export const schedules = pgTable('schedules', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id').notNull(),
@@ -170,6 +183,34 @@ export const runEvents = pgTable('run_events', {
   nodeId: text('node_id'),
   data: jsonb('data').notNull().default({}),
 });
+
+export const localFolders = pgTable(
+  'local_folders',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    path: text('path').notNull(),
+    createdBy: text('created_by'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.name] })],
+);
+
+export const runWorktrees = pgTable(
+  'run_worktrees',
+  {
+    workspaceId: text('workspace_id').notNull(),
+    runId: text('run_id').notNull(),
+    folder: text('folder').notNull(),
+    path: text('path').notNull(),
+    branch: text('branch').notNull(),
+    baseSha: text('base_sha').notNull(),
+    workerId: text('worker_id'),
+    createdAt: ts('created_at').notNull().defaultNow(),
+    removedAt: ts('removed_at'),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.folder] })],
+);
 
 export const nodeAttempts = pgTable(
   'node_attempts',

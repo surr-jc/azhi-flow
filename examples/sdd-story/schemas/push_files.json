@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "description": "The files of a push (the agent's files and the extra files) and the paths of the extras that were not pushed.",
+  "properties": {
+    "files": {
+      "type": "array",
+      "maxItems": 300,
+      "items": {"type": "object", "properties": {"path": {"type": "string"}, "status": {"type": "string"}}, "required": ["path", "status"]}
+    },
+    "ignored": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 200}}
+  },
+  "required": ["files", "ignored"],
+  "additionalProperties": false
+}

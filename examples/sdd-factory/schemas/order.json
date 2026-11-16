@@ -1,0 +1,89 @@
+{
+  "type": "object",
+  "description": "The Stories to deliver, in order.",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "problem": {
+      "enum": [
+        "split_failed",
+        "unreadable",
+        "too_many",
+        null
+      ]
+    },
+    "count": {
+      "type": "integer"
+    },
+    "stories": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "The identity shown to people: owner/name#N for github, the Story key for files."
+          },
+          "number": {
+            "type": "integer",
+            "description": "The issue number for github, 1..N across the release for files."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "epic": {
+            "type": "integer"
+          },
+          "inputs": {
+            "type": "object",
+            "properties": {
+              "ticket": {
+                "type": "string"
+              },
+              "story_key": {
+                "type": "string"
+              },
+              "story_title": {
+                "type": "string"
+              },
+              "story_body": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ticket",
+              "story_key",
+              "story_title",
+              "story_body"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "ref",
+          "number",
+          "title",
+          "epic",
+          "inputs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "too_many": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok",
+    "problem",
+    "count",
+    "stories",
+    "too_many"
+  ],
+  "additionalProperties": false
+}

@@ -16,7 +16,7 @@ export function Overview() {
   const done = useQuery({ queryKey: ['runs', 'finished'], queryFn: () => api<RunRow[]>(`/v1/runs?state=${TERMINAL.join(',')}&limit=5`), refetchInterval: 10_000 });
   const usage = useQuery({ queryKey: ['usage', 28], queryFn: () => api<UsageSummary>('/v1/usage/summary?days=28'), refetchInterval: 30_000 });
   if (o.error) return <ErrorNote error={o.error} />;
-  if (!o.data) return <Loading />;
+  if (!o.data) return <Loading variant="page" />;
   const d = o.data;
   const waiting = [...(approvals.data ?? [])].sort((a, b) => Number(b.can_decide) - Number(a.can_decide) || (a.expires_at ?? '9').localeCompare(b.expires_at ?? '9'));
   const mine = waiting.filter((a) => a.can_decide).length;

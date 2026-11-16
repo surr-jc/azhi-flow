@@ -5,7 +5,6 @@ dist/
 .env
 coverage/
 .scratch/
-package-lock.json
 docs/demo/out/*
 
 # Claude Code dev layer
@@ -88,3 +87,12 @@ site/wiki-dist/
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-package.json
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-exports.json
 .claude/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-package.json
+
+# graphify (local code knowledge graph)
+graphify-out/
+
+# Desktop app build output
+build/
+desktop/resources/
+desktop/out/
+desktop/node_modules/

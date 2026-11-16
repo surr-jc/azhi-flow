@@ -9,7 +9,7 @@ import type { AppContext } from '../server/context.js';
 import { requireRole } from './auth.js';
 
 /** A model provider as agent profiles name it, and as the builder's model lists name it. */
-const BUILDER_ID: Record<ModelProviderName, ModelProviderId> = { anthropic: 'anthropic', openai: 'openai', 'github-copilot': 'opencode', 'openai-chatgpt': 'chatgpt' };
+export const BUILDER_ID: Record<ModelProviderName, ModelProviderId> = { anthropic: 'anthropic', openai: 'openai', 'github-copilot': 'opencode', 'openai-chatgpt': 'chatgpt' };
 const LABEL: Record<ModelProviderName, string> = { anthropic: 'Anthropic', openai: 'OpenAI', 'github-copilot': 'GitHub Copilot (OpenCode)', 'openai-chatgpt': 'ChatGPT plan (OpenCode)' };
 
 /**

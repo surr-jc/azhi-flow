@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "description": "Whether one Story was signed off, and the branch it left. branch is null unless signed off.",
+  "properties": {
+    "status": {
+      "enum": [
+        "signed_off",
+        "sent_back"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "branch": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pr_number": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "pr_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last": {
+      "type": "boolean",
+      "description": "True when this was the last round that was meant to run: the loop ends after it. Unknown counts as last, so a loop whose input could not be read ends rather than goes on."
+    }
+  },
+  "required": [
+    "status",
+    "reason",
+    "branch",
+    "pr_number",
+    "pr_url",
+    "last"
+  ],
+  "additionalProperties": false
+}

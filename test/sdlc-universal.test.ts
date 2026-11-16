@@ -14,13 +14,11 @@ const PKG = 'examples/sdlc-universal';
 const pkg = packageFromDirectory(PKG);
 const config = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8'));
 const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
-// The Jira tools are registered in the workspace (a gateway connection), not defined by this example; stand-ins let it compile.
-const jiraCcp = ['jira-ccp_get_issue', 'jira-ccp_jira_search'].map((id) => ({ id, version: 1, description: id, effect: 'read', source: 'jira-ccp', input_schema: { type: 'object', properties: { issue_key: { type: 'string' }, include_all_fields: { type: 'boolean' }, fields: { type: 'array', items: { type: 'string' } } } }, output_schema: { type: 'object' }, transport: { kind: 'mcp-streamable-http', connection: 'jira-ccp', tool: id.replace('jira-ccp_', '') } }));
 const python = process.platform === 'win32' ? 'python' : 'python3';
 
 describe('SDLC universal: definition', () => {
   it('compiles, and every write is behind a gate', () => {
-    const r = compile(def, { pkg, catalog: staticCatalog([...config.tools, ...jiraCcp] as never) });
+    const r = compile(def, { pkg, catalog: staticCatalog(config.tools as never) });
     expect(r.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(r.ok).toBe(true);
     const writes = new Set(r.plan!.taint.paths.map((p) => p.write));
@@ -34,10 +32,9 @@ describe('SDLC universal: definition', () => {
     expect((def.inputs as any).properties.source.enum).toEqual(['jira', 'github']);
     expect((def.inputs as any).required).not.toContain('confluence_page');
     const tools = config.tools.map((t: { id: string }) => t.id);
-    expect(tools).toEqual(expect.arrayContaining(['confluence.get-page', 'github.get-issue']));
-    expect(tools).not.toContain('jira.get-issue');
+    expect(tools).toEqual(expect.arrayContaining(['jira.get-issue', 'confluence.get-page', 'github.get-issue']));
     const jira = (def.nodes as Array<{ id: string; tool?: string; arguments?: Record<string, unknown> }>).find((n) => n.id === 'jira_issue')!;
-    expect(jira.tool).toBe('jira-ccp_get_issue@1');
+    expect(jira.tool).toBe('jira.get-issue@1');
     // Without this the tool returns a trimmed field set that has no description.
     expect(jira.arguments!.include_all_fields).toBe(true);
   });

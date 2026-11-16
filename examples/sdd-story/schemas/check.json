@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "description": "The deterministic spec check: errors block, warnings are shown to the approver.",
+  "properties": {
+    "ok": {"type": "boolean"},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "deltas": {"type": "array", "items": {"type": "object", "properties": {"capability": {"type": "string"}, "op": {"type": "string"}, "requirement": {"type": "string"}}, "required": ["capability", "op", "requirement"]}},
+    "capabilities": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["ok", "errors", "warnings", "deltas", "capabilities"],
+  "additionalProperties": false
+}

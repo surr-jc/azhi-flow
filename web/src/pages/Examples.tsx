@@ -33,6 +33,9 @@ interface Example {
   id: string;
   name: string;
   description: string;
+  tags?: string[];
+  /** Picked by the server from the tags; null when no tag names a category. */
+  category?: string | null;
   tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean; transport?: string; roles?: string[] | null }>;
   /** What the template ships: agents, skills, commands, MCP servers and built-in tools. */
   inventory?: Inventory;
@@ -79,22 +82,35 @@ const REPO = /^[\w.-]+\/[\w.-]+$/;
 const META: Record<string, { category: string; steps: number; works_with: string[]; featured?: boolean }> = {
   'quality-report': { category: 'Reports', steps: 7, works_with: ['Slack'], featured: true },
   'pr-review': { category: 'Code review', steps: 12, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'pr-conflict-resolver': { category: 'Code review', steps: 24, works_with: ['GitHub', 'OpenCode'] },
   'ai-sdlc-v2': { category: 'Delivery', steps: 46, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'openspec-flow': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter': { category: 'Delivery', steps: 33, works_with: ['GitHub', 'Slack', 'OpenCode'] },
   'issue-splitter-jira': { category: 'Delivery', steps: 34, works_with: ['Jira', 'GitHub', 'Slack', 'OpenCode'] },
-  'ai-sdlc-factory-plan': { category: 'Delivery', steps: 24, works_with: ['GitHub', 'Jira', 'OpenCode'] },
+  'ai-sdlc-factory-plan': { category: 'Delivery', steps: 26, works_with: ['GitHub', 'Jira', 'OpenCode'] },
   'ai-sdlc-factory': { category: 'Delivery', steps: 18, works_with: ['GitHub', 'Jira', 'Slack'] },
   'ai-sdlc-factory-readiness': { category: 'Delivery', steps: 13, works_with: ['GitHub', 'Jira', 'Slack'] },
+  'ai-sdlc-factory-verify': { category: 'Delivery', steps: 8, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdd-breakdown': { category: 'Delivery', steps: 12, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdd-story': { category: 'Delivery', steps: 49, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdd-factory': { category: 'Delivery', steps: 26, works_with: ['GitHub', 'Slack', 'OpenCode'] },
+  'sdlc-lean': { category: 'Delivery', steps: 36, works_with: ['GitHub', 'Jira', 'Slack', 'OpenCode'] },
   'issue-investigation': { category: 'Investigation', steps: 6, works_with: ['GitHub', 'OpenCode'] },
   'ci-digest': { category: 'Reports', steps: 4, works_with: [] },
   doubler: { category: 'Learn Azhi', steps: 1, works_with: [] },
   caller: { category: 'Learn Azhi', steps: 2, works_with: [] },
   'loop-demo': { category: 'Learn Azhi', steps: 1, works_with: [] },
 };
-const metaOf = (e: Example) => META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
+const metaOf = (e: Example) => {
+  const m = META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
+  return e.category ? { ...m, category: e.category } : m;
+};
 
-/** The marketplace category of an installed workflow; the delivery variants not listed above are found by name. */
-export const workflowCategory = (slug: string): string => META[slug]?.category ?? (/sdlc|^issue-/.test(slug) ? 'Delivery' : 'Other');
+/**
+ * The category of an installed workflow: the one its tags pick (the server reads them), and for a
+ * version saved before tags existed, the marketplace's table or its name.
+ */
+export const workflowCategory = (w: { slug: string; category?: string | null }): string => w.category ?? META[w.slug]?.category ?? (/sdlc|^issue-/.test(w.slug) ? 'Delivery' : 'Other');
 
 /** What an install lets the workflow change, read from its tools' effects. */
 function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
@@ -137,7 +153,7 @@ export function Examples() {
   }
   const categories = [...new Set(all.map((e) => metaOf(e).category))].sort();
   const term = search.trim().toLowerCase();
-  const shown = all.filter((e) => (!category || metaOf(e).category === category) && (!term || `${e.name} ${e.description} ${e.id}`.toLowerCase().includes(term)));
+  const shown = all.filter((e) => (!category || metaOf(e).category === category) && (!term || `${e.name} ${e.description} ${e.id} ${(e.tags ?? []).join(' ')}`.toLowerCase().includes(term)));
   const featured = !term && !category ? shown.find((e) => metaOf(e).featured) : undefined;
   const lookAt = look ? all.find((x) => x.id === look) : undefined;
   const countIn = (c: string) => all.filter((e) => !c || metaOf(e).category === c).length;

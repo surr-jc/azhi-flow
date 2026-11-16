@@ -13,6 +13,7 @@ import { signVersion } from '../signing';
 import { TYPE_HELP, brief, effectsOf, helpFor, keySettings, sentenceOf } from '../stepHelp';
 import { Badge, ErrorNote, Loading, Panel } from '../ui';
 import { PlanDock } from '../components/PlanDock';
+import { Popup } from '../components/Popup';
 
 /**
  * The workflow editor: add, connect, change and remove steps on the canvas, checked as you go by
@@ -223,7 +224,7 @@ export function WorkflowEditor({ slug }: { slug: string }) {
 
   if (versions.error || base.error) return <ErrorNote error={versions.error ?? base.error} />;
   if (me.data && !atLeast(me.data.role, 'author')) return <p>Editing workflows needs the author role or higher. Your role is {me.data.role}.</p>;
-  if (!def || !base.data) return <Loading />;
+  if (!def || !base.data) return <Loading variant="page" />;
 
   const diagnostics = check.data?.diagnostics ?? [];
   const errors = diagnostics.filter((d) => d.severity === 'error');
@@ -635,22 +636,46 @@ function FieldInput({ field: f, value, onChange, row, was }: { field: Field; val
   );
 }
 
-/** Every registered tool to pick from, grouped by system; a value that is not registered stays visible and is flagged. */
+/** Every registered tool to pick from, grouped by system, in a popup with search; a value that is not registered stays visible and is flagged. */
 function ToolSelect({ id, value, onChange }: { id?: string; value: string; onChange: (v: unknown) => void }) {
   const tools = useQuery({ queryKey: ['tools'], queryFn: () => api<Tool[]>('/v1/tools') });
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
   const list = [...(tools.data ?? [])].sort((a, b) => a.id.localeCompare(b.id));
   const refOf = (t: Tool) => `${t.id}@${t.version}`;
-  const systems = [...new Set(list.map((t) => t.id.split('.')[0]!))];
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? list.filter((t) => `${refOf(t)} ${t.description}`.toLowerCase().includes(needle)) : list;
+  const systems = [...new Set(shown.map((t) => t.id.split('.')[0]!))];
+  const unregistered = Boolean(value) && !list.some((t) => refOf(t) === value);
+  const close = () => { setOpen(false); setQ(''); };
   return (
-    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
-      {!value ? <option value="">Choose a tool…</option> : null}
-      {value && !list.some((t) => refOf(t) === value) ? <option value={value}>{value} (not registered here)</option> : null}
-      {systems.map((s) => (
-        <optgroup key={s} label={s}>
-          {list.filter((t) => t.id.split('.')[0] === s).map((t) => <option key={refOf(t)} value={refOf(t)}>{refOf(t)} · {t.effect === 'read' ? 'read' : 'writes'}{t.description ? ` · ${t.description}` : ''}</option>)}
-        </optgroup>
-      ))}
-    </select>
+    <>
+      <button type="button" id={id} className="tool-trigger" aria-haspopup="dialog" onClick={() => setOpen(true)}>
+        <span className="truncate">{value ? (unregistered ? `${value} (not registered here)` : value) : 'Choose a tool…'}</span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      {open ? (
+        <Popup title="Choose a tool" size="narrow" initialFocus="input" onClose={close}>
+          <input type="search" aria-label="Search tools" placeholder="Search tools" value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} />
+          <div className="tool-pick">
+            {tools.isLoading ? <Loading /> : null}
+            {systems.map((s) => (
+              <div key={s} role="group" aria-label={s}>
+                <div className="tool-pick-group muted small">{s}</div>
+                {shown.filter((t) => t.id.split('.')[0] === s).map((t) => (
+                  <button key={refOf(t)} type="button" className={`tool-pick-row${refOf(t) === value ? ' picked' : ''}`} aria-pressed={refOf(t) === value} onClick={() => { onChange(refOf(t)); close(); }}>
+                    <span className="mono">{refOf(t)}</span>
+                    <Badge tone={t.effect === 'read' ? 'ok' : 'warn'}>{t.effect === 'read' ? 'read' : 'writes'}</Badge>
+                    {t.description ? <span className="d muted small">{t.description}</span> : null}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {!tools.isLoading && !shown.length ? <p className="muted small">No tools match.</p> : null}
+          </div>
+        </Popup>
+      ) : null}
+    </>
   );
 }
 
@@ -724,6 +749,30 @@ function unusedContexts(def: Definition): string[] {
   return Object.keys((def.contexts ?? {}) as Record<string, unknown>).filter((name) => !def.nodes.some((n) => Array.isArray(n.context) && n.context.includes(name)));
 }
 
+/** The workflow's tags as one comma-separated field, with the category the first known tag picks. */
+function TagsRow({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const cats = useQuery({ queryKey: ['workflow-categories'], queryFn: () => api<Array<{ name: string; tags: string[] }>>('/v1/workflows/categories'), staleTime: Infinity });
+  const [text, setText] = useState(tags.join(', '));
+  const category = tags.map((t) => cats.data?.find((c) => c.tags.includes(t))?.name).find(Boolean);
+  const edit = (value: string) => {
+    setText(value);
+    onChange([...new Set(value.split(',').map((t) => t.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')).filter(Boolean))].slice(0, 10));
+  };
+  return (
+    <SettingRow label="Tags" help="Lowercase words, separated by commas. The first tag a category knows picks the category the workflow is listed under.">
+      {(id) => (
+        <>
+          <input id={id} value={text} placeholder="code-review, github" onChange={(e) => edit(e.target.value)} />
+          <div className="muted small">
+            {category ? <>Category: <b>{category}</b>. </> : tags.length && cats.data ? 'No tag names a category yet, so it is listed under Other. ' : null}
+            {cats.data ? <details><summary>Tags that pick a category</summary>{cats.data.map((c) => <div key={c.name}><b>{c.name}</b>: {c.tags.join(', ')}</div>)}</details> : null}
+          </div>
+        </>
+      )}
+    </SettingRow>
+  );
+}
+
 function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: Definition) => void; plan?: RunPlan }) {
   const set = (key: string, value: unknown) => {
     const next: Definition = { ...def };
@@ -738,6 +787,7 @@ function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: 
       <div className="set-group">
         <SettingRow label="Name" help="Shown in lists, runs and approvals.">{(id) => <input id={id} value={def.name ?? ''} onChange={(e) => set('name', e.target.value)} />}</SettingRow>
         <SettingRow label="Description" help="What the workflow is for, in a sentence or two.">{(id) => <textarea id={id} rows={3} value={def.description ?? ''} onChange={(e) => set('description', e.target.value)} />}</SettingRow>
+        <TagsRow tags={Array.isArray(def.tags) ? def.tags : []} onChange={(t) => set('tags', t.length ? t : undefined)} />
         <ValueInput row field={{ key: 'trigger', label: 'Trigger', kind: 'value', help: 'When it runs: by hand, on a schedule, or both.', hint: 'manual: true, or schedule: {cron, timezone}' }} value={def.trigger} onChange={(v) => set('trigger', v)} />
         <ValueInput row field={{ key: 'inputs', label: 'Inputs (JSON schema)', kind: 'value', help: 'What a run asks for. Steps read them as inputs.name.' }} value={def.inputs} onChange={(v) => set('inputs', v)} />
         <SettingRow label="Default provider and model" help="For every agent step whose profile says name: default. Steps that name their own provider and model keep them. A run can choose differently when it starts.">
@@ -1032,11 +1082,14 @@ function HarnessBuilder({ step, ctx, set }: { step: Step; ctx: HarnessContext; s
 
 /**
  * The repository an OpenCode step reviews or works in: cloned by the worker into a fresh folder for
- * the step (isolated git settings, the credential only in the fetch) and deleted afterwards.
+ * the step (isolated git settings, the credential only in the fetch) and deleted afterwards. Or a
+ * local folder registered on the Workers page: the run then works in its own git worktree of it, which stays.
  */
 function WorkspaceFields({ value, changes, onChange }: { value: Record<string, any> | undefined; changes: Array<{ id: string; ref: string }>; onChange: (w: Record<string, any> | undefined) => void }) {
   const w = value ?? {};
   const fromRef: string = typeof w.from?.ref === 'string' ? w.from.ref : '';
+  const isLocal = w.local !== undefined;
+  const folders = useQuery({ queryKey: ['local-folders'], queryFn: () => api<{ folders: Array<{ name: string; path: string }> }>('/v1/local-folders'), enabled: Boolean(value) });
   const set = (k: string, v: unknown) => {
     const n = { ...w };
     if (v === undefined || v === '') delete n[k];
@@ -1048,9 +1101,40 @@ function WorkspaceFields({ value, changes, onChange }: { value: Record<string, a
       <legend>Workspace</legend>
       <label className="check">
         <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked ? { repo: { ref: 'inputs.repo' }, ref: { cel: "'refs/pull/' + string(inputs.pr) + '/head'" }, credential: 'github-read-token' } : undefined)} />
-        Clone a repository for this step
+        Give this step a repository to work in
       </label>
       {value ? (
+        <label>Where it works
+          <select
+            value={isLocal ? 'local' : 'clone'}
+            onChange={(e) =>
+              onChange(
+                e.target.value === 'local'
+                  ? { local: folders.data?.folders[0]?.name ?? '', ...(w.mode ? { mode: w.mode } : {}), ...(w.test ? { test: w.test } : {}) }
+                  : { repo: { ref: 'inputs.repo' }, ref: 'HEAD', credential: 'github-read-token', ...(w.mode ? { mode: w.mode } : {}), ...(w.test ? { test: w.test } : {}) },
+              )
+            }
+          >
+            <option value="clone">A fresh clone of a repository, deleted after the step</option>
+            <option value="local">A worktree of a local folder, kept after the run</option>
+          </select>
+        </label>
+      ) : null}
+      {value && isLocal ? (
+        <>
+          <label>Local folder
+            <select value={w.local ?? ''} onChange={(e) => onChange({ ...w, local: e.target.value })}>
+              {w.local ? null : <option value="">Choose a folder</option>}
+              {(folders.data?.folders ?? []).map((f) => <option key={f.name} value={f.name}>{f.name} ({f.path})</option>)}
+              {w.local && !(folders.data?.folders ?? []).some((f) => f.name === w.local) ? <option value={w.local}>{w.local} (not registered)</option> : null}
+            </select>
+            <span className="muted small">Folders are registered on the Workers page. The run works on its own branch in a worktree of the folder, on a worker started with local folders allowed. Nothing is merged or pushed.</span>
+          </label>
+          <ValueInput field={{ key: 'ref', label: 'Start from (optional)', kind: 'value', hint: 'A branch, tag or commit in the folder; HEAD when empty' }} value={w.ref} onChange={(v) => set('ref', v)} />
+          <ValueInput field={{ key: 'base_ref', label: 'Base ref (optional)', kind: 'value', hint: 'Kept as refs/azhi/base, so the agent can diff against it' }} value={w.base_ref} onChange={(v) => set('base_ref', v)} />
+        </>
+      ) : null}
+      {value && !isLocal ? (
         <>
           <ValueInput field={{ key: 'repo', label: 'Repository (owner/name)', kind: 'value', hint: 'For example {ref: inputs.repo} or acme/api' }} value={w.repo} onChange={(v) => set('repo', v)} />
           <ValueInput field={{ key: 'ref', label: 'Ref to check out', kind: 'value', hint: "A branch, tag or PR ref, for example {cel: \"'refs/pull/' + string(inputs.pr) + '/head'\"}" }} value={w.ref} onChange={(v) => set('ref', v)} />
@@ -1076,9 +1160,13 @@ function WorkspaceFields({ value, changes, onChange }: { value: Record<string, a
               <input type="number" min="1" value={typeof w.depth === 'number' ? w.depth : ''} onChange={(e) => set('depth', e.target.value === '' ? undefined : Number(e.target.value))} />
             </label>
           </div>
+        </>
+      ) : null}
+      {value ? (
+        <>
           <label className="check">
             <input type="checkbox" checked={w.mode === 'write'} onChange={(e) => onChange(e.target.checked ? { ...w, mode: 'write' } : (({ mode: _m, test: _t, ...rest }) => rest)(w))} />
-            Let the agent edit the checkout (the change comes back as the step's output; nothing is pushed)
+            {isLocal ? 'Let the agent edit the worktree (the change is committed to the run\'s branch and comes back as the step\'s output; nothing is pushed)' : 'Let the agent edit the checkout (the change comes back as the step\'s output; nothing is pushed)'}
           </label>
           {w.mode === 'write' ? (
             <label>Test command (runs on the worker after the edits; repository code)

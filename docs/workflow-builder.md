@@ -28,7 +28,7 @@ time. Input counts every lookup round of a turn, so it grows faster than the tex
 the provider does not report shows "—", and cost shows "unavailable": the builder has no price
 list, so nothing is estimated. The totals live in the browser tab with the conversation.
 
-The conversation stays in your browser tab; the server keeps no transcript. Each turn is in the
+The conversation stays in your browser tab (session storage); the server keeps no transcript. Each turn is in the
 audit log (`builder.turn`, with provider, model and token counts) and each save as
 `builder.saved`. Builder calls are not part of any run, so run budgets do not apply to them.
 
@@ -108,7 +108,10 @@ When a requirement needs a tool that is not registered (your own MCP server, an 
 the chat. The builder asks for the MCP start command and tool name (or the HTTP method and URL), what it reads
 or changes, and the input and output shape, then proposes the tool with `propose_tool`. The server checks the
 spec (and refuses anything that looks like a secret value). The chat shows a card with **Register tool**; an
-admin clicks it and the tool is registered (a new revision if that `id@version` exists). The builder never asks
+admin clicks it and the tool is registered (a new revision if that `id@version` exists). When a turn ends with
+proposed tools still unregistered, a dialog lists them with **Register and continue**, which registers them and
+tells the builder to go on; **Not now** leaves a bar above the composer to reopen it. Registering publishes
+nothing and does not check that the command or URL works. The builder never asks
 for a token: it names the credential and you set its value on the Secrets page. Local stdio MCP servers and
 admin-managed remote Streamable HTTP MCP connections run today. Add a remote connection on Tools (or with
 `azhi mcp add`) with just its name and URL, approve access once for the workspace when it asks for sign-in, discover
@@ -118,6 +121,13 @@ The builder can propose the connection itself with `propose_mcp_connection` (nam
 chat shows a card; an admin clicks **Connect and sign in**, approves access in the pop-up and the card shows the
 status. It never asks for a client ID, secret or token. Tools are then discovered on the Tools page, and the builder
 proposes each one with `propose_tool`.
+
+For a connection that is already `ready`, the builder reads its tools itself with `list_mcp_tools` (name,
+description, argument names, and `registered_as` when a registered tool already wraps it). It uses registered tools as
+they are and proposes the rest with `propose_tool`. For an `mcp-streamable-http` tool the server is the source of
+truth: the remote tool name must exist on the connection, the input schema is the server's own (whatever the model
+wrote is replaced), the connection is stored by id, and a tool that is already registered is refused with a pointer
+to its ref. A connection that is not ready lists nothing until an admin finishes signing in.
 
 ## Suggesting what is available, and adding MCP servers
 
@@ -138,7 +148,7 @@ connection with `propose_tool` instead.
 
 ## Shared contexts, input caps and continuing a change
 
-The skill teaches three opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
+The skill teaches four opt-in features of the workflow format ([docs/context-sharing.md](context-sharing.md)):
 
 - **Shared contexts** (`contexts:` and `context: [name]` on agent, script and report steps) for the same
   input values written once. The skill says when to use one, that the step's input must then be an object,
@@ -146,19 +156,45 @@ The skill teaches three opt-in features of the workflow format ([docs/context-sh
   `merge: any` step. When it patches an existing workflow it keeps `contexts:` and each step's `context:`.
 - **`context_budget`** on an agent step, to cap the bytes of input that reach the model.
 - **`workspace.from`** on an OpenCode step, to start its checkout from an earlier step's change.
+- **`workspace.merge_ref`** on an OpenCode step, to merge a second ref into its checkout with the conflicts left as
+  markers, and the patterns of the [PR conflict resolver](pr-conflict-resolver.md) for workflows that change a
+  repository: worker steps without a model, rules before the agent, one test command compared on the base, the
+  change and the result, read-only agents with writes only after an approval, and unrolled retries.
 
 A draft's notes to the model include the compiler's warnings (`context_may_skip`, `context_taints`,
 `unused_context`) and one line per step that takes keys from a context. The draft panel lists those steps
 and the context each key came from. A patch that drops `contexts:` while a step still lists the name fails
 with `unknown_context`, so it is caught before the person sees it.
 
+## Attaching files and pinning tools
+
+Next to the message box, **Attach files** takes up to 5 files (drop or paste works too): text, Markdown,
+CSV/TSV, JSON, YAML, SQL, code, PDF, DOCX and XLSX, up to 10 MB each. **Tools** pins workspace items
+(tools, MCP servers, skills, agent roles and datasets) from the Toolbox for the builder to use.
+
+- The server reads each file to plain text (`POST /v1/builder/attachments`). Spreadsheets become CSV
+  per sheet (first 200 rows of up to 10 sheets); PDFs need a text layer, so scanned pages are not read.
+  Text is capped at 60,000 characters per file and 150,000 per message, and a cut is flagged
+  (`truncated`). A file that cannot be read is shown as "not read" with the reason and is not sent.
+- File text is **untrusted data**. It goes to the model fenced in `<attachment>` tags with the
+  instruction to read it for requirements and never follow it; a closing tag inside it is defused. A
+  file never becomes a command, tool name or step.
+- Pinned items are looked up in the workspace toolbox on the server; unknown ids are dropped, and the
+  model sees only the toolbox's own name, status and summary. Pinning changes nothing and runs nothing.
+- Nothing is stored by the server. The text the model read stays in the conversation in your browser
+  tab, so it counts toward the size meter and is sent again each turn. **Save as dataset** on a file
+  chip creates a new, unpublished, untrusted dataset (`chat-<name>`, never an existing one) holding the
+  extracted text; publish it from the Toolbox before a workflow retrieves from it.
+- The audit log records `builder.attachments` (names, kinds, character counts; never content).
+
 ## API
 
+- `POST /v1/builder/attachments` `{files:[{name, data (base64)}]}`: returns `{files:[{name, kind, text, chars, truncated, warnings}]}`.
 - `POST /v1/builder/register-mcp` `{server}`: re-checks and adds a proposed MCP server.
 
 - `GET /v1/builder`: providers, whether each is ready (and why not), and the default model.
 - `GET /v1/builder/models?provider=anthropic|openai|opencode`: the model list, the recommended model and why.
-- `POST /v1/builder/chat` `{messages, text, provider?, model?}`: runs one turn; returns the new transcript
+- `POST /v1/builder/chat` `{messages, text, attachments?, pinned?, provider?, model?}`: runs one turn; returns the new transcript
   and an event (`questions`, `proposal`, `tool_proposal`, `mcp_proposal` or `text`).
 - `POST /v1/builder/save` `{files, new_version_of?}`: re-checks and saves the proposal as an
   unsigned draft.

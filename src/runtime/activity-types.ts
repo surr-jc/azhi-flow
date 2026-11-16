@@ -73,6 +73,10 @@ export interface GatewayActivities {
   toolNode(input: ToolNodeInput): Promise<{ output: unknown; observation: { source: string; observed_at: string } & Record<string, unknown>; action?: { id: string; reused: boolean } }>;
   notifyNode(input: NotifyNodeInput): Promise<{ action_id: string; delivered: boolean; receipt: unknown }>;
   reportNode(input: ReportNodeInput): Promise<unknown>;
+  /** Carries a step that succeeded in an earlier run into a resumed run; returns its output. */
+  carryNode(input: { workspaceId: string; runId: string; fromRun: string; nodeId: string }): Promise<unknown>;
+  /** Resolves a value whose CEL reads into outputs stored as artifacts; a result over the artifact threshold comes back as a handle. */
+  resolveValue(input: { workspaceId: string; value: unknown; scope: Record<string, unknown>; reads: string[] }): Promise<unknown>;
   /** Online workers that can run this script: capable of the runtime and trusting the package signer. */
   checkWorkers(workspaceId: string, packageHash: string, runtime: string, needs?: string[]): Promise<WorkerSelection>;
   issueRunToken(workspaceId: string, runId: string, nodeId: string, tools: string[], creds?: string[]): Promise<string>;
@@ -81,7 +85,7 @@ export interface GatewayActivities {
   /** Model agent: one model turn plus its gateway tool calls. */
   agentTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   /** Harness executors: builds the same context as the model agent, for a worker to run. */
-  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write' }; workspaceFrom?: WorkspaceFrom }): Promise<HarnessPlan>;
+  harnessPrepare(input: AgentBeginInput & { executor?: string; workspace?: { repo: string; ref: string; baseRef?: string; mode?: 'read' | 'write'; local?: string }; workspaceFrom?: WorkspaceFrom }): Promise<HarnessPlan>;
   /** Harness executors: records usage, the context manifest and the attempt outcome. */
   harnessRecord(input: HarnessRecordInput): Promise<void>;
   /** Subworkflow nodes: creates the child run (idempotent per parent node) and returns what the child workflow starts with. */
@@ -141,6 +145,8 @@ export interface HarnessPlan {
   prompt: string;
   /** The change a `workspace.from` step continues from, stored as an artifact the worker fetches (never carried in history). */
   continuation?: { artifact: string; baseSha: string; files: number };
+  /** A `workspace.local` step's folder: the name the workflow gave and the path the workspace's registry holds for it. */
+  localFolder?: { name: string; path: string };
   /** Input fields the node's context_budget withheld from the prompt (hash and size only). */
   withheld?: Array<{ key: string; bytes: number; sha256: string }>;
   tools: Array<{ name: string; ref: string; description: string; input_schema: Record<string, unknown> }>;
@@ -151,6 +157,8 @@ export interface HarnessPlan {
   provider: 'anthropic' | 'openai' | 'github-copilot' | 'openai-chatgpt';
   /** Models a custom Copilot endpoint (AZHI_COPILOT_API_URL) serves: the server's default model. */
   endpointModels?: string[];
+  /** The workspace's chosen OpenCode major; absent when the workers' own default applies. */
+  opencodeMajor?: 1 | 2;
 }
 
 export interface HarnessRecordInput {

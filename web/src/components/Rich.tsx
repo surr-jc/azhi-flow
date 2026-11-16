@@ -87,6 +87,10 @@ export function toMarkdown(value: unknown, depth = 0, key?: string, plain?: bool
   if (Array.isArray(value)) {
     if (!value.length) return '_none_';
     if (value.every((v) => isScalar(v) && !(typeof v === 'string' && (v.includes('\n') || v.length > LONG)))) return value.map((v) => `- ${shown(v)}`).join('\n');
+    // Long prose items (acceptance criteria, findings) read as a numbered list, not a label above each.
+    if (value.every((v) => typeof v === 'string' && v.trim() && parseJsonText(v) === undefined && !looksLikeDiff(v))) {
+      return (value as string[]).map((v, i) => `${i + 1}. ${shown(v).trim().replace(/\n/g, '\n   ')}`).join('\n');
+    }
     return value.map((v, i) => {
       let body = v;
       let title = '';

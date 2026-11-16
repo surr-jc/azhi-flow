@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"enum": ["pass", "inconclusive", "regression", "invalid"]},
+    "ok": {"type": "boolean"},
+    "level": {"enum": ["full", "none"]},
+    "regressions": {"type": "array", "items": {"type": "string"}},
+    "markers_left": {"type": "array", "items": {"type": "string"}},
+    "out_of_scope": {"type": "array", "items": {"type": "string"}},
+    "dropped": {"type": "array", "items": {"type": "string"}},
+    "base_stale": {"type": "boolean"},
+    "notes": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["verdict", "ok", "level", "regressions", "markers_left", "out_of_scope", "dropped", "base_stale", "notes"]
+}

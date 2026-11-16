@@ -31,12 +31,13 @@ async function call(cfg: SlackConfig, method: string, body: Record<string, unkno
 
 export async function postMessage(
   cfg: SlackConfig,
-  args: { channel: string; text: string; blocks?: unknown; dedupeKey: string },
+  args: { channel: string; text: string; blocks?: unknown; dedupeKey: string; threadTs?: string },
 ): Promise<{ channel: string; ts: string }> {
   const r = await call(cfg, 'chat.postMessage', {
     channel: args.channel,
     text: args.text,
     blocks: args.blocks,
+    thread_ts: args.threadTs,
     unfurl_links: false,
     metadata: { event_type: DEDUPE_EVENT, event_payload: { action_id: args.dedupeKey } },
   });

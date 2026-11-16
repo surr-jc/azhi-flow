@@ -1,0 +1,136 @@
+{
+  "type": "object",
+  "description": "What the pr-review child concluded. unavailable (child failed, no verdict, unreadable verdict) sends the Story back.",
+  "properties": {
+    "status": {
+      "enum": [
+        "approved",
+        "findings",
+        "unavailable"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error_class": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "fix_now": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string"
+          },
+          "triage": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "severity",
+          "triage",
+          "reviewer",
+          "path",
+          "line",
+          "title",
+          "detail",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "remaining": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string"
+          },
+          "triage": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "severity",
+          "triage",
+          "reviewer",
+          "path",
+          "line",
+          "title",
+          "detail",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status",
+    "reason",
+    "verdict",
+    "error_class",
+    "summary",
+    "fix_now",
+    "remaining"
+  ],
+  "additionalProperties": false
+}

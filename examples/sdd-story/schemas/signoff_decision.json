@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "description": "Who signed the pull request off, and what they decided. Both are null when no decision could be read.",
+  "properties": {
+    "decision": {"enum": ["approved", "rejected", null]},
+    "by": {"type": ["string", "null"]}
+  },
+  "required": ["decision", "by"],
+  "additionalProperties": false
+}

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { z } from 'zod';
 import type { AdminConfig } from '../config/admin.js';
+import { categoryOf, tagsOf } from '../definition/category.js';
 import { packageFromDirectory } from '../definition/package.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
@@ -28,10 +29,11 @@ export const examplesDir = () => process.env.AZHI_EXAMPLES_DIR ?? fileURLToPath(
 const ID = /^[a-z0-9][a-z0-9-]*$/;
 const REPO = /^[\w.-]+\/[\w.-]+$/;
 
-interface Example {
+export interface Example {
   id: string;
   name: string;
   description: string;
+  tags: string[];
   config: AdminConfig;
   /** The workflow's id and its `config:` block, where settings may also appear as `{{name}}`. */
   workflow: { id: string; config: Record<string, unknown> };
@@ -45,21 +47,21 @@ function user(req: FastifyRequest) {
   return req.principal;
 }
 
-function loadExample(id: string): Example | undefined {
+export function loadExample(id: string): Example | undefined {
   if (!ID.test(id)) return undefined;
   const dir = join(examplesDir(), id);
   if (!existsSync(join(dir, 'workflow.yaml'))) return undefined;
   const wf = parse(readFileSync(join(dir, 'workflow.yaml'), 'utf8')) ?? {};
   const configPath = join(dir, 'azhi.config.yaml');
   const config: AdminConfig = existsSync(configPath) ? (parse(readFileSync(configPath, 'utf8')) ?? {}) : {};
-  return { id, name: String(wf.name ?? id), description: String(wf.description ?? ''), config, workflow: { id: String(wf.id ?? id), config: wf.config ?? {} }, nodes: Array.isArray(wf.nodes) ? wf.nodes.filter((n: unknown) => n && typeof (n as { id?: unknown }).id === 'string' && typeof (n as { type?: unknown }).type === 'string') : [], inputs: wf.inputs };
+  return { id, name: String(wf.name ?? id), description: String(wf.description ?? ''), tags: tagsOf(wf.tags), config, workflow: { id: String(wf.id ?? id), config: wf.config ?? {} }, nodes: Array.isArray(wf.nodes) ? wf.nodes.filter((n: unknown) => n && typeof (n as { id?: unknown }).id === 'string' && typeof (n as { type?: unknown }).type === 'string') : [], inputs: wf.inputs };
 }
 
 /** A tool whose registration lists repositories; the person names theirs at install time. */
 const needsRepos = (t: ToolSpec) => Array.isArray((t.transport as { config?: { repos?: unknown } }).config?.repos);
 
 /** Secrets the example names: its config's list, the tools' credentials, and model keys in profiles. */
-function secretsOf(e: Example): string[] {
+export function secretsOf(e: Example): string[] {
   const names = new Set<string>(e.config.secrets ?? []);
   for (const t of e.config.tools ?? []) if (t.credential) names.add(t.credential);
   return [...names].sort();
@@ -263,6 +265,9 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
         installed: Boolean(local),
         name: e.name,
         description: e.description,
+        tags: e.tags,
+        /** Picked from the tags; null when no tag names a category. */
+        category: categoryOf(e.tags),
         /** The workflow this example installs, to tell which workflow page it belongs to. */
         workflow: e.workflow.id,
         nodes: e.nodes,

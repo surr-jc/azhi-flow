@@ -22,12 +22,12 @@ import {
 } from '@temporalio/workflow';
 import { evaluateCel } from '../cel/evaluator.js';
 import type { PlanNode } from '../compiler/plan.js';
-import type { AgentNode, ApprovalNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
+import type { Value, AgentNode, ApprovalNode, LoopJoinNode, LoopNode, RetrieveNode, NotifyNode, ParallelNode, ReportNode, ScriptNode, SubworkflowNode, ToolNode } from '../definition/types.js';
 import { parseDuration } from '../lib/duration.js';
 import { NON_RETRYABLE } from '../lib/errors.js';
 import type { ApprovalDecision, ApprovalSignal, ExecActivities, GatewayActivities } from './activity-types.js';
 import type { NodeError, NodeStatus, RunFlags, RunInput, RunState, RunStatus } from './types.js';
-import { resolveValue, type ValueScope } from './values.js';
+import { artifactReads, isHandle, resolveValue, type ValueScope } from './values.js';
 import { withheldBefore } from './withheld.js';
 import { isHarness, type HarnessExecutor } from '../executors/capabilities.js';
 
@@ -109,6 +109,15 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   }
   const asOf: Record<string, string> = {};
   const scope = (): ValueScope => ({ inputs: input.inputs, nodes: outputs, config: plan.config, now: snapshot.reference_time, run: { id: runId, attempt: workflowInfo().attempt } });
+  // CEL cannot read inside an output stored as an artifact, so such a value is resolved by an activity next to the store.
+  // The same holds for `args` (a guard's view of the call) when the resolved arguments were themselves stored.
+  const resolve = async (node: PlanNode, value: Value | undefined, s: ValueScope): Promise<unknown> => {
+    const reads = artifactReads(value, s.nodes);
+    if (!reads.length && !isHandle(s.args)) return resolveValue(value, s);
+    const named = new Set([...JSON.stringify(value).matchAll(/\bnodes\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!));
+    const nodes = Object.fromEntries(Object.entries(s.nodes).filter(([id]) => named.has(id)));
+    return (await gateway(node).resolveValue({ workspaceId, value, scope: { ...s, nodes }, reads })) ?? undefined;
+  };
   // The run token is shared by activities, while each gateway call still verifies the calling
   // node. Include both deterministic tool nodes and agent-declared tools so harness bridges such
   // as OpenCode can invoke the catalog tools assigned to their own agent node.
@@ -159,10 +168,12 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       const ws = def.workspace;
       const workspace = ws
         ? {
-            host: ws.host ?? 'https://github.com',
-            repo: String(resolveValue(ws.repo, s) ?? ''),
-            ref: String(resolveValue(ws.ref, s) ?? ''),
+            // A local folder clones nothing: `repo` is a label and the ref is read in the folder's own repository.
+            host: ws.local ? '' : (ws.host ?? 'https://github.com'),
+            repo: ws.local ? `local:${ws.local}` : String(resolveValue(ws.repo, s) ?? ''),
+            ref: ws.local && ws.ref === undefined ? 'HEAD' : String(resolveValue(ws.ref, s) ?? ''),
             ...(ws.base_ref !== undefined ? { baseRef: String(resolveValue(ws.base_ref, s) ?? '') } : {}),
+            ...(ws.merge_ref !== undefined ? { mergeRef: String(resolveValue(ws.merge_ref, s) ?? '') } : {}),
             ...(ws.credential ? { credential: ws.credential } : {}),
             ...(ws.depth ? { depth: ws.depth } : {}),
             ...(ws.mode === 'write' ? { mode: 'write' as const } : {}),
@@ -183,18 +194,21 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         executor,
         outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
         tools: tools as never,
-        input: resolveValue(def.input, s) ?? null,
+        input: (await resolve(node, def.input, s)) ?? null,
         inputSources: node.dataDeps,
         ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
         ...(node.inputParts ? { inputParts: node.inputParts } : {}),
         ...(def.datasets?.length ? { datasets: pinned(def.datasets), principal: snapshot.principal } : {}),
         ...(snapshot.model_defaults?.provider ? { modelDefaults: snapshot.model_defaults } : {}),
-        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}) } } : {}),
+        ...(workspace ? { workspace: { repo: workspace.repo, ref: workspace.ref, ...(workspace.baseRef ? { baseRef: workspace.baseRef } : {}), ...(workspace.mode ? { mode: workspace.mode } : {}), ...(ws?.local ? { local: ws.local } : {}) } } : {}),
         ...(workspaceFrom ? { workspaceFrom } : {}),
       });
       await noteWithheld(node.id, prep.withheld);
       // A worker without continuation would drop the unknown field and work on the bare base: only ask workers that have it.
-      const queue = await selectWorker(node.id, executor, 1, prep.continuation ? ['workspace_continuation'] : undefined);
+      // A worker without merge support would ignore merge_ref and hand on the bare head with no conflicts in it.
+      // Only a worker started with local folders allowed may open one; any other would try to clone the label.
+      const needs = [...(prep.continuation ? ['workspace_continuation'] : []), ...(workspace?.mergeRef ? ['workspace_merge'] : []), ...(ws?.local ? ['workspace_local'] : []), ...(prep.opencodeMajor ? [`opencode_${prep.opencodeMajor}`] : [])];
+      const queue = await selectWorker(node.id, executor, 1, needs.length ? needs : undefined);
       const runToken = await bookkeeping.issueRunToken(workspaceId, runId, node.id, tools.map((t) => t.ref), [prep.credential, ...(workspace?.credential ? [workspace.credential] : [])]);
       const r = await exec(node, queue).runHarness({
         runId,
@@ -203,6 +217,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         packageHash: snapshot.package_hash,
         executor: executor as HarnessExecutor,
         provider: prep.provider,
+        ...(prep.opencodeMajor ? { opencodeMajor: prep.opencodeMajor } : {}),
         runToken,
         credential: prep.credential,
         providerUrl: prep.providerUrl,
@@ -215,7 +230,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         maxToolCalls: def.budget?.max_tool_calls,
         timeoutMs: node.timeoutMs,
         profile: def.profile,
-        ...(workspace ? { workspace: { ...workspace, ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
+        ...(workspace ? { workspace: { ...workspace, ...(prep.localFolder ? { local: prep.localFolder } : {}), ...(prep.continuation ? { continuation: { artifact: prep.continuation.artifact, baseSha: prep.continuation.baseSha } } : {}) } } : {}),
       });
       const overBudget = def.budget?.max_output_tokens !== undefined && r.usage.output_tokens !== null && r.usage.output_tokens > def.budget.max_output_tokens;
       const error = r.error ?? (overBudget ? { class: 'budget_exceeded', message: `output tokens ${r.usage.output_tokens} exceeded the budget of ${def.budget!.max_output_tokens} (measured after the run; harness budgets are not hard caps)` } : undefined);
@@ -231,7 +246,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   };
 
   const runAgent = async (node: PlanNode, def: AgentNode, s: ValueScope) => {
-    const executor = def.executor ?? 'model-agent';
+    const executor = snapshot.run_executors?.[node.id] ?? def.executor ?? 'model-agent';
     if (executor !== 'model-agent' && !isHarness(executor)) {
       throw ApplicationFailure.create({ type: 'unsupported_capability', message: `executor '${executor}' is not available on this interpreter build`, nonRetryable: true });
     }
@@ -248,7 +263,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         profile: def.profile,
         outputSchema: (node.outputSchema ?? { type: 'object' }) as Record<string, unknown>,
         tools,
-        input: resolveValue(def.input, s) ?? null,
+        input: (await resolve(node, def.input, s)) ?? null,
         inputSources: node.dataDeps,
         ...(def.context_budget ? { contextBudget: def.context_budget } : {}),
         ...(node.inputParts ? { inputParts: node.inputParts } : {}),
@@ -285,8 +300,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     // Input a context_budget kept from an agent that this approval comes after: the person deciding is told.
     const withheld = withheldBefore(plan.nodes, status.flags.context_withheld, node.id);
     await bookkeeping.requestApproval(runId, workspaceId, node.id, {
-      message: resolveValue(def.message, s) ?? null,
-      payload: resolveValue(def.payload, s) ?? null,
+      message: (await resolve(node, def.message, s)) ?? null,
+      payload: (await resolve(node, def.payload, s)) ?? null,
       role: def.role ?? 'operator',
       expires_at: expiresAt,
       on_expiry: onExpiry,
@@ -370,8 +385,8 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
   };
 
   const runTool = async (node: PlanNode, def: Omit<ToolNode, 'id'>, s: ValueScope, ordinal?: number) => {
-    const args = (resolveValue(def.arguments as never, s) ?? {}) as Record<string, unknown>;
-    if (def.guard && evaluateCel(def.guard, { ...s, args }) !== true) {
+    const args = ((await resolve(node, def.arguments as never, s)) ?? {}) as Record<string, unknown>;
+    if (def.guard && (await resolve(node, { cel: def.guard }, { ...s, args })) !== true) {
       throw ApplicationFailure.create({ type: 'authorization', message: `guard rejected the call to ${def.tool}: ${def.guard}`, nonRetryable: true });
     }
     const r = await gateway(node).toolNode({
@@ -390,6 +405,44 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     return r.output;
   };
 
+  /**
+   * The end of a loop written out by the compiler: which rounds ran, read from their gates, with their steps' outputs.
+   * The outputs are opened next to the artifact store and the result kept there when large, so later steps can read
+   * into it and the rounds' contents stay out of workflow history.
+   */
+  const joinRounds = async (node: PlanNode, def: LoopJoinNode, s: ValueScope): Promise<{ output: unknown }> => {
+    const ran = def.rounds.filter((r) => status.nodes[r.gate]?.status === 'succeeded');
+    const final = ran[ran.length - 1];
+    if (!final) throw ApplicationFailure.create({ type: 'internal', message: `loop '${node.id}' has no finished round`, nonRetryable: true });
+    const outcome = status.nodes[final.gate]!.route!;
+    // A round reads the one before it through `next`. If that read a step the round before skipped, this round's steps are
+    // skipped too: part of it, or none of it, ran. Reporting an outcome for it would hide that.
+    if (outcome === 'retry') {
+      throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}': round ${ran.length + 1} could not start, as a step it reads was skipped in round ${ran.length}`, nonRetryable: true });
+    }
+    ran.forEach((r, i) => {
+      const missing = r.required.find((id) => status.nodes[id]?.status !== 'succeeded');
+      if (missing) throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}': round ${i + 1} could not start: step '${missing}' was skipped, as a step it reads was skipped in round ${i}`, nonRetryable: true });
+    });
+    if (outcome === 'exhausted' && (def.on_max ?? 'fail') === 'fail') {
+      throw ApplicationFailure.create({ type: 'contract_violation', message: `loop '${node.id}' used all ${def.rounds.length} rounds without an exit rule holding`, nonRetryable: true });
+    }
+    // A step its round skipped is null, not missing.
+    const stepsOf = (r: LoopJoinNode['rounds'][number]) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => [k, status.nodes[(v as { ref: string }).ref.split('.')[1]!]?.status === 'succeeded' ? v : null]));
+    const value = {
+      outcome,
+      reason: def.reasons[outcome] ?? null,
+      count: ran.length,
+      exited: outcome !== 'exhausted',
+      last: stepsOf(final),
+      rounds: ran.map((r, i) => ({ round: i + 1, outcome: status.nodes[r.gate]!.route!, reason: def.reasons[status.nodes[r.gate]!.route!] ?? null, steps: stepsOf(r) })),
+    };
+    const named = new Set(ran.flatMap((r) => Object.values(r.steps).map((v) => (v as { ref: string }).ref.split('.')[1]!)));
+    const nodes = Object.fromEntries(Object.entries(s.nodes).filter(([id]) => named.has(id)));
+    const reads = Object.keys(nodes).filter((id) => isHandle(nodes[id]?.output));
+    return { output: await gateway(node).resolveValue({ workspaceId, value: value as never, scope: { ...s, nodes }, reads }) };
+  };
+
   const execute = async (node: PlanNode): Promise<{ output?: unknown; route?: string }> => {
     const s = scope();
     switch (node.type) {
@@ -397,11 +450,11 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         return { output: await runTool(node, node.def as ToolNode, s) };
       case 'script': {
         const def = node.def as ScriptNode;
-        return { output: await runScript(node, def, resolveValue(def.input, s)) };
+        return { output: await runScript(node, def, await resolve(node, def.input, s)) };
       }
       case 'condition': {
         const def = node.def as { expression: string; routes: Record<string, string[]>; default?: string };
-        const raw = evaluateCel(def.expression, s);
+        const raw = await resolve(node, { cel: def.expression }, s);
         const route = typeof raw === 'string' ? raw : raw === true ? Object.keys(def.routes)[0]! : def.default;
         if (route === undefined || !(route in def.routes)) {
           if (def.default === undefined) throw ApplicationFailure.create({ type: 'contract_violation', message: `condition chose route '${String(raw)}', which does not exist and there is no default`, nonRetryable: true });
@@ -419,18 +472,18 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
             packageHash: snapshot.package_hash,
             template: def.template,
             format: def.format ?? 'markdown',
-            input: resolveValue(def.input, s),
-            summary: resolveValue(def.summary, s),
+            input: await resolve(node, def.input, s),
+            summary: await resolve(node, def.summary, s),
             asOf: { ...asOf },
           }),
         };
       }
       case 'notify': {
         const def = node.def as NotifyNode;
-        const destination = String(resolveValue(def.destination, s) ?? '');
-        const message = resolveValue(def.message, s);
+        const destination = String((await resolve(node, def.destination, s)) ?? '');
+        const message = await resolve(node, def.message, s);
         const text = typeof message === 'string' ? message : JSON.stringify(message);
-        if (def.guard && evaluateCel(def.guard, { ...s, args: { channel: destination, destination, text } }) !== true) {
+        if (def.guard && (await resolve(node, { cel: def.guard }, { ...s, args: { channel: destination, destination, text } })) !== true) {
           throw ApplicationFailure.create({ type: 'authorization', message: `guard rejected the notification: ${def.guard}`, nonRetryable: true });
         }
         return { output: await gateway(node).notifyNode({ runId, workspaceId, nodeId: node.id, channel: def.channel, destination, text, mock: input.mockWrites }) };
@@ -471,6 +524,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         return { output: { items: results, completed, failed } };
       }
       case 'loop': {
+        if ('rounds' in node.def) return joinRounds(node, node.def as LoopJoinNode, s);
         const def = node.def as LoopNode;
         let state = resolveValue(def.initial, s);
         const iterations: unknown[] = [];
@@ -493,16 +547,31 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
       }
       case 'subworkflow': {
         const def = node.def as SubworkflowNode;
-        const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: (resolveValue(def.input, s) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
+        const prep = await gateway(node).prepareChildRun({ runId, workspaceId, nodeId: node.id, workflow: def.workflow, inputs: ((await resolve(node, def.input, s)) ?? {}) as Record<string, unknown>, mock: input.mockWrites });
         // The child is a run of its own (own plan, ledger and page). Cancelling this run cancels it.
-        await executeChild('azhiRun', {
-          workflowId: prep.run.runId,
-          taskQueue: workflowInfo().taskQueue,
-          args: [prep.run],
-          parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
-          workflowExecutionTimeout: node.timeoutMs + 60_000,
-        });
+        // With on_failure: continue a child that fails or times out is reported to the next steps instead of failing this run.
+        const lenient = def.on_failure === 'continue';
+        let childError: NodeError | undefined;
+        try {
+          await executeChild('azhiRun', {
+            workflowId: prep.run.runId,
+            taskQueue: workflowInfo().taskQueue,
+            args: [prep.run],
+            parentClosePolicy: ParentClosePolicy.REQUEST_CANCEL,
+            workflowExecutionTimeout: node.timeoutMs + 60_000,
+          });
+        } catch (err) {
+          if (!lenient || isCancellation(err)) throw err;
+          childError = toNodeError(err);
+        }
         const result = await gateway(node).childResult(workspaceId, prep.run.runId);
+        if (result.state !== 'succeeded' && lenient) {
+          // A child that died without recording an end state has not succeeded either.
+          const ended = ['failed', 'expired', 'cancelled', 'delivery_failed'].includes(result.state);
+          const state = ended ? result.state : 'failed';
+          const error = result.error ?? childError ?? { class: 'internal', message: `the child run ended ${result.state}` };
+          return { output: { run_id: prep.run.runId, workflow: prep.workflow, version: prep.version, state, error, nodes: result.nodes } };
+        }
         if (result.state !== 'succeeded') {
           throw ApplicationFailure.create({
             type: result.error?.class ?? 'internal',
@@ -517,7 +586,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
         if (def.filters && Object.keys(def.filters).length) {
           throw ApplicationFailure.create({ type: 'unsupported_capability', message: 'retrieve filters arrive with document-level ACL in the first release', nonRetryable: true });
         }
-        const query = resolveValue(def.query, s);
+        const query = await resolve(node, def.query, s);
         return {
           output: await gateway(node).retrieveNode({
             runId,
@@ -573,6 +642,17 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
 
   try {
     await setState('running', { event: 'run.started' });
+    // A resumed run does not repeat the steps that succeeded in the run it continues; their outputs are carried over.
+    for (const id of snapshot.resume?.nodes ?? []) {
+      const node = plan.nodes.find((n) => n.id === id);
+      if (!node) continue;
+      const stored = await gateway(node).carryNode({ workspaceId, runId, fromRun: snapshot.resume!.from_run, nodeId: id });
+      // A tool step's stored attempt is the whole activity result ({ output, observation }); later steps read just its output.
+      const output = node.type === 'tool' && stored && typeof stored === 'object' && 'output' in stored ? (stored as { output: unknown }).output : stored;
+      outputs[id] = { output };
+      const route = node.type === 'condition' ? (output as { route?: string } | null)?.route : undefined;
+      status.nodes[id] = { status: 'succeeded', ...(route ? { route } : {}) };
+    }
     if (testNode) for (const n of plan.nodes) if (status.nodes[n.id]!.status === 'skipped') await setNode(n.id, 'skipped');
     await CancellationScope.cancellable(async () => {
       const inFlight = new Map<string, Promise<void>>();

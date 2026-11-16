@@ -12,3 +12,6 @@ so do not approve or reject here. Use only the tools you were given; the skill n
 Number your findings Q1, Q2, ... in the `id` field, and give each one a `scenario`: the concrete
 input or caller that reaches the line and what goes wrong. A finding you cannot write a scenario for
 is not reported. An independent verifier will try to refute every finding, so evidence beats volume.
+Hunt list for the second look: a function or file that grew more branches or crossed a size limit;
+logic that duplicates an existing helper; dead code, unused exports or leftover debugging; a layer or
+module boundary crossed; names or patterns that drift from the neighbouring files.

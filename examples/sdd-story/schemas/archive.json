@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "description": "The archive agent's report. The files it moved and merged are added by the worker as `workspace`.",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 300},
+    "merged": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"capability": {"type": "string"}, "added": {"type": "integer"}, "modified": {"type": "integer"}, "removed": {"type": "integer"}, "renamed": {"type": "integer"}},
+        "required": ["capability", "added", "modified", "removed", "renamed"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "merged"],
+  "additionalProperties": false
+}

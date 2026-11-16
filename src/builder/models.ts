@@ -15,6 +15,8 @@ export interface BuilderModel {
   label: string;
   /** Served only on the Responses API (some Copilot models); absent means Chat Completions. */
   endpoint?: 'responses';
+  /** Tokens the model can hold, as the provider's own list says (Copilot: capabilities.limits); absent when it does not say. */
+  context_window?: number;
 }
 
 export interface BuilderModels {
@@ -93,6 +95,7 @@ export function copilotPlanModels(list: Array<Record<string, any>>): BuilderMode
     id: m.id,
     label: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : m.id,
     ...(Array.isArray(m.supported_endpoints) && !m.supported_endpoints.includes('/chat/completions') ? { endpoint: 'responses' as const } : {}),
+    ...(Number.isFinite(m.capabilities?.limits?.max_context_window_tokens) && m.capabilities.limits.max_context_window_tokens > 0 ? { context_window: m.capabilities.limits.max_context_window_tokens as number } : {}),
   }));
 }
 

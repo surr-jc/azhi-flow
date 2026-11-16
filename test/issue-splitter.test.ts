@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { PYTHON } from './helpers/python.js';
 import { describe, expect, it } from 'vitest';
 import { evaluateCel } from '../src/cel/evaluator.js';
 import { compile } from '../src/compiler/compile.js';
@@ -20,7 +21,7 @@ const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!
 const node = (id: string) => def.nodes.find((n) => n.id === id) as any;
 const compiled = () => compile(def, { pkg, catalog: staticCatalog(tools) });
 const config = { split_max_files: 5, split_sensitive_max_files: 2, ready_label: 'ready', split_label: 'azhi-split' };
-const py = (script: string, input: unknown) => JSON.parse(execFileSync('python3', [join(PKG, 'scripts', script)], { input: JSON.stringify(input) }).toString());
+const py = (script: string, input: unknown) => JSON.parse(execFileSync(PYTHON[0]!, [...PYTHON.slice(1), join(PKG, 'scripts', script)], { input: JSON.stringify(input) }).toString());
 const scope = (over: Record<string, unknown> = {}) => ({ is_code: true, deliverables: ['toggle'], est_files: 2, touches_sensitive: false, slices: [{}, {}], ...over });
 const weight = (a: unknown) => evaluateCel(node('weight').expression, { config, nodes: { analyze: { output: a } } });
 

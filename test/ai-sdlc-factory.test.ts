@@ -33,7 +33,7 @@ const run = (pkg: string, script: string, input: unknown) =>
     }).toString(),
   );
 
-const PACKAGES = ['ai-sdlc-factory-plan', 'ai-sdlc-factory', 'ai-sdlc-factory-readiness'];
+const PACKAGES = ['ai-sdlc-factory-plan', 'ai-sdlc-factory', 'ai-sdlc-factory-readiness', 'ai-sdlc-factory-verify'];
 
 describe('AI SDLC Factory packages', () => {
   for (const name of PACKAGES) {
@@ -56,6 +56,22 @@ describe('AI SDLC Factory packages', () => {
     });
   }
 
+  it('every step that creates a ticket waits for a person: it depends, through the plan, on an approval', () => {
+    for (const name of ['ai-sdlc-factory-readiness', 'ai-sdlc-factory-verify']) {
+      const pkg = packageFromDirectory(`examples/${name}`);
+      const tools = parse(readFileSync(`examples/${name}/azhi.config.yaml`, 'utf8')).tools;
+      const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+      const nodes = new Map(compile(def, { pkg, catalog: staticCatalog(tools) }).plan!.nodes.map((n) => [n.id, n]));
+      const upstream = (id: string, seen = new Set<string>()): Set<string> => {
+        for (const d of nodes.get(id)!.deps) if (!seen.has(d)) (seen.add(d), upstream(d, seen));
+        return seen;
+      };
+      const writers = [...nodes.values()].filter((n) => /create-issue/.test(String((n.def as any).tool ?? '')));
+      expect(writers.length, name).toBeGreaterThan(0);
+      for (const w of writers) expect([...upstream(w.id)].some((d) => nodes.get(d)!.type === 'approval'), `${name}: ${w.id} runs without waiting for an approval`).toBe(true);
+    }
+  });
+
   it('the lap writes only labels, each on the ticket it picked', () => {
     const pkg = packageFromDirectory('examples/ai-sdlc-factory');
     const tools = parse(readFileSync('examples/ai-sdlc-factory/azhi.config.yaml', 'utf8')).tools;
@@ -66,6 +82,24 @@ describe('AI SDLC Factory packages', () => {
     expect(writers.map((n) => n.id).sort()).toEqual(['claim_github', 'claim_jira', 'lap_post', 'sendback_github', 'sendback_jira']);
     for (const n of writers) expect(typeof n.guard, n.id).toBe('string');
     expect(tools.filter((t: any) => t.effect !== 'read').map((t: any) => t.id).sort()).toEqual(['github.label-issue', 'jira.update-labels']);
+  });
+
+  it('the lap carries on when the delivery fails, so a failed ticket is sent back and not left claimed', () => {
+    const pkg = packageFromDirectory('examples/ai-sdlc-factory');
+    const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+    expect((def.nodes as any[]).find((n) => n.id === 'deliver').on_failure).toBe('continue');
+  });
+
+  it('the release plan is brainstormed with a person before it is planned, and the brainstormer can only read', () => {
+    const pkg = packageFromDirectory('examples/ai-sdlc-factory-plan');
+    const def = loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!;
+    const node = (id: string) => (def.nodes as any[]).find((n) => n.id === id);
+    expect(node('brainstorm_review').type).toBe('approval');
+    expect(node('brainstorm_review').on_expiry).toBe('reject');
+    expect(node('brainstorm_review').decision_schema.required).toEqual(['approach']);
+    // The plan reads the person's decisions, so it cannot run before they answer.
+    expect(JSON.stringify(node('plan_release').input)).toContain('nodes.brainstorm_review.output.data.approach');
+    expect(pkg.readText('profiles/brainstormer@1.yaml')).toMatch(/tools: \[read, grep, glob, skill\]/);
   });
 
   it('the release plan has no model step after the approval and no merge or close anywhere', () => {
@@ -200,6 +234,12 @@ describe('outcome.py', () => {
     expect(shipped).toMatchObject({ status: 'shipped', pr_url: 'https://github.com/acme/shop/pull/7', pr_number: 7, draft: true, tests: 'passed', needs_attention: true });
     expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r2', nodes: { finalize: { change: { tests: { status: 'failed' } } } } } })).toMatchObject({ status: 'sent_back', pr_url: '', tests: 'failed' });
     expect(run('ai-sdlc-factory', 'outcome.py', { child: {} })).toMatchObject({ status: 'sent_back', tests: 'unavailable' });
+    // A delivery that failed or was rejected arrives with its state and error: sent back, with the class and not the message.
+    const failed = run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r3', state: 'failed', error: { class: 'contract_violation', message: 'ticket text here' }, nodes: {} } });
+    expect(failed).toMatchObject({ status: 'sent_back', pr_url: '', child_state: 'failed', failure: 'contract_violation' });
+    expect(JSON.stringify(failed)).not.toContain('ticket text here');
+    expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r4', state: 'failed', error: { class: 'internal' }, nodes: { open_pr: { url: 'https://github.com/acme/shop/pull/8', number: 8 } } } })).toMatchObject({ status: 'shipped', failure: 'internal' });
+    expect(run('ai-sdlc-factory', 'outcome.py', { child: { run_id: 'r1', state: 'succeeded', nodes: {} } })).toMatchObject({ failure: '' });
   });
 });
 
@@ -235,6 +275,33 @@ describe('score.py: the readiness level', () => {
     const unknown = score({ files: all, runs: runs('failure'), open_tickets: null });
     expect(unknown).toMatchObject({ propose_fix: false, has_unavailable: true });
     expect(unknown.unavailable).toContain('Whether a ticket is already open for the failing CI');
+  });
+});
+
+describe('verify scripts', () => {
+  const verdict = (o: any) => run('ai-sdlc-factory-verify', 'verdict.py', { repo: 'a/b', staging_branch: 'dev', labels: ['ready', 'priority', 'release-verify'], ...o });
+  const ok = (name: string, status = 'pass', evidence = ['src/a.ts']) => ({ name, status, evidence, gap: '' });
+  const green = [{ id: '1', status: 'success', branch: 'dev' }];
+
+  it('is verified only when nothing failed, nothing is unavailable and CI on the branch passed', () => {
+    expect(verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: green })).toMatchObject({ overall: 'verified', propose_fix: false, ticket: null });
+  });
+
+  it('never counts a pass without a file as evidence, and no CI runs is not a green CI', () => {
+    const v = verdict({ verify: { method: 'read', journeys: [ok('Checkout', 'pass', [])], invariants: [] }, runs: green });
+    expect(v).toMatchObject({ overall: 'unavailable', counts: { pass: 0, unavailable: 1 } });
+    expect(verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: [{ id: '1', status: 'success', branch: 'main' }] })).toMatchObject({ overall: 'unavailable', ci_status: 'unavailable' });
+    expect(verdict({ verify: { method: 'read', journeys: [], invariants: [] }, runs: green }).overall).toBe('unavailable');
+  });
+
+  it('fails on a failed journey or a red CI, and proposes one labelled ticket for the failures', () => {
+    const v = verdict({ verify: { method: 'read', journeys: [ok('Checkout', 'fail', ['src/pay.ts']), ok('Login')], invariants: [{ statement: 'No data loss', status: 'fail', evidence: [], gap: 'drops rows' }] }, runs: green });
+    expect(v).toMatchObject({ overall: 'failed', propose_fix: true, counts: { fail: 2, pass: 1 } });
+    expect(v.ticket.labels).toEqual(['ready', 'priority', 'release-verify']);
+    expect(v.ticket.body).toContain('Checkout');
+    expect(v.ticket.body).toContain('drops rows');
+    const red = verdict({ verify: { method: 'read', journeys: [ok('Checkout')], invariants: [] }, runs: [{ id: '2', status: 'failure', branch: 'dev' }] });
+    expect(red).toMatchObject({ overall: 'failed', propose_fix: false });
   });
 });
 
