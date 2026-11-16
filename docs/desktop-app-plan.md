@@ -1,102 +1,104 @@
-# Desktop app plan (macOS and Windows)
+# Desktop app (macOS and Windows)
 
-Status: planned, nothing built. Written 2026-10-27. Builds on step 6 of [local-mode-plan.md](local-mode-plan.md).
+Status: built on Windows (verified, see below); macOS written but not yet run. Updated 2026-11-16. Builds on step 6
+of [local-mode-plan.md](local-mode-plan.md).
 
 ## Decisions
 
 | # | Question | Decision |
 |---|---|---|
 | 1 | Licensing | Free, Apache 2.0, same as the repo |
-| 2 | Work on a user-chosen folder | Yes, opt-in per workflow, shown in the run plan (Phase 3) |
+| 2 | Work on a user-chosen folder | Yes, opt-in per workflow, shown in the run plan ([local-workspaces.md](local-workspaces.md)) |
 | 3 | Code signing | None for now: unsigned builds (consequences below) |
 | 4 | `git`, `uv`, `bun` | Detect and guide; do not bundle |
+| 5 | Shell | Electron, as a thin shell around a Node sidecar (not the server inside Electron) |
+| 6 | Distribution | GitHub Releases only: a pushed `v*.*.*` tag builds the installers and attaches them, with SHA-256 checksums, to a **draft** release. No npm, stores, winget or Homebrew |
 
-## Approach: wrap, do not convert
+## Design: an Electron shell around the `azhi up` code
 
-An Electron shell runs the existing `startLocal()` (`src/local/up.ts`) in its main process and opens
-the web UI at the loopback URL. `src/` is unchanged apart from the build changes below. Electron over
-Tauri because the server, worker, Temporal client and PGlite all need Node; Tauri would still ship and
-supervise a Node sidecar.
+```
+Azhi Flow.exe / .app  (Electron: window, tray, notifications)
+  └─ resources/node/node        bundled Node 22, pinned and checksum-verified
+       └─ resources/app/src/local/sidecar.js   compiled backend = the `azhi up` code
+            ├─ Temporal dev server   resources/temporal/temporal  (AZHI_TEMPORAL_BIN)
+            ├─ PGlite database       ~/.azhi/local/db
+            └─ server + worker       http://127.0.0.1:7400
+```
 
-## Critical path: there is no build step
+Why a sidecar and not `startLocal()` inside Electron's main process (the earlier plan):
 
-The CLI runs TypeScript through `tsx` (`bin/azhi.js`), and Temporal bundles the workflow with webpack
-and SWC when the worker starts. A packaged app cannot depend on either. Phase 0 exists to prove this.
+- Six places start `process.execPath` to run `bin/azhi.js` or the MCP bridge (the Claude, Codex and OpenCode
+  harnesses). Inside Electron that is the Electron binary, so each would launch another copy of the app.
+- A busy worker would share a process with the window.
+- The Temporal native addon runs under the Node it is tested on.
 
-## Phase 0: spike (about 3 days)
+The shell keeps `nodeIntegration` off, `contextIsolation` and `sandbox` on, no preload, and only lets the window
+show the local server; other links open in the default browser. The owner token reaches the page only in the URL
+fragment (the same handoff as `azhi open`). Quitting asks the sidecar to stop over IPC (Windows has no SIGTERM), so
+PGlite and Temporal close cleanly.
 
-1. Compile `src/` to `dist/` (esbuild or `tsc`); keep the `tsx` path for development.
-2. Pre-bundle the interpreter workflow with `bundleWorkflowCode()` at build time and pass
-   `workflowBundle` to `Worker.create` in `src/runtime/interpreter.ts`. No webpack or SWC at runtime,
-   which also retires the `SWC_NATIVE_BINDING_CACHE` Windows workaround.
-3. Run `startLocal()` from `dist/` under plain Node on Windows and macOS.
-4. Kill criterion: if the pre-bundled workflow cannot run the existing e2e tests, stop and revisit.
+## What was built
 
-## Phase 1: the shell (about 1 week)
+| Piece | Where |
+|---|---|
+| Compiled backend with no `tsx` and no bundling at start-up | `npm run build:app` (`scripts/build-app.mjs`, `tsconfig.build.json`) writes `build/app` |
+| Pre-bundled interpreter workflow | `workflow-bundle.js` and `interpreter-build.json` next to `src/runtime/interpreter.ts`; the source path is used when they are absent |
+| Compiled-or-source launchers | `bin/azhi.js`, `bin/azhi-gateway-mcp.js` |
+| Sidecar entry | `src/local/sidecar.ts` |
+| Pinned Node and Temporal CLI | `scripts/fetch-runtime.mjs` |
+| Shell, tray, notifications, update check, missing-tools prompt | `desktop/src/main.ts`, `desktop/src/background.ts` |
+| Packaging | `desktop/electron-builder.yml`, `desktop/scripts/after-pack.cjs`, `desktop/scripts/mac-adhoc-sign.cjs` |
+| CI | `.github/workflows/desktop.yml` (Windows x64, macOS arm64, macOS x64) |
 
-- `desktop/` package: Electron main process, single-instance lock, splash with progress.
-- Startup: `startLocal({ port: 0 })`, read `server.localTokenFile`, open
-  `http://127.0.0.1:<port>/ui#<token>` (the same handoff as `azhi open`). Quit calls `handle.stop()`.
-- Renderer: `nodeIntegration` off, `contextIsolation` on, sandboxed, navigation limited to the loopback
-  origin, existing CSP kept (`src/web/routes.ts`). The token appears only in the window URL.
-- Bundle the Temporal CLI in the installer (look in `resources/` before downloading in
-  `ensureTemporalCli`); the pinned SHA-256 check stays.
-- Data stays in `~/.azhi`.
+Behaviour: closing the window hides it to the tray so schedules and approvals keep running; Quit stops everything.
+A notification appears for each new approval the signed-in user can decide (one summary if several arrive at once).
+Once a day the app asks GitHub for the latest release of this repository (no user data sent; set
+`AZHI_DESKTOP_NO_UPDATE_CHECK=1` to turn it off) and notifies with a link, never an in-place update. Once per set of
+missing tools it lists what the worker did not find (Git, Python or uv, Bun) with links to the installers.
 
-## Phase 2: native behavior (3 to 4 days)
+## What was learned building it
 
-- Tray icon and background mode, so schedules and approvals still fire with the window closed.
-- Notifications for pending approvals.
-- Update check that notifies and links to the release page (see Unsigned builds for why not silent update on macOS).
+- **electron-builder never copies a folder called `node_modules`** from `extraResources`, whatever the filter says.
+  `desktop/scripts/after-pack.cjs` copies the backend's modules in. This is easy to miss: if the package sits inside a
+  source checkout, Node finds the checkout's `node_modules` and the app appears to work. Test a package from outside the
+  repository.
+- **Size.** The staged backend is about 1.2 GB before pruning, 825 MB after: `opencode-ai` leaves a copy of its binary at
+  `opencode-ai/bin/opencode.exe` (the only path Azhi runs), so the build removes the two platform packages it came from
+  (about 200 MB each). The rest is the Claude Agent SDK's native runtime (238 MB), Temporal's native bridge (145 MB),
+  OpenCode (202 MB) and the Temporal CLI (160 MB, outside `node_modules`). Installer sizes are in the release notes.
+- **Start-up** takes 40 to 60 seconds on a cold first launch on the development machine (Temporal dev server, database
+  migrations, worker registration); the window shows a "starting" page meanwhile.
+- A hook-free `tar` is not guaranteed on Windows (Git's GNU tar cannot read `.zip`), so `fetch-runtime.mjs` extracts
+  with PowerShell there.
 
-## Phase 3: worker prerequisites and local folders (about 1.5 weeks)
+## Verified, and not
 
-- First-run "what is missing" screen from the `capabilities.ts` detection (`azhi doctor` output) for
-  `git`, `uv` or Python, `bun`, OpenCode. Detect and link to installers; bundle nothing.
-- `limits.memory_mb` is enforced only on Linux (`prlimit`). Elsewhere the run plan warns that it is not enforced
-  and the step runs with its time limit; the UI shows the reason. `AZHI_REQUIRE_MEMORY_LIMITS=1` makes it a blocker.
-- `workspace: local`: a workflow may point its workspace at a folder the user picks (native folder
-  dialog). Requirements, because this weakens isolation:
-  - off by default, opt-in per workflow, and recorded in the run plan as a capability with its own
-    policy coverage mark (not "enforced" for filesystem isolation);
-  - the folder is chosen in the UI by the user, never taken from workflow, ticket, issue or PR text;
-  - writes still go through the gateway and ledger; the approval gate and taint rule apply unchanged;
-  - nothing merges, closes or force-pushes (project rule), so a git folder gets a branch, not a push to the default branch.
-  Built, apart from the native folder dialog (the path is typed on the Workers page): see
-  [local-workspaces.md](local-workspaces.md). Harness steps work in a git worktree of the folder, on the
-  run's own branch, never in the folder itself.
-- Close the open items from the local-mode plan: single-process PGlite crash-durability test, macOS runs.
+Verified on Windows 11 with Node 24 on the host: the compiled backend under plain Node (`doctor` all ok, a Python
+script workflow, stop and restart with run history kept); the Electron window (signed in, renderer has no Node, second
+launch focuses the first, close-to-tray with the backend still healthy, Quit leaves no `node` or `temporal` process and
+removes the pid file); the packaged `win-unpacked` app run from outside the repository (bundled Node and Temporal,
+`claude-agent-sdk` and OpenCode found, a workflow succeeds).
 
-## Phase 4: packaging and CI (about 1 week)
-
-- `electron-builder`: macOS `dmg` and `zip` (x64 and arm64), Windows NSIS installer (x64; arm64 only if
-  Temporal, PGlite and the native addon pass).
-- Native addon: `@temporalio/core-bridge` must be listed in `asarUnpack` with the right per-arch binaries.
-- CI matrix `ubuntu`, `macos`, `windows` running `npm run test:local`; installers built on tags and
-  attached to a GitHub release.
+Not verified: running the NSIS installer itself; any macOS build (the workflow and the ad-hoc signing hook are written
+but have never run); a live OpenCode, Claude or Codex harness step from the packaged app (they need model access);
+notification delivery on screen; the update check against a real release.
 
 ## Unsigned builds: what users will hit
 
-- **macOS:** Gatekeeper blocks the first launch. On macOS 15 and later the right-click Open shortcut is
-  gone; users go to System Settings, Privacy & Security, Open Anyway (or run `xattr -dr
-  com.apple.quarantine`). Apple Silicon requires at least an ad-hoc signature, which electron-builder
-  applies by default; keep it, and ad-hoc sign the bundled Temporal binary too. Silent auto-update on
-  macOS needs a signed app, so updates there are a manual download.
-- **Windows:** SmartScreen shows "Windows protected your PC"; users click More info, then Run anyway.
-  Expect more antivirus false positives than for a signed app. Auto-update through `electron-updater`
-  works unsigned as long as no publisher name is pinned.
-- Publish SHA-256 checksums with each release and put the steps above in the install docs.
-- Revisit signing before wider distribution. Apple's developer program is a yearly fee; Windows has
-  cloud-signing options. Neither changes the code, only the build pipeline.
+- **macOS:** Gatekeeper blocks the first launch. On macOS 15 and later the right-click Open shortcut is gone; users go
+  to System Settings, Privacy & Security, Open Anyway (or run `xattr -dr com.apple.quarantine "/Applications/Azhi
+  Flow.app"`). Apple Silicon requires at least an ad-hoc signature: `mac-adhoc-sign.cjs` signs every bundled Mach-O
+  file and the app. Silent auto-update on macOS needs a signed app, so updates there are a manual download.
+- **Windows:** SmartScreen shows "Windows protected your PC"; users click More info, then Run anyway. Expect more
+  antivirus false positives than for a signed app.
+- Each release publishes SHA-256 checksums (`SHA256SUMS.txt`); the steps above are in [install.md](install.md).
+- Revisit signing before wider distribution. Apple's developer program is a yearly fee; Windows has cloud-signing
+  options. Neither changes the code, only the build pipeline.
 
-## Sizing
+## Open items
 
-About 4 to 5 weeks for one developer to an unsigned beta. Inferred from reading the code, not
-measured; Phases 0 and 3 are the uncertain ones.
-
-## Risks
-
-- Workflow pre-bundling does not work with the interpreter's imports (Phase 0 decides).
-- PGlite or Temporal dev server misbehave under macOS file locking or Windows antivirus scanning.
-- Electron size (about 150 to 250 MB installer) plus the Temporal CLI.
-- `workspace: local` is a real weakening of the product's isolation claim; it must stay visibly opt-in.
+- Run the macOS builds on real Macs (arm64 and x64); `macos-15-intel` is the assumed runner label for x64.
+- Single-process PGlite crash-durability test (from the local-mode plan).
+- A native folder picker for `workspace.local` (the path is typed on the Workers page today).
+- Windows arm64 only if Temporal, PGlite and the native addon pass.
+- Decide whether to ship the Claude Agent SDK runtime in the installer or fetch it on first use (238 MB).

@@ -201,6 +201,10 @@ process on the same data, and script memory limits only on Linux. macOS is not y
 (`npm ci` installs OpenCode; add ripgrep with `winget install BurntSushi.ripgrep.MSVC`, then
 `npx azhi setup` checks both); this is new and not yet checked by a live run on Windows.
 
+A desktop app for Windows and macOS (a window, tray icon and notifications around local mode, no Node or Docker
+needed; unsigned builds, macOS not yet run on a Mac) is built from `desktop/`; see [docs/install.md](docs/install.md#desktop-app-windows-and-macos-one-person-on-one-machine)
+and [docs/desktop-app-plan.md](docs/desktop-app-plan.md).
+
 ### Linux
 
 ```bash

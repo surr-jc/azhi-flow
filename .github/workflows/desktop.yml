@@ -1,0 +1,110 @@
+name: Desktop app
+
+# Builds the unsigned Azhi Flow desktop installers (docs/desktop-app-plan.md). A pull request or a manual
+# run builds them and keeps them as workflow artifacts; a pushed version tag also attaches them, with
+# SHA-256 checksums, to a DRAFT release. Nothing is published until a person publishes the draft.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'scripts/build-app.mjs'
+      - 'scripts/fetch-runtime.mjs'
+      - 'src/local/**'
+      - 'src/runtime/interpreter.ts'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            builder: --win --x64
+          - name: macos-arm64
+            os: macos-latest
+            builder: --mac --arm64
+          - name: macos-x64
+            os: macos-15-intel
+            builder: --mac --x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and check the backend
+        run: |
+          npm ci
+          npm run typecheck
+
+      # Native modules are installed per platform inside build/app, so each OS builds its own.
+      - name: Build the compiled backend
+        run: npm run build:app
+
+      - name: Install the desktop shell
+        working-directory: desktop
+        run: |
+          npm ci
+          node node_modules/electron/install.js
+
+      - name: Fetch the pinned Node and Temporal CLI (checksum-verified)
+        run: node scripts/fetch-runtime.mjs
+
+      - name: Package the installer
+        working-directory: desktop
+        run: npm run dist -- ${{ matrix.builder }} --publish never
+
+      - name: Checksums
+        shell: bash
+        working-directory: desktop/out
+        run: |
+          for f in *.exe *.dmg *.zip; do
+            if [ -f "$f" ]; then
+              if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi >> "SHA256SUMS-${{ matrix.name }}.txt"
+            fi
+          done
+          cat "SHA256SUMS-${{ matrix.name }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: azhi-flow-${{ matrix.name }}
+          path: |
+            desktop/out/*.exe
+            desktop/out/*.dmg
+            desktop/out/*.zip
+            desktop/out/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  draft-release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat dist/SHA256SUMS-*.txt > SHA256SUMS.txt
+          gh release create "${{ github.ref_name }}" dist/*.exe dist/*.dmg dist/*.zip SHA256SUMS.txt \
+            --repo "${{ github.repository }}" --draft --title "${{ github.ref_name }}" \
+            --notes "Unsigned desktop builds. See docs/install.md for the Gatekeeper and SmartScreen steps. Verify downloads against SHA256SUMS.txt."
