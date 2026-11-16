@@ -27,7 +27,8 @@
           "author": {"type": "string"},
           "status": {"type": "string"},
           "reason": {"type": "string"},
-          "resolution_url": {"type": "string"}
+          "resolution_url": {"type": "string"},
+          "draft": {"type": ["boolean", "null"]}
         }
       }
     },

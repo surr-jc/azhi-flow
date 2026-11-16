@@ -13,7 +13,7 @@ import { loadExample } from '../src/api/examples.js';
 
 /**
  * The PR conflict sweep example (examples/pr-conflict-sweep): it compiles against its own tool registration, the
- * lister keeps only conflicting same-repository pull requests, and the two scripts fail closed on unreadable children.
+ * lister keeps only conflicting same-repository pull requests, the fan-out is one parallel step, and the summary script fails closed on unreadable children.
  */
 const PKG = 'examples/pr-conflict-sweep';
 
@@ -34,30 +34,40 @@ describe('pr-conflict-sweep example', () => {
     return JSON.parse(r.stdout);
   };
 
-  it('round_outcome reads the resolver child and fails closed', () => {
-    const base = { repo: 'acme/shop', number: 7, last: false };
-    const child = (nodes: unknown, state = 'succeeded') => ({ ...base, child: { state, nodes } });
-    expect(py('round_outcome.py', child({ open_pr: { repo: 'acme/shop', number: 31, draft: true } }))).toMatchObject({ status: 'resolved', url: 'https://github.com/acme/shop/pull/31', draft: true, last: false });
-    expect(py('round_outcome.py', child({ open_pr: { output: { repo: 'acme/shop', number: 31 } } }))).toMatchObject({ status: 'resolved' });
-    expect(py('round_outcome.py', child({ give_up: {} }))).toMatchObject({ status: 'needs_manual' });
-    expect(py('round_outcome.py', child({ skip_report: {} }))).toMatchObject({ status: 'skipped' });
-    expect(py('round_outcome.py', child({}, 'failed'))).toMatchObject({ status: 'failed' });
-    expect(py('round_outcome.py', child({ open_pr: { repo: 'evil/other', number: 31 } }))).toMatchObject({ status: 'unknown' });
-    expect(py('round_outcome.py', { ...base, child: 'nope' })).toMatchObject({ status: 'unknown', last: false });
-    // Unknown whether another follows: the loop ends.
-    expect(py('round_outcome.py', { repo: 'acme/shop', number: 7, child: null }).last).toBe(true);
+  it('fans out with one parallel step over the list, not a loop written out per round', () => {
+    const pkg = packageFromDirectory(PKG);
+    const tools = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools;
+    const plan = compile(loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!, { pkg, catalog: staticCatalog(tools) }).plan!;
+    expect(plan.nodes.map((n) => n.id)).toEqual(['queue', 'route', 'resolve_each', 'summary', 'summary_report']);
+    const each = plan.nodes.find((n) => n.id === 'resolve_each')!;
+    expect(each.type).toBe('parallel');
+    expect(each.def).toMatchObject({ for_each: { ref: 'nodes.queue.output.items' }, max_concurrency: 1, node: { type: 'subworkflow', workflow: 'pr-conflict-resolver', on_failure: 'continue', input: { pr: { ref: 'item.number' } } } });
+    // What the children return is untrusted, like any subworkflow's output.
+    expect(plan.taint.untrusted.resolve_each).toMatch(/subworkflow/);
   });
 
-  it('summarize counts every pull request and never calls an untried one resolved', () => {
-    const items = [1, 2, 3].map((number) => ({ number, title: `T${number} <b>x</b>`, url: `https://github.com/acme/shop/pull/${number}`, author: 'a' }));
-    const s = py('summarize.py', { repo: 'acme/shop', dry_run: false, items, unknown: [9], truncated: true, rounds: [{ number: 1, status: 'resolved', reason: 'ok', url: 'https://github.com/acme/shop/pull/40' }, { number: 2, status: 'failed', reason: 'not_completed' }] });
-    expect(s.counts).toMatchObject({ resolved: 1, failed: 1, not_tried: 1 });
-    expect(s.headline).toBe('1 of 3 conflicting pull request(s) resolved');
-    expect(s.prs[0]).toMatchObject({ title: 'T1 b x /b', resolution_url: 'https://github.com/acme/shop/pull/40' });
-    expect(s.prs[2].status).toBe('not_tried');
+  it('summarize reads each resolver child, fails closed, and never calls an untried one resolved', () => {
+    const items = [1, 2, 3, 4, 5, 6, 7].map((number) => ({ number, title: `T${number} <b>x</b>`, url: `https://github.com/acme/shop/pull/${number}`, author: 'a' }));
+    const ok = (nodes: unknown) => ({ state: 'succeeded', nodes });
+    const children = [
+      ok({ open_pr: { repo: 'acme/shop', number: 40, draft: true } }),
+      ok({ open_pr: { output: { repo: 'acme/shop', number: 41 } } }),
+      ok({ give_up: {} }),
+      ok({ skip_report: {} }),
+      { state: 'failed', nodes: {} },
+      ok({ open_pr: { repo: 'evil/other', number: 42 } }),
+      // The seventh pull request has no child: the fan-out ended before it.
+    ];
+    const s = py('summarize.py', { repo: 'acme/shop', dry_run: false, items, unknown: [9], truncated: true, children });
+    expect(s.prs.map((p: any) => p.status)).toEqual(['resolved', 'resolved', 'needs_manual', 'skipped', 'failed', 'unknown', 'not_tried']);
+    expect(s.counts).toEqual({ resolved: 2, needs_manual: 1, skipped: 1, failed: 1, unknown: 1, not_tried: 1 });
+    expect(s.headline).toBe('2 of 7 conflicting pull request(s) resolved');
+    expect(s.prs[0]).toMatchObject({ title: 'T1 b x /b', resolution_url: 'https://github.com/acme/shop/pull/40', draft: true, reason: 'ok' });
+    expect(s.prs[5]).toMatchObject({ resolution_url: '', reason: 'unreadable' });
     expect(s.unknown).toEqual([9]);
-    expect(py('summarize.py', { repo: 'acme/shop', dry_run: true, items, rounds: [] }).headline).toContain('dry run');
-    expect(py('summarize.py', { repo: 'acme/shop', items: [], rounds: [] }).headline).toBe('No conflicting pull request found');
+    expect(py('summarize.py', { repo: 'acme/shop', items: items.slice(0, 1), children: ['nope'] }).prs[0].status).toBe('unknown');
+    expect(py('summarize.py', { repo: 'acme/shop', dry_run: true, items, children: [] }).headline).toContain('dry run');
+    expect(py('summarize.py', { repo: 'acme/shop', items: [], children: [] }).headline).toBe('No conflicting pull request found');
   });
 
   describe('github.conflicted-prs', () => {

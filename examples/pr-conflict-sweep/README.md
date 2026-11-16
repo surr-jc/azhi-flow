@@ -33,8 +33,10 @@ azhi run examples/pr-conflict-sweep -i repo=OWNER/REPO -i limit=5
 
 1. **List.** Open, from this repository (not a fork), `mergeable_state` dirty, oldest first. A pull request whose
    mergeability GitHub has not computed yet is listed as *unknown*, never as clean: run the sweep again later.
-2. **Resolve.** One child run of `pr-conflict-resolver` per pull request, one after the other. A child that is
-   rejected at its approval, expires or fails does not stop the sweep.
+2. **Resolve.** A `parallel` step fans out over the list found at run time: one child run of `pr-conflict-resolver`
+   per pull request, in one step of the plan. A child that is rejected at its approval, expires or fails does not
+   stop the sweep. `max_concurrency` is 1, so they run one after the other; raise it in `workflow.yaml` to resolve
+   several at once (each child clones the repository and runs the tests on the worker).
 3. **Summary.** Each pull request with its result: `resolved` (with the resolution pull request), `needs_manual`
    (the resolver commented why), `skipped`, `failed` or `not_tried`.
 
@@ -42,10 +44,10 @@ azhi run examples/pr-conflict-sweep -i repo=OWNER/REPO -i limit=5
 
 | Skill | This workflow |
 |---|---|
-| Resolves in parallel, one agent per worktree | One at a time: every child runs the tests on a worker and waits for its own approval |
+| Resolves in parallel, one agent per worktree | A fan-out of child runs, one at a time by default (`max_concurrency: 1`): every child runs the tests on a worker and waits for its own approval |
 | Pushes the merge to the head branch | Never touches the contributor's branch; opens a pull request into it after approval |
 | Fork pull requests via the fork URL | Forks are skipped |
-| `--concurrency`, `--limit` | `limit` only |
+| `--concurrency`, `--limit` | `limit` as an input; concurrency is `max_concurrency` in `workflow.yaml` |
 | Verification optional (`no-verify`) | The resolver's `inconclusive` result opens a draft |
 
 ## Known limits
