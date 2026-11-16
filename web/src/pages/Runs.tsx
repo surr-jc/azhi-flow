@@ -1,11 +1,11 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { api, atLeast, type Overview, type RunRow, type WorkflowSummary } from '../api';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState, type ReactNode } from 'react';
+import { api, atLeast, TERMINAL, type Overview, type RunRow, type WorkflowSummary } from '../api';
 import { useMe } from '../App';
 import { useRoute } from '../router';
 import { Link } from '../router';
-import { ErrorNote, Loading, money, num, PageHead, Panel } from '../ui';
-import { RunTable } from './Overview';
+import { ago, Badge, ErrorNote, Loading, money, num, PageHead, Panel, RunLink, StateBadge, useConfirm, when } from '../ui';
+import { duration } from './Overview';
 
 /** One quiet line of system state. Zeros stay grey; only counts that need a person get colour. */
 function StatusBar({ o, active }: { o: Overview; active: string }) {
@@ -40,6 +40,76 @@ function NeedsYou({ o }: { o: Overview }) {
     <div className="needs-you" role="status">
       <span><b>{num(o.approvals.mine)}</b> approval{o.approvals.mine === 1 ? '' : 's'} waiting for you</span>
       <Link to="/ui/approvals" className="button">Review approvals</Link>
+    </div>
+  );
+}
+
+const GLYPH: Record<string, string> = { succeeded: '✓', failed: '✕', delivery_failed: '✕', expired: '✕', cancelled: '–', waiting: '…', running: '▶', queued: '…', cancelling: '…' };
+const tone = (s: string) => (s === 'succeeded' ? 'ok' : ['failed', 'delivery_failed', 'expired'].includes(s) ? 'bad' : ['waiting', 'queued', 'cancelling'].includes(s) ? 'warn' : s === 'running' ? 'run' : 'idle');
+const secs = (r: RunRow) => (r.ended_at ? Math.max(0, Math.round((new Date(r.ended_at).getTime() - new Date(r.created_at).getTime()) / 1000)) : null);
+
+/** Compact run list; selecting a row opens its details beside it. Run text stays plain text, never a command. */
+function RunConsole({ runs, empty, emptyHint, emptyAction, cancel }: { runs: RunRow[]; empty: string; emptyHint: string; emptyAction?: ReactNode; cancel: boolean }) {
+  const [picked, setPicked] = useState('');
+  const [copied, setCopied] = useState(false);
+  const qc = useQueryClient();
+  const [ask, dialog] = useConfirm();
+  const stop = useMutation({
+    mutationFn: (id: string) => api(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['runs'] }),
+  });
+  if (!runs.length) return <div className="runs-empty"><b>{empty}</b><span className="muted">{emptyHint}</span>{emptyAction}</div>;
+  const sel = runs.find((r) => r.id === picked) ?? runs[0]!;
+  const siblings = runs.filter((r) => r.workflow === sel.workflow && secs(r) !== null).slice(0, 8);
+  const longest = Math.max(1, ...siblings.map((r) => secs(r) ?? 0));
+  const open = !TERMINAL.includes(sel.state) && sel.state !== 'cancelling';
+  const copy = () => { void navigator.clipboard?.writeText(sel.id).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); };
+  return (
+    <div className="run-console">
+      {dialog}
+      <ul className="run-list" aria-label="Runs">
+        {runs.map((r) => (
+          <li key={r.id}>
+            <button type="button" className={`run-item ${tone(r.state)}${r.id === sel.id ? ' selected' : ''}`} aria-pressed={r.id === sel.id} onClick={() => setPicked(r.id)}>
+              <span className="run-glyph" aria-hidden="true">{GLYPH[r.state] ?? '·'}</span>
+              <span className="run-main"><b>{r.workflow}<span className="muted">@{r.version}</span></b><span className="mono small muted">{r.id}</span></span>
+              <span className="run-meta"><span>{r.ended_at ? duration(r.created_at, r.ended_at) : '—'}</span><span className="muted">{ago(r.created_at)}</span></span>
+              <span className="sr-only">{r.state.replaceAll('_', ' ')}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <aside className="run-detail" aria-label="Selected run">
+        <div className="run-detail-head"><span className="eyebrow">Selected run</span><StateBadge state={sel.state} />{sel.test ? <Badge tone="idle">test</Badge> : null}</div>
+        <h2><Link to={`/ui/workflows/${encodeURIComponent(sel.workflow)}`}>{sel.workflow}</Link><span className="muted">@{sel.version}</span></h2>
+        <code className="mono small muted run-id">{sel.id}</code>
+        {sel.flags?.waiting_reason ? <p className="small muted">Waiting: {String(sel.flags.waiting_reason.reason).replace('_', ' ')}</p> : null}
+        <dl className="run-facts">
+          <div><dt>Started</dt><dd title={when(sel.created_at)}>{ago(sel.created_at)}</dd></div>
+          <div><dt>Took</dt><dd>{sel.ended_at ? duration(sel.created_at, sel.ended_at) : '—'}</dd></div>
+          <div><dt>Trigger</dt><dd>{sel.parent_run_id ? <>↳ <RunLink id={sel.parent_run_id} /></> : sel.trigger}</dd></div>
+          <div><dt>Started at</dt><dd>{when(sel.created_at)}</dd></div>
+        </dl>
+        {siblings.length > 1 ? (
+          <div className="run-compare">
+            <span className="eyebrow">Other {sel.workflow} runs</span>
+            {siblings.map((r) => (
+              <div key={r.id} className={`run-bar ${tone(r.state)}${r.id === sel.id ? ' me' : ''}`}>
+                <span className="mono">@{r.version}</span>
+                <span className="run-track"><span style={{ width: `${Math.max(4, Math.round(((secs(r) ?? 0) / longest) * 100))}%` }} /></span>
+                <span>{duration(r.created_at, r.ended_at!)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {sel.inputs && Object.keys(sel.inputs).length ? <details className="run-inputs"><summary>Inputs</summary><pre className="mono small">{JSON.stringify(sel.inputs, null, 2)}</pre></details> : null}
+        <div className="row run-actions">
+          <Link to={`/ui/runs/${encodeURIComponent(sel.id)}`} className="button primary">Open run</Link>
+          <button type="button" onClick={copy}>{copied ? 'Copied' : 'Copy run id'}</button>
+          {cancel && open ? <button type="button" className="danger" disabled={stop.isPending} onClick={async () => (await ask({ title: `Cancel run ${sel.id}?`, text: 'Steps that have not started will not run.', confirm: 'Cancel run' })) && stop.mutate(sel.id)}>Cancel run</button> : null}
+        </div>
+        <ErrorNote error={stop.error} />
+      </aside>
     </div>
   );
 }
@@ -109,11 +179,9 @@ export function Runs() {
         <label className="row small subs-toggle"><input type="checkbox" checked={subs} onChange={(e) => set('subs', e.target.checked ? '1' : '')} /> Show subworkflow runs</label>
         {state || workflow || text || from || to || subs ? <button type="button" className="small" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : null}
       </div>
-      <Panel>
-        <ErrorNote error={q.error} />
-        {q.data ? <RunTable runs={q.data.pages.flat()} empty={filtered ? 'No runs match these filters' : 'No runs yet'} emptyHint={filtered ? 'Widen the date range or pick another state.' : 'Start a workflow from its page and the run shows up here.'} emptyAction={filtered ? <button type="button" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : undefined} cancel={atLeast(me.data?.role, 'operator')} inputs={Boolean(text)} /> : <Loading />}
-        {q.hasNextPage ? <button onClick={() => q.fetchNextPage()} disabled={q.isFetchingNextPage}>Load more</button> : null}
-      </Panel>
+      <ErrorNote error={q.error} />
+      {q.data ? <RunConsole runs={q.data.pages.flat()} empty={filtered ? 'No runs match these filters' : 'No runs yet'} emptyHint={filtered ? 'Widen the date range or pick another state.' : 'Start a workflow from its page and the run shows up here.'} emptyAction={filtered ? <button type="button" onClick={() => navigate('/ui/runs')}>Clear all filters</button> : undefined} cancel={atLeast(me.data?.role, 'operator')} /> : <Loading />}
+      {q.hasNextPage ? <button onClick={() => q.fetchNextPage()} disabled={q.isFetchingNextPage}>Load more</button> : null}
     </>
   );
 }

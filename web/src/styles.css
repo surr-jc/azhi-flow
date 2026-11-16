@@ -2143,3 +2143,33 @@ details.reinstall > :not(summary) { margin-left: 0; margin-right: 0; }
 .needs-you { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--attention); background: var(--panel); border-radius: 10px; }
 .runs-filters > input[type="search"] { flex: 1 1 220px; min-width: 0; }
 .subs-toggle { margin-left: auto; color: var(--muted); }
+.run-console { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 16px; }
+.run-list { flex: 1 1 520px; min-width: 0; margin: 0; padding: 0; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--shadow); }
+.run-list li + li { border-top: 1px solid var(--line); }
+.run-item { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 14px; width: 100%; min-height: 52px; padding: 6px 16px 6px 13px; border-left: 3px solid transparent; cursor: pointer; }
+.run-item:hover { background: var(--idle-bg); }
+.run-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.run-item.selected { background: var(--accent-bg); border-left-color: var(--accent); }
+.run-glyph { width: 20px; flex: none; text-align: center; font-weight: 700; color: var(--idle); }
+.run-item.ok .run-glyph { color: var(--ok); } .run-item.bad .run-glyph { color: var(--bad); } .run-item.warn .run-glyph { color: var(--warn); } .run-item.run .run-glyph { color: var(--run); }
+.run-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.run-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; font-size: calc(13px * var(--fs, 1)); font-variant-numeric: tabular-nums; }
+.run-detail { flex: 1 1 340px; max-width: 520px; min-width: 0; position: sticky; top: 72px; display: flex; flex-direction: column; gap: 14px; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.run-detail h2 { margin: 0; font-size: calc(20px * var(--fs, 1)); }
+.run-detail-head { display: flex; align-items: center; gap: 8px; }
+.run-detail-head .eyebrow { margin-right: auto; }
+.eyebrow { font-size: calc(12px * var(--fs, 1)); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.run-id { word-break: break-all; }
+.run-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; margin: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.run-facts dt { font-size: calc(12px * var(--fs, 1)); color: var(--muted); } .run-facts dd { margin: 2px 0 0; font-weight: 500; }
+.run-compare { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.run-bar { display: flex; align-items: center; gap: 10px; font-size: calc(13px * var(--fs, 1)); font-variant-numeric: tabular-nums; }
+.run-bar > :first-child { width: 36px; color: var(--muted); } .run-bar > :last-child { width: 60px; text-align: right; }
+.run-track { flex: 1; height: 8px; border-radius: 4px; background: var(--idle-bg); overflow: hidden; } .run-track > span { display: block; height: 100%; border-radius: 4px; background: var(--idle); }
+.run-bar.ok .run-track > span { background: var(--ok); } .run-bar.bad .run-track > span { background: var(--bad); } .run-bar.warn .run-track > span { background: var(--warn); }
+.run-bar.me { font-weight: 600; } .run-bar.me > :first-child { color: var(--ink); }
+.run-inputs pre { max-height: 220px; overflow: auto; margin: 8px 0 0; padding: 10px; background: var(--idle-bg); border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
+.run-actions { flex-wrap: wrap; gap: 10px; }
+.runs-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); }
+@media (max-width: 900px) { .run-detail { position: static; max-width: none; } }
