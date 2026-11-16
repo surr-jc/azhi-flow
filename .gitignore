@@ -90,3 +90,9 @@ site/wiki-dist/
 
 # graphify (local code knowledge graph)
 graphify-out/
+
+# Desktop app build output
+build/
+desktop/resources/
+desktop/out/
+desktop/node_modules/

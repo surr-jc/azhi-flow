@@ -43,7 +43,8 @@
     "demo": "tsx demo/demo.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",
-    "test:local": "cross-env AZHI_TEST_DATABASE_URL=pglite:// vitest run"
+    "test:local": "cross-env AZHI_TEST_DATABASE_URL=pglite:// vitest run",
+    "build:app": "node scripts/build-app.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8",
