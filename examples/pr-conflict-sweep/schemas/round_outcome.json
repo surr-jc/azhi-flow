@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {"enum": ["resolved", "needs_manual", "skipped", "failed", "unknown"]},
+    "number": {"type": ["integer", "null"]},
+    "url": {"type": ["string", "null"]},
+    "draft": {"type": ["boolean", "null"]},
+    "reason": {"type": "string"},
+    "last": {"type": "boolean"}
+  },
+  "required": ["status", "number", "reason", "last"],
+  "additionalProperties": false
+}

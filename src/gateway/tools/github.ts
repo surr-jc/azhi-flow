@@ -313,6 +313,75 @@ export async function pullRequest(cfg: GithubConfig, args: { repo?: unknown; num
   };
 }
 
+const SCAN_MAX = 100;
+
+/**
+ * `github.conflicted-prs` (read): the open pull requests of a repository that GitHub reports as conflicting
+ * (mergeable_state dirty), oldest first. A fork, a draft (unless include_drafts), one of the tool's own branch-prefix
+ * branches and, with `author`, one by someone else is left out. At most SCAN_MAX are checked; the list holds at most
+ * `limit`. A pull request whose mergeability GitHub has not computed yet is named in `unknown`, never counted clean.
+ */
+export async function conflictedPullRequests(
+  cfg: GithubConfig,
+  args: { repo?: unknown; limit?: unknown; include_drafts?: unknown; author?: unknown },
+  token: string | undefined,
+  timeoutMs: number,
+) {
+  const repo = argRepo(cfg, args.repo);
+  const limit = args.limit === undefined ? 10 : Number(args.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new SendError('limit must be 1 to 20', true, ErrorClass.invalidInput);
+  const author = args.author === undefined || args.author === '' ? '' : String(args.author);
+  if (author && !/^[A-Za-z0-9-]{1,39}$/.test(author)) throw new SendError(`not a GitHub login: '${author.slice(0, 60)}'`, true, ErrorClass.invalidInput);
+  const drafts = args.include_drafts === true;
+  const prefix = cfg.branch_prefix ?? 'azhi/';
+  const deadline = Date.now() + timeoutMs;
+  const open = await pages(cfg, token, `/repos/${repo}/pulls?state=open&sort=created&direction=asc`, undefined, timeoutMs);
+  const items: Array<Record<string, unknown>> = [];
+  const unknown: number[] = [];
+  let scanned = 0;
+  let forks = 0;
+  let truncated = false;
+  for (const p of open) {
+    const head = String(p.head?.repo?.full_name ?? '').toLowerCase();
+    // A deleted fork has no head repo: it counts as a fork, so nothing is ever pushed on its behalf.
+    if (!p.head?.repo || head !== String(p.base?.repo?.full_name ?? '').toLowerCase()) {
+      forks++;
+      continue;
+    }
+    if ((p.draft && !drafts) || String(p.head?.ref ?? '').startsWith(prefix)) continue;
+    if (author && String(p.user?.login ?? '').toLowerCase() !== author.toLowerCase()) continue;
+    if (scanned >= SCAN_MAX || Date.now() >= deadline) {
+      truncated = true;
+      break;
+    }
+    scanned++;
+    // The list does not carry mergeability: read each one, asking again while GitHub computes it.
+    let pr = await get(cfg, token, `/repos/${repo}/pulls/${Number(p.number)}`, Math.max(1000, deadline - Date.now()));
+    for (let i = 1; pr.mergeable == null && i <= MERGEABLE_RETRIES && Date.now() + MERGEABLE_BACKOFF_MS * i < deadline; i++) {
+      await new Promise((r) => setTimeout(r, MERGEABLE_BACKOFF_MS * i));
+      pr = await get(cfg, token, `/repos/${repo}/pulls/${Number(p.number)}`, Math.max(1000, deadline - Date.now()));
+    }
+    if (pr.mergeable == null) unknown.push(Number(p.number));
+    else if (pr.mergeable_state === 'dirty') {
+      if (items.length >= limit) {
+        truncated = true;
+        break;
+      }
+      items.push({
+        number: Number(p.number),
+        title: String(p.title ?? '').slice(0, 200),
+        url: String(p.html_url ?? ''),
+        author: String(p.user?.login ?? ''),
+        draft: Boolean(p.draft),
+        base_ref: String(p.base?.ref ?? ''),
+        head_ref: String(p.head?.ref ?? ''),
+        head_sha: String(p.head?.sha ?? ''),
+      });
+    }
+  }
+  return { repo, items, unknown, scanned, skipped_forks: forks, truncated };
+}
+
 /** Inline review comments on one pull request (`github.review-comments`), mapped to the declared shape. Thread resolution needs GraphQL, so it is left out. */
 export async function reviewComments(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
   const repo = argRepo(cfg, args.repo);

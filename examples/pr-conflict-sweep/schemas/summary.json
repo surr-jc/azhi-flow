@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "headline": {"type": "string"},
+    "repo": {"type": "string"},
+    "dry_run": {"type": "boolean"},
+    "total": {"type": "integer"},
+    "counts": {
+      "type": "object",
+      "properties": {
+        "resolved": {"type": "integer"},
+        "needs_manual": {"type": "integer"},
+        "skipped": {"type": "integer"},
+        "failed": {"type": "integer"},
+        "unknown": {"type": "integer"},
+        "not_tried": {"type": "integer"}
+      }
+    },
+    "prs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": {"type": "integer"},
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "author": {"type": "string"},
+          "status": {"type": "string"},
+          "reason": {"type": "string"},
+          "resolution_url": {"type": "string"}
+        }
+      }
+    },
+    "unknown": {"type": "array", "items": {"type": "integer"}},
+    "scanned": {"type": ["integer", "null"]},
+    "skipped_forks": {"type": ["integer", "null"]},
+    "truncated": {"type": "boolean"}
+  },
+  "required": ["headline", "total", "counts", "prs"]
+}

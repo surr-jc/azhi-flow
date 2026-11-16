@@ -1,0 +1,89 @@
+# Sweep a repository for conflicting pull requests and resolve each one with the published pr-conflict-resolver.
+# Adapted from the resolve-pr-conflicts skill (tomzx/agents): find every open pull request that has merge conflicts,
+# then work through them. Differences from the skill: the resolver here is a checked, approval-gated child run (it
+# never pushes to the contributor's branch, and has no force-push), the pull requests are worked one after the other
+# (each child waits for its own approval, and the worker runs the tests), and forks are left out.
+#   queue    github.conflicted-prs lists open, non-fork, non-draft pull requests GitHub reports as conflicting,
+#            oldest first, up to `limit`. One whose mergeability GitHub has not computed yet is listed as unknown.
+#   dry_run  stop after the list: nothing is resolved, nothing is posted.
+#   resolve  one child run of pr-conflict-resolver per pull request. A child that fails or is rejected does not stop
+#            the sweep; the next pull request goes on.
+#   summary  every pull request and what happened to it. Nothing is merged, closed or force-pushed here.
+# Pull request titles are untrusted data: they are shown in the summary and never run or used as a command. Each
+# child's output is read only by scripts that fail closed.
+schema_version: "2.0"
+id: pr-conflict-sweep
+name: Pull request conflict sweep
+tags: [merge-conflict, pull-request, github]
+description: Find every open pull request in a repository that GitHub reports as conflicting and resolve each one with the checked pr-conflict-resolver, one after the other, then summarize. Nothing is merged.
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, for example acme/payments"}
+    limit: {type: integer, default: 5, minimum: 1, maximum: 20, title: Most pull requests to resolve}
+    author: {type: string, default: "", title: Only pull requests by this GitHub login (empty for everyone)}
+    resolve_draft: {type: boolean, default: false, title: Include draft pull requests}
+    dry_run: {type: boolean, default: false, title: Only list the conflicting pull requests (nothing is resolved or posted)}
+  required: [repo]
+nodes:
+  - id: queue
+    type: tool
+    description: The open pull requests GitHub reports as conflicting (mergeable_state dirty), oldest first. Forks and, unless asked, drafts are left out.
+    tool: github.conflicted-prs@1
+    arguments:
+      repo: {ref: inputs.repo}
+      limit: {cel: "has(inputs.limit) ? inputs.limit : 5"}
+      author: {cel: "has(inputs.author) ? inputs.author : ''"}
+      include_drafts: {cel: "has(inputs.resolve_draft) && inputs.resolve_draft"}
+
+  - id: route
+    type: condition
+    description: Resolve only when there is something to resolve and this is not a dry run. Either way the summary runs.
+    expression: "size(nodes.queue.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'"
+    routes: {go: [resolve_each], summary_only: [summary]}
+    default: summary_only
+
+  # Each round resolves pull request number iteration + 1 of the list, and the round's outcome says whether it was the last,
+  # so no round reads past the end. limit is at most 20.
+  - id: resolve_each
+    type: loop
+    description: Resolve each conflicting pull request with the published pr-conflict-resolver (merge, rules, agent, tests, review, its own approval, then a resolution pull request), one after the other.
+    max_iterations: 20
+    on_max: continue
+    body:
+      - id: resolve
+        type: subworkflow
+        description: Run the published pr-conflict-resolver on this round's pull request. It waits for a person at its own approval, so it may take days.
+        workflow: pr-conflict-resolver
+        on_failure: continue
+        timeout: 96h
+        input: {repo: {ref: inputs.repo}, pr: {cel: "nodes.queue.output.items[iteration].number"}, resolve_draft: {cel: "has(inputs.resolve_draft) && inputs.resolve_draft"}}
+      - id: round_outcome
+        type: script
+        description: What happened to this round's pull request. Reads the child's output as data and fails closed.
+        runtime: python
+        entrypoint: scripts/round_outcome.py
+        input: {map: "{'child': nodes.resolve.output, 'repo': inputs.repo, 'number': nodes.queue.output.items[iteration].number, 'last': iteration + 1 >= size(nodes.queue.output.items)}"}
+        output_schema: schemas/round_outcome.json
+        limits: {time: 1m}
+    exit:
+      - {when: "nodes.round_outcome.output.last", outcome: done, reason: Every conflicting pull request was tried}
+
+  # A merge node: it runs on the summary_only route too (nothing to resolve, or a dry run), where the loop never started, so the loop is read behind has().
+  - id: summary
+    type: script
+    description: Every conflicting pull request and its result, and what the sweep did not look at.
+    runtime: python
+    entrypoint: scripts/summarize.py
+    merge: any
+    input:
+      map: "{'repo': inputs.repo, 'dry_run': has(inputs.dry_run) && inputs.dry_run, 'items': nodes.queue.output.items, 'unknown': nodes.queue.output.unknown, 'scanned': nodes.queue.output.scanned, 'skipped_forks': nodes.queue.output.skipped_forks, 'truncated': nodes.queue.output.truncated, 'rounds': has(nodes.resolve_each) ? nodes.resolve_each.output.rounds.map(r, r.steps.round_outcome) : []}"
+    output_schema: schemas/summary.json
+    limits: {time: 1m}
+  - id: summary_report
+    type: report
+    description: The sweep as Markdown, one line per pull request.
+    template: templates/summary.md
+    input: {map: "{'summary': nodes.summary.output}"}
