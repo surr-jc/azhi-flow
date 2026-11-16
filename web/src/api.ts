@@ -192,7 +192,9 @@ export interface TriggerDelivery {
 
 export interface WorkflowSummary {
   slug: string;
-  latest: { id: string; version: number; draft: boolean; signed: boolean; created_at: string; name: string | null; description: string | null } | null;
+  latest: { id: string; version: number; draft: boolean; signed: boolean; created_at: string; name: string | null; description: string | null; tags: string[] } | null;
+  /** Picked from the latest version's tags; null when no tag names a category. */
+  category: string | null;
   published: { id: string; version: number; signed: boolean; created_at: string } | null;
   schedule: { id: string; cron: string; timezone: string; enabled: boolean; next_occurrence_at: string | null } | null;
   last_run: { id: string; state: string; created_at: string } | null;

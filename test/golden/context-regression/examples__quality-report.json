@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "quality-report",
-    "definitionHash": "sha256:5c8520cc72d55482ac5e5dead46183ac8aae95cf9f73683e26fd6d810d9e2a8a",
+    "definitionHash": "sha256:ed188de2b94d2258b41a577d3c32a2bb0ec2cf529036ae9c1f6cdc263c3109c3",
     "inputsSchema": {
       "type": "object",
       "properties": {

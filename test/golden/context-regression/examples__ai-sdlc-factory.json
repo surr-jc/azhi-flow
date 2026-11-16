@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ai-sdlc-factory",
-    "definitionHash": "sha256:3f45e94c607017b7e19c22b9e261ff4700c67d68df1d13867e8319c760f569b7",
+    "definitionHash": "sha256:df4a104c6f4120b017d5e9d234dfc924976c6224d2266d8dcc84fffa44b487d1",
     "inputsSchema": {
       "type": "object",
       "properties": {

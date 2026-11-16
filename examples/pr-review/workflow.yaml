@@ -12,6 +12,7 @@
 schema_version: "2.0"
 id: pr-review
 name: Pull request review (OpenCode)
+tags: [code-review, pull-request, github]
 description: Correctness, security and tests reviewers in isolated checkouts, a summarizer, a PR comment posted automatically, and a Slack notification when there are comments.
 trigger:
   manual: true

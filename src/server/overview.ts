@@ -1,3 +1,4 @@
+import { categoryOf, tagsOf } from '../definition/category.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { pendingApprovals } from './alerts.js';
 import { audit } from './catalog.js';
@@ -78,11 +79,12 @@ export async function workspaceOverview(ctx: AppContext, p: { workspaceId: strin
   };
 }
 
+/** Each workflow with the tags of its latest version and the category they pick (null when no tag names one). */
 export async function workflowSummaries(ctx: AppContext, workspaceId: string) {
-  return (
+  const rows = (
     await ctx.pool.query(
       `SELECT w.slug, w.created_at,
-         (SELECT row_to_json(x) FROM (SELECT v.id, v.version, v.draft, v.signature IS NOT NULL AS signed, v.created_at, v.definition->>'name' AS name, v.definition->>'description' AS description
+         (SELECT row_to_json(x) FROM (SELECT v.id, v.version, v.draft, v.signature IS NOT NULL AS signed, v.created_at, v.definition->>'name' AS name, v.definition->>'description' AS description, v.definition->'tags' AS tags
             FROM workflow_versions v WHERE v.workflow_id = w.id ORDER BY v.version DESC LIMIT 1) x) AS latest,
          (SELECT row_to_json(x) FROM (SELECT v.id, v.version, v.signature IS NOT NULL AS signed, v.created_at
             FROM workflow_versions v WHERE v.workflow_id = w.id AND NOT v.draft ORDER BY v.version DESC LIMIT 1) x) AS published,
@@ -93,6 +95,10 @@ export async function workflowSummaries(ctx: AppContext, workspaceId: string) {
       [workspaceId],
     )
   ).rows;
+  return rows.map((r) => {
+    const tags = tagsOf(r.latest?.tags);
+    return { ...r, latest: r.latest && { ...r.latest, tags }, category: categoryOf(tags) };
+  });
 }
 
 export async function workflowVersions(ctx: AppContext, workspaceId: string, slug: string) {

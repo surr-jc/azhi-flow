@@ -170,7 +170,7 @@ export const TOOLS: AssistantTool[] = [
   },
   {
     name: 'list_workflows',
-    description: 'Every workflow: slug, latest version (name, description, draft, signed), latest published version, schedule and last run.',
+    description: 'Every workflow: slug, category, latest version (name, description, tags, draft, signed), latest published version, schedule and last run.',
     input_schema: obj({}),
     role: 'viewer',
     effect: 'read',

@@ -5,7 +5,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "loop-demo",
-    "definitionHash": "sha256:ab254c634394a4b6e3374b8de5e55edc14dd444b426f22d6acb580c1a3da4963",
+    "definitionHash": "sha256:564c310e5a63d253c0a23834bfc6c2ee92151db2e2cf0a66996474ffba03ab11",
     "inputsSchema": {
       "type": "object",
       "properties": {

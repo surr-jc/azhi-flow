@@ -17,6 +17,7 @@
 schema_version: "2.0"
 id: sdd-breakdown
 name: SDD breakdown (no tracker)
+tags: [breakdown, planning, spec]
 description: Size an epic against the code, split it into ordered Stories when it is too big for one pull request, and return them as data after a person approves the plan. Writes nothing to GitHub.
 trigger:
   manual: true

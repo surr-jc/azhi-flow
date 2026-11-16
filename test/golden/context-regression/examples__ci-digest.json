@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "ci-digest",
-    "definitionHash": "sha256:c88d08287b3833619f6cbf188cd95b177febf3e744a276dc435b526f5cb7d54a",
+    "definitionHash": "sha256:b53e09184fc4ea1029fbcd85892d130ddf4b3e87d263ec9e3fc01dcd9676c284",
     "inputsSchema": {
       "type": "object",
       "properties": {

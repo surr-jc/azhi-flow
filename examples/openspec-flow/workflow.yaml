@@ -1,6 +1,7 @@
 schema_version: "2.0"
 id: openspec-flow
 name: "OpenSpec flow: spec-driven delivery with approval gates"
+tags: [delivery, spec, openspec]
 description: Reads the repository's OpenSpec folder, writes a change (proposal, delta specs, tasks), checks
   it with a deterministic validator and an independent reviewer, waits for a person to approve the specs,
   builds the tasks with tests, verifies the code against the specs, waits for release approval, archives

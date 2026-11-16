@@ -46,7 +46,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-story",
-    "definitionHash": "sha256:081b140c705a8b5a5eaecd6bf57b24b593cbd1544faf67b3627e6526bc4e764e",
+    "definitionHash": "sha256:61737abf3231f902e2eb28700629128bb7abfaf1ba54ba18fcba947ec86f6712",
     "inputsSchema": {
       "type": "object",
       "properties": {

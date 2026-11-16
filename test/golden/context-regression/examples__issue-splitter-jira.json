@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "issue-splitter-jira",
-    "definitionHash": "sha256:88148bd6842154b8e7db2be07a668fbfd928122a03a781df11581a9051ca1ed3",
+    "definitionHash": "sha256:361980074bd355acff2b001edac7eae3ff40d7326b1317ad928a40886a878144",
     "inputsSchema": {
       "type": "object",
       "properties": {

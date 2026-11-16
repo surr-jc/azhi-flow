@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "issue-investigation",
-    "definitionHash": "sha256:1a0a430b15604c4163e014b4c7dd7daf2716c930a12c0f85b2575a9862171b29",
+    "definitionHash": "sha256:371f3a8a165606553f2db3a56b4030d15a187b98743b7867f3fe7f9a9bf97591",
     "inputsSchema": {
       "type": "object",
       "properties": {

@@ -13,6 +13,7 @@
 schema_version: "2.0"
 id: ai-sdlc-factory-readiness
 name: AI SDLC Factory - readiness scorecard
+tags: [readiness, factory]
 description: Grade a repository bronze, silver or gold for running as a software factory (owner, README, PR template, CI workflow, CI green) and, when CI is red, propose a fix ticket for a person to approve.
 trigger:
   manual: true

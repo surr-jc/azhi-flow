@@ -15,6 +15,7 @@
 schema_version: "2.0"
 id: ai-sdlc-factory-plan
 name: AI SDLC Factory - plan a release
+tags: [planning, release, factory]
 description: Plan a release against the code with a person, then split it into dependency-ordered GitHub issues or Jira sub-tasks that the factory delivers one lap at a time.
 trigger:
   manual: true

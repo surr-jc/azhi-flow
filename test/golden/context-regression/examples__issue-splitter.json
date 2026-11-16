@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "issue-splitter",
-    "definitionHash": "sha256:e585f2ad81a619cb048ee50abd18b098c85e563ba81a4c82163cfe6af8ac83aa",
+    "definitionHash": "sha256:fdeed6edf05b1137c682a8d9827ae8133605eebe30041d3de73d1d714850095a",
     "inputsSchema": {
       "type": "object",
       "properties": {

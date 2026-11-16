@@ -4,6 +4,7 @@ import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
 import { alertSettings, computeAlerts, pendingApprovals, sendSlackAlert } from '../server/alerts.js';
 import { auditLog, canDecide, harnessSettings, nextSchedules, setScheduleEnabled, usageSummary, workflowSummaries, workflowVersions, workspaceOverview } from '../server/overview.js';
+import { WORKFLOW_CATEGORIES } from '../definition/category.js';
 import { getDataset } from '../knowledge/datasets.js';
 import { datasetAllows } from '../plan/run-plan.js';
 import { budgetStatus } from '../server/budgets.js';
@@ -60,6 +61,9 @@ export function registerMissionRoutes(app: FastifyInstance, ctx: AppContext) {
   });
 
   app.get('/v1/workflows/summary', async (req) => workflowSummaries(ctx, user(req).workspaceId));
+
+  // The categories and the tags that pick each, for the editor's tag field.
+  app.get('/v1/workflows/categories', async (req) => (user(req), WORKFLOW_CATEGORIES));
 
   app.get('/v1/workflows/:slug/versions', async (req) => workflowVersions(ctx, user(req).workspaceId, (req.params as { slug: string }).slug));
 

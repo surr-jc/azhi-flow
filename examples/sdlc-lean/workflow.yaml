@@ -1,6 +1,7 @@
 schema_version: "2.0"
 id: sdlc-lean
 name: "SDLC lean: a GitHub or Jira ticket to a reviewed pull request in a few agent turns"
+tags: [delivery, sdlc, github, jira]
 description: "Intake, a test run on the base branch (a script-like agent with no tool calls), one planning pass that also lists the open questions, a person approves the design, build with the repository's own tests, one independent review with a single fix round, a person approves the release, then a pushed branch and a pull request. If the base branch fails its own tests the run stops and says so: nothing is built untested."
 trigger:
   manual: true

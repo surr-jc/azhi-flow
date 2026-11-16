@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review",
-    "definitionHash": "sha256:024f2bd86c6ab8b451181df3b442e20c689074f6d0e3ecef3fbd11684173e6d3",
+    "definitionHash": "sha256:6fbc97d9f12590486c32a64ad68456a7fe77633961dc02ebbef29794e2908ed2",
     "inputsSchema": {
       "type": "object",
       "properties": {

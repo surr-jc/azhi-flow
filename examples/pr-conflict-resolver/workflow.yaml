@@ -9,6 +9,7 @@
 schema_version: "2.0"
 id: pr-conflict-resolver
 name: Pull request conflict resolver
+tags: [merge-conflict, pull-request, github]
 description: Merges the base branch into a pull request, resolves the conflicts with rules and an agent, checks the result with tests and an independent review, and after approval opens a pull request with the resolution.
 trigger:
   manual: true

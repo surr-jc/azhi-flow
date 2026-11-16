@@ -39,7 +39,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "openspec-flow",
-    "definitionHash": "sha256:b52e446986c0f0487345d1b0ac289bc795484b9ff4e1f1f4001763bf5c6c8752",
+    "definitionHash": "sha256:3576ac7ab83fe8a74dcf728b5cba2ed366457e361adf1a48634c1e655db6db5e",
     "inputsSchema": {
       "type": "object",
       "properties": {

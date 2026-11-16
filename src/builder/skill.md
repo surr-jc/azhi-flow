@@ -95,6 +95,7 @@ schema_version: "2.0"
 id: weekly-digest            # lowercase slug, unique in the workspace
 name: Weekly digest
 description: One sentence.
+tags: [digest, slack]        # required in what you write; the first known tag picks the category
 trigger:
   schedule: {cron: "0 8 * * 1", timezone: "Asia/Kolkata"}   # optional
   manual: true
@@ -109,6 +110,24 @@ contexts:                    # optional: named sets of input values several step
     ticket: {ref: nodes.intake.output}
 nodes: [...]
 ```
+
+Always write `tags`: 2 to 5 lowercase words (letters, digits, dashes), most telling first. The
+workflow list files a workflow under the category of the first tag below; a workflow with none of
+them lands in "Other", where nobody finds it. Then add tags for the systems it touches (`github`,
+`jira`, `slack`). Keep the tags when you edit an existing workflow unless its purpose changed.
+
+- Delivery: `delivery`, `sdlc`, `implementation`, `feature`, `release`, `factory`
+- Planning: `planning`, `breakdown`, `spec`, `sizing`, `readiness`
+- Code review: `code-review`, `review`, `pull-request`, `merge-conflict`
+- Investigation: `investigation`, `rca`, `debugging`, `incident`, `triage`
+- Testing: `testing`, `qa`, `verification`
+- Reports: `report`, `digest`, `metrics`, `summary`
+- Operations: `operations`, `ci`, `deploy`, `monitoring`, `maintenance`
+- Security: `security`, `compliance`, `audit`, `vulnerability`
+- Documentation: `documentation`, `docs`, `knowledge`
+- Support: `support`, `customer`, `helpdesk`
+- Data: `data`, `etl`, `analytics`
+- Learn Azhi: `learn`, `demo`, `tutorial`
 
 Every node has `id` (letters, digits, underscore), `type`, optional `description`,
 `depends_on: [ids]`, `timeout` ("5m"), `retry: {max_attempts: n}`. Order follows data

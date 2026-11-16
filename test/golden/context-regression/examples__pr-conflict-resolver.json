@@ -53,7 +53,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-conflict-resolver",
-    "definitionHash": "sha256:d3bdead6b9680484eac9a2b845d43c130652bea79420a0cc1e02c4b1bb3fa7d5",
+    "definitionHash": "sha256:1ea7feab89185d4142f03e7e5001b3c0cdac16b48d6f7f91cd6f91674a8ae06d",
     "inputsSchema": {
       "type": "object",
       "properties": {

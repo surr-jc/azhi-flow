@@ -59,6 +59,8 @@ export const workflowSchema = {
     id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$', maxLength: 80 },
     name: { type: 'string' },
     description: { type: 'string' },
+    // What the workflow is about; the first tag a category knows picks its category (definition/category.ts).
+    tags: { type: 'array', items: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$', maxLength: 32 }, maxItems: 10, uniqueItems: true },
     trigger: {
       type: 'object',
       properties: {

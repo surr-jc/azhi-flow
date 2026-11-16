@@ -13,6 +13,7 @@
 schema_version: "2.0"
 id: ai-sdlc-factory-verify
 name: AI SDLC Factory - verify a release
+tags: [verification, release, factory]
 description: Check the release's user journeys and invariants against the code merged into the staging branch, grade it verified, failed or unavailable, and propose one fix ticket for a person to approve when something fails.
 trigger:
   manual: true

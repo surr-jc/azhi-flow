@@ -1,6 +1,7 @@
 schema_version: "2.0"
 id: sdd-story
 name: "SDD Story: one ticket to a signed-off pull request"
+tags: [delivery, spec, openspec]
 description: Takes one Story (a GitHub issue, or a title and body given as inputs when there is no tracker) through a spec-driven delivery - an OpenSpec change a person approves,
   a build with the repository's own tests, a checked archive - then pushes one branch cut from stack_on and
   opens a pull request into base_branch, has pr-review review it, runs one fix round for the findings, and

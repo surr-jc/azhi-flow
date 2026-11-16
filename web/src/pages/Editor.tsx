@@ -749,6 +749,30 @@ function unusedContexts(def: Definition): string[] {
   return Object.keys((def.contexts ?? {}) as Record<string, unknown>).filter((name) => !def.nodes.some((n) => Array.isArray(n.context) && n.context.includes(name)));
 }
 
+/** The workflow's tags as one comma-separated field, with the category the first known tag picks. */
+function TagsRow({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const cats = useQuery({ queryKey: ['workflow-categories'], queryFn: () => api<Array<{ name: string; tags: string[] }>>('/v1/workflows/categories'), staleTime: Infinity });
+  const [text, setText] = useState(tags.join(', '));
+  const category = tags.map((t) => cats.data?.find((c) => c.tags.includes(t))?.name).find(Boolean);
+  const edit = (value: string) => {
+    setText(value);
+    onChange([...new Set(value.split(',').map((t) => t.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')).filter(Boolean))].slice(0, 10));
+  };
+  return (
+    <SettingRow label="Tags" help="Lowercase words, separated by commas. The first tag a category knows picks the category the workflow is listed under.">
+      {(id) => (
+        <>
+          <input id={id} value={text} placeholder="code-review, github" onChange={(e) => edit(e.target.value)} />
+          <div className="muted small">
+            {category ? <>Category: <b>{category}</b>. </> : tags.length && cats.data ? 'No tag names a category yet, so it is listed under Other. ' : null}
+            {cats.data ? <details><summary>Tags that pick a category</summary>{cats.data.map((c) => <div key={c.name}><b>{c.name}</b>: {c.tags.join(', ')}</div>)}</details> : null}
+          </div>
+        </>
+      )}
+    </SettingRow>
+  );
+}
+
 function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: Definition) => void; plan?: RunPlan }) {
   const set = (key: string, value: unknown) => {
     const next: Definition = { ...def };
@@ -763,6 +787,7 @@ function WorkflowForm({ def, onChange, plan }: { def: Definition; onChange: (d: 
       <div className="set-group">
         <SettingRow label="Name" help="Shown in lists, runs and approvals.">{(id) => <input id={id} value={def.name ?? ''} onChange={(e) => set('name', e.target.value)} />}</SettingRow>
         <SettingRow label="Description" help="What the workflow is for, in a sentence or two.">{(id) => <textarea id={id} rows={3} value={def.description ?? ''} onChange={(e) => set('description', e.target.value)} />}</SettingRow>
+        <TagsRow tags={Array.isArray(def.tags) ? def.tags : []} onChange={(t) => set('tags', t.length ? t : undefined)} />
         <ValueInput row field={{ key: 'trigger', label: 'Trigger', kind: 'value', help: 'When it runs: by hand, on a schedule, or both.', hint: 'manual: true, or schedule: {cron, timezone}' }} value={def.trigger} onChange={(v) => set('trigger', v)} />
         <ValueInput row field={{ key: 'inputs', label: 'Inputs (JSON schema)', kind: 'value', help: 'What a run asks for. Steps read them as inputs.name.' }} value={def.inputs} onChange={(v) => set('inputs', v)} />
         <SettingRow label="Default provider and model" help="For every agent step whose profile says name: default. Steps that name their own provider and model keep them. A run can choose differently when it starts.">

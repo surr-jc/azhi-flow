@@ -271,6 +271,8 @@ export interface WorkflowDefinition {
   id: string;
   name?: string;
   description?: string;
+  /** Lowercase labels; the first one a category knows picks the workflow's category. */
+  tags?: string[];
   trigger?: {
     schedule?: { cron: string; timezone: string };
     manual?: boolean;

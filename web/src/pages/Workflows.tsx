@@ -27,9 +27,11 @@ export function Workflows() {
   const [category, setCategory] = useState('');
   const needle = search.trim().toLowerCase();
   const all = q.data ?? [];
-  const categories = [...new Set(all.map((w) => workflowCategory(w.slug)))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
-  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w.slug) === c).length;
-  const shown = all.filter((w) => (!category || workflowCategory(w.slug) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''}`.toLowerCase().includes(needle)));
+  const categories = [...new Set(all.map(workflowCategory))].sort((a, b) => (a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)));
+  const countIn = (c: string) => all.filter((w) => !c || workflowCategory(w) === c).length;
+  const shown = all.filter((w) => (!category || workflowCategory(w) === category) && (!needle || `${w.slug} ${w.latest?.name ?? ''} ${w.latest?.description ?? ''} ${(w.latest?.tags ?? []).join(' ')}`.toLowerCase().includes(needle)));
+  // With no category picked the list is laid out under one heading per category.
+  const groups = category || categories.length < 2 ? [{ name: '', items: shown }] : categories.map((c) => ({ name: c, items: shown.filter((w) => workflowCategory(w) === c) })).filter((g) => g.items.length);
   return (
     <>
       <PageHead
@@ -43,7 +45,7 @@ export function Workflows() {
       ) : (
         <>
           <div className="wfl-filters">
-            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search workflows" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
+            {q.data.length > 6 ? <input type="search" className="wfl-search" aria-label="Search workflows" placeholder="Search by name or tag" value={search} onChange={(e) => setSearch(e.target.value)} /> : null}
             {categories.length > 1 ? (
               <div className="tpl-cats" role="group" aria-label="Category">
                 {['', ...categories].map((c) => (
@@ -55,9 +57,14 @@ export function Workflows() {
             ) : null}
           </div>
           <p className="sr-only" role="status">{shown.length} workflow{shown.length === 1 ? '' : 's'} shown</p>
-          <div className="wfl-grid">
-            {shown.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} />)}
-          </div>
+          {groups.map((g) => (
+            <section key={g.name || 'all'} className="wfl-group" aria-label={g.name || undefined}>
+              {g.name ? <h2 className="wfl-group-head">{g.name} <span className="tpl-count">{g.items.length}</span></h2> : null}
+              <div className="wfl-grid">
+                {g.items.map((w) => <WorkflowCard key={w.slug} w={w} isAdmin={isAdmin} onTag={setSearch} />)}
+              </div>
+            </section>
+          ))}
           {!shown.length ? (
             <div className="empty"><p className="empty-title">No workflows match.</p><button type="button" onClick={() => { setSearch(''); setCategory(''); }}>Clear filters</button></div>
           ) : null}
@@ -67,20 +74,25 @@ export function Workflows() {
   );
 }
 
-function WorkflowCard({ w, isAdmin }: { w: WorkflowSummary; isAdmin: boolean }) {
+function WorkflowCard({ w, isAdmin, onTag }: { w: WorkflowSummary; isAdmin: boolean; onTag: (tag: string) => void }) {
   const href = `/ui/workflows/${encodeURIComponent(w.slug)}`;
   const name = w.latest?.name ?? w.slug;
   return (
     <article className="wfl-card">
       <header className="wfl-head">
         <div className="wfl-title">
-          <span className="tpl-cat-label">{workflowCategory(w.slug)}</span>
-          <h2><Link to={href}>{name}</Link></h2>
+          <span className="tpl-cat-label">{workflowCategory(w)}</span>
+          <h3><Link to={href}>{name}</Link></h3>
           <span className="muted small mono">{w.slug}</span>
         </div>
         {w.last_run ? <StateBadge state={w.last_run.state} /> : <Badge tone="idle">never run</Badge>}
       </header>
       <p className={`wfl-desc ${w.latest?.description ? 'muted' : 'faint'}`}>{w.latest?.description ?? 'No description.'}</p>
+      {w.latest?.tags?.length ? (
+        <div className="wfl-tags" role="group" aria-label="Tags">
+          {w.latest.tags.map((t) => <button key={t} type="button" className="wfl-tag" title={`Show workflows tagged ${t}`} onClick={() => onTag(t)}>{t}</button>)}
+        </div>
+      ) : null}
       <dl className="wfl-facts">
         <div>
           <dt>Published</dt>

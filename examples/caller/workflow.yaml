@@ -2,6 +2,7 @@
 schema_version: "2.0"
 id: caller
 name: Caller
+tags: [learn, demo]
 inputs:
   type: object
   properties: {x: {type: integer}}

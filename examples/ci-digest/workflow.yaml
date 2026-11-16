@@ -2,6 +2,7 @@
 schema_version: "2.0"
 id: ci-digest
 name: Daily CI digest
+tags: [digest, ci]
 trigger:
   schedule: {cron: "0 9 * * *", timezone: "Asia/Kolkata"}
 inputs:

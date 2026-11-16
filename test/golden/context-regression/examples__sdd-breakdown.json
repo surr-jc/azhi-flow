@@ -5,7 +5,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-breakdown",
-    "definitionHash": "sha256:051c0ce5fcb52396ef86c8357a5c4113bd2db9766da07b31bf9833a4f60bb06a",
+    "definitionHash": "sha256:e162d945482f63164824d906acc032c836d4b3223cb5b22b51b20794027130e2",
     "inputsSchema": {
       "type": "object",
       "properties": {

@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "sdd-factory",
-    "definitionHash": "sha256:aeaefe5b33c7046d21c3b8748f90146f1253a140b4a8e54dadf070f70ac3dd7f",
+    "definitionHash": "sha256:f0169d1993b6830844c6994efe8e8c2a1302a3578c9025bd9a4712d7e4a3c788",
     "inputsSchema": {
       "type": "object",
       "properties": {

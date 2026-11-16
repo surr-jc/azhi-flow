@@ -5,7 +5,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "doubler",
-    "definitionHash": "sha256:d96fcc75a7595ba57791d9130a176c7ccb0d0de7680f6558173c3f6f8f4d4444",
+    "definitionHash": "sha256:b7a67b946a50bca724781556b01e50256ad83ade65bc9ee83c29ae089da02409",
     "inputsSchema": {
       "type": "object",
       "properties": {

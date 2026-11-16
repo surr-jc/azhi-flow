@@ -30,6 +30,7 @@
 schema_version: "2.0"
 id: sdd-factory
 name: SDD Factory - from a goal to a stack of signed-off pull requests
+tags: [delivery, factory, spec]
 description: Plan a release against the code with a person, split it into Stories, then deliver each Story as its own spec-driven child run - a branch stacked on the previous Story, a reviewed pull request and a sign-off - and finish with a release check and a summary. Nothing merges.
 trigger:
   manual: true

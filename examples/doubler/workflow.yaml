@@ -2,6 +2,7 @@
 schema_version: "2.0"
 id: doubler
 name: Doubler
+tags: [learn, demo]
 inputs:
   type: object
   properties: {x: {type: integer}}

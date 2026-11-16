@@ -33,6 +33,9 @@ interface Example {
   id: string;
   name: string;
   description: string;
+  tags?: string[];
+  /** Picked by the server from the tags; null when no tag names a category. */
+  category?: string | null;
   tools: Array<{ ref: string; effect: string; description: string; needs_repos: boolean; transport?: string; roles?: string[] | null }>;
   /** What the template ships: agents, skills, commands, MCP servers and built-in tools. */
   inventory?: Inventory;
@@ -98,10 +101,16 @@ const META: Record<string, { category: string; steps: number; works_with: string
   caller: { category: 'Learn Azhi', steps: 2, works_with: [] },
   'loop-demo': { category: 'Learn Azhi', steps: 1, works_with: [] },
 };
-const metaOf = (e: Example) => META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
+const metaOf = (e: Example) => {
+  const m = META[e.id] ?? { category: 'Other', steps: 0, works_with: [] };
+  return e.category ? { ...m, category: e.category } : m;
+};
 
-/** The marketplace category of an installed workflow; the delivery variants not listed above are found by name. */
-export const workflowCategory = (slug: string): string => META[slug]?.category ?? (/sdlc|^issue-/.test(slug) ? 'Delivery' : 'Other');
+/**
+ * The category of an installed workflow: the one its tags pick (the server reads them), and for a
+ * version saved before tags existed, the marketplace's table or its name.
+ */
+export const workflowCategory = (w: { slug: string; category?: string | null }): string => w.category ?? META[w.slug]?.category ?? (/sdlc|^issue-/.test(w.slug) ? 'Delivery' : 'Other');
 
 /** What an install lets the workflow change, read from its tools' effects. */
 function changes(e: Example): { label: string; tone: 'ok' | 'warn' } {
@@ -144,7 +153,7 @@ export function Examples() {
   }
   const categories = [...new Set(all.map((e) => metaOf(e).category))].sort();
   const term = search.trim().toLowerCase();
-  const shown = all.filter((e) => (!category || metaOf(e).category === category) && (!term || `${e.name} ${e.description} ${e.id}`.toLowerCase().includes(term)));
+  const shown = all.filter((e) => (!category || metaOf(e).category === category) && (!term || `${e.name} ${e.description} ${e.id} ${(e.tags ?? []).join(' ')}`.toLowerCase().includes(term)));
   const featured = !term && !category ? shown.find((e) => metaOf(e).featured) : undefined;
   const lookAt = look ? all.find((x) => x.id === look) : undefined;
   const countIn = (c: string) => all.filter((e) => !c || metaOf(e).category === c).length;
