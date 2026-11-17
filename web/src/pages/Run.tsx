@@ -138,10 +138,11 @@ export function RunPage({ id }: { id: string }) {
           </>
         }
       />
+      <RunSummary detail={d} nodes={version.data?.plan?.nodes} />
       {(d.worktrees ?? []).length ? <Worktrees runId={r.id} worktrees={d.worktrees} /> : null}
       {resuming ? <ResumeDialog runId={r.id} workflow={r.workflow} current={r.workflow_version} onClose={() => setResuming(false)} onStarted={(rid) => navigate(`/ui/runs/${encodeURIComponent(rid)}`)} /> : null}
       <ErrorNote error={cancel.error ?? rerun.error} />
-      {flags.filter(([k]) => k !== 'waiting_reason').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
+      {flags.filter(([k]) => k !== 'waiting_reason' && k !== 'usage_incomplete').length ? <div className="flags">{flags.filter(([k]) => k !== 'waiting_reason' && k !== 'usage_incomplete').map(([k]) => <Badge key={k} tone="s warn">{k.replaceAll('_', ' ')}</Badge>)}</div> : null}
       {r.error ? <div className="error"><strong>{r.error.class}</strong>: {r.error.message}</div> : null}
       {version.data?.plan?.nodes ? (
         <div className="atlas">
@@ -201,6 +202,56 @@ function runSentence(r: any): string {
     default:
       return `Stopped (${r.state.replaceAll('_', ' ')}) after ${duration(r.created_at, r.ended_at ?? r.created_at)}.`;
   }
+}
+
+/** A row of facts under the header: step progress, time, cost, ledger and policy, each read from the run itself. */
+function RunSummary({ detail: d, nodes }: { detail: any; nodes?: PlanNode[] }) {
+  const r = d.run;
+  const states = nodeStates(d);
+  const total = nodes?.length ?? Object.keys(states).length;
+  const count = (s: string) => Object.values(states).filter((x) => x?.state === s).length;
+  const done = count('succeeded');
+  const skipped = count('skipped');
+  const failed = count('failed');
+  const u = d.usage;
+  const plan: RunPlan | null = d.plan;
+  const controls = plan ? plan.nodes.flatMap((n) => n.coverage ?? []) : [];
+  const enforced = controls.filter((c) => c.enforcement === 'enforced').length;
+  const denied = (d.actions as any[]).filter((a) => a.state === 'failed').length;
+  const parentNode = r.snapshot?.parent?.node_id as string | undefined;
+  const seg = (n: number, cls: string) => (n > 0 && total ? <span className={cls} style={{ flex: n }} /> : null);
+  const rest = Math.max(0, total - done - skipped - failed);
+  return (
+    <div className="run-summary" aria-label="Run summary">
+      <div className="rs-tile">
+        <span className="k">Steps</span>
+        <b>{total ? `${done} of ${total} done` : '—'}</b>
+        <span className="s">{[skipped ? `${skipped} skipped` : '', failed ? `${failed} failed` : ''].filter(Boolean).join(' · ') || ' '}</span>
+        <div className="rs-bar" aria-hidden="true">{seg(done, 'ok')}{seg(failed, 'bad')}{seg(skipped, 'skip')}{seg(rest, 'todo')}</div>
+      </div>
+      <div className="rs-tile">
+        <span className="k">Duration</span>
+        <b>{duration(r.created_at, r.ended_at ?? new Date().toISOString())}</b>
+        <span className="s">{r.ended_at ? `Ended ${ago(r.ended_at)}` : 'Still running'}</span>
+      </div>
+      <div className="rs-tile">
+        <span className="k">Cost</span>
+        <b>{u?.turns ? (u.cost.amount === null ? 'Unavailable' : money(u.cost.amount, u.cost.currency)) : money(0)}</b>
+        <span className={`s ${r.flags?.usage_incomplete ? 'warn' : ''}`}>{r.flags?.usage_incomplete ? 'Usage incomplete' : u?.turns ? `${num(u.turns)} model call${u.turns === 1 ? '' : 's'}` : 'No model calls'}</span>
+      </div>
+      <div className="rs-tile">
+        <span className="k">Ledger</span>
+        <b>{d.actions.length} call{d.actions.length === 1 ? '' : 's'}</b>
+        <span className="s">{denied ? `${denied} failed` : 'None failed'}</span>
+      </div>
+      <div className="rs-tile">
+        <span className="k">Policy</span>
+        <b>{controls.length ? `${enforced} / ${controls.length}` : '—'}</b>
+        <span className="s">{controls.length ? 'controls enforced' : 'No controlled actions'}</span>
+      </div>
+      {parentNode ? <div className="rs-note"><span className="chip">Spawned by {parentNode}</span></div> : null}
+    </div>
+  );
 }
 
 const STEP_ICON: Record<string, [string, string, string]> = {

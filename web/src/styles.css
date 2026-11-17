@@ -655,6 +655,17 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .atlas-at { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
 @media (max-width: 640px) { .atlas-at { flex-basis: 100%; max-width: none; } }
 .atlas-decisions { margin-bottom: 20px; }
+.run-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 16px; }
+.rs-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg, 12px); padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rs-tile .k { font-size: calc(12px * var(--fs, 1)); color: var(--muted); }
+.rs-tile b { font-size: calc(18px * var(--fs, 1)); font-weight: 600; }
+.rs-tile .s { font-size: calc(12px * var(--fs, 1)); color: var(--muted); min-height: 1.2em; }
+.rs-tile .s.warn { color: var(--warn); }
+.rs-bar { display: flex; gap: 2px; height: 4px; margin-top: 4px; }
+.rs-bar span { border-radius: 2px; }
+.rs-bar .ok { background: var(--ok); } .rs-bar .bad { background: var(--bad); } .rs-bar .skip { background: var(--idle); } .rs-bar .todo { background: var(--line); }
+.rs-note { grid-column: 1 / -1; display: flex; gap: 8px; }
+.rs-note .chip { font-size: calc(12px * var(--fs, 1)); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
 
 /* ---- Mission control status tiles: the system at a glance, each tile a filter ---------------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 8px; margin: 0 0 24px; }
