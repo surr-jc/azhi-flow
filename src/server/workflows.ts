@@ -4,6 +4,7 @@ import type { ExecutionPlan } from '../compiler/plan.js';
 import { loadDefinitionText, type Diagnostic } from '../definition/load.js';
 import { packageFromFiles, type PackageManifest, type PackageSource } from '../definition/package.js';
 import type { WorkflowDefinition } from '../definition/types.js';
+import { toolRef, type ToolSpec } from '../gateway/types.js';
 import { transaction } from '../db/pool.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { newId } from '../lib/ids.js';
@@ -30,11 +31,15 @@ export async function checkPackage(
   workspaceId: string,
   workflow: string,
   files: Map<string, Buffer>,
+  /** Tool specs not registered yet (an update preview) that take the place of the registered ones. */
+  pending: ToolSpec[] = [],
 ): Promise<{ ok: true; pkg: PackageSource; definition: WorkflowDefinition; compiled: CompileResult & { plan: ExecutionPlan } } | { ok: false; diagnostics: Diagnostic[] }> {
   const pkg = packageFromFiles(workflow, files);
   const loaded = loadDefinitionText(pkg.readText(workflow) ?? '');
   if (!loaded.definition) return { ok: false, diagnostics: loaded.diagnostics };
-  const catalog = await loadCatalog(ctx, workspaceId);
+  const registered = await loadCatalog(ctx, workspaceId);
+  const over = new Map(pending.map((t) => [toolRef(t), t]));
+  const catalog = over.size ? { ...registered, get: (ref: string) => over.get(ref) ?? registered.get(ref), list: () => [...registered.list().filter((t) => !over.has(toolRef(t))), ...over.values()] } : registered;
   // Dataset trust feeds taint analysis; unknown datasets are treated as trusted until they exist.
   const trust = new Map((await ctx.pool.query(`SELECT name, trusted FROM datasets WHERE workspace_id=$1`, [workspaceId])).rows.map((r) => [r.name as string, r.trusted as boolean]));
   const compiled = compile(loaded.definition, { pkg, catalog, datasets: (ref) => (trust.has(ref.split('@')[0]!) ? { trusted: trust.get(ref.split('@')[0]!)! } : undefined) });

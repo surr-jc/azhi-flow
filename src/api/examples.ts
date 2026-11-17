@@ -452,8 +452,9 @@ export function registerExampleRoutes(app: FastifyInstance, ctx: AppContext) {
     const nothing = merged.report.changes.length === 0 && toolsChanged.length === 0;
     const report = { ...merged.report, summary, tools: toolsChanged.map((t) => ({ ref: t.ref, kind: t.kind })), tracked: Boolean(rec), nothing_to_update: nothing };
 
-    // A dry run cannot compile against tools it has not registered yet.
-    const checked = b.dry_run && toolPlan.some((t) => t.kind === 'added') ? undefined : await checkPackage(ctx, p.workspaceId, wfPath, merged.files);
+    // A dry run has not registered the new tool specs yet, so it compiles against them as pending
+    // (the installed ones would reject arguments the update adds, and block the update itself).
+    const checked = await checkPackage(ctx, p.workspaceId, wfPath, merged.files, toolsChanged.map((t) => t.spec));
     if (b.dry_run) return { ok: !checked || checked.ok, dry_run: true, report, diagnostics: checked && !checked.ok ? checked.diagnostics : [], settings: wanted };
     if (nothing) {
       if (rec) await saveInstallRecord(ctx, p.workspaceId, e, Object.fromEntries([...upFiles].map(([k, v]) => [k, v.toString('base64')])), opts, p.userId);

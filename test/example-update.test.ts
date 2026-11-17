@@ -141,6 +141,21 @@ describe('updating an installed marketplace workflow', () => {
     expect(reposOf(added)).not.toContain('OWNER/REPO');
   });
 
+  it('previews an update whose workflow uses an argument the marketplace added to an installed tool', async () => {
+    const cfgPath = join(examples, 'pr-review', 'azhi.config.yaml');
+    const cfg = parse(readFileSync(cfgPath, 'utf8'));
+    cfg.tools.find((t: any) => t.id === 'github.get-pull-request').input_schema.properties.extra_flag = { type: 'boolean' };
+    const { stringify } = await import('yaml');
+    writeFileSync(cfgPath, stringify(cfg));
+    writeFileSync(wfFile(), readFileSync(wfFile(), 'utf8').replace('arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}', 'arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, extra_flag: false}'));
+    // The installed tool has no extra_flag yet; the preview compiles against the tool the update will register.
+    const dry = await post('/v1/examples/pr-review/update', { dry_run: true });
+    expect(dry, JSON.stringify(dry.diagnostics)).toMatchObject({ ok: true, dry_run: true });
+    expect(dry.report.tools).toContainEqual({ ref: 'github.get-pull-request@1', kind: 'updated' });
+    const done = await post('/v1/examples/pr-review/update', {});
+    expect(done).toMatchObject({ ok: true, updated: true });
+  });
+
   it('only admins may update', async () => {
     const other = Fastify();
     other.addHook('onRequest', async (req) => void (req.principal = { kind: 'user', workspaceId: WS, userId: 'usr_x', role: 'author' } as never));
