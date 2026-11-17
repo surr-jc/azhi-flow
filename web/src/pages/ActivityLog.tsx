@@ -278,9 +278,14 @@ function GroupView({ group: g, rows, start, type, detail: d, running, opened, to
   const problems = g.rows.filter((r) => r.cat === 'problem').length;
   const summary = [plural(g.rows.length, 'event'), tools ? plural(tools, 'tool call') : '', msgs ? plural(msgs, 'message') : ''].filter(Boolean).join(' · ');
   const t = TYPE[type ?? ''];
-  // A subworkflow step links to the run it started (one per round in a loop), as the canvas does.
-  const childRuns: string[] = type === 'subworkflow'
-    ? [...new Set([...((d.children ?? []) as any[]).filter((c) => c.parent_node_id === g.node).map((c) => String(c.id)), ...attempts.map((a) => a.output?.run_id).filter((x): x is string => typeof x === 'string')])]
+  // A subworkflow step links to the run it started (one per round in a loop), as the canvas does. A parallel step over a
+  // subworkflow starts one per item, listed as they start so they can be opened while the step is still running.
+  const outItems = (a: any): any[] => (Array.isArray(a.output?.items) ? a.output.items : []);
+  const childRuns: string[] = type === 'subworkflow' || type === 'parallel'
+    ? [...new Set([
+      ...((d.children ?? []) as any[]).filter((c) => c.parent_node_id === g.node).map((c) => String(c.id)),
+      ...attempts.flatMap((a) => [a.output?.run_id, ...outItems(a).map((it) => it?.run_id)]).filter((x): x is string => typeof x === 'string'),
+    ])]
     : [];
   return (
     <li className="al-entry" id={`al-${g.node}`}>
