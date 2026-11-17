@@ -430,15 +430,36 @@ export async function commentOnPullRequest(cfg: GithubConfig, args: { repo?: unk
   return { id: Number(c.id), url: String(c.html_url ?? ''), updated: false };
 }
 
-/** The id of the newest comment on the pull request that carries `tag` and was written by this token's account. */
-async function stickyComment(cfg: GithubConfig, token: string | undefined, repo: string, number: number, tag: string, timeoutMs: number): Promise<number | null> {
+/** The newest comment on the pull request that carries `tag` and was written by this token's account. */
+async function ownStickyComment(cfg: GithubConfig, token: string | undefined, repo: string, number: number, tag: string, timeoutMs: number): Promise<any | null> {
   const comments = await pages(cfg, token, `/repos/${repo}/issues/${number}/comments`, undefined, timeoutMs);
   const tagged = comments.filter((c: any) => String(c.body ?? '').includes(tag));
   if (!tagged.length) return null;
   // A GitHub App's token cannot read /user; its comments are the app's bot account.
   const me = await getOrNull(cfg, token, '/user', timeoutMs).catch(() => null);
   const mine = tagged.filter((c: any) => (me?.login ? c.user?.login === me.login : c.user?.type === 'Bot' && c.performed_via_github_app));
-  return mine.length ? Number(mine[mine.length - 1].id) : null;
+  return mine.length ? mine[mine.length - 1] : null;
+}
+
+async function stickyComment(cfg: GithubConfig, token: string | undefined, repo: string, number: number, tag: string, timeoutMs: number): Promise<number | null> {
+  const c = await ownStickyComment(cfg, token, repo, number, tag, timeoutMs);
+  return c ? Number(c.id) : null;
+}
+
+/**
+ * What the sticky review comment on a pull request says about itself (`github.pr-sticky`, read): whether this token's
+ * account has one, and the fingerprint the review put in it as a hidden `azhi-reviewed` marker, so a workflow can skip
+ * a run whose inputs did not change. Only the comment's own account counts (see commentOnPullRequest), and only a
+ * 64-hex-digit marker is read from its text; nothing else of the body is returned.
+ */
+export async function stickyReview(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, timeoutMs: number) {
+  const repo = argRepo(cfg, args.repo);
+  const number = argNumber(args.number);
+  if (!cfg.sticky) throw new SendError('github.pr-sticky needs the same sticky name as the comment tool in its config', true, ErrorClass.invalidInput);
+  const c = await ownStickyComment(cfg, token, repo, number, stickyMarker(cfg.sticky), timeoutMs);
+  if (!c) return { found: false, id: 0, url: '', fingerprint: '', updated_at: '' };
+  const m = /<!-- azhi-reviewed:([0-9a-f]{64}) -->/.exec(String(c.body ?? ''));
+  return { found: true, id: Number(c.id), url: String(c.html_url ?? ''), fingerprint: m ? m[1]! : '', updated_at: String(c.updated_at ?? '') };
 }
 
 export async function findPullRequestComment(cfg: GithubConfig, args: { repo?: unknown; number?: unknown }, token: string | undefined, key: string, timeoutMs: number) {

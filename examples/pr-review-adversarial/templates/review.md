@@ -116,3 +116,4 @@
 
 ---
 *{{view.verdict_word}} is the verdict of the attacks that were tried; "Holds" is not proof of correctness. Findings were checked by an independent verifier (confidence {{t.stats.min_confidence}} or more). Probes ran on a worker in a throwaway checkout; nothing in the repository was changed.*
+<!-- azhi-reviewed:{{fingerprint}} -->

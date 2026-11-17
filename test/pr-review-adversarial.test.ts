@@ -36,8 +36,8 @@ describe('pr-review-adversarial example: package', () => {
     // The one expected warning is the unfilled {{probe_setup_command}} setting, which the example install fills.
     expect(result.diagnostics.filter((d) => d.severity === 'warning' && d.code !== 'unfilled_setting')).toEqual([]);
     const e = loadExample('pr-review-adversarial')!;
-    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'source', 'ticket', 'requirements', 'conformance', 'static', 'strategy', 'surface', 'probe', 'probe_results', 'verify', 'triage', 'summarize', 'review', 'post']));
-    expect((e.config.tools ?? []).map((t) => t.id).sort()).toEqual(['github.comment-on-pr', 'github.get-issue', 'github.get-pull-request', 'jira.get-issue', 'ticket.normalize']);
+    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'source', 'ticket', 'fingerprint', 'existing', 'decide', 'should_run', 'unchanged', 'requirements', 'conformance', 'static', 'strategy', 'surface', 'probe', 'probe_results', 'verify', 'triage', 'summarize', 'review', 'post']));
+    expect((e.config.tools ?? []).map((t) => t.id).sort()).toEqual(['github.comment-on-pr', 'github.get-issue', 'github.get-pull-request', 'github.pr-review-state', 'jira.get-issue', 'ticket.normalize']);
   });
 
   it('can only read and comment: no merge, push, approval or write tool but the pinned comment', () => {
@@ -64,10 +64,32 @@ describe('pr-review-adversarial example: package', () => {
     expect(wf.inputs.properties.requirement.maxLength).toBe(20000);
   });
 
+  it('skips a run whose commit, requirement and workflow version match the posted review, unless forced or a dry run', () => {
+    const wf = parse(read('workflow.yaml'));
+    const node = (id: string) => wf.nodes.find((n: any) => n.id === id);
+    // Nothing expensive starts before the decision: the agents are routed from should_run, not from the PR gate.
+    expect(node('should_review').routes.review).toEqual(['source']);
+    expect(node('should_run').routes).toEqual({ run: ['requirements', 'static', 'strategy'], skip: ['unchanged'] });
+    expect(node('should_run').expression).toBe('nodes.decide.output.decision');
+    expect(node('decide').merge).toBe('any');
+    expect(node('should_check').expression).toContain('inputs.force');
+    expect(node('should_check').expression).toContain('!inputs.post');
+    expect(node('existing').tool).toBe('github.pr-review-state@1');
+    expect(wf.inputs.properties.force).toMatchObject({ type: 'boolean', default: false });
+    // The fingerprint reaches the comment as a hidden marker the next run reads back.
+    expect(read('templates/review.md').trimEnd().endsWith('<!-- azhi-reviewed:{{fingerprint}} -->')).toBe(true);
+    expect(JSON.stringify(node('review').input)).toContain('nodes.fingerprint.output.value');
+    // It reads the comment with the comment token (the same account that wrote it), pinned to the same sticky name.
+    const tool = parse(read('azhi.config.yaml')).tools.find((t: any) => t.id === 'github.pr-review-state');
+    const post = parse(read('azhi.config.yaml')).tools.find((t: any) => t.id === 'github.comment-on-pr');
+    expect(tool).toMatchObject({ effect: 'read', credential: 'github-comment-token' });
+    expect(tool.transport.config.sticky).toBe(post.transport.config.sticky);
+  });
+
   it('has the strategist decide how to probe, read-only, before the planner and the prober, and advise only', () => {
     const wf = parse(read('workflow.yaml'));
     const node = (id: string) => wf.nodes.find((n: any) => n.id === id);
-    expect(node('should_review').routes.review).toContain('strategy');
+    expect(node('should_run').routes.run).toEqual(expect.arrayContaining(['requirements', 'static', 'strategy']));
     expect(node('strategy').workspace.mode).toBeUndefined();
     expect(node('strategy').profile).toBe('probe-strategist@1');
     for (const id of ['surface', 'probe', 'triage']) expect(JSON.stringify(node(id).input), id).toContain('nodes.strategy.output');
@@ -185,6 +207,40 @@ describe('pr-review-adversarial example: ticket and probe results', () => {
     const st = (res: string) => py('probe_results.py', { surface: surface([scenario({ probe_kind: 'static', class: 'deployment' })]), probe: { scenarios: [{ id: 'P1', mode: 'static', static_result: res, reason: 'walked src/a.ts:3' }] } }).scenarios[0];
     expect(st('ruled_out')).toMatchObject({ state: 'ruled_out', level: 'L2 - Ruled out', mode: 'static' });
     expect(st('unproven')).toMatchObject({ state: 'unproven', level: 'none' });
+  });
+});
+
+describe('pr-review-adversarial example: fingerprint', () => {
+  const base = { repo: 'acme/shop', pr: 7, head_sha: 'a'.repeat(40), review_from: '', ticket: { origin: 'issue', key: 'PAY-1', title: 'T', description: 'D', comments: [] }, version: '1' };
+  const fp = (o: Record<string, unknown> = {}) => py('fingerprint.py', { ...base, ...o }).value as string;
+  it('is stable for the same inputs and changes with any of them', () => {
+    expect(fp()).toMatch(/^[0-9a-f]{64}$/);
+    expect(fp()).toBe(fp());
+    const others = [{ head_sha: 'b'.repeat(40) }, { review_from: 'c'.repeat(40) }, { pr: 8 }, { repo: 'acme/other' }, { version: '2' }, { ticket: { ...base.ticket, description: 'D edited' } }, { ticket: { ...base.ticket, comments: [{ author: 'x', body: 'y' }] } }, { ticket: { ...base.ticket, origin: 'text', key: '' } }];
+    for (const o of others) expect(fp(o), JSON.stringify(o)).not.toBe(fp());
+    expect(new Set(others.map(fp)).size).toBe(others.length);
+  });
+
+  it('skips only when its own posted review carries the fingerprint of this run', () => {
+    const run = (o: Record<string, unknown>) => py('decide.py', { force: false, post: true, fingerprint: 'f1', existing: { found: true, fingerprint: 'f1' }, ...o });
+    expect(run({})).toEqual({ decision: 'skip', reason: 'unchanged since the posted review' });
+    expect(run({ existing: { found: true, fingerprint: 'f2' } }).decision).toBe('run');
+    expect(run({ existing: { found: true, fingerprint: '' } })).toMatchObject({ decision: 'run', reason: expect.stringMatching(/no fingerprint/) });
+    expect(run({ existing: { found: false, fingerprint: '' } }).decision).toBe('run');
+    expect(run({ existing: null }).decision).toBe('run');
+    expect(run({ force: true })).toMatchObject({ decision: 'run', reason: 'forced' });
+    expect(run({ post: false })).toMatchObject({ decision: 'run', reason: 'dry run' });
+  });
+
+  it('puts the marker in the comment and says why nothing ran when skipped', () => {
+    const hex = fp();
+    const view = { icon: '🟢', headline: 'Go', verdict_word: 'Holds', origin_label: 'GitHub issue', dirty: false, dirty_count: 0 };
+    const pr = { repo: 'acme/shop', number: 7, title: 'T', url: 'u', head_sha: 'abc', base_ref: 'main' };
+    const md = renderReport(read('templates/review.md'), { pr, ticket: { title: 'T', url: '' }, ambiguous: [], review: { summary: 's', next_steps: [] }, t: py('triage.py', { origin: 'issue', requirements: { summary: '', criteria: [], ambiguous: [] }, conformance: { reviewer: 'c', summary: '', criteria: [], findings: [] }, reviews: [], probes: { runner_ran: true, dirty_paths: [], findings: [], scenarios: [] }, surface: { executable: false, surface: [], scenarios: [], deferred: [] }, strategy: {}, checks: [], min_confidence: 80 }), fingerprint: hex, view }, { asOf: {}, format: 'markdown' }).markdown;
+    expect(md).toContain(`<!-- azhi-reviewed:${hex} -->`);
+    const skipped = renderReport(read('templates/unchanged.md'), { pr, existing: { found: true, url: 'https://github.com/acme/shop/pull/7#c1', updated_at: '2026-11-17T10:00:00Z' } }, { asOf: {}, format: 'markdown' }).markdown;
+    expect(skipped).toContain('Already reviewed: acme/shop#7 at abc');
+    expect(skipped).toContain('`force`');
   });
 });
 

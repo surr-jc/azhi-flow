@@ -32,12 +32,27 @@ azhi run examples/pr-review-adversarial -i repo=OWNER/REPO -i pr=123 -i requirem
 | `issue` | A GitHub issue (`45`, `owner/name#45`, an issue URL) or a Jira key (`PAY-142`). Wins over `requirement`. |
 | `requirement` | The goal as text (up to 20,000 characters). Used when no issue is given. |
 | *(neither)* | The PR title and description stand in for the requirement, marked **inferred**: gaps against it are advisory and never turn the light red. |
-| `post` | `false` is a dry run: nothing is posted or sent. |
+| `post` | `false` is a dry run: nothing is posted or sent, and the run always reviews. |
+| `force` | `true` reviews again even when nothing changed since the posted review (see below). |
 | `allow_closed`, `diff_base` | As in `pr-review`: review a closed PR anyway; review a stacked PR from the commit its own work starts at. |
 
 Secrets: `github-read-token` (read-only Contents, Issues, Pull requests), `github-comment-token` (Pull requests: write,
 used only by the comment), `jira-api-token` (only for a Jira key; needs the `jira_url` and `jira_username` settings and
 `uvx` on the gateway), `github-copilot-token` (`azhi copilot login`), `slack-bot-token` (optional).
+
+## Re-runs: nothing changed, nothing runs
+
+The review is one **sticky** comment, and it carries a hidden fingerprint (`<!-- azhi-reviewed:<sha256> -->`): a hash of the
+repository, the PR, the head commit, `diff_base`, the whole requirement (issue text and comments, typed text, or the PR
+description) and `config.fingerprint_version`. Before any agent starts, the run computes the same fingerprint and reads the
+comment back (`github.pr-review-state@1`, read-only, with `github-comment-token`: the same account that wrote it, so a comment
+someone else pasted the markers into is ignored). `decide` (a script) **skips** the run when they match: no agent runs, nothing
+is posted, and the run report says why. It reviews when there is no earlier review, the commit, requirement or version changed,
+`post` is false (a dry run), or `force` is true. Bump `fingerprint_version` in the workflow's `config` when you change the workflow or
+its prompts in a way that should re-review open PRs.
+
+If reading the comment fails (a token without access), the run fails rather than guessing; set `force` to bypass the check.
+The check costs three cheap steps (a hash, one read, a script) before any agent.
 
 ## What each step does
 

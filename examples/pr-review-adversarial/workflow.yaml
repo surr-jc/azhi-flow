@@ -14,6 +14,7 @@
 #   verify         a different model tries to refute every finding and every reproduced failure
 #   triage         RULES decide the verdict (breaks, unproven, holds), the severities and the light. No model
 #   summarize      writes the plain summary and next steps; it cannot change a fact
+# A run whose commit, requirement and workflow version match the posted review is skipped (set force to review again).
 # The review is a run report and a PR comment (set post to false for a dry run), and a short summary goes to Slack
 # when there is something to report. Nothing merges, closes or pushes. Ticket, issue and PR text are untrusted data.
 schema_version: "2.0"
@@ -31,6 +32,7 @@ inputs:
     issue: {type: string, maxLength: 300, pattern: "^(([A-Z][A-Z0-9_]*-[0-9]+)|([0-9]+)|([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+)|(https://[^ ]+/issues/[0-9]+))?$", title: Issue or ticket, description: "The requirement as a GitHub issue (123, owner/name#123 or its URL) or a Jira key (PAY-142). Leave empty to type the requirement instead."}
     requirement: {type: string, maxLength: 20000, title: Goal or requirement, description: "What the change should do, as text. Used when no issue is given. With neither, the pull request description stands in for it (marked inferred)."}
     post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
+    force: {type: boolean, default: false, title: Review again even when nothing changed since the last posted review (off by default)}
     allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
     diff_base: {type: string, pattern: "^([0-9a-f]{40}([0-9a-f]{24})?)?$", title: Review from this commit, description: "A full commit SHA the pull request's branch was built on. The review then covers only the commits after it, which is what a stacked pull request needs. Leave empty to review the whole pull request."}
   required: [repo, pr]
@@ -41,6 +43,8 @@ config:
   min_confidence: 80
   # How many attack scenarios the planner may select (the skill's cap is 5: more cannot be probed in the time).
   max_scenarios: 5
+  # Part of the review fingerprint: bump it when the workflow or its prompts change in a way that should re-review pull requests.
+  fingerprint_version: "1"
 nodes:
   - id: pr
     type: tool
@@ -52,7 +56,7 @@ nodes:
     type: condition
     description: Review only open pull requests (unless allow_closed is set); a closed or merged one skips every later step, so nothing is spent, posted or sent.
     expression: "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'"
-    routes: {review: [source, static, strategy], skip: []}
+    routes: {review: [source], skip: []}
     default: skip
 
   # --- the requirement ---------------------------------------------------------------------------------------
@@ -113,6 +117,54 @@ nodes:
     input: {map: "{'normalized': has(nodes.intake_github) ? nodes.intake_github.output : (has(nodes.intake_jira) ? nodes.intake_jira.output : null), 'comments': has(nodes.github_issue) ? nodes.github_issue.output.comments : [], 'text': has(inputs.requirement) ? inputs.requirement : '', 'pr': {'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'url': nodes.pr.output.url}}"}
     output_schema: schemas/ticket.json
     limits: {time: 1m, memory_mb: 256}
+
+  # --- skip a run whose inputs did not change -----------------------------------------------------------------
+  - id: fingerprint
+    type: script
+    description: One fingerprint of the commit, the diff base, the whole requirement and the workflow version (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/fingerprint.py
+    input: {map: "{'repo': inputs.repo, 'pr': inputs.pr, 'head_sha': nodes.pr.output.head_sha, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'ticket': nodes.ticket.output, 'version': config.fingerprint_version}"}
+    output_schema: schemas/fingerprint.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: should_check
+    type: condition
+    description: Look for an earlier review only when this run will post (a dry run or force always reviews).
+    expression: "(has(inputs.force) && inputs.force) || (has(inputs.post) && !inputs.post) ? 'no' : 'yes'"
+    depends_on: [fingerprint]
+    routes: {yes: [existing], no: []}
+    default: yes
+
+  - id: existing
+    type: tool
+    description: Read what this workflow's sticky comment on the pull request says it reviewed (its fingerprint), from the comment's own account only.
+    tool: github.pr-review-state@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
+  - id: decide
+    type: script
+    description: Skip when this workflow's own posted review carries the fingerprint computed for this run; a forced run, a dry run, no earlier review or any change reviews (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/decide.py
+    merge: any
+    depends_on: [should_check]
+    input: {map: "{'force': has(inputs.force) ? inputs.force : false, 'post': has(inputs.post) ? inputs.post : true, 'fingerprint': nodes.fingerprint.output.value, 'existing': has(nodes.existing) ? nodes.existing.output : null}"}
+    output_schema: schemas/decision.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: should_run
+    type: condition
+    description: Review, or stop here because nothing changed since the posted review.
+    expression: "nodes.decide.output.decision"
+    routes: {run: [requirements, static, strategy], skip: [unchanged]}
+    default: run
+
+  - id: unchanged
+    type: report
+    description: Why nothing ran - the pull request, the requirement and the workflow are the same as in the posted review.
+    template: templates/unchanged.md
+    input: {map: "{'pr': nodes.pr.output, 'existing': nodes.existing.output}"}
 
   - id: requirements
     type: agent
@@ -253,7 +305,7 @@ nodes:
     type: report
     description: The review as a run artifact and as the PR comment (a template over the decided facts; no model writes the verdict).
     template: templates/review.md
-    input: {map: "{'pr': nodes.pr.output, 'ticket': {'title': nodes.ticket.output.shown_title, 'url': nodes.ticket.output.url}, 'ambiguous': nodes.requirements.output.ambiguous, 'review': nodes.summarize.output, 't': nodes.triage.output, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds'), 'origin_label': nodes.ticket.output.source == 'jira' ? 'Jira ticket' : (nodes.ticket.output.source == 'github' ? 'GitHub issue' : (nodes.ticket.output.source == 'text' ? 'typed requirement' : 'inferred from the PR description')), 'dirty': size(nodes.probe_results.output.dirty_paths) > 0, 'dirty_count': size(nodes.probe_results.output.dirty_paths)}}"}
+    input: {map: "{'pr': nodes.pr.output, 'ticket': {'title': nodes.ticket.output.shown_title, 'url': nodes.ticket.output.url}, 'ambiguous': nodes.requirements.output.ambiguous, 'review': nodes.summarize.output, 't': nodes.triage.output, 'fingerprint': nodes.fingerprint.output.value, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds'), 'origin_label': nodes.ticket.output.source == 'jira' ? 'Jira ticket' : (nodes.ticket.output.source == 'github' ? 'GitHub issue' : (nodes.ticket.output.source == 'text' ? 'typed requirement' : 'inferred from the PR description')), 'dirty': size(nodes.probe_results.output.dirty_paths) > 0, 'dirty_count': size(nodes.probe_results.output.dirty_paths)}}"}
 
   - id: slack_message
     type: report

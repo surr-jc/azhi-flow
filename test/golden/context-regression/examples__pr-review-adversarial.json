@@ -18,7 +18,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review-adversarial",
-    "definitionHash": "sha256:f613bc5c2fcd3e8c8735cc2fa656a9455cf7ff7139b8ceababe059b763b22efc",
+    "definitionHash": "sha256:c07a57af0aeb7710149b8f0a9fe4e3d8d72fa8288ca7d1d3733db97cc137db63",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -51,6 +51,11 @@
           "default": true,
           "title": "Post the review and notify Slack (on by default; turn off for a dry run)"
         },
+        "force": {
+          "type": "boolean",
+          "default": false,
+          "title": "Review again even when nothing changed since the last posted review (off by default)"
+        },
         "allow_closed": {
           "type": "boolean",
           "default": false,
@@ -71,7 +76,8 @@
     "config": {
       "channel": "{{slack_channel}}",
       "min_confidence": 80,
-      "max_scenarios": 5
+      "max_scenarios": 5,
+      "fingerprint_version": "1"
     },
     "trigger": {
       "manual": true
@@ -115,9 +121,7 @@
           "expression": "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'",
           "routes": {
             "review": [
-              "source",
-              "static",
-              "strategy"
+              "source"
             ],
             "skip": []
           },
@@ -401,9 +405,230 @@
         "maxAttempts": 3
       },
       {
+        "id": "fingerprint",
+        "type": "script",
+        "deps": [
+          "pr",
+          "ticket"
+        ],
+        "dataDeps": [
+          "pr",
+          "ticket"
+        ],
+        "def": {
+          "id": "fingerprint",
+          "type": "script",
+          "description": "One fingerprint of the commit, the diff base, the whole requirement and the workflow version (plain rules, no model).",
+          "runtime": "python",
+          "entrypoint": "scripts/fingerprint.py",
+          "input": {
+            "map": "{'repo': inputs.repo, 'pr': inputs.pr, 'head_sha': nodes.pr.output.head_sha, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'ticket': nodes.ticket.output, 'version': config.fingerprint_version}"
+          },
+          "output_schema": "schemas/fingerprint.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_check",
+        "type": "condition",
+        "deps": [
+          "fingerprint"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "should_check",
+          "type": "condition",
+          "description": "Look for an earlier review only when this run will post (a dry run or force always reviews).",
+          "expression": "(has(inputs.force) && inputs.force) || (has(inputs.post) && !inputs.post) ? 'no' : 'yes'",
+          "depends_on": [
+            "fingerprint"
+          ],
+          "routes": {
+            "yes": [
+              "existing"
+            ],
+            "no": []
+          },
+          "default": "yes"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "existing",
+        "type": "tool",
+        "deps": [
+          "should_check"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "existing",
+          "type": "tool",
+          "description": "Read what this workflow's sticky comment on the pull request says it reviewed (its fingerprint), from the comment's own account only.",
+          "tool": "github.pr-review-state@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_check",
+          "route": "yes"
+        }
+      },
+      {
+        "id": "decide",
+        "type": "script",
+        "deps": [
+          "existing",
+          "fingerprint",
+          "should_check"
+        ],
+        "dataDeps": [
+          "existing",
+          "fingerprint"
+        ],
+        "def": {
+          "id": "decide",
+          "type": "script",
+          "description": "Skip when this workflow's own posted review carries the fingerprint computed for this run; a forced run, a dry run, no earlier review or any change reviews (plain rules, no model).",
+          "runtime": "python",
+          "entrypoint": "scripts/decide.py",
+          "merge": "any",
+          "depends_on": [
+            "should_check"
+          ],
+          "input": {
+            "map": "{'force': has(inputs.force) ? inputs.force : false, 'post': has(inputs.post) ? inputs.post : true, 'fingerprint': nodes.fingerprint.output.value, 'existing': has(nodes.existing) ? nodes.existing.output : null}"
+          },
+          "output_schema": "schemas/decision.json",
+          "limits": {
+            "time": "1m",
+            "memory_mb": 256
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "should_run",
+        "type": "condition",
+        "deps": [
+          "decide"
+        ],
+        "dataDeps": [
+          "decide"
+        ],
+        "def": {
+          "id": "should_run",
+          "type": "condition",
+          "description": "Review, or stop here because nothing changed since the posted review.",
+          "expression": "nodes.decide.output.decision",
+          "routes": {
+            "run": [
+              "requirements",
+              "static",
+              "strategy"
+            ],
+            "skip": [
+              "unchanged"
+            ]
+          },
+          "default": "run"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "unchanged",
+        "type": "report",
+        "deps": [
+          "existing",
+          "pr",
+          "should_run"
+        ],
+        "dataDeps": [
+          "existing",
+          "pr"
+        ],
+        "def": {
+          "id": "unchanged",
+          "type": "report",
+          "description": "Why nothing ran - the pull request, the requirement and the workflow are the same as in the posted review.",
+          "template": "templates/unchanged.md",
+          "input": {
+            "map": "{'pr': nodes.pr.output, 'existing': nodes.existing.output}"
+          }
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "as_of": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "markdown",
+            "summary"
+          ]
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_run",
+          "route": "skip"
+        }
+      },
+      {
         "id": "requirements",
         "type": "agent",
         "deps": [
+          "should_run",
           "ticket"
         ],
         "dataDeps": [
@@ -426,6 +651,10 @@
         },
         "timeoutMs": 600000,
         "maxAttempts": 3,
+        "route": {
+          "condition": "should_run",
+          "route": "run"
+        },
         "agentTools": []
       },
       {
@@ -475,7 +704,7 @@
         "type": "agent",
         "deps": [
           "pr",
-          "should_review"
+          "should_run"
         ],
         "dataDeps": [
           "pr"
@@ -510,8 +739,8 @@
         "timeoutMs": 1200000,
         "maxAttempts": 3,
         "route": {
-          "condition": "should_review",
-          "route": "review"
+          "condition": "should_run",
+          "route": "run"
         },
         "agentTools": []
       },
@@ -520,7 +749,7 @@
         "type": "agent",
         "deps": [
           "pr",
-          "should_review"
+          "should_run"
         ],
         "dataDeps": [
           "pr"
@@ -555,8 +784,8 @@
         "timeoutMs": 600000,
         "maxAttempts": 3,
         "route": {
-          "condition": "should_review",
-          "route": "review"
+          "condition": "should_run",
+          "route": "run"
         },
         "agentTools": []
       },
@@ -853,6 +1082,7 @@
         "id": "review",
         "type": "report",
         "deps": [
+          "fingerprint",
           "pr",
           "probe_results",
           "requirements",
@@ -861,6 +1091,7 @@
           "triage"
         ],
         "dataDeps": [
+          "fingerprint",
           "pr",
           "probe_results",
           "requirements",
@@ -874,7 +1105,7 @@
           "description": "The review as a run artifact and as the PR comment (a template over the decided facts; no model writes the verdict).",
           "template": "templates/review.md",
           "input": {
-            "map": "{'pr': nodes.pr.output, 'ticket': {'title': nodes.ticket.output.shown_title, 'url': nodes.ticket.output.url}, 'ambiguous': nodes.requirements.output.ambiguous, 'review': nodes.summarize.output, 't': nodes.triage.output, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds'), 'origin_label': nodes.ticket.output.source == 'jira' ? 'Jira ticket' : (nodes.ticket.output.source == 'github' ? 'GitHub issue' : (nodes.ticket.output.source == 'text' ? 'typed requirement' : 'inferred from the PR description')), 'dirty': size(nodes.probe_results.output.dirty_paths) > 0, 'dirty_count': size(nodes.probe_results.output.dirty_paths)}}"
+            "map": "{'pr': nodes.pr.output, 'ticket': {'title': nodes.ticket.output.shown_title, 'url': nodes.ticket.output.url}, 'ambiguous': nodes.requirements.output.ambiguous, 'review': nodes.summarize.output, 't': nodes.triage.output, 'fingerprint': nodes.fingerprint.output.value, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds'), 'origin_label': nodes.ticket.output.source == 'jira' ? 'Jira ticket' : (nodes.ticket.output.source == 'github' ? 'GitHub issue' : (nodes.ticket.output.source == 'text' ? 'typed requirement' : 'inferred from the PR description')), 'dirty': size(nodes.probe_results.output.dirty_paths) > 0, 'dirty_count': size(nodes.probe_results.output.dirty_paths)}}"
           }
         },
         "outputSchema": {

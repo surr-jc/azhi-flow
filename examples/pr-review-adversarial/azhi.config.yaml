@@ -131,6 +131,15 @@ tools:
     transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-adversarial-review}}
     input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
     output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
+  - id: github.pr-review-state
+    version: 1
+    description: What this workflow's sticky comment on a pull request says it reviewed - whether it exists and its fingerprint (GitHub, read; the comment's own account only)
+    effect: read
+    source: github
+    credential: github-comment-token
+    transport: {kind: builtin, name: github.pr-sticky, config: {repos: [OWNER/REPO], sticky: azhi-pr-adversarial-review}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema: {type: object, properties: {found: {type: boolean}, id: {type: integer}, url: {type: string}, fingerprint: {type: string}, updated_at: {type: string}}, required: [found, fingerprint]}
 secrets:
   - github-read-token
   - github-comment-token

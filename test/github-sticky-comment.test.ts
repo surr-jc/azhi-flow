@@ -23,7 +23,7 @@ describe('github PR comment, sticky', () => {
     gh = await startFakeGithub(
       { runs: [], issues: [] },
       // On PR 9 someone else pasted the marker into their own comment.
-      { token: TOKEN, comments: [{ id: 500, repo: 'acme/shop', number: 9, body: 'mine <!-- azhi-sticky:azhi-pr-review -->', user: 'mallory' }] },
+      { token: TOKEN, comments: [{ id: 500, repo: 'acme/shop', number: 9, body: 'mine <!-- azhi-sticky:azhi-pr-review -->', user: 'mallory' }, { id: 501, repo: 'acme/shop', number: 17, body: `x <!-- azhi-sticky:azhi-pr-review --> <!-- azhi-reviewed:${'c'.repeat(64)} -->`, user: 'mallory' }] },
     );
   });
   afterAll(async () => {
@@ -70,5 +70,26 @@ describe('github PR comment, sticky', () => {
     await run(s, { repo: 'acme/shop', number: 11, body: 'B' }, 'act_b');
     expect(on(11)).toHaveLength(2);
     expect(on(11).every((c) => !c.body.includes('azhi-sticky'))).toBe(true);
+  });
+
+  it('reads back what the sticky review says it reviewed: found or not, and its fingerprint, from its own account only', async () => {
+    const s = spec(gh.url, 'azhi-pr-review');
+    const sticky = { ...s, id: 'github.pr-sticky', effect: 'read', transport: { ...s.transport, name: 'github.pr-sticky' } } as ToolSpec;
+    const read = async (n: number) => (await executorFor(sticky).call(sticky, { repo: 'acme/shop', number: n }, { credential: TOKEN, timeoutMs: 5000 })).value as any;
+    const fp = 'a'.repeat(63) + 'b';
+    expect(await read(13)).toEqual({ found: false, id: 0, url: '', fingerprint: '', updated_at: '' });
+    const posted = (await run(s, { repo: 'acme/shop', number: 13, body: `Review <!-- azhi-reviewed:${fp} -->` }, 'act_r13')).value as any;
+    expect(await read(13)).toMatchObject({ found: true, id: posted.id, fingerprint: fp });
+    // A later run's review replaces the fingerprint; a review without one reads as an empty fingerprint.
+    await run(s, { repo: 'acme/shop', number: 13, body: 'Review without a marker' }, 'act_r13b');
+    expect(await read(13)).toMatchObject({ found: true, id: posted.id, fingerprint: '' });
+    // Someone else's comment with the sticky and reviewed markers pasted in is not this review.
+    expect(await read(17)).toMatchObject({ found: false, fingerprint: '' });
+    // A marker that is not 64 hex digits is ignored.
+    await run(s, { repo: 'acme/shop', number: 15, body: 'x <!-- azhi-reviewed:abc -->' }, 'act_r15');
+    expect((await read(15)).fingerprint).toBe('');
+    // The tool needs the sticky name, so it can only look at the comment the comment tool keeps.
+    const bare = { ...sticky, transport: { ...sticky.transport, config: { repos: ['acme/shop'], api_url: gh.url } } } as ToolSpec;
+    await expect(executorFor(bare).call(bare, { repo: 'acme/shop', number: 13 }, { credential: TOKEN, timeoutMs: 5000 })).rejects.toThrow(/sticky/);
   });
 });
