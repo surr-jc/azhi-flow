@@ -48,6 +48,22 @@ which starts from the first attempt's files and is told why it was rejected. Eve
 `nodes.attempt.output`, so what `finalize` ships and what the approver sees is always the last attempt. When `triage`
 sets a conflict aside the loop is skipped, and `finalize` runs with no attempts to say why.
 
+## Cross-file breaks (integration fixes)
+
+Git merges two changes cleanly that are inconsistent together: one side re-types a method, the other adds a caller
+of the old one. No conflict marker shows it, and the build breaks. The resolver therefore does an integration pass
+after the hunks (skill `merge-conflict-resolution`): it lists what each side changed, searches the repository for
+the use sites, and applies the smallest fix that keeps both sides working (an overload or adapter over rewriting the
+other side's callers, the pull request's change on top of the base's new code). Each file it edits outside the
+conflicts is declared in `integration_fixes` with a reason. `compare.py` accepts declared edits, lists them as
+`integration_edits`, and still marks an undeclared edit, or a declared one under `.github`, `.claude`, `.hooks`,
+`.husky` or a lock file, `invalid`. A result with integration edits is never "clean": it opens as a draft, the
+approval message and the pull request name the files, and the reviewer checks each one is minimal and necessary.
+
+Whether the code still builds is judged by the `test_command` setting, which is any shell command, not only npm
+(`mvn -q -o -DskipTests compile` is a compile check for Java). A failing build on the result where the base and the
+pull request pass is a `regression`, and the second attempt is told which one.
+
 ## The prompt-injection flag
 
 The resolver and the reviewer set `prompt_injection_detected` only for text that addresses an AI agent or tool, or
@@ -69,5 +85,6 @@ stored output with `azhi inspect`.
   request therefore merges into the contributor's branch without raising the conflicts again. Merge it with a
   merge commit: a squash or rebase drops the base-tip parent, and the contributor's branch is then as far behind the
   base as before.
-- Agents here have no shell: they cannot regenerate a lock file or delete a file, so those conflicts are set aside.
+- Agents here have no shell: they cannot regenerate a lock file, delete a file or compile. They learn that a fix did
+  not build from the check after the attempt, and the second attempt starts from it.
 - `give_up` comments on the pull request without an approval, like the PR review's comment; it only reports.

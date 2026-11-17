@@ -5,7 +5,8 @@
 # independent reviewer and a refuter on another model challenge the result; one stronger second attempt follows
 # if it is rejected. After a person approves, the result goes to a new azhi/ branch and a pull request into the
 # pull request's own branch. Nothing is pushed to the contributor's branch, merged, or force-pushed.
-# The test command is in `test:` of the base_run step (repeated by reference): change it there.
+# The build or test command is the `test_command` setting (default npm ci && npm test), in `test:` of the base_run step
+# and repeated by reference. For another language use its build or test command, for example mvn -q -o -DskipTests compile.
 schema_version: "2.0"
 id: pr-conflict-resolver
 name: Pull request conflict resolver
@@ -75,7 +76,7 @@ nodes:
       depth: 1
       mode: write
       test: &test
-        command: npm ci && npm test
+        command: "{{test_command}}"
         timeout: 20m
         attempts: 1
     input: {map: "{'repository': inputs.repo}"}
@@ -127,10 +128,11 @@ nodes:
     initial:
       change: {ref: nodes.triage.output.change}
       rejected: null
+      fixes: []
     body:
       - id: resolve
         type: agent
-        description: Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.
+        description: Resolve the hunks the rules left, then fix what the merge left out of step in other files (declared as integration_fixes), in a checkout that already has the rules' work (or the first attempt's). The worker then runs the build or tests on the result.
         executor: opencode
         profile: conflict-resolver@1
         workspace:
@@ -152,7 +154,7 @@ nodes:
         runtime: python
         entrypoint: scripts/compare.py
         input:
-          map: "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve.output.workspace.files}"
+          map: "{'integration_fixes': nodes.resolve.output.integration_fixes + state.fixes, 'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.resolve.output.workspace.files}"
         output_schema: schemas/compare.json
         limits: {time: 2m, memory_mb: 512}
       - id: review
@@ -198,6 +200,7 @@ nodes:
         reason: The check passed or is inconclusive, nothing is unresolved and no critical or major finding was confirmed
     next:
       change: {ref: nodes.resolve.output.workspace}
+      fixes: {cel: "nodes.resolve.output.integration_fixes + state.fixes"}
       rejected: {map: "{'summary': nodes.resolve.output.summary, 'unresolved': nodes.resolve.output.unresolved, 'check': nodes.compare.output, 'findings': nodes.review.output.findings, 'verification': nodes.refute.output.checks}"}
 
   - id: finalize
@@ -222,9 +225,9 @@ nodes:
     description: The release owner approves the exact resolution, its checks and its reviews before a branch is pushed.
     role: admin
     message:
-      cel: "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '')"
+      cel: "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '') + (size(nodes.finalize.output.integration_edits) > 0 ? ' It also edits ' + string(size(nodes.finalize.output.integration_edits)) + ' file(s) outside the conflicts to keep the code consistent.' : '')"
     payload:
-      map: "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.finalize.output.diff, 'diff_truncated': nodes.finalize.output.diff_truncated}"
+      map: "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'integration_edits': nodes.finalize.output.integration_edits, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.finalize.output.diff, 'diff_truncated': nodes.finalize.output.diff_truncated}"
     expires_in: 24h
     on_expiry: reject
   - id: push_branch

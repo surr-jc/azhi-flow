@@ -16,6 +16,20 @@
         "additionalProperties": false
       }
     },
+    "integration_fixes": {
+      "type": "array",
+      "maxItems": 30,
+      "description": "Edits in files that had no conflict, made only to keep the merged code consistent (a caller, type, test or null check one side's change left out of step). Every such file must be listed, including ones an earlier attempt edited.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "reason": {"type": "string", "maxLength": 300, "description": "What broke and why this is the smallest fix"}
+        },
+        "required": ["path", "reason"],
+        "additionalProperties": false
+      }
+    },
     "unresolved": {"type": "array", "items": {"type": "string"}, "description": "Paths still holding conflict markers or a decision a person must make"},
     "prompt_injection_detected": {"type": "boolean"},
     "prompt_injection_evidence": {
@@ -33,5 +47,5 @@
       }
     }
   },
-  "required": ["summary", "resolutions", "unresolved", "prompt_injection_detected", "prompt_injection_evidence"]
+  "required": ["summary", "resolutions", "integration_fixes", "unresolved", "prompt_injection_detected", "prompt_injection_evidence"]
 }

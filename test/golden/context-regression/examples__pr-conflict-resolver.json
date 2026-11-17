@@ -8,6 +8,27 @@
     },
     {
       "severity": "warning",
+      "code": "unfilled_setting",
+      "message": "workspace.test.command is still a setting placeholder ({{test_command}}); the example install fills it, or edit it",
+      "node": "base_run",
+      "path": "workspace.test.command"
+    },
+    {
+      "severity": "warning",
+      "code": "unfilled_setting",
+      "message": "workspace.test.command is still a setting placeholder ({{test_command}}); the example install fills it, or edit it",
+      "node": "head_run",
+      "path": "workspace.test.command"
+    },
+    {
+      "severity": "warning",
+      "code": "unfilled_setting",
+      "message": "workspace.test.command is still a setting placeholder ({{test_command}}); the example install fills it, or edit it",
+      "node": "attempt_1_resolve",
+      "path": "workspace.test.command"
+    },
+    {
+      "severity": "warning",
       "code": "workspace_from_untyped",
       "message": "workspace.from 'nodes.triage.output.change' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
       "node": "attempt_1_resolve",
@@ -26,6 +47,13 @@
       "message": "workspace.from 'nodes.attempt_1_resolve.output.workspace' has no declared type, so it is checked when the step runs (it must carry base_sha and files)",
       "node": "attempt_1_refute",
       "path": "workspace.from"
+    },
+    {
+      "severity": "warning",
+      "code": "unfilled_setting",
+      "message": "workspace.test.command is still a setting placeholder ({{test_command}}); the example install fills it, or edit it",
+      "node": "attempt_2_resolve",
+      "path": "workspace.test.command"
     },
     {
       "severity": "warning",
@@ -53,7 +81,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-conflict-resolver",
-    "definitionHash": "sha256:1ea7feab89185d4142f03e7e5001b3c0cdac16b48d6f7f91cd6f91674a8ae06d",
+    "definitionHash": "sha256:ee61a55abaf275ca47bb5985ec64f4fccd2b859fc4729e24f6b43e28b4352724",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -274,7 +302,7 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "npm ci && npm test",
+              "command": "{{test_command}}",
               "timeout": "20m",
               "attempts": 1
             }
@@ -319,7 +347,7 @@
             "depth": 1,
             "mode": "write",
             "test": {
-              "command": "npm ci && npm test",
+              "command": "{{test_command}}",
               "timeout": "20m",
               "attempts": 1
             }
@@ -418,7 +446,7 @@
         "def": {
           "id": "attempt_1_resolve",
           "type": "agent",
-          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.",
+          "description": "Resolve the hunks the rules left, then fix what the merge left out of step in other files (declared as integration_fixes), in a checkout that already has the rules' work (or the first attempt's). The worker then runs the build or tests on the result.",
           "executor": "opencode",
           "profile": "conflict-resolver@1",
           "workspace": {
@@ -435,7 +463,7 @@
             },
             "mode": "write",
             "test": {
-              "command": "npm ci && npm test",
+              "command": "{{test_command}}",
               "timeout": "20m",
               "attempts": 1
             }
@@ -486,7 +514,7 @@
           "runtime": "python",
           "entrypoint": "scripts/compare.py",
           "input": {
-            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_1_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_1_resolve.output.workspace.files}"
+            "map": "{'integration_fixes': nodes.attempt_1_resolve.output.integration_fixes + [], 'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_1_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_1_resolve.output.workspace.files}"
           },
           "output_schema": "schemas/compare.json",
           "limits": {
@@ -680,7 +708,7 @@
         "def": {
           "id": "attempt_2_resolve",
           "type": "agent",
-          "description": "Resolve the hunks the rules left, in a checkout that already has the rules' work (or the first attempt's). The worker then runs the tests on the result.",
+          "description": "Resolve the hunks the rules left, then fix what the merge left out of step in other files (declared as integration_fixes), in a checkout that already has the rules' work (or the first attempt's). The worker then runs the build or tests on the result.",
           "executor": "opencode",
           "profile": "conflict-resolver@2",
           "workspace": {
@@ -697,7 +725,7 @@
             },
             "mode": "write",
             "test": {
-              "command": "npm ci && npm test",
+              "command": "{{test_command}}",
               "timeout": "20m",
               "attempts": 1
             }
@@ -728,6 +756,7 @@
         "id": "attempt_2_compare",
         "type": "script",
         "deps": [
+          "attempt_1_resolve",
           "attempt_2_resolve",
           "base_run",
           "head_run",
@@ -735,6 +764,7 @@
           "triage"
         ],
         "dataDeps": [
+          "attempt_1_resolve",
           "attempt_2_resolve",
           "base_run",
           "head_run",
@@ -748,7 +778,7 @@
           "runtime": "python",
           "entrypoint": "scripts/compare.py",
           "input": {
-            "map": "{'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_2_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_2_resolve.output.workspace.files}"
+            "map": "{'integration_fixes': nodes.attempt_2_resolve.output.integration_fixes + (nodes.attempt_1_resolve.output.integration_fixes + []), 'base': nodes.base_run.output.workspace.tests, 'head': nodes.head_run.output.workspace.tests, 'candidate': nodes.attempt_2_resolve.output.workspace.tests, 'base_run_sha': nodes.base_run.output.workspace.base_sha, 'merge_base_sha': nodes.merge_attempt.output.workspace.merge.base_sha, 'triage_files': nodes.triage.output.change.files, 'remaining': nodes.triage.output.remaining, 'files': nodes.attempt_2_resolve.output.workspace.files}"
           },
           "output_schema": "schemas/compare.json",
           "limits": {
@@ -1146,10 +1176,10 @@
           "description": "The release owner approves the exact resolution, its checks and its reviews before a branch is pushed.",
           "role": "admin",
           "message": {
-            "cel": "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '')"
+            "cel": "'Push the resolution of ' + inputs.repo + '#' + string(inputs.pr) + ' (' + string(nodes.finalize.output.stats.files) + ' changed file(s)) to ' + nodes.finalize.output.branch + ' and open a ' + (nodes.finalize.output.draft ? 'DRAFT ' : '') + 'pull request into ' + nodes.pr.output.head_ref + '? Tests: ' + nodes.finalize.output.verdict + '. ' + nodes.finalize.output.summary + '.' + (size(nodes.finalize.output.protected) > 0 ? ' It touches protected paths.' : '') + (size(nodes.finalize.output.integration_edits) > 0 ? ' It also edits ' + string(size(nodes.finalize.output.integration_edits)) + ' file(s) outside the conflicts to keep the code consistent.' : '')"
           },
           "payload": {
-            "map": "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.finalize.output.diff, 'diff_truncated': nodes.finalize.output.diff_truncated}"
+            "map": "{'comment': nodes.finalize.output.comment, 'files': nodes.finalize.output.stats, 'verdict': nodes.finalize.output.verdict, 'branch': nodes.finalize.output.branch, 'protected': nodes.finalize.output.protected, 'integration_edits': nodes.finalize.output.integration_edits, 'resolved_by_rule': nodes.triage.output.resolved, 'diff': nodes.finalize.output.diff, 'diff_truncated': nodes.finalize.output.diff_truncated}"
           },
           "expires_in": "24h",
           "on_expiry": "reject"
@@ -1352,10 +1382,10 @@
         "attempt_1_refute": "output of tainted agent attempt_1_refute",
         "attempt_1_gate": "output of tainted agent attempt_1_resolve",
         "attempt_2_resolve": "output of tainted agent attempt_2_resolve",
-        "attempt_2_compare": "output of tainted agent attempt_2_resolve",
+        "attempt_2_compare": "output of tainted agent attempt_1_resolve",
         "attempt_2_review": "output of tainted agent attempt_2_review",
         "attempt_2_refute": "output of tainted agent attempt_2_refute",
-        "attempt_2_gate": "output of tainted agent attempt_2_resolve",
+        "attempt_2_gate": "output of tainted agent attempt_1_resolve",
         "attempt": "output of tainted agent attempt_1_resolve",
         "finalize": "output of tainted agent attempt_1_resolve",
         "ship_gate": "output of tainted agent attempt_1_resolve",

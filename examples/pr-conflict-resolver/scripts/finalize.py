@@ -58,6 +58,8 @@ def main():
     ship = not blockers
     verification = compare.get("level", "none")
     clean = ship and compare.get("verdict") == "pass" and review.get("approved") and not triage.get("protected") and not any(f["severity"] in ("critical", "major") for f in review.get("findings", []))
+    integration = compare.get("integration_edits") or []
+    clean = clean and not integration
     draft = ship and not clean
     stats = ws.get("stats") or {"files": 0, "additions": 0, "deletions": 0}
     settled = len(triage.get("resolved", []))
@@ -73,6 +75,9 @@ def main():
     ]
     for n in compare.get("notes", []):
         lines.append(f"- Note: {n}.")
+    if integration:
+        reasons = {f["path"]: f.get("reason", "") for f in ((last or {}).get("resolution") or {}).get("integration_fixes") or [] if isinstance(f, dict) and "path" in f}
+        lines.append("- Edits outside the conflicts, made to keep the merged code consistent (check each): " + "; ".join(f"`{p}`" + (f" ({reasons[p]})" if reasons.get(p) else "") for p in integration) + ".")
     if triage.get("protected"):
         lines.append("- Touches protected paths, check them by hand: " + ", ".join(f"`{p}`" for p in triage["protected"]) + ".")
     body = "\n".join(lines + ["", f"Merge this branch into `{pr.get('head_ref', 'the pull request branch')}` with a merge commit, not a squash. Resolved at pull request head `{head_sha[:12]}`."])
@@ -95,6 +100,7 @@ def main():
         "pr_body": body,
         "comment": comment,
         "protected": triage.get("protected", []),
+        "integration_edits": integration,
         "blockers": blockers,
         "blockers_text": "; ".join(blockers),
         "summary": summary,

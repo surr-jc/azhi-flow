@@ -14,7 +14,7 @@ the **pull request's own branch**. Nothing is pushed to the contributor's branch
 | **GitHub access** | Either the GitHub CLI (`gh auth login`, then `azhi github login`), or the secrets `github-read-token` (Contents and Pull requests: read) and `github-write-token` (Contents and Pull requests: write; used only after approval). |
 | A **GitHub Copilot** sign-in for the models | `azhi copilot login` (secret `github-copilot-token`). |
 | The repository named on the tools | Install from the marketplace and name it, or edit `repos` in `azhi.config.yaml`. |
-| Your **test command** | In `workflow.yaml`, `test:` of the `base_run` step (default `npm ci && npm test`); the other steps repeat it by reference. |
+| Your **build or test command** | The `test_command` setting at install (default `npm ci && npm test`). Use the project's own: for Java `mvn -q -o -DskipTests compile` checks that the merge compiles. It is in `test:` of the `base_run` step; the other steps repeat it by reference. |
 
 ## Run it
 
@@ -28,9 +28,13 @@ azhi run examples/pr-conflict-resolver -i repo=OWNER/REPO -i pr=123
 2. **Merge.** The worker merges the live base branch into the pull request's head. Conflicts stay as diff3 markers.
 3. **Rules.** Identical, one-sided, whitespace-only and import or changelog additions are settled without a model.
    A delete-against-edit conflict, a binary file or a lock file is set aside for a person.
-4. **Resolve.** An agent resolves the remaining hunks, editing only the conflicting files. The tests run on the result.
+4. **Resolve.** An agent resolves the remaining hunks, then makes the merged code consistent: it searches the whole
+   repository for callers and types that either side changed and fixes what the merge left out of step, even in files
+   that did not conflict. Every such edit is declared (`integration_fixes`) with a reason, shown to the approver and
+   in the pull request, and the result opens as a draft. The build or tests run on the result.
 5. **Check.** A script compares the tests on the base, the pull request and the result, and checks the files: no
-   markers left, nothing changed outside the conflicts, no change of the pull request dropped.
+   no markers
+   left, nothing changed outside the conflicts except declared integration fixes, no change of the pull request dropped.
 6. **Review.** An independent reviewer reads the result against what each side meant; a refuter on another model
    tries to disprove each critical or major finding.
 7. **One more try.** If rejected, one stronger second attempt starts from the first and is told why.

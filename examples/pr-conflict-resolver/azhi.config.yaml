@@ -13,6 +13,13 @@
 #                          (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
 # 3. The tools fall back to `gh api` when the API call cannot be made (cli_fallback: login): a certificate or proxy
 #    problem Node cannot get past, or a token GitHub rejects. Set it to off to use the API only.
+settings:
+  - name: test_command
+    title: Build or test command
+    description: Run in the checkout of the base, of the pull request and of the resolution (a shell command; exit 0 means it passed). Use the project's own, for example "mvn -q -o -DskipTests compile" for a Java build check or "npm ci && npm test".
+    placeholder: npm ci && npm test
+    default: npm ci && npm test
+    required: true
 tools:
   - id: github.get-pull-request
     version: 1

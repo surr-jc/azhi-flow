@@ -102,7 +102,17 @@ describe.skipIf(!python)('compare.py', () => {
     expect(cmp({ candidate: t('not_run') })).toMatchObject({ verdict: 'inconclusive', level: 'none' });
   });
 
-  it('compares failing test ids when every run prints them', () => {
+  it('accepts a declared integration fix outside the conflicts, lists it, and rejects an undeclared or protected one', () => {
+    const extra = file('src/Handler.java', 'caller(String s)\n');
+    const ok = file('src/a.py', 'ok = 1\n');
+    const fix = [{ path: 'src/Handler.java', reason: 'caller of the changed signature' }];
+    expect(cmp({ files: [ok, extra], integration_fixes: fix })).toMatchObject({ verdict: 'pass', ok: true, integration_edits: ['src/Handler.java'], out_of_scope: [] });
+    expect(cmp({ files: [ok, extra] })).toMatchObject({ verdict: 'invalid', integration_edits: [], out_of_scope: [expect.stringContaining('not declared')] });
+    const wf = file('.github/workflows/ci.yml', 'on: push\n');
+    expect(cmp({ files: [ok, wf], integration_fixes: [{ path: '.github/workflows/ci.yml', reason: 'x' }] })).toMatchObject({ verdict: 'invalid' });
+  });
+
+it('compares failing test ids when every run prints them', () => {
     const shared = cmp({ base: t('failed', ['a']), head: t('failed', ['b']), candidate: t('failed', ['a', 'b']) });
     expect(shared.verdict).toBe('inconclusive');
     const fresh = cmp({ base: t('failed', ['a']), head: t('failed', ['b']), candidate: t('failed', ['a', 'c']) });
@@ -118,10 +128,10 @@ describe.skipIf(!python)('compare.py', () => {
   it('is invalid when markers are left, an unrelated file changed or the pull request change was dropped', () => {
     expect(cmp({ files: [file('src/a.py', '<<<<<<< x\n=======\n>>>>>>> y\n')] }).markers_left).toEqual(['src/a.py']);
     const extra = cmp({ files: [file('src/a.py', 'ok\n'), file('other.py', 'x\n')] });
-    expect(extra).toMatchObject({ verdict: 'invalid', ok: false, out_of_scope: ['other.py (a file the merge did not touch)'] });
+    expect(extra).toMatchObject({ verdict: 'invalid', ok: false, out_of_scope: ['other.py (a file the merge did not touch, and not declared as an integration fix)'] });
     const clean = [file('src/b.py', 'kept\n')];
     const changed = cmp({ triage_files: [...started, ...clean], files: [file('src/a.py', 'ok\n'), file('src/b.py', 'edited\n')] });
-    expect(changed.out_of_scope).toEqual(['src/b.py (had no conflict left)']);
+    expect(changed.out_of_scope).toEqual(['src/b.py (had no conflict left, and not declared as an integration fix)']);
     const lost = cmp({ triage_files: [...started, ...clean], files: [file('src/a.py', 'ok\n')] });
     expect(lost).toMatchObject({ verdict: 'invalid', dropped: ['src/b.py'] });
   });
@@ -140,6 +150,13 @@ describe.skipIf(!python)('finalize.py', () => {
     expect(r).toMatchObject({ ship: true, draft: false, attempt: 1, verification: 'full', branch: `azhi/resolve-7-${'a'.repeat(12)}`, base_sha: 'b'.repeat(40) });
     expect(r.files).toEqual([file('src/a.py', 'ok\n')]);
     expect(r.pr_body).toContain('merge commit, not a squash');
+  });
+
+  it('opens a result with integration edits as a draft and names the files', () => {
+    const r = fin([attempt({ compare: { verdict: 'pass', level: 'full', notes: [], integration_edits: ['src/Handler.java'] }, resolution: { ...resolution, integration_fixes: [{ path: 'src/Handler.java', reason: 'caller of the changed signature' }] } })]);
+    expect(r).toMatchObject({ ship: true, draft: true, integration_edits: ['src/Handler.java'] });
+    expect(r.pr_body).toContain('src/Handler.java');
+    expect(r.pr_body).toContain('caller of the changed signature');
   });
 
   it('hands on the diff of the attempt that ships, not an earlier one', () => {

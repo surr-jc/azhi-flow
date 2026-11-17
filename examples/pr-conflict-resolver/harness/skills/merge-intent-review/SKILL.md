@@ -17,7 +17,13 @@ the merged result against the base branch's tip: it should be the pull request's
    block, a half-applied rename or a variable used before it is defined is a finding.
 4. **The settled-by-rule hunks were sound.** A `union` of imports or a changelog is fine; a `whitespace` rule must
    not have touched indentation.
-5. **No markers, no stray files.** Any `<<<<<<<` left, or a file with no conflict that changed, is a finding.
+5. **No markers, no stray files.** Any `<<<<<<<` left is a finding. A file with no conflict that changed is expected
+   only when the resolver declared it in `integration_fixes`; check that each one is the smallest fix for a real
+   break (a caller, type or contract the merge left out of step), that it keeps both sides working, and that it
+   changes nothing else. An undeclared change, or a refactor in the guise of a fix, is a finding.
+6. **Cross-file breaks the resolver missed.** Search the repository for callers and overrides of any name either side
+   changed, including in files that merged without a conflict; a call that no longer matches its definition is
+   critical.
 
 ## Findings
 

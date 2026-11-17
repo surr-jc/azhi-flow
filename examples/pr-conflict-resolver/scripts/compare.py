@@ -2,11 +2,12 @@
 
 Reads JSON on stdin: `base`, `head` and `candidate` (each the `tests` of a step: status, exit_code, output), the
 checkout commit of the base run and the tip that was merged (`base_run_sha`, `merge_base_sha`), the
-`triage` files the resolver started from, and the `files` the resolver handed on.
+`triage` files the resolver started from, the `files` the resolver handed on, and its declared
+`integration_fixes` (edits outside the conflicts that keep the merged code consistent; allowed, listed, never silent).
 
 The checks run in this order, and the first that fails decides:
-  invalid       conflict markers are left in a file, the resolver changed a file that had no conflict left, or it
-                dropped a change the pull request made (a file the pull request changed is back at the base's text)
+  invalid       conflict markers are left in a file, the resolver changed a file that had no conflict left without
+                declaring it as an integration fix, or it dropped a change the pull request made (a file the pull request changed is back at the base's text)
   pass          the candidate's tests passed
   regression    the candidate fails and both parents pass (by test id when the runs print them, else by status)
   inconclusive  anything else: no tests ran, a parent also fails, or the base run was on another commit.
@@ -22,6 +23,8 @@ import sys
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
+# A declared integration fix never covers these: CI and agent config, and files a package manager owns.
+NEVER = re.compile(r"(^|/)(\.github|\.claude|\.hooks|\.husky)/|(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|Pipfile\.lock|go\.sum|composer\.lock|Gemfile\.lock|uv\.lock)$")
 OPEN, CLOSE = re.compile(r"^<{7}(\s|$)", re.M), re.compile(r"^>{7}(\s|$)", re.M)
 
 
@@ -42,17 +45,23 @@ def main():
     base, head, cand = d.get("base") or {}, d.get("head") or {}, d.get("candidate") or {}
     started = {f["path"]: f for f in d.get("triage_files", [])}
     remaining = {r["path"] for r in d.get("remaining", [])}
-    notes, markers, out_of_scope, dropped = [], [], [], []
+    declared = {f["path"] for f in d.get("integration_fixes", []) if isinstance(f, dict) and f.get("path") and not NEVER.search(str(f["path"]))}
+    notes, markers, out_of_scope, dropped, integration = [], [], [], [], []
 
     handed = {f["path"]: f for f in d.get("files", []) if f.get("status") != "deleted"}
     for path, f in handed.items():
         text = f.get("content") or ""
         if f.get("encoding") != "base64" and OPEN.search(text) and CLOSE.search(text):
             markers.append(path)
-        if path not in started:
-            out_of_scope.append(f"{path} (a file the merge did not touch)")
+        if path not in started and path in declared:
+            integration.append(path)
+        elif path not in started:
+            out_of_scope.append(f"{path} (a file the merge did not touch, and not declared as an integration fix)")
         elif path not in remaining and text != started[path].get("content"):
-            out_of_scope.append(f"{path} (had no conflict left)")
+            if path in declared:
+                integration.append(path)
+            else:
+                out_of_scope.append(f"{path} (had no conflict left, and not declared as an integration fix)")
     for path, f in started.items():
         if f.get("status") != "deleted" and path not in handed and path not in remaining:
             dropped.append(path)
@@ -89,6 +98,7 @@ def main():
         "markers_left": sorted(markers),
         "out_of_scope": sorted(out_of_scope),
         "dropped": sorted(dropped),
+        "integration_edits": sorted(integration),
         "base_stale": stale,
         "notes": notes,
     }

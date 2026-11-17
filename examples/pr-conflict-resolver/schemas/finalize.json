@@ -17,9 +17,10 @@
     "pr_body": {"type": "string"},
     "comment": {"type": "string"},
     "protected": {"type": "array", "items": {"type": "string"}},
+    "integration_edits": {"type": "array", "items": {"type": "string"}},
     "blockers": {"type": "array", "items": {"type": "string"}},
     "blockers_text": {"type": "string"},
     "summary": {"type": "string"}
   },
-  "required": ["ship", "draft", "attempt", "verdict", "verification", "branch", "base_sha", "files", "stats", "diff", "diff_truncated", "commit_message", "pr_title", "pr_body", "comment", "protected", "blockers", "blockers_text", "summary"]
+  "required": ["ship", "draft", "attempt", "verdict", "verification", "branch", "base_sha", "files", "stats", "diff", "diff_truncated", "commit_message", "pr_title", "pr_body", "comment", "protected", "integration_edits", "blockers", "blockers_text", "summary"]
 }
