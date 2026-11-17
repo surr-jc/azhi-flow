@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { compile } from '../src/compiler/compile.js';
@@ -114,5 +114,18 @@ describe('pr-conflict-resolver example', () => {
     expect(tool.input_schema.properties.merge_parent).toEqual({ type: 'string' });
     expect(tool.input_schema.required).not.toContain('merge_parent');
     expect(readFileSync(`${PKG}/scripts/triage.py`, 'utf8')).toMatch(/"head_sha": merge\.get\("head_sha"/);
+  });
+
+  // A tool is registered once per workspace, so the example installed last decides what github.push-branch@1 accepts.
+  // Every example that registers it must therefore declare the same arguments, or installing one breaks another.
+  it('is registered with the same arguments by every example that registers github.push-branch', () => {
+    const argsOf = (dir: string) => {
+      const tool = (parse(readFileSync(`examples/${dir}/azhi.config.yaml`, 'utf8')).tools ?? []).find((t: any) => t.id === 'github.push-branch');
+      return tool ? { required: [...tool.input_schema.required].sort(), properties: Object.keys(tool.input_schema.properties).sort() } : null;
+    };
+    const reference = argsOf('pr-conflict-resolver')!;
+    const others = readdirSync('examples').filter((d) => d !== 'pr-conflict-resolver' && existsSync(`examples/${d}/azhi.config.yaml`) && argsOf(d));
+    expect(others.length).toBeGreaterThan(0);
+    for (const dir of others) expect({ dir, ...argsOf(dir)! }).toEqual({ dir, ...reference });
   });
 });

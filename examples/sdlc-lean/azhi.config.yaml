@@ -211,6 +211,8 @@ tools:
           maxLength: 250
         base_sha:
           type: string
+        merge_parent:
+          type: string
         message:
           type: string
           maxLength: 5000
