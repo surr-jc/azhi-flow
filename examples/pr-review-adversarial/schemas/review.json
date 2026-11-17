@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "minLength": 1, "maxLength": 700, "description": "Two or three plain sentences. Never contradicts the verdict in the facts."},
+    "next_steps": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 240}, "description": "Always include; [] when there is nothing to do."}
+  },
+  "required": ["summary", "next_steps"],
+  "additionalProperties": false
+}

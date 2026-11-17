@@ -1,0 +1,139 @@
+# Admin configuration for the adversarial PR review example: `azhi apply examples/pr-review-adversarial/azhi.config.yaml`
+# (or `azhi example install pr-review-adversarial --repo OWNER/REPO --set slack_channel=C0123ABCD`).
+# 1. Edit repos below (the tools refuse any other repository). For GitHub Enterprise add
+#    api_url: https://<host>/api/v3 to the GitHub tools and set `host` on the workflow's workspaces
+#    (`azhi example install pr-review-adversarial --api-url ...` does both).
+# 2. Settings: slack_channel (optional: the summary goes to Slack when there is something to report),
+#    jira_url and jira_username (only for a run that names a Jira ticket), and probe_setup_command, the
+#    command that prepares the checkout before the probes run (for example `npm ci`; see docs/pr-review-adversarial.md).
+# 3. Secrets (values never go in a package or run state):
+#    github-read-token     fine-grained token, read-only "Contents", "Issues" and "Pull requests": reads the PR
+#                          and the issue, and clones the repository on the worker
+#    github-comment-token  fine-grained token with "Pull requests: write"; used only by the comment step
+#                          (the review is posted automatically, and later runs edit that comment)
+#    jira-api-token        Atlassian API token of jira_username, read access; only for Jira tickets
+#    github-copilot-token  your GitHub Copilot sign-in; the agents run on Copilot models through OpenCode
+#                          (`azhi copilot login`, or Secrets > Sign in with GitHub Copilot)
+#    slack-bot-token       posts the summary to the channel
+# Nothing here can merge, close or push: the review only reads and comments.
+settings:
+  - name: slack_channel
+    title: Slack channel
+    description: The channel ID the review summary is posted to when posting is on (the bot must be in it).
+    placeholder: C0123ABCD
+  - name: jira_url
+    title: Jira site
+    description: Your Jira Cloud address. Needed only when a run reads a Jira ticket.
+    placeholder: https://your-company.atlassian.net
+  - name: jira_username
+    title: Jira user
+    description: The email of the Atlassian account the Jira API token belongs to. Needed only for a Jira ticket.
+    placeholder: you@example.com
+  - name: probe_setup_command
+    title: Probe setup command
+    description: Run in the checkout before the probes, on the worker. Install what the project's tests need (the probes themselves must not use the network). If it fails, the probes do not run and the scenarios are reported unproven.
+    placeholder: npm ci
+    default: node --version
+    required: true
+tools:
+  - id: github.get-pull-request
+    version: 1
+    description: One pull request with its refs and changed files (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.pull-request, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        draft: {type: boolean}
+        mergeable: {type: [boolean, 'null']}
+        mergeable_state: {type: string}
+        url: {type: string}
+        base_ref: {type: string}
+        base_sha: {type: string}
+        head_ref: {type: string}
+        head_sha: {type: string}
+        additions: {type: integer}
+        deletions: {type: integer}
+        changed_files:
+          type: array
+          items: {type: object, properties: {path: {type: string}, status: {type: string}, additions: {type: integer}, deletions: {type: integer}}}
+  - id: github.get-issue
+    version: 1
+    description: One GitHub issue with its first comments (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.issue, config: {repos: [OWNER/REPO]}}
+    input_schema: {type: object, properties: {issue: {type: string, maxLength: 300}}, required: [issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        body: {type: string}
+        author: {type: string}
+        state: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+        comments: {type: array, items: {type: object, properties: {author: {type: string}, body: {type: string}}}}
+  - id: jira.get-issue
+    version: 1
+    description: One Jira issue, read through a Jira MCP server (mcp-atlassian, read-only)
+    effect: read
+    source: jira
+    credential: jira-api-token
+    credential_optional: true
+    transport:
+      kind: mcp-stdio
+      command: [uvx, mcp-atlassian]
+      tool: jira_get_issue
+      credential_env: JIRA_API_TOKEN
+      env: {JIRA_URL: "{{jira_url}}", JIRA_USERNAME: "{{jira_username}}", READ_ONLY_MODE: "true", ENABLED_TOOLS: jira_get_issue}
+    timeout: 120s
+    input_schema: {type: object, properties: {issue_key: {type: string, pattern: "^[A-Z][A-Z0-9_]*-[0-9]+$"}}, required: [issue_key], additionalProperties: false}
+    output_schema: {type: object}
+  - id: ticket.normalize
+    version: 1
+    description: A Jira or GitHub issue as one plain ticket (no network)
+    effect: read
+    source: intake
+    transport: {kind: builtin, name: ticket.normalize}
+    input_schema: {type: object, properties: {source: {type: string, enum: [jira, github]}, issue: {type: object}}, required: [source, issue], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        source: {type: string}
+        key: {type: string}
+        title: {type: string}
+        description: {type: string}
+        priority: {type: string}
+        reporter: {type: string}
+        status: {type: string}
+        labels: {type: array, items: {type: string}}
+        url: {type: string}
+      required: [source, key, title, description]
+  - id: github.comment-on-pr
+    version: 1
+    description: Post the review comment on a pull request, or edit the one it posted before (GitHub); deduplicated by the action ledger
+    effect: write-dedupable
+    source: github
+    credential: github-comment-token
+    transport: {kind: builtin, name: github.pr-comment, config: {repos: [OWNER/REPO], sticky: azhi-pr-adversarial-review}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}, body: {type: string}}, required: [repo, number, body], additionalProperties: false}
+    output_schema: {type: object, properties: {id: {type: integer}, url: {type: string}, updated: {type: boolean}}}
+secrets:
+  - github-read-token
+  - github-comment-token
+  - jira-api-token
+  - github-copilot-token
+  - slack-bot-token

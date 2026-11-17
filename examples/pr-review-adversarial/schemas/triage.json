@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"enum": ["breaks", "unproven", "holds"], "description": "The adversarial verdict (adversarial-pr-review skill)"},
+    "verdict_note": {"type": "string"},
+    "light": {"enum": ["red", "yellow", "green"], "description": "Overall: the adversarial verdict, the requirement coverage and the reviewers' findings together"},
+    "recommendation": {"enum": ["request_changes", "comment", "approve"]},
+    "origin": {"enum": ["issue", "text", "inferred"]},
+    "reproduced": {"type": "array", "items": {"type": "object"}},
+    "ruled_out": {"type": "array", "items": {"type": "object"}},
+    "unproven": {"type": "array", "items": {"type": "object"}},
+    "findings": {"type": "array", "items": {"type": "object"}, "description": "Confirmed static and conformance findings, most severe first"},
+    "check_by_hand": {"type": "array", "items": {"type": "object"}},
+    "dropped": {"type": "array", "items": {"type": "object"}},
+    "attack_surface": {"type": "array", "items": {"type": "object"}},
+    "deferred": {"type": "array", "items": {"type": "object"}},
+    "criteria": {"type": "array", "items": {"type": "object"}, "description": "Each criterion with its final status"},
+    "coverage": {"type": "object"},
+    "stats": {"type": "object"}
+  },
+  "required": ["verdict", "verdict_note", "light", "recommendation", "origin", "reproduced", "ruled_out", "unproven", "findings", "check_by_hand", "dropped", "attack_surface", "deferred", "criteria", "coverage", "stats"],
+  "additionalProperties": false
+}

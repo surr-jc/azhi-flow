@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "properties": {
+    "reviewer": {"type": "string"},
+    "summary": {"type": "string", "maxLength": 1000},
+    "criteria": {
+      "description": "One entry per criterion in the input, same ids.",
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "pattern": "^R[0-9]{1,2}$"},
+          "status": {"enum": ["met", "partial", "missing", "unverifiable"]},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "evidence": {"type": "string", "minLength": 1, "maxLength": 400}
+        },
+        "required": ["id", "status", "evidence"],
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "description": "Missing or partial criteria and unrequested behaviour changes only; [] when none.",
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "pattern": "^G[0-9]{1,2}$"},
+          "criterion": {"type": "string", "pattern": "^(R[0-9]{1,2})?$", "description": "The criterion this concerns; empty for an unrequested change"},
+          "severity": {"enum": ["blocker", "major", "minor"]},
+          "path": {"type": "string"},
+          "line": {"type": "integer", "minimum": 0},
+          "title": {"type": "string", "maxLength": 120},
+          "detail": {"type": "string", "maxLength": 1000},
+          "scenario": {"type": "string", "maxLength": 500}
+        },
+        "required": ["id", "criterion", "severity", "path", "title", "detail", "scenario"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["reviewer", "summary", "criteria", "findings"],
+  "additionalProperties": false
+}

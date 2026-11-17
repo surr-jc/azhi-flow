@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 600, "description": "One or two sentences: what the requester wants."},
+    "criteria": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "pattern": "^R[0-9]{1,2}$"},
+          "text": {"type": "string", "minLength": 1, "maxLength": 400},
+          "kind": {"enum": ["functional", "constraint", "nonfunctional"]},
+          "testable": {"type": "boolean"}
+        },
+        "required": ["id", "text", "kind", "testable"],
+        "additionalProperties": false
+      }
+    },
+    "ambiguous": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 300}, "description": "Always include; [] when nothing is unclear."}
+  },
+  "required": ["summary", "criteria", "ambiguous"],
+  "additionalProperties": false
+}

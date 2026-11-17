@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "runner_ran": {"type": "boolean", "description": "The runner printed its done line; false when the setup command failed or the test did not run"},
+    "dirty_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed files outside .azhi-probes/; any entry invalidates every probe"},
+    "scenarios": {"type": "array", "items": {"type": "object"}},
+    "findings": {"type": "array", "items": {"type": "object"}, "description": "One P finding per reproduced scenario, for the refuter"}
+  },
+  "required": ["runner_ran", "dirty_paths", "scenarios", "findings"],
+  "additionalProperties": false
+}

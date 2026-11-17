@@ -20,6 +20,7 @@ npx azhi example install ai-sdlc-v2 --repo OWNER/REPO --set slack_channel=...
 | [`ai-sdlc-v2`](/examples/ai-sdlc-v2/) | GitHub issue → readiness check → plan → build → independent review and verification → approval → draft PR | OpenCode |
 | `openspec-flow` | Spec-driven delivery on [OpenSpec](https://github.com/Fission-AI/OpenSpec): GitHub issue → change folder (proposal, delta specs, tasks) → spec check and review → spec approval → build with tests → verify against the specs → release approval → checked archive into `openspec/specs/` → PR | OpenCode |
 | `pr-review` | Four read-only reviewers in fresh checkouts, a verifier on a different model family, triage by script, one sticky PR comment | OpenCode (Copilot models) |
+| `pr-review-adversarial` | Checks a PR against its requirement (text, GitHub issue or Jira ticket), plans ranked failure scenarios, runs probes with a trusted runner, an independent refuter, and a rule-decided verdict: breaks, unproven or holds | OpenCode (Copilot models) |
 | `pr-conflict-resolver` | Merges the base into a conflicting PR, settles easy hunks by rule, resolves the rest with an agent, compares tests on base, PR and result, independent review, approval, then a PR with the resolution into the PR's branch | OpenCode (Copilot models) |
 | `issue-investigation` | Evidence-backed root-cause analysis with a challenger; an approval gates the comment | OpenCode |
 | `issue-splitter` / `issue-splitter-jira` | Sizes a ticket against the code; if too big, splits into ordered, linked sub-issues after approval | agent |
@@ -51,6 +52,19 @@ pr ─┬─ correctness ─┐
 - A closed or merged PR skips every later step unless `allow_closed` is true.
 - The comment is ledgered, deduplicated, guarded to the PR under review, and **sticky**: a later run edits it.
 - Runs on GitHub Copilot models: `azhi copilot login`.
+
+## `pr-review-adversarial`
+
+```text
+pr ─ source ─ ticket ─ requirements ─┬─ conformance ─────────────────┐
+   └─ static ──────────────────────────┼───────────────────────────── verify ─ triage ─ summarize ─ review ─┬─ post
+                                       └─ surface ─ probe ─ probe_results ─┘                              └─ notify
+```
+
+- The requirement is a GitHub issue, a Jira key, text you type, or (none given) the PR description, marked **inferred** and advisory.
+- `surface` assumes the change is broken and ranks failure scenarios; `probe` writes probes (no shell), and the worker runs them with a **trusted runner**: what ran decides, not what the agent says.
+- `triage` (a script) decides the verdict **breaks / unproven / holds**, the severities (MUST, SHOULD, MAY) and the light. Nothing merges, closes or pushes.
+- Details: `docs/pr-review-adversarial.md` in the repository.
 
 ## `issue-investigation`
 

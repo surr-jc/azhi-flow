@@ -139,6 +139,12 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
   or from the web UI); an approval gates the PR comment. Set up from Mission Control's Examples page or
   `azhi example install pr-review --repo OWNER/REPO`, and edit its agents in the workflow editor.
   See [docs/pr-review.md](docs/pr-review.md).
+- Adversarial pull request review (`examples/pr-review-adversarial`): checks a PR against its requirement (text, a
+  GitHub issue or a Jira ticket; none given, the PR description stands in, marked inferred), then attacks it: an
+  agent plans ranked failure scenarios, writes probes, and the worker runs them with a trusted runner; an
+  independent refuter checks every finding, and plain rules decide the verdict (breaks, unproven, holds). It only
+  reads and comments; nothing merges. `azhi example install pr-review-adversarial --repo OWNER/REPO`. See
+  [docs/pr-review-adversarial.md](docs/pr-review-adversarial.md).
 - Provider and model for the default-model steps, chosen per workflow (editor) or per run (runner, `azhi run
   --provider/--model`); steps that name their own model keep it. Examples list what they need before you
   install (`azhi example needs`, the marketplace's *Before you install*). See [docs/model-defaults.md](docs/model-defaults.md).

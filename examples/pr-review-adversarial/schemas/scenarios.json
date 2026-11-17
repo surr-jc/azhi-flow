@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 800},
+    "executable": {"type": "boolean", "description": "false only when the diff has no executable surface (docs, comments, formatting)"},
+    "surface": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "element": {"enum": ["entry_point", "invariant", "trust_boundary", "state", "contract", "caller"]},
+          "what": {"type": "string", "maxLength": 300},
+          "where": {"type": "string", "maxLength": 200}
+        },
+        "required": ["element", "what", "where"],
+        "additionalProperties": false
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string", "pattern": "^P[1-5]$"},
+          "title": {"type": "string", "maxLength": 120},
+          "class": {"enum": ["input_boundary", "trust_boundary", "state_concurrency", "migration", "compatibility", "error_handling", "resource_limits", "deployment"]},
+          "likelihood": {"enum": ["high", "medium", "low"]},
+          "impact": {"enum": ["high", "medium", "low"]},
+          "mechanism": {"type": "string", "maxLength": 300, "description": "file:line in the changed code and how it reaches the failure"},
+          "invariant": {"type": "string", "maxLength": 300},
+          "probe_kind": {"enum": ["library", "cli", "http", "job", "migration", "concurrency", "static"]},
+          "decisive": {"type": "boolean"},
+          "probe_plan": {"type": "string", "maxLength": 600, "description": "The seam to call, the input, and the single observable that means the failure happened"}
+        },
+        "required": ["id", "title", "class", "likelihood", "impact", "mechanism", "invariant", "probe_kind", "decisive", "probe_plan"],
+        "additionalProperties": false
+      }
+    },
+    "deferred": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "properties": {"title": {"type": "string", "maxLength": 160}, "why": {"type": "string", "maxLength": 200}},
+        "required": ["title", "why"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "executable", "surface", "scenarios", "deferred"],
+  "additionalProperties": false
+}

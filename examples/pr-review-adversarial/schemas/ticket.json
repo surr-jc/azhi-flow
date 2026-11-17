@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "origin": {"enum": ["issue", "text", "inferred"], "description": "issue: a GitHub issue or Jira ticket; text: typed by the requester; inferred: no requirement was given, so it is the PR title and description"},
+    "source": {"enum": ["github", "jira", "text", "pr"]},
+    "key": {"type": "string"},
+    "title": {"type": "string"},
+    "shown_title": {"type": "string", "description": "The title made safe to show in a PR comment"},
+    "description": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "url": {"type": "string"},
+    "comments": {"type": "array", "items": {"type": "object", "properties": {"author": {"type": "string"}, "body": {"type": "string"}}}}
+  },
+  "required": ["origin", "source", "key", "title", "shown_title", "description", "labels", "url", "comments"],
+  "additionalProperties": false
+}
