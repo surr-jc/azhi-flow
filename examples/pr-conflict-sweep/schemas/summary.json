@@ -32,6 +32,13 @@
         }
       }
     },
+    "not_taken": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"number": {"type": "integer"}, "reason": {"type": "string"}, "explanation": {"type": "string"}}
+      }
+    },
     "unknown": {"type": "array", "items": {"type": "integer"}},
     "scanned": {"type": ["integer", "null"]},
     "skipped_forks": {"type": ["integer", "null"]},

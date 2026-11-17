@@ -24,8 +24,8 @@ describe('pr-conflict-sweep example', () => {
     const result = compile(loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!, { pkg, catalog: staticCatalog(tools) });
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const e = loadExample('pr-conflict-sweep')!;
-    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['queue', 'route', 'resolve_each', 'summary']));
-    expect((e.config.tools ?? []).map((t) => t.id)).toEqual(['github.conflicted-prs']);
+    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['mode', 'one_pr', 'queue', 'targets', 'route', 'resolve_each', 'summary']));
+    expect((e.config.tools ?? []).map((t) => t.id)).toEqual(['github.conflicted-prs', 'github.get-pull-request']);
   });
 
   const py = (script: string, input: unknown) => {
@@ -38,12 +38,58 @@ describe('pr-conflict-sweep example', () => {
     const pkg = packageFromDirectory(PKG);
     const tools = parse(readFileSync(`${PKG}/azhi.config.yaml`, 'utf8')).tools;
     const plan = compile(loadDefinitionText(pkg.readText(pkg.manifest.workflow)!).definition!, { pkg, catalog: staticCatalog(tools) }).plan!;
-    expect(plan.nodes.map((n) => n.id)).toEqual(['queue', 'route', 'resolve_each', 'summary', 'summary_report']);
+    expect(plan.nodes.map((n) => n.id)).toEqual(['mode', 'one_pr', 'queue', 'targets', 'route', 'resolve_each', 'summary', 'summary_report']);
     const each = plan.nodes.find((n) => n.id === 'resolve_each')!;
     expect(each.type).toBe('parallel');
-    expect(each.def).toMatchObject({ for_each: { ref: 'nodes.queue.output.items' }, max_concurrency: 1, node: { type: 'subworkflow', workflow: 'pr-conflict-resolver', on_failure: 'continue', input: { pr: { ref: 'item.number' } } } });
+    expect(each.def).toMatchObject({ for_each: { ref: 'nodes.targets.output.items' }, max_concurrency: 1, node: { type: 'subworkflow', workflow: 'pr-conflict-resolver', on_failure: 'continue', input: { pr: { ref: 'item.number' } } } });
     // What the children return is untrusted, like any subworkflow's output.
     expect(plan.taint.untrusted.resolve_each).toMatch(/subworkflow/);
+  });
+
+  it('takes the one pull request named in pr, or sweeps the repository when none is named', () => {
+    const pkg = packageFromDirectory(PKG);
+    const wf = parse(pkg.readText(pkg.manifest.workflow)!);
+    const node = (id: string) => wf.nodes.find((n: any) => n.id === id);
+    expect(node('mode').routes).toEqual({ one: ['one_pr'], all: ['queue'] });
+    expect(node('one_pr').arguments).toEqual({ repo: { ref: 'inputs.repo' }, number: { ref: 'inputs.pr' } });
+    expect(wf.inputs.properties.pr).toMatchObject({ type: 'integer', minimum: 1 });
+    expect(wf.inputs.required).toEqual(['repo']);
+    // Both ways in meet in one merge step, and everything after reads that.
+    expect(node('targets').merge).toBe('any');
+    expect(JSON.stringify([node('route'), node('resolve_each'), node('summary')])).not.toContain('nodes.queue');
+  });
+
+  it('targets passes the listing through, and applies the listing rules to a named pull request', () => {
+    const repo = 'acme/shop';
+    const listed = { repo, items: [{ number: 3, title: 'T' }], unknown: [4], scanned: 5, skipped_forks: 1, truncated: true };
+    expect(py('targets.py', { repo, pr: null, queue: listed, one: null })).toEqual({ items: [{ number: 3, title: 'T' }], unknown: [4], scanned: 5, skipped_forks: 1, truncated: true, skipped: [] });
+    const one = (o: Record<string, unknown> = {}) => ({ repo, number: 7, title: 'Fix <b>it</b>', author: 'dev', state: 'open', draft: false, mergeable_state: 'dirty', url: 'https://github.com/acme/shop/pull/7', base_ref: 'main', head_ref: 'f7', head_sha: 's7', head_is_fork: false, ...o });
+    const take = (o: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => py('targets.py', { repo, pr: 7, queue: null, one: one(o), ...extra });
+    expect(take().items).toEqual([{ number: 7, title: 'Fix b it /b', url: 'https://github.com/acme/shop/pull/7', author: 'dev', draft: false, base_ref: 'main', head_ref: 'f7', head_sha: 's7' }]);
+    const why = (o: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+      const r = take(o, extra);
+      expect(r.items).toEqual([]);
+      return r.skipped;
+    };
+    expect(why({ state: 'closed' })).toEqual([{ number: 7, reason: 'not_open' }]);
+    expect(why({ head_is_fork: true })).toEqual([{ number: 7, reason: 'fork' }]);
+    expect(why({ draft: true })).toEqual([{ number: 7, reason: 'draft' }]);
+    expect(take({ draft: true }, { include_drafts: true }).items).toHaveLength(1);
+    expect(why({ mergeable_state: 'clean' })).toEqual([{ number: 7, reason: 'not_conflicting' }]);
+    expect(why({ mergeable_state: 'unknown' })).toEqual([{ number: 7, reason: 'unknown' }]);
+    expect(take({ mergeable_state: 'unknown' }).unknown).toEqual([7]);
+    // Anything else is skipped, never resolved: another number, another repository, or an unreadable result.
+    expect(why({ number: 8 })).toEqual([{ number: 7, reason: 'unreadable' }]);
+    expect(why({ repo: 'evil/other' })).toEqual([{ number: 7, reason: 'unreadable' }]);
+    expect(py('targets.py', { repo, pr: 7, queue: null, one: 'nope' }).skipped).toEqual([{ number: 7, reason: 'unreadable' }]);
+    expect(py('targets.py', { repo: 'not a repo', pr: 7, queue: null, one: one() }).items).toEqual([]);
+  });
+
+  it('the summary says why a named pull request was not taken', () => {
+    const s = py('summarize.py', { repo: 'acme/shop', items: [], children: [], skipped: [{ number: 7, reason: 'not_conflicting' }, { number: 9, reason: 'made up' }] });
+    expect(s.headline).toBe('Pull request #7 was not resolved: GitHub does not report merge conflicts on it');
+    expect(s.not_taken).toEqual([{ number: 7, reason: 'not_conflicting', explanation: 'GitHub does not report merge conflicts on it' }]);
+    expect(s.total).toBe(0);
   });
 
   it('summarize reads each resolver child, fails closed, and never calls an untried one resolved', () => {

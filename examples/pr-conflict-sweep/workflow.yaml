@@ -3,8 +3,12 @@
 # then work through them. Differences from the skill: the resolver here is a checked, approval-gated child run (it
 # never pushes to the contributor's branch, and has no force-push), the pull requests are worked one after the other
 # (each child waits for its own approval, and the worker runs the tests), and forks are left out.
+#   mode     with `pr` set, only that pull request is taken (github.get-pull-request); without it, the repository
+#            is swept (github.conflicted-prs).
 #   queue    github.conflicted-prs lists open, non-fork, non-draft pull requests GitHub reports as conflicting,
 #            oldest first, up to `limit`. One whose mergeability GitHub has not computed yet is listed as unknown.
+#   targets  one list for both ways in. A named pull request follows the same rules as the listing, and one that is
+#            not taken (closed, a fork, a draft, not conflicting) is reported with its reason, not resolved.
 #   dry_run  stop after the list: nothing is resolved, nothing is posted.
 #   resolve  a parallel step fans out over the list: one child run of pr-conflict-resolver per pull request, one at a
 #            time. A child that fails or is rejected does not stop the sweep; the next pull request goes on.
@@ -15,19 +19,33 @@ schema_version: "2.0"
 id: pr-conflict-sweep
 name: Pull request conflict sweep
 tags: [merge-conflict, pull-request, github]
-description: Find every open pull request in a repository that GitHub reports as conflicting and resolve each one with the checked pr-conflict-resolver, one after the other, then summarize. Nothing is merged.
+description: Resolve the conflicting pull requests of a repository - every open one that GitHub reports as conflicting, or the one pull request you name - with the checked pr-conflict-resolver, one after the other, then summarize. Nothing is merged.
 trigger:
   manual: true
 inputs:
   type: object
   properties:
     repo: {type: string, title: Repository, pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", description: "owner/name, for example acme/payments"}
+    pr: {type: integer, minimum: 1, title: Pull request number, description: "Resolve only this pull request, if it conflicts. Leave empty to sweep the repository (limit and author then do not apply)."}
     limit: {type: integer, default: 5, minimum: 1, maximum: 20, title: Most pull requests to resolve}
     author: {type: string, default: "", title: Only pull requests by this GitHub login (empty for everyone)}
     resolve_draft: {type: boolean, default: false, title: Include draft pull requests}
     dry_run: {type: boolean, default: false, title: Only list the conflicting pull requests (nothing is resolved or posted)}
   required: [repo]
 nodes:
+  - id: mode
+    type: condition
+    description: One named pull request, or the whole repository.
+    expression: "has(inputs.pr) && inputs.pr > 0 ? 'one' : 'all'"
+    routes: {one: [one_pr], all: [queue]}
+    default: all
+
+  - id: one_pr
+    type: tool
+    description: The pull request that was named, with its refs and whether GitHub sees conflicts.
+    tool: github.get-pull-request@1
+    arguments: {repo: {ref: inputs.repo}, number: {ref: inputs.pr}}
+
   - id: queue
     type: tool
     description: The open pull requests GitHub reports as conflicting (mergeable_state dirty), oldest first. Forks and, unless asked, drafts are left out.
@@ -38,10 +56,22 @@ nodes:
       author: {cel: "has(inputs.author) ? inputs.author : ''"}
       include_drafts: {cel: "has(inputs.resolve_draft) && inputs.resolve_draft"}
 
+  # A merge node: it runs after whichever of the two ways in was taken, and reads the other behind has().
+  - id: targets
+    type: script
+    description: The pull requests to resolve, from the listing or from the one that was named, and why a named one was not taken.
+    runtime: python
+    entrypoint: scripts/targets.py
+    merge: any
+    input:
+      map: "{'repo': inputs.repo, 'include_drafts': has(inputs.resolve_draft) && inputs.resolve_draft, 'pr': has(inputs.pr) ? inputs.pr : null, 'queue': has(nodes.queue) ? nodes.queue.output : null, 'one': has(nodes.one_pr) ? nodes.one_pr.output : null}"
+    output_schema: schemas/targets.json
+    limits: {time: 1m}
+
   - id: route
     type: condition
     description: Resolve only when there is something to resolve and this is not a dry run. The summary is in neither route, so it runs either way.
-    expression: "size(nodes.queue.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'"
+    expression: "size(nodes.targets.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'"
     routes: {go: [resolve_each], summary_only: []}
     default: summary_only
 
@@ -51,7 +81,7 @@ nodes:
   - id: resolve_each
     type: parallel
     description: Resolve each conflicting pull request with the published pr-conflict-resolver (merge, rules, agent, tests, review, its own approval, then a resolution pull request). Each child waits for a person, so this may take days.
-    for_each: {ref: nodes.queue.output.items}
+    for_each: {ref: nodes.targets.output.items}
     max_concurrency: 1
     max_items: 20
     timeout: 96h
@@ -65,12 +95,12 @@ nodes:
   # the fan-out, and also when the fan-out was skipped (nothing to resolve, or a dry run), so that is read behind has().
   - id: summary
     type: script
-    description: Every conflicting pull request and its result, and what the sweep did not look at.
+    description: Every pull request taken and its result, and what the sweep did not take or look at.
     runtime: python
     entrypoint: scripts/summarize.py
     merge: any
     input:
-      map: "{'repo': inputs.repo, 'dry_run': has(inputs.dry_run) && inputs.dry_run, 'items': nodes.queue.output.items, 'unknown': nodes.queue.output.unknown, 'scanned': nodes.queue.output.scanned, 'skipped_forks': nodes.queue.output.skipped_forks, 'truncated': nodes.queue.output.truncated, 'children': has(nodes.resolve_each) ? nodes.resolve_each.output.items : []}"
+      map: "{'repo': inputs.repo, 'dry_run': has(inputs.dry_run) && inputs.dry_run, 'items': nodes.targets.output.items, 'unknown': nodes.targets.output.unknown, 'scanned': nodes.targets.output.scanned, 'skipped_forks': nodes.targets.output.skipped_forks, 'truncated': nodes.targets.output.truncated, 'skipped': nodes.targets.output.skipped, 'children': has(nodes.resolve_each) ? nodes.resolve_each.output.items : []}"
     output_schema: schemas/summary.json
     limits: {time: 1m}
   - id: summary_report

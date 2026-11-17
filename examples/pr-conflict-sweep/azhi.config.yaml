@@ -1,7 +1,7 @@
 # Admin configuration for the PR conflict sweep: `azhi apply examples/pr-conflict-sweep/azhi.config.yaml`.
 # Needs the published pr-conflict-resolver first, installed with the same repository. The child carries its own
 # tools and secrets (the write token is used only by its steps after a person approved); this workflow only lists
-# the conflicting pull requests, hands each to the child and summarizes.
+# the conflicting pull requests (or reads the one you name), hands each to the child and summarizes.
 # 1. Edit repos below (the tool refuses any other repository).
 # 2. Secret github-read-token: fine-grained token, read-only "Pull requests"; the same one the resolver uses
 #    (`azhi github login --secret github-read-token`).
@@ -45,5 +45,28 @@ tools:
         skipped_forks: {type: integer}
         truncated: {type: boolean}
       required: [repo, items, unknown, scanned, skipped_forks, truncated]
+  - id: github.get-pull-request
+    version: 1
+    description: One pull request with its refs, mergeability and changed files (GitHub)
+    effect: read
+    source: github
+    credential: github-read-token
+    transport: {kind: builtin, name: github.pull-request, config: {repos: [OWNER/REPO], cli_fallback: login}}
+    input_schema: {type: object, properties: {repo: {type: string}, number: {type: integer}}, required: [repo, number], additionalProperties: false}
+    output_schema:
+      type: object
+      properties:
+        repo: {type: string}
+        number: {type: integer}
+        title: {type: string}
+        author: {type: string}
+        state: {type: string}
+        draft: {type: boolean}
+        mergeable_state: {type: string}
+        url: {type: string}
+        base_ref: {type: string}
+        head_ref: {type: string}
+        head_sha: {type: string}
+        head_is_fork: {type: boolean}
 secrets:
   - github-read-token

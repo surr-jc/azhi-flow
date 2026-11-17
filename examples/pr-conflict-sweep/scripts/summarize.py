@@ -1,12 +1,13 @@
 """The conflict sweep as one record. Reads JSON on stdin, prints JSON.
 
 Input:  repo, dry_run, items [{number, title, url, author, draft}] from github.conflicted-prs, unknown [number],
-        scanned, skipped_forks, truncated, children: the fan-out's results in the order of items, each the output of
+        scanned, skipped_forks, truncated, skipped [{number, reason}] (a named pull request that was not taken),
+        children: the fan-out's results in the order of items, each the output of
         one pr-conflict-resolver child run {run_id, workflow, state, nodes, error?} where nodes maps each succeeded
         step to its output (a tool step may be stored as its whole result {action, output, observation}).
 Output: {headline, repo, dry_run, total, counts {resolved, needs_manual, skipped, failed, unknown, not_tried},
-         prs [{number, title, url, author, status, reason, resolution_url, draft}], unknown, scanned, skipped_forks,
-         truncated}. status is one of
+         prs [{number, title, url, author, status, reason, resolution_url, draft}], not_taken [{number, reason,
+         explanation}], unknown, scanned, skipped_forks, truncated}. status is one of
           resolved      the resolver opened a resolution pull request (resolution_url, draft say where)
           needs_manual  the resolver set a conflict aside or both attempts failed, and commented why
           skipped       the resolver found the pull request not eligible (closed, fork, draft, no longer conflicting)
@@ -29,6 +30,14 @@ sys.stdout.reconfigure(encoding="utf-8")
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TITLE_MAX = 200
 STATUSES = ("resolved", "needs_manual", "skipped", "failed", "unknown")
+NOT_TAKEN = {
+    "not_open": "it is not open",
+    "fork": "it comes from a fork, which this workflow does not resolve",
+    "draft": "it is a draft (set resolve_draft to include drafts)",
+    "not_conflicting": "GitHub does not report merge conflicts on it",
+    "unknown": "GitHub had not computed its mergeability yet, try again",
+    "unreadable": "it could not be read",
+}
 
 
 def clean(value):
@@ -101,9 +110,15 @@ def decide(data):
             "resolution_url": resolution_url,
             "draft": draft,
         })
+    not_taken = []
+    for s in data.get("skipped", []) if isinstance(data.get("skipped"), list) else []:
+        if isinstance(s, dict) and positive_int(s.get("number")) and s.get("reason") in NOT_TAKEN:
+            not_taken.append({"number": s["number"], "reason": s["reason"], "explanation": NOT_TAKEN[s["reason"]]})
     dry = data.get("dry_run") is True
     total = len(prs)
-    if total == 0:
+    if total == 0 and not_taken:
+        headline = f"Pull request #{not_taken[0]['number']} was not resolved: {not_taken[0]['explanation']}"
+    elif total == 0:
         headline = "No conflicting pull request found"
     elif dry:
         headline = f"{total} conflicting pull request(s) found (dry run, nothing resolved)"
@@ -116,6 +131,7 @@ def decide(data):
         "total": total,
         "counts": counts,
         "prs": prs,
+        "not_taken": not_taken,
         "unknown": ints(data.get("unknown")),
         "scanned": count(data.get("scanned")),
         "skipped_forks": count(data.get("skipped_forks")),

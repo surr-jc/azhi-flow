@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "number": {"type": "integer"},
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "author": {"type": "string"},
+          "draft": {"type": "boolean"},
+          "base_ref": {"type": "string"},
+          "head_ref": {"type": "string"},
+          "head_sha": {"type": "string"}
+        },
+        "required": ["number"]
+      }
+    },
+    "unknown": {"type": "array", "items": {"type": "integer"}},
+    "scanned": {"type": "integer"},
+    "skipped_forks": {"type": "integer"},
+    "truncated": {"type": "boolean"},
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"number": {"type": "integer"}, "reason": {"enum": ["not_open", "fork", "draft", "not_conflicting", "unknown", "unreadable"]}},
+        "required": ["number", "reason"]
+      }
+    }
+  },
+  "required": ["items", "unknown", "scanned", "skipped_forks", "truncated", "skipped"]
+}

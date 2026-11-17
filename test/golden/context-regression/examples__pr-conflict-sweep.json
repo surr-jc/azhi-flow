@@ -11,7 +11,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-conflict-sweep",
-    "definitionHash": "sha256:0993a172384e2bae99dd45df1535f549d22cdf2178963d0a8dae39b1aded3bed",
+    "definitionHash": "sha256:6babb1dedee1575dcb9b624971d6d0eb6ac12961836a17981a9b1e97d923fdd1",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -20,6 +20,12 @@
           "title": "Repository",
           "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
           "description": "owner/name, for example acme/payments"
+        },
+        "pr": {
+          "type": "integer",
+          "minimum": 1,
+          "title": "Pull request number",
+          "description": "Resolve only this pull request, if it conflicts. Leave empty to sweep the repository (limit and author then do not apply)."
         },
         "limit": {
           "type": "integer",
@@ -54,9 +60,70 @@
     },
     "nodes": [
       {
+        "id": "mode",
+        "type": "condition",
+        "deps": [],
+        "dataDeps": [],
+        "def": {
+          "id": "mode",
+          "type": "condition",
+          "description": "One named pull request, or the whole repository.",
+          "expression": "has(inputs.pr) && inputs.pr > 0 ? 'one' : 'all'",
+          "routes": {
+            "one": [
+              "one_pr"
+            ],
+            "all": [
+              "queue"
+            ]
+          },
+          "default": "all"
+        },
+        "outputSchema": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string"
+            }
+          }
+        },
+        "timeoutMs": 1000,
+        "maxAttempts": 3
+      },
+      {
+        "id": "one_pr",
+        "type": "tool",
+        "deps": [
+          "mode"
+        ],
+        "dataDeps": [],
+        "def": {
+          "id": "one_pr",
+          "type": "tool",
+          "description": "The pull request that was named, with its refs and whether GitHub sees conflicts.",
+          "tool": "github.get-pull-request@1",
+          "arguments": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "number": {
+              "ref": "inputs.pr"
+            }
+          }
+        },
+        "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "one"
+        }
+      },
+      {
         "id": "queue",
         "type": "tool",
-        "deps": [],
+        "deps": [
+          "mode"
+        ],
         "dataDeps": [],
         "def": {
           "id": "queue",
@@ -79,29 +146,60 @@
           }
         },
         "timeoutMs": 60000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "mode",
+          "route": "all"
+        }
+      },
+      {
+        "id": "targets",
+        "type": "script",
+        "deps": [
+          "one_pr",
+          "queue"
+        ],
+        "dataDeps": [
+          "one_pr",
+          "queue"
+        ],
+        "def": {
+          "id": "targets",
+          "type": "script",
+          "description": "The pull requests to resolve, from the listing or from the one that was named, and why a named one was not taken.",
+          "runtime": "python",
+          "entrypoint": "scripts/targets.py",
+          "merge": "any",
+          "input": {
+            "map": "{'repo': inputs.repo, 'include_drafts': has(inputs.resolve_draft) && inputs.resolve_draft, 'pr': has(inputs.pr) ? inputs.pr : null, 'queue': has(nodes.queue) ? nodes.queue.output : null, 'one': has(nodes.one_pr) ? nodes.one_pr.output : null}"
+          },
+          "output_schema": "schemas/targets.json",
+          "limits": {
+            "time": "1m"
+          }
+        },
+        "timeoutMs": 60000,
         "maxAttempts": 3
       },
       {
         "id": "route",
         "type": "condition",
         "deps": [
-          "queue"
+          "targets"
         ],
         "dataDeps": [
-          "queue"
+          "targets"
         ],
         "def": {
           "id": "route",
           "type": "condition",
-          "description": "Resolve only when there is something to resolve and this is not a dry run. Either way the summary runs.",
-          "expression": "size(nodes.queue.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'",
+          "description": "Resolve only when there is something to resolve and this is not a dry run. The summary is in neither route, so it runs either way.",
+          "expression": "size(nodes.targets.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'",
           "routes": {
             "go": [
               "resolve_each"
             ],
-            "summary_only": [
-              "summary"
-            ]
+            "summary_only": []
           },
           "default": "summary_only"
         },
@@ -120,18 +218,18 @@
         "id": "resolve_each",
         "type": "parallel",
         "deps": [
-          "queue",
-          "route"
+          "route",
+          "targets"
         ],
         "dataDeps": [
-          "queue"
+          "targets"
         ],
         "def": {
           "id": "resolve_each",
           "type": "parallel",
           "description": "Resolve each conflicting pull request with the published pr-conflict-resolver (merge, rules, agent, tests, review, its own approval, then a resolution pull request). Each child waits for a person, so this may take days.",
           "for_each": {
-            "ref": "nodes.queue.output.items"
+            "ref": "nodes.targets.output.items"
           },
           "max_concurrency": 1,
           "max_items": 20,
@@ -201,23 +299,22 @@
         "id": "summary",
         "type": "script",
         "deps": [
-          "queue",
           "resolve_each",
-          "route"
+          "targets"
         ],
         "dataDeps": [
-          "queue",
-          "resolve_each"
+          "resolve_each",
+          "targets"
         ],
         "def": {
           "id": "summary",
           "type": "script",
-          "description": "Every conflicting pull request and its result, and what the sweep did not look at.",
+          "description": "Every pull request taken and its result, and what the sweep did not take or look at.",
           "runtime": "python",
           "entrypoint": "scripts/summarize.py",
           "merge": "any",
           "input": {
-            "map": "{'repo': inputs.repo, 'dry_run': has(inputs.dry_run) && inputs.dry_run, 'items': nodes.queue.output.items, 'unknown': nodes.queue.output.unknown, 'scanned': nodes.queue.output.scanned, 'skipped_forks': nodes.queue.output.skipped_forks, 'truncated': nodes.queue.output.truncated, 'children': has(nodes.resolve_each) ? nodes.resolve_each.output.items : []}"
+            "map": "{'repo': inputs.repo, 'dry_run': has(inputs.dry_run) && inputs.dry_run, 'items': nodes.targets.output.items, 'unknown': nodes.targets.output.unknown, 'scanned': nodes.targets.output.scanned, 'skipped_forks': nodes.targets.output.skipped_forks, 'truncated': nodes.targets.output.truncated, 'skipped': nodes.targets.output.skipped, 'children': has(nodes.resolve_each) ? nodes.resolve_each.output.items : []}"
           },
           "output_schema": "schemas/summary.json",
           "limits": {
@@ -225,11 +322,7 @@
           }
         },
         "timeoutMs": 60000,
-        "maxAttempts": 3,
-        "route": {
-          "condition": "route",
-          "route": "summary_only"
-        }
+        "maxAttempts": 3
       },
       {
         "id": "summary_report",

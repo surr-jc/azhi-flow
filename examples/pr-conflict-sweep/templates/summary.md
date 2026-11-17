@@ -1,11 +1,14 @@
 *{{summary.headline}}* ({{summary.repo}})
 
 {{#summary.prs}}
-• #{{number}} {{title}} {{url}}: {{status}}{{#resolution_url}} -> {{resolution_url}}{{#draft}} (draft){{/draft}}{{/resolution_url}}{{#reason}} ({{reason}}){{/reason}}
+- #{{number}} {{title}} {{url}}: {{status}}{{#resolution_url}} -> {{resolution_url}}{{#draft}} (draft){{/draft}}{{/resolution_url}}{{#reason}} ({{reason}}){{/reason}}
 {{/summary.prs}}
 {{^summary.prs}}
 Nothing to resolve.
 {{/summary.prs}}
+{{#summary.not_taken}}
+- #{{number}} was not taken: {{explanation}}
+{{/summary.not_taken}}
 {{#summary.unknown}}
 GitHub had not computed mergeability for #{{.}} yet; run the sweep again later.
 {{/summary.unknown}}
