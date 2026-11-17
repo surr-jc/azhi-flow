@@ -40,9 +40,9 @@ nodes:
 
   - id: route
     type: condition
-    description: Resolve only when there is something to resolve and this is not a dry run. Either way the summary runs.
+    description: Resolve only when there is something to resolve and this is not a dry run. The summary is in neither route, so it runs either way.
     expression: "size(nodes.queue.output.items) == 0 || (has(inputs.dry_run) && inputs.dry_run) ? 'summary_only' : 'go'"
-    routes: {go: [resolve_each], summary_only: [summary]}
+    routes: {go: [resolve_each], summary_only: []}
     default: summary_only
 
   # A fan-out over the list found at run time: one step in the plan, one child run per pull request. max_concurrency is 1
@@ -61,7 +61,8 @@ nodes:
       on_failure: continue
       input: {repo: {ref: inputs.repo}, pr: {ref: item.number}, resolve_draft: {cel: "has(inputs.resolve_draft) && inputs.resolve_draft"}}
 
-  # A merge node: it runs on the summary_only route too (nothing to resolve, or a dry run), where the fan-out never started, so it is read behind has().
+  # A merge node, in no route of its own (a step listed in a route is skipped when another route is taken). It runs after
+  # the fan-out, and also when the fan-out was skipped (nothing to resolve, or a dry run), so that is read behind has().
   - id: summary
     type: script
     description: Every conflicting pull request and its result, and what the sweep did not look at.

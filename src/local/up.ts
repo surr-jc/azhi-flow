@@ -45,11 +45,13 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
 
   ensureWebBuilt(log);
   const bin = await ensureTemporalCli(join(home, 'bin'), log);
+  log('starting the Temporal dev server');
   const temporal = await startTemporalDevServer({ bin, dbFile: join(localDir, 'temporal.db'), log });
   log(`Temporal dev server on ${temporal.address}`);
   const stops: Array<() => Promise<void>> = [() => temporal.stop()];
   try {
     const dataDir = join(home, 'server');
+    log('starting the server (database, API, scheduler)');
     const server = await startServer({
       log,
       settings: {
@@ -65,6 +67,7 @@ export async function startLocal(o: LocalOptions = {}): Promise<LocalHandle> {
     stops.unshift(() => server.stop());
     const token = readFileSync(server.localTokenFile!, 'utf8').trim();
     if (o.worker !== false) {
+      log('starting the worker');
       const worker = await startWorker({ apiUrl: server.url, token, temporalAddress: temporal.address, dataDir: join(home, 'worker'), trustPolicy: { kind: 'workspace-publishers' }, ...(o.localFolders ? { localFolders: true } : {}), log });
       stops.unshift(() => worker.stop());
     }

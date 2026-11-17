@@ -170,6 +170,8 @@ export function Assistant() {
     addEventListener('keydown', on);
     return () => removeEventListener('keydown', on);
   }, []);
+  // Moving to another page closes the panel (the conversation is kept).
+  useEffect(() => setOpen(false), [path]);
   useEffect(() => {
     if (open) composer.current?.focus();
   }, [open, ready]);

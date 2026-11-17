@@ -81,6 +81,31 @@ if (!args.has('--skip-install')) {
       }
     }
   }
+
+  // The Windows installer writes every file one by one (and the virus scanner reads each), so the file
+  // count sets the install time as much as the size does.
+  step('prune files the backend never loads');
+  // @temporalio/core-bridge ships its native addon for every platform (about 28 MB each) and loads only
+  // releases/<this platform>/index.node.
+  const releases = join(modules, '@temporalio', 'core-bridge', 'releases');
+  const os = { win32: 'windows', darwin: 'apple-darwin', linux: 'linux' }[process.platform];
+  if (os && existsSync(releases)) {
+    for (const name of readdirSync(releases)) {
+      if (!name.includes(os)) {
+        rmSync(join(releases, name), { recursive: true, force: true });
+        console.log(`  removed core-bridge/releases/${name}`);
+      }
+    }
+  }
+  // Source maps and type declarations: nearly half the files in node_modules, read by nothing at run time.
+  let dropped = 0;
+  for (const entry of readdirSync(modules, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile() && /\.(map|d\.ts|d\.mts|d\.cts)$/.test(entry.name)) {
+      rmSync(join(entry.parentPath, entry.name), { force: true });
+      dropped++;
+    }
+  }
+  console.log(`  removed ${dropped} source maps and type declarations`);
 }
 
 console.log(`\n[build:app] done: ${out}`);

@@ -648,7 +648,7 @@ export async function azhiRun(input: RunInput): Promise<RunStatus> {
     try {
       const r = await execute(node);
       outputs[node.id] = { output: r.output };
-      await setNode(node.id, 'succeeded', { output: r.output, route: r.route, attempt: node.type === 'loop' || node.type === 'subworkflow' });
+      await setNode(node.id, 'succeeded', { output: r.output, route: r.route, attempt: node.type === 'loop' || node.type === 'subworkflow' || (node.type === 'parallel' && (node.def as ParallelNode).node.type === 'subworkflow') });
     } catch (err) {
       if (isCancellation(err)) {
         status.nodes[node.id] = { status: 'cancelled' };
