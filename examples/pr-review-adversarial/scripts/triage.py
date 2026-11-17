@@ -1,6 +1,7 @@
 """Decides the review from the evidence, with plain rules and no model.
 
-Reads JSON on stdin: {origin, requirements, conformance, reviews, probes, surface, checks, min_confidence}.
+Reads JSON on stdin: {origin, requirements, conformance, reviews, probes, surface, strategy, checks, min_confidence}.
+  strategy     the probe strategist's advice; only its advisory setup_command is used, to tell a person what to set
   reviews      the static reviewer's output ({reviewer, summary, findings})
   conformance  the conformance reviewer's output (criteria statuses and G findings)
   probes       probe_results.py output (one result per attack scenario)
@@ -127,6 +128,15 @@ for s in probes.get("scenarios", []):
             unproven.append({**base, "reason": why + " (probe saw: " + base["observed"] + ")"})
 reproduced.sort(key=lambda r: ["MUST", "SHOULD", "MAY"].index(r["severity"]))
 
+strategy = d.get("strategy") or {}
+executed = [s for s in probes.get("scenarios", []) if s["mode"] == "executed"]
+# The setup advice is shown when probes were expected but none gave a result (the setup probably does not fit the project).
+setup_hint = {
+    "show": bool(strategy.get("setup_command")) and bool(executed) and (not probes.get("runner_ran", False) or not any(s["state"] != "unproven" for s in executed)),
+    "command": clean(strategy.get("setup_command"), 600),
+    "stack": clean(strategy.get("stack"), 200),
+}
+
 executable = surface.get("executable", True)
 held_exec = any(r["level"].startswith("L3") for r in ruled_out)
 decisive_open = any(u["decisive"] for u in unproven)
@@ -167,6 +177,7 @@ json.dump(
         "findings": kept_findings,
         "check_by_hand": check_by_hand,
         "dropped": dropped,
+        "setup_hint": setup_hint,
         "attack_surface": [{"element": x["element"], "what": clean(x["what"], 300), "where": clean(x["where"], 200)} for x in surface.get("surface", [])],
         "deferred": [{"title": clean(x["title"], 160), "why": clean(x["why"], 200)} for x in surface.get("deferred", [])],
         "criteria": criteria,

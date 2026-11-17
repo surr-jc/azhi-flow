@@ -12,12 +12,13 @@
     "findings": {"type": "array", "items": {"type": "object"}, "description": "Confirmed static and conformance findings, most severe first"},
     "check_by_hand": {"type": "array", "items": {"type": "object"}},
     "dropped": {"type": "array", "items": {"type": "object"}},
+    "setup_hint": {"type": "object", "description": "Advice only: the strategist's recommended probe_setup_command, shown when no executed probe gave a result"},
     "attack_surface": {"type": "array", "items": {"type": "object"}},
     "deferred": {"type": "array", "items": {"type": "object"}},
     "criteria": {"type": "array", "items": {"type": "object"}, "description": "Each criterion with its final status"},
     "coverage": {"type": "object"},
     "stats": {"type": "object"}
   },
-  "required": ["verdict", "verdict_note", "light", "recommendation", "origin", "reproduced", "ruled_out", "unproven", "findings", "check_by_hand", "dropped", "attack_surface", "deferred", "criteria", "coverage", "stats"],
+  "required": ["verdict", "verdict_note", "light", "recommendation", "origin", "reproduced", "ruled_out", "unproven", "findings", "check_by_hand", "dropped", "setup_hint", "attack_surface", "deferred", "criteria", "coverage", "stats"],
   "additionalProperties": false
 }

@@ -9,7 +9,8 @@ is broken, map the attack surface, rank the failure scenarios, try the best ones
 It only reads and comments. It has no merge, push, close or approval step.
 
 ```
-pr ─ should_review ─┬─ source ─┬─ jira_issue ─ intake_jira ──┐
+pr ─ should_review ─┬─ strategy (how to probe) ─ feeds surface and probe
+                    ├─ source ─┬─ jira_issue ─ intake_jira ──┐
                     │          ├─ github_issue ─ intake_github ─┼─ ticket ─ requirements ─┬─ conformance ─┐
                     │          ├─ text_pass ─────────────────────┤                          └─ surface ─ should_probe ─ probe ─ probe_results ─┐
                     │          └─ inferred_pass ─────────────────┘                                                                                ├─ verify ─ triage ─ summarize ─ review ─┬─ post (PR comment)
@@ -46,6 +47,7 @@ used only by the comment), `jira-api-token` (only for a Jira key; needs the `jir
 | `requirements` | Agent: numbered, testable acceptance criteria `R1..Rn` and the open questions. Invents nothing. |
 | `conformance` | Agent in a read-only checkout: each criterion is `met`, `partial`, `missing` or `unverifiable`, with `file:line`; unrequested behaviour changes become findings. |
 | `static` | One read-only pass for correctness and security, so cheap findings are not lost. |
+| `strategy` | Agent in a read-only checkout: reads the build files and the project's own tests and decides **how this repository can be probed** - the stack, the command that runs one probe file (`launch`), the safe seams, what to avoid, and `probeable` (false when no safe way exists, so the planner marks scenarios static). It also recommends a setup command, which is advice only (see below). Idioms for Spring Boot (Maven, Gradle), Node, Python and Go are in the `probe-strategy` skill. |
 | `surface` | Agent: the attack surface (entry points, invariants, trust boundaries, state, contracts, callers), candidates over the eight failure classes, ranked by likelihood x impact, 3 to 5 selected (one high impact), the rest listed as deferred. |
 | `probe` | Agent in a **writable** checkout: writes one small probe per scenario under `.azhi-probes/`, or walks the ones that cannot be executed (deployment, anything needing a service or credential). |
 | `probe_results` | Script: what the runner printed becomes one result per scenario. |
@@ -66,6 +68,15 @@ runs it after the agent submits, as the step's workspace test command:
    `.azhi-probes/<id>/probe.json` (`argv`, no shell) with 10 minutes per probe and 25 in all, and records the probe's
    last stdout line: `REPRODUCED: ...` or `HELD: ...`. Anything else is `not_run` with the reason (crash, timeout,
    program missing). It always exits 0.
+
+The prober takes its `argv` from the strategist's `launch` (for Spring Boot: `java @target/probe.args Probe.java`, a single-file
+program against the compiled classes and the test classpath, with `MockMvc.standaloneSetup` or plain service calls rather than a
+full `@SpringBootTest` context).
+
+**No agent chooses what the worker runs.** The setup command stays the `probe_setup_command` setting. The strategist's
+`setup_command` is shown, in the comment and the run report, only when probes were expected and none gave a result:
+"the probe strategist recommends setting `probe_setup_command` to ...". Nothing wires it into a command, and a test checks that.
+Set it once per repository.
 
 The runner's lines, not the agent's claims, decide. A change anywhere outside `.azhi-probes/` voids every probe.
 

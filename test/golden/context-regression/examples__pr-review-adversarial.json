@@ -18,7 +18,7 @@
     "format": "azhi-plan/1",
     "compiler": "0.1.0",
     "workflowId": "pr-review-adversarial",
-    "definitionHash": "sha256:65c601ec62d7a52d66c050c00252cdb908f688db0b4b77454d8d04a9bf32d945",
+    "definitionHash": "sha256:f613bc5c2fcd3e8c8735cc2fa656a9455cf7ff7139b8ceababe059b763b22efc",
     "inputsSchema": {
       "type": "object",
       "properties": {
@@ -116,7 +116,8 @@
           "routes": {
             "review": [
               "source",
-              "static"
+              "static",
+              "strategy"
             ],
             "skip": []
           },
@@ -515,15 +516,62 @@
         "agentTools": []
       },
       {
+        "id": "strategy",
+        "type": "agent",
+        "deps": [
+          "pr",
+          "should_review"
+        ],
+        "dataDeps": [
+          "pr"
+        ],
+        "def": {
+          "id": "strategy",
+          "type": "agent",
+          "description": "Read the build files and decide how this repository can be probed - launch line, safe seams, what to avoid - and recommend a setup command (advisory only; probe-strategy skill).",
+          "executor": "opencode",
+          "profile": "probe-strategist@1",
+          "workspace": {
+            "repo": {
+              "ref": "inputs.repo"
+            },
+            "ref": {
+              "cel": "'refs/pull/' + string(inputs.pr) + '/head'"
+            },
+            "base_ref": {
+              "cel": "has(inputs.diff_base) && inputs.diff_base != '' ? inputs.diff_base : nodes.pr.output.base_sha"
+            },
+            "credential": "github-read-token"
+          },
+          "input": {
+            "map": "{'pr': nodes.pr.output}"
+          },
+          "output_schema": "schemas/strategy.json",
+          "timeout": "10m",
+          "budget": {
+            "max_tool_calls": 12
+          }
+        },
+        "timeoutMs": 600000,
+        "maxAttempts": 3,
+        "route": {
+          "condition": "should_review",
+          "route": "review"
+        },
+        "agentTools": []
+      },
+      {
         "id": "surface",
         "type": "agent",
         "deps": [
           "pr",
-          "requirements"
+          "requirements",
+          "strategy"
         ],
         "dataDeps": [
           "pr",
-          "requirements"
+          "requirements",
+          "strategy"
         ],
         "def": {
           "id": "surface",
@@ -544,7 +592,7 @@
             "credential": "github-read-token"
           },
           "input": {
-            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'requirements': nodes.requirements.output, 'limits': {'max_scenarios': config.max_scenarios}}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'requirements': nodes.requirements.output, 'strategy': nodes.strategy.output, 'limits': {'max_scenarios': config.max_scenarios}}"
           },
           "output_schema": "schemas/scenarios.json",
           "timeout": "20m",
@@ -595,10 +643,12 @@
         "deps": [
           "pr",
           "should_probe",
+          "strategy",
           "surface"
         ],
         "dataDeps": [
           "pr",
+          "strategy",
           "surface"
         ],
         "def": {
@@ -626,7 +676,7 @@
             }
           },
           "input": {
-            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'scenarios': nodes.surface.output.scenarios}"
+            "map": "{'pr': nodes.pr.output, 'review_from': has(inputs.diff_base) ? inputs.diff_base : '', 'strategy': nodes.strategy.output, 'scenarios': nodes.surface.output.scenarios}"
           },
           "output_schema": "schemas/probes.json",
           "timeout": "60m",
@@ -732,6 +782,7 @@
           "probe_results",
           "requirements",
           "static",
+          "strategy",
           "surface",
           "ticket",
           "verify"
@@ -741,6 +792,7 @@
           "probe_results",
           "requirements",
           "static",
+          "strategy",
           "surface",
           "ticket",
           "verify"
@@ -752,7 +804,7 @@
           "runtime": "python",
           "entrypoint": "scripts/triage.py",
           "input": {
-            "map": "{'origin': nodes.ticket.output.origin, 'requirements': nodes.requirements.output, 'conformance': nodes.conformance.output, 'reviews': [nodes.static.output], 'probes': nodes.probe_results.output, 'surface': nodes.surface.output, 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"
+            "map": "{'origin': nodes.ticket.output.origin, 'requirements': nodes.requirements.output, 'conformance': nodes.conformance.output, 'reviews': [nodes.static.output], 'probes': nodes.probe_results.output, 'surface': nodes.surface.output, 'strategy': nodes.strategy.output, 'checks': nodes.verify.output.checks, 'min_confidence': config.min_confidence}"
           },
           "output_schema": "schemas/triage.json",
           "limits": {
@@ -1068,6 +1120,7 @@
       "untrusted": {
         "conformance": "output of tainted agent conformance",
         "static": "output of tainted agent static",
+        "strategy": "output of tainted agent strategy",
         "surface": "output of tainted agent surface",
         "should_probe": "output of tainted agent surface",
         "probe": "output of tainted agent probe",
@@ -1084,6 +1137,7 @@
       "tainted": {
         "conformance": "reads a cloned repository (its files are untrusted)",
         "static": "reads a cloned repository (its files are untrusted)",
+        "strategy": "reads a cloned repository (its files are untrusted)",
         "surface": "reads a cloned repository (its files are untrusted)",
         "probe": "reads a cloned repository (its files are untrusted)",
         "verify": "reads a cloned repository (its files are untrusted)",
@@ -1106,6 +1160,17 @@
           "write": "notify",
           "path": [
             "static",
+            "triage",
+            "slack_message",
+            "notify"
+          ],
+          "gate": "guard"
+        },
+        {
+          "agent": "strategy",
+          "write": "notify",
+          "path": [
+            "strategy",
             "triage",
             "slack_message",
             "notify"

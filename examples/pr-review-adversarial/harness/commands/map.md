@@ -12,6 +12,8 @@ a `probe_plan` the prober can follow: the seam to call, the input, and the one o
 happened. Set `probe_kind` to how it can be run (`library`, `cli`, `http`, `job`, `migration`, `concurrency`) or
 `static` when it can only be walked by reading (deployment, rollout, anything needing a service or credential).
 Mark `decisive` true for a scenario whose outcome would change the verdict. The rest go in `deferred`.
-If the diff has no executable code (docs, comments, formatting only) set `executable` to false and select none.
+The message has a `strategy` for this repository (how it can be probed). When it says `probeable` is false, or a
+scenario has no safe seam in its `seams`, set that scenario's `probe_kind` to `static`; choose `probe_kind`
+values the strategy's seams can actually reach. If the diff has no executable code (docs, comments, formatting only) set `executable` to false and select none.
 If changed-files returns an error or no changes, the diff is unavailable: select none, set `executable` to
 true, and say so in the summary. When `review_from` is not empty the diff starts at that commit.

@@ -36,7 +36,7 @@ describe('pr-review-adversarial example: package', () => {
     // The one expected warning is the unfilled {{probe_setup_command}} setting, which the example install fills.
     expect(result.diagnostics.filter((d) => d.severity === 'warning' && d.code !== 'unfilled_setting')).toEqual([]);
     const e = loadExample('pr-review-adversarial')!;
-    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'source', 'ticket', 'requirements', 'conformance', 'static', 'surface', 'probe', 'probe_results', 'verify', 'triage', 'summarize', 'review', 'post']));
+    expect(e.nodes.map((n) => n.id)).toEqual(expect.arrayContaining(['pr', 'source', 'ticket', 'requirements', 'conformance', 'static', 'strategy', 'surface', 'probe', 'probe_results', 'verify', 'triage', 'summarize', 'review', 'post']));
     expect((e.config.tools ?? []).map((t) => t.id).sort()).toEqual(['github.comment-on-pr', 'github.get-issue', 'github.get-pull-request', 'jira.get-issue', 'ticket.normalize']);
   });
 
@@ -62,6 +62,20 @@ describe('pr-review-adversarial example: package', () => {
     for (const ok of ['', 'PAY-142', '17', 'acme/shop#17', 'https://github.com/acme/shop/issues/17']) expect(issue.test(ok), ok).toBe(true);
     for (const bad of ['pay-1', 'PAY-', '17; rm -rf', 'acme/shop', '$(id)']) expect(issue.test(bad), bad).toBe(false);
     expect(wf.inputs.properties.requirement.maxLength).toBe(20000);
+  });
+
+  it('has the strategist decide how to probe, read-only, before the planner and the prober, and advise only', () => {
+    const wf = parse(read('workflow.yaml'));
+    const node = (id: string) => wf.nodes.find((n: any) => n.id === id);
+    expect(node('should_review').routes.review).toContain('strategy');
+    expect(node('strategy').workspace.mode).toBeUndefined();
+    expect(node('strategy').profile).toBe('probe-strategist@1');
+    for (const id of ['surface', 'probe', 'triage']) expect(JSON.stringify(node(id).input), id).toContain('nodes.strategy.output');
+    // Its setup command is never wired into a command: the only test command is the workflow's own.
+    expect(JSON.stringify(wf.nodes.filter((n: any) => n.id !== 'triage'))).not.toMatch(/strategy.output.setup_command/);
+    expect(JSON.stringify(wf.nodes.find((n: any) => n.id === 'probe').workspace.test)).not.toContain('strategy');
+    const profile = parse(read('profiles/probe-strategist@1.yaml'));
+    expect(profile.harness.opencode.tools).toEqual(['read', 'grep', 'glob', 'skill']);
   });
 
   it('puts the probe agent in a writable checkout whose test command is the compressed trusted runner', () => {
@@ -181,7 +195,8 @@ describe('pr-review-adversarial example: triage rules', () => {
   const gap = (id = 'G1', criterion = 'R2') => ({ id, criterion, severity: 'major', path: 'src/a.ts', line: 3, title: 'No log', detail: 'd', scenario: 's' });
   const check = (id: string, verdict: string, confidence = 90, severity?: string) => ({ id, verdict, confidence, evidence: `${verdict} ${id}`, ...(severity ? { severity } : {}) });
   const probesFor = (state: string, o: Record<string, unknown> = {}) => ({ runner_ran: true, dirty_paths: [], findings: [], scenarios: [{ id: 'P1', title: 'Empty header', class: 'input_boundary', impact: 'high', likelihood: 'high', decisive: true, kind: 'library', mechanism: 'src/parse.ts:12', mode: 'executed', state, level: state === 'ruled_out' ? 'L3 - Executed' : state === 'reproduced' ? 'L3 - Executed' : 'none', observed: 'o', reason: 'because', command: 'node p.mjs', probe_files: [{ path: '.azhi-probes/P1/p.mjs', content: '' }], ...o }] });
-  const triage = (o: Record<string, unknown> = {}) => py('triage.py', { origin: 'issue', requirements: req, conformance: conf(['met', 'met']), reviews: [{ reviewer: 'static', summary: '', findings: [] }], probes: probesFor('ruled_out'), surface: surface(), checks: [], min_confidence: 80, ...o });
+  const strategy = { summary: 's', stack: 'Spring Boot 3, Maven, JUnit 5', build_tool: 'maven', probeable: true, launch: { argv: ['java', '@target/probe.args', '{probe}'], file: 'Probe.java', notes: '' }, seams: ['MockMvc standalone'], avoid: ['@SpringBootTest'], setup_command: 'mvn -q test-compile `x` @me' };
+  const triage = (o: Record<string, unknown> = {}) => py('triage.py', { origin: 'issue', strategy, requirements: req, conformance: conf(['met', 'met']), reviews: [{ reviewer: 'static', summary: '', findings: [] }], probes: probesFor('ruled_out'), surface: surface(), checks: [], min_confidence: 80, ...o });
 
   it('holds only when a probe executed and passed: green, approve, and never "proven correct"', () => {
     const t = triage();
@@ -240,6 +255,15 @@ describe('pr-review-adversarial example: triage rules', () => {
     expect(skipped.criteria[1]).toMatchObject({ status: 'unverifiable', evidence: expect.stringMatching(/did not assess/) });
   });
 
+  it('shows the setup advice of the strategist only when probes were expected and none gave a result, and never as something to run', () => {
+    const hint = (probes: unknown, s: unknown = strategy) => triage({ probes, strategy: s }).setup_hint;
+    expect(hint(probesFor('ruled_out'))).toMatchObject({ show: false });
+    const none = { ...probesFor('unproven', { reason: 'setup failed' }), runner_ran: false };
+    expect(hint(none)).toMatchObject({ show: true, stack: 'Spring Boot 3, Maven, JUnit 5', command: "mvn -q test-compile 'x' @​me" });
+    expect(hint(none, { ...strategy, setup_command: '' }).show).toBe(false);
+    expect(hint({ ...probesFor('unproven', { mode: 'static' }), runner_ran: false }).show).toBe(false); // nothing was meant to execute
+  });
+
   it('treats an inferred requirement as advisory: a gap against the PR description never turns the light red', () => {
     const t = triage({ origin: 'inferred', conformance: conf(['met', 'missing'], [gap()]), checks: [check('G1', 'confirmed', 90, 'blocker')] });
     expect(t.findings[0]).toMatchObject({ id: 'G1', severity: 'minor', reported_severity: 'major' });
@@ -266,6 +290,10 @@ describe('pr-review-adversarial example: triage rules', () => {
     expect(md).toContain('1 of 2 met, 1 missing');
     expect(md).toContain('- Fix P1: guard the empty header');
     expect(md).toContain('How many retries?');
+    expect(md).not.toContain('recommends setting');
+    const none = triage({ probes: { ...probesFor('unproven', { reason: 'setup failed' }), runner_ran: false } });
+    const hinted = renderReport(read('templates/review.md'), { pr, ticket: { title: 'T', url: '' }, ambiguous: [], review, t: none, view }, { asOf: {}, format: 'markdown' }).markdown;
+    expect(hinted).toContain('recommends setting `probe_setup_command` to: `mvn -q test-compile');
     expect(md).not.toMatch(/\{\{|\}\}/);
     const slack = renderReport(read('templates/slack.md'), { pr, review, t, view }, { asOf: {}, format: 'markdown' }).markdown;
     expect(slack).toContain('🔴 No-go, changes requested (adversarial verdict: Breaks)');

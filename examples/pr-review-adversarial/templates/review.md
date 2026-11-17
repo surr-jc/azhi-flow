@@ -10,6 +10,10 @@
 
 :warning: A probe changed files outside its scratch folder, so every executed probe was discarded as invalid ({{view.dirty_count}} file(s)).
 {{/view.dirty}}
+{{#t.setup_hint.show}}
+
+:information_source: No probe gave a result, so the scenarios above are unproven. The probe strategist read the build files ({{t.setup_hint.stack}}) and recommends setting `probe_setup_command` to: `{{t.setup_hint.command}}`
+{{/t.setup_hint.show}}
 {{#t.reproduced.length}}
 
 ### Reproduced failures

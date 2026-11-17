@@ -16,6 +16,8 @@ For each scenario you can execute, create `.azhi-probes/<id>/probe.json` and the
 - `id` equals the folder name and the scenario id (`P1` to `P5`). `kind` is one of `library`, `cli`, `http`,
   `job`, `migration`, `concurrency`. `argv` is the program and its arguments, no shell syntax (no `&&`, pipes,
   globs, redirects, quotes meant for a shell). Paths are relative to the checkout root.
+- The message carries a `strategy` for this repository: take `argv` from its `launch.argv` (with `{probe}` replaced
+  by your probe file's path), the file name from `launch.file`, and stay within its `seams` and out of its `avoid`.
 - Use the language the project already has (its test runner, fixtures and fakes are the best seam). Import the
   changed code from the checkout; do not copy it.
 - The probe's **last line of stdout** is the verdict: `REPRODUCED: <the observable that went wrong, with the

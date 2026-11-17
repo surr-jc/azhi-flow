@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": {"type": "string", "maxLength": 600, "description": "One or two sentences: the stack and how it can be probed."},
+    "stack": {"type": "string", "maxLength": 200, "description": "For example: Spring Boot 3 (Java 17), Maven, JUnit 5, Mockito, H2"},
+    "build_tool": {"enum": ["maven", "gradle", "npm", "pnpm", "yarn", "pip", "poetry", "go", "cargo", "dotnet", "make", "other", "unknown"]},
+    "probeable": {"type": "boolean", "description": "false when no safe way to run code from this repository's toolchain could be found; the planner then marks scenarios static"},
+    "launch": {
+      "type": "object",
+      "properties": {
+        "argv": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 200}, "description": "The program and arguments that run one probe file, with {probe} where its path goes. No shell syntax."},
+        "file": {"type": "string", "maxLength": 80, "description": "The probe file name to write, such as Probe.java, probe.mjs or test_probe.py"},
+        "notes": {"type": "string", "maxLength": 400}
+      },
+      "required": ["argv", "file", "notes"],
+      "additionalProperties": false
+    },
+    "seams": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 240}, "description": "Safe ways to reach the changed code: standalone MockMvc, plain service calls, an in-memory database"},
+    "avoid": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 240}, "description": "What a probe must not use: booting the whole application context, real brokers or databases, external HTTP"},
+    "setup_command": {"type": "string", "maxLength": 600, "description": "ADVISORY: the command that would prepare the checkout for the launch above. It is never run; a person sets it as probe_setup_command. Empty when unknown."}
+  },
+  "required": ["summary", "stack", "build_tool", "probeable", "launch", "seams", "avoid", "setup_command"],
+  "additionalProperties": false
+}
