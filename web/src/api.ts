@@ -225,7 +225,7 @@ export interface RunPlan {
 
 export interface PreflightCheck {
   id: string;
-  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack' | 'model';
   optional?: boolean;
   status: 'ok' | 'warn' | 'fail' | 'skipped';
   target: string;

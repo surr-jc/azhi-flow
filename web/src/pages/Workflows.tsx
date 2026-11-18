@@ -371,8 +371,8 @@ function StartRun({ versionId, slug, draft, schema, plan: workflowPlan, workflow
     return () => clearTimeout(t);
   }, [values, schema]);
   const pre = useQuery({
-    queryKey: ['preflight', versionId, JSON.stringify(settled)],
-    queryFn: () => api<PreflightReport>(`/v1/versions/${encodeURIComponent(versionId)}/preflight`, { method: 'POST', body: { inputs: settled } }),
+    queryKey: ['preflight', versionId, JSON.stringify(settled), JSON.stringify(modelBody)],
+    queryFn: () => api<PreflightReport>(`/v1/versions/${encodeURIComponent(versionId)}/preflight`, { method: 'POST', body: { inputs: settled, ...modelBody } }),
     staleTime: 0,
     refetchOnWindowFocus: false,
   });

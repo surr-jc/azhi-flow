@@ -19,7 +19,7 @@ import { EXECUTORS } from '../executors/capabilities.js';
 import { preflight, probesFor } from '../plan/preflight.js';
 import { checkRepoAccess, type GithubConfig } from '../gateway/tools/github.js';
 import { getRunDetail, listRuns, requestCancel, resumeRun, runEvents } from '../server/runs.js';
-import { startRun, startRunBody } from '../server/start-run.js';
+import { modelDefaultsBody, startRun, startRunBody } from '../server/start-run.js';
 import { readTranscript, redactor, writeTranscript } from '../agents/transcript.js';
 import { listSecrets, resolveSecret, setSecret } from '../server/secrets.js';
 import { ghCliPointer, ghCliToken } from '../server/gh-cli.js';
@@ -240,10 +240,12 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false, log 
   app.post('/v1/versions/:ref/preflight', async (req) => {
     const p = user(req);
     requireRole(p, 'operator');
-    const b = z.object({ inputs: z.record(z.string(), z.unknown()).default({}) }).parse(req.body ?? {});
+    // `model_defaults` is the provider and model a run would choose, so its steps are checked as they will run.
+    const b = z.object({ inputs: z.record(z.string(), z.unknown()).default({}), model_defaults: modelDefaultsBody }).parse(req.body ?? {});
+    if (b.model_defaults?.executor && !EXECUTORS[b.model_defaults.executor]) throw new AzhiError(ErrorClass.invalidInput, `unknown executor ${b.model_defaults.executor}`);
     const v = await resolveVersion(ctx, p.workspaceId, (req.params as { ref: string }).ref);
     if (!v) throw notFound('workflow version');
-    return preflight(ctx, p.workspaceId, v, { inputs: b.inputs, principal: { userId: p.userId, role: p.role } });
+    return preflight(ctx, p.workspaceId, v, { inputs: b.inputs, principal: { userId: p.userId, role: p.role }, modelDefaults: b.model_defaults });
   });
 
   app.get('/v1/workflows', async (req) => {

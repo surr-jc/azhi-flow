@@ -35,6 +35,20 @@ Example: `ai-sdlc` pins the code reviewer, test reviewer, security reviewer and 
 models on purpose. Choosing `github-copilot` / `claude-opus-5.5` for a run changes the analyst, architect,
 engineer and the other default-model steps, and leaves those four alone.
 
+# A model the provider does not offer stops the run before it starts
+
+The preflight (the checks before a run, in the runner and with `azhi run`) looks up each distinct
+provider and model the agent steps will use, including the provider and model chosen for this run,
+in the provider's own model list (Copilot: the models your sign-in's plan offers).
+
+- **Not in the live list:** the check fails, names the step and model, lists a few models that are
+  offered, and the run is refused. Choose another model for that step, or `--model` with `--force-model`.
+- **List not available** (a ChatGPT plan, which has no list call, or a list that could not be read):
+  a warning, "could not verify". Azhi does not guess; the run can start and a bad model then fails
+  at its step.
+- **Not covered:** a model Copilot lists but then rejects for OpenCode's integrator
+  (`model_not_available_for_integrator`) passes this check, because the list does not say so.
+
 # Required configuration is shown before you install
 
 An example's `azhi.config.yaml` marks each setting `required: true` or leaves it optional (with

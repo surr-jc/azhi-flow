@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import { cpSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { registerExampleRoutes } from '../src/api/examples.js';
 import { migrate } from '../src/db/migrate.js';
 import { preflight } from '../src/plan/preflight.js';
@@ -12,6 +12,10 @@ import { setSecret } from '../src/server/secrets.js';
 import { getVersion } from '../src/server/workflows.js';
 import { startFakeGithub } from '../src/testing/fake-github.js';
 import { startFakeSlack } from '../src/testing/fake-slack.js';
+
+// The provider's model list, which the real code reads over the network: tests set what it answers.
+const modelList = vi.hoisted(() => ({ next: (): unknown => ({ provider: 'opencode', models: [], source: 'built-in' }), calls: [] as string[] }));
+vi.mock('../src/builder/models.js', async (orig) => ({ ...(await orig<typeof import('../src/builder/models.js')>()), builderModels: async (_c: unknown, _w: string, provider: string) => (modelList.calls.push(provider), modelList.next()) }));
 
 /** The workflow preflight: tools, secrets, GitHub tokens per repository, Slack. Real pr-review example, fake GitHub and Slack. */
 process.env.AZHI_EGRESS_ALLOW = '127.0.0.1';
@@ -109,5 +113,46 @@ describe('workflow preflight', () => {
     // Required again: the same missing secret blocks.
     await registerTool(ctx, WS, { ...cur, credential: 'optional-sign-in' }, 'usr_test');
     expect(failures(await run({ repo: 'acme/payments', pr: 7 })).some((c) => c.target === 'optional-sign-in')).toBe(true);
+  });
+
+  describe('model availability', () => {
+    // The run's own choice, as `--provider github-copilot --model ... --force-model` sends it.
+    const choose = (name: string) => ({ provider: 'github-copilot' as const, name, force: true });
+    const check = async (name: string) => preflight(ctx, WS, (await getVersion(ctx, WS, versionId))!, { inputs: { repo: 'acme/payments', pr: 7 }, modelDefaults: choose(name) });
+    const models = (...ids: string[]) => ({ provider: 'opencode', models: ids.map((id) => ({ id, label: id })), source: 'live' });
+
+    it('fails a model the provider does not list, naming the step and what is offered', async () => {
+      modelList.next = () => models('claude-opus-5-5', 'gpt-5.5');
+      const f = (await check('gpt-5.6-terra')).checks.filter((c) => c.kind === 'model' && c.status === 'fail');
+      expect(f.length).toBe(1); // one check however many steps use the model
+      expect(f[0]!.node).toBeTruthy();
+      expect(f[0]!.message).toContain('gpt-5.6-terra');
+      expect(f[0]!.message).toContain('claude-opus-5-5');
+      expect(f[0]!.fix).toContain('--model');
+    });
+
+    it('passes a model the provider lists', async () => {
+      modelList.next = () => models('gpt-5.5');
+      const r = await check('gpt-5.5');
+      expect(r.checks.filter((c) => c.kind === 'model').map((c) => c.status)).toEqual(['ok']);
+    });
+
+    it('warns, and never guesses, when the live list is not available', async () => {
+      modelList.next = () => ({ provider: 'opencode', models: [], source: 'built-in', note: 'could not read Copilot\'s model list (HTTP 500)' });
+      const m = (await check('gpt-5.6-terra')).checks.filter((c) => c.kind === 'model');
+      expect(m.map((c) => c.status)).toEqual(['warn']);
+      expect(m[0]!.message).toContain('Could not verify');
+      modelList.next = () => { throw new Error('offline'); };
+      expect((await check('gpt-5.6-terra')).checks.filter((c) => c.kind === 'model').map((c) => c.status)).toEqual(['warn']);
+    });
+
+    it("checks the run's model choice, not only the workflow's", async () => {
+      modelList.calls.length = 0;
+      modelList.next = () => models('gpt-5.5');
+      const without = await run({ repo: 'acme/payments', pr: 7 });
+      expect(without.checks.some((c) => c.kind === 'model' && c.target === 'github-copilot gpt-5.5')).toBe(false);
+      expect((await check('gpt-5.5')).checks.some((c) => c.kind === 'model' && c.target === 'github-copilot gpt-5.5')).toBe(true);
+      expect(modelList.calls).toContain('opencode'); // Copilot is listed under OpenCode's name
+    });
   });
 });

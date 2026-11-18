@@ -25,6 +25,8 @@ export const startRunBody = z.object({
   // `force` also replaces steps that name their own model; `executor` is the harness for every step that can run on it.
   model_defaults: z.object({ provider: z.enum(MODEL_PROVIDERS), name: z.string().optional(), force: z.boolean().optional(), executor: z.string().optional() }).strict().optional(),
 });
+/** The same choice, as the preflight route takes it. */
+export const modelDefaultsBody = startRunBody.shape.model_defaults;
 export type StartRunBody = z.infer<typeof startRunBody>;
 
 export async function startRun(ctx: AppContext, p: Extract<Principal, { kind: 'user' }>, body: StartRunBody, interpreterBuild: string): Promise<{ runId: string }> {
@@ -46,7 +48,7 @@ export async function startRun(ctx: AppContext, p: Extract<Principal, { kind: 'u
       throw new AzhiError(first.code === 'worker_trust_denied' ? ErrorClass.workerTrustDenied : ErrorClass.unsupportedCapability, `run plan has ${plan.blockers.length} blocker(s): ${plan.blockers.map((b) => (b.node ? `${b.node}: ` : '') + b.message).join('; ')}`, { blockers: plan.blockers });
     }
     if (body.preflight) {
-      const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role } });
+      const pre = await preflight(ctx, p.workspaceId, v, { inputs: body.inputs, principal: { userId: p.userId, role: p.role }, modelDefaults: body.model_defaults });
       if (!pre.ok) {
         const failed = pre.checks.filter((c) => c.status === 'fail');
         throw new AzhiError(ErrorClass.unsupportedCapability, `preflight failed: ${failed.map((c) => (c.node ? `${c.node}: ` : '') + c.message).join('; ')}`, { checks: pre.checks });

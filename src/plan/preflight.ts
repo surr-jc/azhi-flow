@@ -3,6 +3,8 @@ import { checkRepoAccess, type GithubConfig, type RepoAccess, type WriteProbe } 
 /** What a GitHub tool needs from a fine-grained token, proved with a harmless write (see checkRepoAccess). */
 export const WRITE_PROBES: Record<string, WriteProbe[]> = { 'github.push-branch': ['contents'], 'github.create-pull-request': ['pull_requests'] };
 export const probesFor = (toolRef: string): WriteProbe[] => WRITE_PROBES[toolRef.replace(/@\d+$/, '')] ?? [];
+import type { ModelDefaults } from '../agents/profile.js';
+import { builderModels, type ModelProviderId } from '../builder/models.js';
 import type { AgentNode, ToolNode } from '../definition/types.js';
 import type { ToolSpec } from '../gateway/types.js';
 import { loadCatalog } from '../server/catalog.js';
@@ -21,7 +23,7 @@ import { buildRunPlan } from './run-plan.js';
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 export interface PreflightCheck {
   id: string;
-  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack';
+  kind: 'plan' | 'tool' | 'secret' | 'dataset' | 'github' | 'slack' | 'model';
   status: CheckStatus;
   /** What was checked, such as a tool, a secret or a repository. */
   target: string;
@@ -61,11 +63,15 @@ const fromAccess = (a: RepoAccess, base: Pick<PreflightCheck, 'id' | 'target' | 
   ...(a.fix ? { fix: a.fix } : {}),
 });
 
-export async function preflight(ctx: AppContext, workspaceId: string, version: VersionRow, opts: { inputs?: Record<string, unknown>; principal?: { userId: string; role: string } } = {}): Promise<PreflightReport> {
+/** The model list a plan provider is checked against (the builder's lists are keyed by the OpenCode and ChatGPT names). */
+const LIST_PROVIDER: Record<string, ModelProviderId> = { anthropic: 'anthropic', openai: 'openai', 'github-copilot': 'opencode', 'openai-chatgpt': 'chatgpt' };
+
+export async function preflight(ctx: AppContext, workspaceId: string, version: VersionRow, opts: { inputs?: Record<string, unknown>; principal?: { userId: string; role: string }; modelDefaults?: ModelDefaults | null } = {}): Promise<PreflightReport> {
   const inputs = opts.inputs ?? {};
   const checks: PreflightCheck[] = [];
   const catalog = await loadCatalog(ctx, workspaceId);
-  const plan = await buildRunPlan(ctx, workspaceId, version, opts.principal);
+  // The run's own provider/model choice, so the steps are checked as they will run.
+  const plan = await buildRunPlan(ctx, workspaceId, version, opts.principal, opts.modelDefaults);
   const secretCache = new Map<string, Promise<string | undefined>>();
   // Why a secret that exists could not be resolved (the GitHub CLI missing or signed out), so it is reported
   // as that and not as a secret that was never set.
@@ -174,6 +180,28 @@ export async function preflight(ctx: AppContext, workspaceId: string, version: V
         }
       });
     }
+  }
+  // Each distinct provider and model an agent step will use, against the provider's own model list: a model
+  // the list does not offer would otherwise fail that step mid-run. A list that cannot be read is a warning.
+  const missingSecret = new Set(plan.missing_grants.filter((g) => g.kind === 'secret').map((g) => g.node));
+  for (const np of plan.nodes) {
+    const m = np.model;
+    const listProvider = m && LIST_PROVIDER[m.provider];
+    if (!m || !m.name || !listProvider || missingSecret.has(np.id)) continue; // scripted, no model named, or already reported as a missing secret
+    const { provider, name } = m;
+    once(`model:${provider}:${name}`, async () => {
+      const base = { id: `model:${provider}:${name}`, kind: 'model' as const, target: `${provider} ${name}`, node: np.id };
+      let list: Awaited<ReturnType<typeof builderModels>>;
+      try {
+        list = await builderModels(ctx, workspaceId, listProvider, true);
+      } catch (err) {
+        return { ...base, status: 'warn' as const, message: `Could not check that ${provider} offers ${name}: ${(err as Error).message}` };
+      }
+      if (list.source !== 'live') return { ...base, status: 'warn' as const, message: `Could not verify that ${provider} offers ${name}${list.note ? ` (${list.note})` : ''}.` };
+      if (list.models.some((x) => x.id === name)) return { ...base, status: 'ok' as const, message: `${provider} offers ${name}.` };
+      const some = list.models.slice(0, 5).map((x) => x.id).join(', ');
+      return { ...base, status: 'fail' as const, message: `${provider} does not offer ${name} (used by ${np.id}); it offers ${some}${list.models.length > 5 ? ', …' : ''}.`, fix: `Choose another model for this step: the profile's model, or --model with --force-model for this run.` };
+    });
   }
   for (const c of await Promise.all(pending)) if (c) checks.push(c);
 
