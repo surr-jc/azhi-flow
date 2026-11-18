@@ -106,6 +106,7 @@ export default defineConfig({
             { label: 'Cost and token control', slug: 'features/cost' },
             { label: 'Knowledge and citations', slug: 'features/knowledge' },
             { label: 'Approvals', slug: 'features/approvals' },
+            { label: 'Slack', slug: 'features/slack' },
             { label: 'MCP and the library', slug: 'features/mcp-library' },
             { label: 'Result confidence', slug: 'features/confidence' },
           ],

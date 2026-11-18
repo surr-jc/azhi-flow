@@ -1,0 +1,109 @@
+---
+title: "Slack: run workflows and chat"
+description: "Decide approvals in Slack, start workflows with /azhi run or @azhi run, and chat with the assistant in Slack, over request URLs or Socket Mode."
+---
+
+Slack is where many people already work, so Azhi Flow can meet them there in three ways: approval buttons,
+starting workflows, and chatting with the assistant. Each one checks the same roles and rules as mission control.
+
+| Part | State |
+|---|---|
+| Approval buttons: Approve, Reject, comment, and a form for decisions that need answers | <span class="tag tag-built">Built</span> |
+| Start workflows with `/azhi run` and `@azhi run` | <span class="tag tag-built">Built</span> |
+| Chat with the assistant in Slack over Socket Mode (no public URL) | <span class="tag tag-built">Built</span>, tried in a real Slack workspace |
+| Chat with the assistant in Slack over Slack's request URLs | <span class="tag tag-built">Built</span>, not yet tried live |
+
+## Approvals in Slack
+
+Each waiting approval is posted once to the approvals channel set on the **Approvals** page, with **Approve** and
+**Reject** buttons. Approve on a step that needs answers opens a form in Slack. **Comment** adds a note under the
+approval and decides nothing. A click counts only for a Slack user linked to an Azhi Flow user on the Users page,
+with that user's role, through the same checks as the API. See [Approvals](/features/approvals/).
+
+## Start workflows from Slack
+
+Type the command in Slack, or mention the app in a channel it has been invited to:
+
+```text
+/azhi run quality-report
+@azhi run pr-review repo=acme/api pr=123
+```
+
+- An admin turns on **Allow runs from Slack** on the Approvals page and lists the workflow slugs Slack may start.
+  Nothing starts until a slug is listed.
+- The Slack user must be linked to an Azhi Flow user with the operator role or above.
+- The newest published version runs, so a draft cannot be started from Slack.
+- The run's approvals and its final result appear in one Slack thread. A refusal is a private reply for the command,
+  and a reply in the thread for a mention.
+- Slack resends a command it thinks timed out; the retry is ignored, so the run starts once.
+
+Not included: step-by-step progress in Slack, and `status` or `cancel` as a command or a mention.
+
+## Chat with the assistant in Slack
+
+Message the app directly, or mention it in a channel. The assistant, which runs in [Mission Control](/features/mission-control/) too, answers in a thread.
+It can read what you are allowed to read (runs, workflows, approvals, usage) and propose actions.
+
+- **Ownership:** the person who starts a thread owns it. The assistant answers them with their own role, so it shows
+  only what they may see. Another person who writes in that thread is refused and should start their own.
+- **Confirmation:** the assistant can propose to start a run, cancel a run, approve or reject an approval, or pause
+  or resume a schedule. It never runs these itself. The proposal is a card with **Confirm** and **Dismiss**. Only the
+  owner can press them. Confirm runs the stored action once; Dismiss runs nothing. Cancelling, rejecting and pausing
+  also ask "Are you sure?" first.
+- **Audit:** each turn is recorded as `assistant.turn`, and each confirmed action as `assistant.action` with
+  `via: slack`.
+- **Messages are data:** Slack message text is what the person says to the assistant. It is not treated as a command
+  for the server, and a proposal still needs Confirm.
+
+### Two ways to connect
+
+| Mode | Needs | Use it for |
+|---|---|---|
+| Socket Mode | An app-level token (`xapp-`, scope `connections:write`). The server connects out to Slack | Local runs, with no public URL |
+| Request URLs | A public address for `/v1/slack/events`, `/v1/slack/interactions` and `/v1/slack/commands` | A server that Slack can reach |
+
+Both modes need the bot token and the signing secret. The two are alternatives, and either one works.
+
+### Set up
+
+1. Store the secrets: `slack-bot-token` (bot scope `chat:write`), `slack-signing-secret` (the app's signing secret),
+   and, for Socket Mode only, `slack-app-token`.
+2. In the Slack app, add the bot scopes `app_mentions:read`, `chat:write` and `im:history`.
+3. Turn on **Event Subscriptions** and subscribe to the bot events `app_mention` and `message.im`. With request URLs,
+   set the request URL to `<public url>/v1/slack/events`.
+4. Turn on **Interactivity**. With request URLs, set its request URL to `<public url>/v1/slack/interactions`.
+5. Turn on **App Home** and its **Messages** tab, so people can DM the app.
+6. Link each person's Slack user to their Azhi Flow user on the Users page.
+7. As an admin, under **Approvals**, open **Chat with the assistant in Slack** and turn on
+   **Allow chat with the assistant from Slack**.
+
+### Running locally with Socket Mode
+
+1. In the Slack app, turn on **Socket Mode** and create an app-level token with the scope `connections:write`.
+2. Store it: `npm run azhi -- secret set slack-app-token`, then paste the `xapp-` value.
+3. Keep the bot events and **Interactivity** on. No request URL is needed, including for `/azhi`.
+4. Reinstall the app to the workspace.
+5. Start the server. The log shows `slack socket: connected` when the connection is open. The server looks for enabled
+   workspaces every 30 seconds, so a restart is not normally needed.
+
+### If nothing happens
+
+- The bot events `app_mention` and `message.im` must be on, even in Socket Mode.
+- The toggle must be on. If it is off, the app replies in Slack to say so.
+- `slack-bot-token` must be set. Without it, the assistant stays silent and the log says so.
+- Check the server log. `slack socket: events_api app_mention -> 200` means the event arrived and was handled. A
+  status such as 401 means the signing secret does not match.
+- Your Slack user must be linked on the Users page.
+- For mentions in a channel, invite the app there with `/invite @azhi`. Direct messages need no invite.
+
+### Limits
+
+- Slack's reply deadline is short, so an answer first shows "Thinking…", then is replaced by the reply.
+- A conversation keeps its recent messages. Very long threads lose their earliest context.
+- Answers are asked to be short, and to link to mission control for detail. This is a request to the model.
+- The assistant uses the workspace's model provider. Without one, it cannot answer.
+
+### Not included
+
+Streaming answers, file uploads, the workflow builder (it opens a browser page, so the assistant points to mission
+control instead), and messages in channels that do not mention the app.

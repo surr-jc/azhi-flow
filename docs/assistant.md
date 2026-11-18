@@ -24,6 +24,8 @@ The assistant uses the workspace's model provider, the same one as the workflow 
 Anthropic or OpenAI key, or a GitHub Copilot or ChatGPT sign-in, under Governance › Secrets.
 The conversation stays in your browser tab.
 
+The assistant can also answer in Slack, in a thread: see [chat with the assistant in Slack](slack-assistant.md).
+
 ### Actions need your confirmation
 
 The assistant can propose to **start a run**, **cancel a run**, **approve or reject an approval**, and

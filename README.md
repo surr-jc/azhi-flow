@@ -165,6 +165,7 @@ Every command is listed in the [CLI](#cli) section and in the [docs](https://sur
   drawn as a graph, and authors can edit them on the canvas (add, link and change steps, checked
   live by the compiler and run plan) and save a new draft version; publishing still needs a
   signature. See [docs/mission-control-plan.md](docs/mission-control-plan.md).
+- Chat with the assistant in Slack: DM the app or mention `@azhi`, in a thread owned by the person who started it, with Confirm cards for proposed actions. Works over Slack's request URLs or, with no public URL, Socket Mode. See [docs/slack-assistant.md](docs/slack-assistant.md).
 - A one-command install (`deploy/install.sh`) and the six-check alpha demo (`npm run demo`).
 
 ## Install
@@ -340,6 +341,7 @@ Without a Slack workspace, point the server at a fake Slack API for local runs:
 `AZHI_SLACK_API_URL=http://127.0.0.1:<port>/api` (see `src/testing/fake-slack.ts`).
 
 To start workflows from Slack with `/azhi run` and follow them in a thread, see [docs/slack-runs.md](docs/slack-runs.md).
+To chat with the assistant in Slack (direct messages and `@azhi` mentions), see [docs/slack-assistant.md](docs/slack-assistant.md); for local use without a public URL, it also works over Socket Mode.
 
 To run the server in Docker instead: `docker compose -f deploy/docker-compose.yml --profile server up -d --wait`.
 

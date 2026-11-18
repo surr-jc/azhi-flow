@@ -128,7 +128,9 @@ Monaco in the first release. Mission control follows it:
    each waiting approval is posted once with Approve and Reject buttons; clicks arrive at
    `/v1/slack/interactions`, are verified with the `slack-signing-secret` secret, and count only
    for a linked, enabled user, through the same role, schema and first-decision checks as the
-   API (`src/server/approvals.ts`).
+   API (`src/server/approvals.ts`). Slack assistant chat: DMs and `@azhi` mentions in a thread owned by the person
+   who started it, with Confirm and Dismiss cards; over Slack's request URLs or Socket Mode. See
+   [chat with the assistant in Slack](slack-assistant.md).
 5. **Visual editor** (React Flow). Step 1 built (2026-10-05, asked for by Suresh): the read-only
    workflow canvas (`web/src/components/WorkflowCanvas.tsx`) on the workflow and run pages, with
    live node states, approval gates, condition routes and node details, and the SDLC example
