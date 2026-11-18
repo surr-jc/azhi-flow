@@ -99,7 +99,7 @@ const FILE_BYTES = 64 * 1024;
 /** Characters of file contents `read_workflow` loads at once; the rest is listed and read with `read_workflow_file`. */
 const LOAD_CHARS = 170_000;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
+export const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:\/@-]{0,159}$/;
 const LABELS = { anthropic: 'Anthropic', openai: 'OpenAI', opencode: 'OpenCode (GitHub Copilot)', chatgpt: 'OpenCode (ChatGPT plan)' } as const;
 /** The secret each builder provider needs; the OpenCode ones use the sign-ins OpenCode steps use (GitHub Copilot, ChatGPT plan). */
 const CREDENTIAL = { anthropic: PROVIDER_DEFAULTS.anthropic.credential, openai: PROVIDER_DEFAULTS.openai.credential, opencode: PROVIDER_DEFAULTS['github-copilot'].credential, chatgpt: PROVIDER_DEFAULTS['openai-chatgpt'].credential } as const;

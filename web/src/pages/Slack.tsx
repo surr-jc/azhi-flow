@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, atLeast } from '../api';
 import { useMe } from '../App';
+import { ModelPicker, type ProviderInfo } from '../components/ModelMenu';
 import { Link } from '../router';
 import { ErrorNote, Loading, PageHead, Panel } from '../ui';
 
@@ -119,19 +120,30 @@ function SlackCommands() {
   );
 }
 
-interface AssistantSettings { enabled: boolean }
+interface AssistantSettings { enabled: boolean; provider: string | null; model: string | null }
+interface AssistantStatus { providers: ProviderInfo[]; default?: string }
 
 /** Whether people may chat with the assistant from Slack, by DM or by mentioning the app in a channel. */
 function SlackAssistant() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['settings', 'slack-assistant'], queryFn: () => api<AssistantSettings>('/v1/settings/slack-assistant') });
+  const status = useQuery({ queryKey: ['assistant'], queryFn: () => api<AssistantStatus>('/v1/assistant'), staleTime: 60_000 });
   const [enabled, setEnabled] = useState(false);
-  useEffect(() => setEnabled(q.data?.enabled ?? false), [q.data]);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  useEffect(() => {
+    setEnabled(q.data?.enabled ?? false);
+    setProvider(q.data?.provider ?? null);
+    setModel(q.data?.model ?? null);
+  }, [q.data]);
   const save = useMutation({
-    mutationFn: () => api('/v1/settings/slack-assistant', { method: 'PUT', body: { enabled } }),
+    mutationFn: () => api('/v1/settings/slack-assistant', { method: 'PUT', body: { enabled, provider, model: provider ? model : null } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings', 'slack-assistant'] }),
   });
   if (!q.data) return <Loading />;
+  const defaultInfo = status.data?.providers.find((p) => p.id === status.data?.default);
+  const savedInfo = status.data?.providers.find((p) => p.id === provider);
+  const chosenProvider = defaultInfo?.id ?? status.data?.providers.find((p) => p.ready)?.id ?? status.data?.providers[0]?.id ?? null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     save.mutate();
@@ -140,6 +152,19 @@ function SlackAssistant() {
     <form onSubmit={submit} className="fields">
       <p className="muted small">People can DM the app, or mention <code>@azhi</code> in a channel it has been invited to. Each conversation is a Slack thread. Actions the assistant proposes run only after a Confirm click from the person who started the thread. Slack users must be linked to an Azhi Flow user on the <Link to="/ui/users">Users</Link> page. A mention that starts with <code>run</code> still starts a workflow, as set up in "Run workflows from Slack" above.</p>
       <label className="row small"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Allow chat with the assistant from Slack</label>
+      <div className="field">
+        <span className="small">Model</span>
+        <select aria-label="Model source" value={provider ? 'chosen' : 'default'} onChange={(e) => {
+          if (e.target.value === 'default') { setProvider(null); setModel(null); }
+          else { setProvider(chosenProvider); setModel(null); }
+        }}>
+          <option value="default">Workspace default{defaultInfo ? ` (${defaultInfo.label}${defaultInfo.model ? `, ${defaultInfo.model}` : ''})` : ''}</option>
+          <option value="chosen">Choose a provider and model</option>
+        </select>
+        {provider && status.data ? <ModelPicker providers={status.data.providers} provider={provider} model={model ?? savedInfo?.model} serverDefault={savedInfo?.model} onChange={(c) => { setProvider(c.provider ?? provider); setModel(c.model ?? null); }} modelsUrl="/v1/assistant/models" purpose="Slack chat" /> : null}
+        {savedInfo && !savedInfo.ready && q.data.provider === provider ? <span className="muted small">{savedInfo.label} is not ready: {savedInfo.reason}. Slack chat will answer with an error until it is.</span> : null}
+        <span className="muted small">Applies to every Slack conversation, from the next message.</span>
+      </div>
       <div className="row">
         <button type="submit" className="primary" disabled={save.isPending}>Save</button>
         {save.isSuccess ? <span className="ok-note">Saved.</span> : null}

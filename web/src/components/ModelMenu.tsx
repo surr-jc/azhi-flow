@@ -61,7 +61,7 @@ export function ModelMenu({ providers, provider, model, onChange, modelsUrl, pur
  * Provider and model for the builder or the assistant: every provider Azhi knows (those not usable here are shown
  * disabled, with why), the provider's own model list with one recommended, and "Other" for an id the list does not show. The choice is remembered.
  */
-function ModelPicker({ providers, provider, model, serverDefault, onChange, modelsUrl, purpose }: {
+export function ModelPicker({ providers, provider, model, serverDefault, onChange, modelsUrl, purpose }: {
   providers: ProviderInfo[];
   provider?: string;
   model?: string;

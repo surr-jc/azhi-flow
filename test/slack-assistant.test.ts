@@ -156,12 +156,12 @@ describe('assistant in Slack', () => {
     expect(slack.messages).toHaveLength(0);
 
     const get = async (token: string) => (await app.inject({ method: 'GET', url: '/v1/settings/slack-assistant', headers: { authorization: `Bearer ${token}` } })).json();
-    expect(await get(ownerToken)).toEqual({ enabled: false });
+    expect(await get(ownerToken)).toEqual({ enabled: false, provider: null, model: null });
     expect((await put(viewerToken, '/v1/settings/slack-assistant', { enabled: true })).status).toBe(403);
     expect((await put(ownerToken, '/v1/settings/slack-assistant', { enabled: 'yes' })).status).toBe(400);
-    expect(await put(ownerToken, '/v1/settings/slack-assistant', { enabled: true })).toEqual({ status: 200, body: { enabled: true } });
-    expect(await get(viewerToken)).toEqual({ enabled: true });
-    expect((await ctx.pool.query(`SELECT data FROM audit_events WHERE kind='settings.slack_assistant_changed'`)).rows.at(-1).data).toEqual({ enabled: true });
+    expect(await put(ownerToken, '/v1/settings/slack-assistant', { enabled: true })).toEqual({ status: 200, body: { enabled: true, provider: null, model: null } });
+    expect(await get(viewerToken)).toEqual({ enabled: true, provider: null, model: null });
+    expect((await ctx.pool.query(`SELECT data FROM audit_events WHERE kind='settings.slack_assistant_changed'`)).rows.at(-1).data).toEqual({ enabled: true, provider: null, model: null });
 
     expect(await event(first.body, { secret: 'wrong' })).toBe(401);
     expect(slack.messages).toHaveLength(0);
@@ -308,13 +308,58 @@ describe('assistant in Slack', () => {
     expect((await stored('D-ACT', m.ts)).at(-1)!.content.at(-1)!.text).toBe('(I dismissed "Resume the standup-summary schedule"; it did not run.)');
   });
 
+  it('saves the model Slack chat uses: omitted keeps it, null clears it, a model needs a provider', async () => {
+    const url = '/v1/settings/slack-assistant';
+    const get = async () => (await app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${ownerToken}` } })).json();
+    expect((await put(ownerToken, url, { enabled: true, model: 'claude-x' })).status).toBe(400);
+    expect((await put(ownerToken, url, { enabled: true, provider: 'nope' })).status).toBe(400);
+    expect((await put(ownerToken, url, { enabled: true, provider: 'anthropic', model: 'bad model!' })).status).toBe(400);
+    expect((await put(viewerToken, url, { enabled: true, provider: 'anthropic' })).status).toBe(403);
+    expect(await put(ownerToken, url, { enabled: true, provider: 'anthropic', model: 'claude-pick-1' })).toEqual({ status: 200, body: { enabled: true, provider: 'anthropic', model: 'claude-pick-1' } });
+    expect((await ctx.pool.query(`SELECT data FROM audit_events WHERE kind='settings.slack_assistant_changed'`)).rows.at(-1).data).toEqual({ enabled: true, provider: 'anthropic', model: 'claude-pick-1' });
+    // An older client that sends only `enabled` keeps the saved choice.
+    await put(ownerToken, url, { enabled: true });
+    expect(await get()).toEqual({ enabled: true, provider: 'anthropic', model: 'claude-pick-1' });
+    // A provider without a model means that provider's default.
+    await put(ownerToken, url, { enabled: true, provider: 'openai' });
+    expect(await get()).toEqual({ enabled: true, provider: 'openai', model: null });
+    await put(ownerToken, url, { enabled: true, provider: 'anthropic', model: 'claude-pick-1' });
+    await put(ownerToken, url, { enabled: true, provider: null, model: null });
+    expect(await get()).toEqual({ enabled: true, provider: null, model: null });
+  });
+
+  it('answers with the configured model, and says so in the thread when its provider is not ready', async () => {
+    await put(ownerToken, '/v1/settings/slack-assistant', { enabled: true, provider: 'anthropic', model: 'claude-pick-1' });
+    script = () => [{ text: 'chosen model answer' }];
+    fake.requests.length = 0;
+    const m = dm('which model?', { channel: 'D-MODEL' });
+    expect(await event(m.body)).toBe(200);
+    await until(() => slack.updates.some((u) => u.text === 'chosen model answer') || undefined);
+    await idle('D-MODEL', m.ts);
+    expect(fake.requests[0]!.model).toBe('claude-pick-1');
+    expect((await ctx.pool.query(`SELECT data FROM audit_events WHERE kind='assistant.turn' ORDER BY seq DESC LIMIT 1`)).rows[0].data).toMatchObject({ provider: 'anthropic', model: 'claude-pick-1' });
+
+    // OpenAI has no key here: no fallback to the default, the person gets the error and a hint.
+    await put(ownerToken, '/v1/settings/slack-assistant', { enabled: true, provider: 'openai' });
+    fake.requests.length = 0;
+    const f = dm('and now?', { channel: 'D-MODEL2' });
+    expect(await event(f.body)).toBe(200);
+    const note = await until(() => slack.updates.find((u) => u.ts === inThread('D-MODEL2', f.ts)[0]?.ts && u.text.includes('could not answer')));
+    expect(note.text).toContain('The default model set under System, Slack may need attention.');
+    expect(fake.requests).toHaveLength(0);
+    await idle('D-MODEL2', f.ts);
+    await put(ownerToken, '/v1/settings/slack-assistant', { enabled: true, provider: null, model: null });
+  });
+
   it('replaces the placeholder with a short note and audits when the turn fails', async () => {
+    const failed = async () => (await ctx.pool.query(`SELECT 1 FROM audit_events WHERE kind='assistant.slack_failed'`)).rowCount;
+    const before = await failed();
     await ctx.pool.query(`DELETE FROM secrets WHERE workspace_id=$1 AND name='anthropic-api-key'`, [ws]);
     const m = dm('will this work?', { channel: 'D-FAIL' });
     expect(await event(m.body)).toBe(200);
     await until(() => slack.updates.find((u) => u.ts === inThread('D-FAIL', m.ts)[0]?.ts && u.text.includes('could not answer')));
     await idle('D-FAIL', m.ts);
-    expect((await ctx.pool.query(`SELECT 1 FROM audit_events WHERE kind='assistant.slack_failed'`)).rowCount).toBe(1);
+    expect(await failed()).toBe(before! + 1);
     await setSecret(ctx, ws, 'anthropic-api-key', 'sk-test', 'test');
   });
 

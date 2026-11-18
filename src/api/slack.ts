@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { AssistantDeps } from '../assistant/tools.js';
 import type { Role } from '../db/schema.js';
+import { MODEL_ID } from '../builder/builder.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { approvalAsk, approvalModal, approvalSettings, commentModal, decideApproval, decidedBlocks, formFields, modalData } from '../server/approvals.js';
 import { openView, postMessage } from '../gateway/tools/slack.js';
@@ -90,13 +91,23 @@ export function registerSlackRoutes(app: FastifyInstance, d: AssistantDeps) {
     return value;
   });
 
-  app.get('/v1/settings/slack-assistant', async (req) => ({ enabled: (await slackAssistantSettings(ctx, user(req).workspaceId)).enabled === true }));
+  app.get('/v1/settings/slack-assistant', async (req) => {
+    const s = await slackAssistantSettings(ctx, user(req).workspaceId);
+    return { enabled: s.enabled === true, provider: s.provider ?? null, model: s.model ?? null };
+  });
 
+  // Omitted provider/model keep what is saved (an older client sends only `enabled`); null clears them.
   app.put('/v1/settings/slack-assistant', async (req) => {
     const p = user(req);
     requireRole(p, 'admin');
-    const b = z.object({ enabled: z.boolean() }).parse(req.body);
-    const value = { enabled: b.enabled };
+    const b = z
+      .object({ enabled: z.boolean(), provider: z.enum(['anthropic', 'openai', 'opencode', 'chatgpt']).nullable().optional(), model: z.string().min(1).max(160).regex(MODEL_ID, 'not a model id').nullable().optional() })
+      .parse(req.body);
+    const saved = await slackAssistantSettings(ctx, p.workspaceId);
+    const provider = b.provider === undefined ? (saved.provider ?? null) : b.provider;
+    const model = b.model !== undefined ? b.model : provider === null || b.provider !== undefined ? null : (saved.model ?? null);
+    if (model !== null && provider === null) throw new AzhiError(ErrorClass.invalidInput, 'pick a provider to go with the model');
+    const value = { enabled: b.enabled, provider, model };
     await ctx.pool.query(`UPDATE workspaces SET settings = jsonb_set(settings, '{slack_assistant}', $2::jsonb) WHERE id=$1`, [p.workspaceId, JSON.stringify(value)]);
     await audit(ctx, p.workspaceId, p.userId, 'settings.slack_assistant_changed', value);
     return value;

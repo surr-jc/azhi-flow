@@ -1,5 +1,6 @@
 import type { Message } from '../agents/providers.js';
 import { runConfirmedAction, trimHistory } from '../assistant/actions.js';
+import type { BuilderProviderId } from '../builder/builder.js';
 import { assistantTurn } from '../assistant/assistant.js';
 import type { AssistantDeps } from '../assistant/tools.js';
 import { postMessage, updateMessage } from '../gateway/tools/slack.js';
@@ -19,6 +20,9 @@ import { linkedSlackUser } from './slack-start.js';
  */
 export interface SlackAssistantSettings {
   enabled?: boolean;
+  /** The model the Slack assistant answers with; unset means the workspace default. */
+  provider?: BuilderProviderId;
+  model?: string;
 }
 
 export async function slackAssistantSettings(ctx: AppContext, workspaceId: string): Promise<SlackAssistantSettings> {
@@ -49,6 +53,7 @@ export async function handleSlackChat(d: AssistantDeps, workspace: string, a: { 
   let placeholder: { channel: string; ts: string } | undefined;
   let conversation: string | undefined;
   let owner: string | undefined;
+  let chosen: SlackAssistantSettings = {};
   try {
     const linked = await linkedSlackUser(ctx, workspace, a.slackUser);
     if (!linked) return void (await post('Your Slack user is not linked to Azhi Flow. An admin can link it on the Users page.'));
@@ -70,7 +75,8 @@ export async function handleSlackChat(d: AssistantDeps, workspace: string, a: { 
 
     placeholder = await post('Thinking…');
     const principal = { kind: 'user', workspaceId: workspace, userId: linked.id, role: linked.role } as const;
-    const r = await assistantTurn(d, principal, { messages: claimed.messages, text: clip(a.text, MAX_TEXT), surface: 'slack' });
+    chosen = await slackAssistantSettings(ctx, workspace);
+    const r = await assistantTurn(d, principal, { messages: claimed.messages, text: clip(a.text, MAX_TEXT), surface: 'slack', ...(chosen.provider ? { provider: chosen.provider, ...(chosen.model ? { model: chosen.model } : {}) } : {}) });
     const proposal = r.event.kind === 'action_proposal' ? r.event.proposal : undefined;
     const text = lastReply(r.messages) || (proposal ? 'This needs your confirmation:' : '(no reply)');
     await updateMessage(cfg, { ...placeholder, text: clip(toMrkdwn(text), 3000), blocks: replyBlocks(text) });
@@ -95,7 +101,8 @@ export async function handleSlackChat(d: AssistantDeps, workspace: string, a: { 
     await audit(ctx, workspace, linked.id, 'assistant.turn', { via: 'slack', provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
   } catch (e) {
     log?.(`slack assistant: turn failed: ${clip((e as Error).message, 200)}`);
-    const note = `Sorry, I could not answer that: ${escapeMrkdwn(clip((e as Error).message, 300))}`;
+    const hint = chosen.provider ? ' The default model set under System, Slack may need attention.' : '';
+    const note = `Sorry, I could not answer that: ${escapeMrkdwn(clip((e as Error).message, 300))}${hint}`;
     if (placeholder) await updateMessage(cfg, { ...placeholder, text: note }).catch(() => undefined);
     else await post(note).catch(() => undefined);
     await audit(ctx, workspace, owner ?? null, 'assistant.slack_failed', { error: clip((e as Error).message, 500), channel: a.channel });

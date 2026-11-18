@@ -50,6 +50,10 @@ It can read what you are allowed to read (runs, workflows, approvals, usage) and
   or resume a schedule. It never runs these itself. The proposal is a card with **Confirm** and **Dismiss**. Only the
   owner can press them. Confirm runs the stored action once; Dismiss runs nothing. Cancelling, rejecting and pausing
   also ask "Are you sure?" first.
+- **Model:** the workspace's default model provider and model, unless an admin picks another under **System, Slack,
+  Chat with the assistant in Slack**, **Model**. The choice applies to every Slack conversation, from the next
+  message. If the chosen provider is not ready, the person gets an error in the thread (with a note that the default
+  model may need attention) and the assistant does not fall back to another model.
 - **Audit:** each turn is recorded as `assistant.turn`, and each confirmed action as `assistant.action` with
   `via: slack`.
 - **Messages are data:** Slack message text is what the person says to the assistant. It is not treated as a command
@@ -101,7 +105,7 @@ Both modes need the bot token and the signing secret. The two are alternatives, 
 - Slack's reply deadline is short, so an answer first shows "Thinking…", then is replaced by the reply.
 - A conversation keeps its recent messages. Very long threads lose their earliest context.
 - Answers are asked to be short, and to link to mission control for detail. This is a request to the model.
-- The assistant uses the workspace's model provider. Without one, it cannot answer.
+- The assistant uses the workspace's default model provider, or the one an admin chose for Slack. Without a ready one, it cannot answer.
 
 ### Not included
 

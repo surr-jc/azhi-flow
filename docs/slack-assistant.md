@@ -63,6 +63,19 @@ Each conversation is a Slack thread. Replies in a channel thread without a menti
 `@azhi run <workflow> key=value` still starts a workflow, exactly as in [running workflows from Slack](slack-runs.md).
 Any other mention text is a chat message.
 
+## Which model answers
+
+By default the assistant uses the workspace's default model provider and model, as the web chat does. An admin can
+pick another under **System, Slack, Chat with the assistant in Slack**, **Model**: choose a provider and one of its
+models, or **Workspace default** to clear the choice. The choice applies to every Slack conversation and takes effect
+from the next message. The setting is stored as `provider` and `model` next to `enabled` (`GET` and `PUT
+/v1/settings/slack-assistant`); a provider without a model means that provider's default model.
+
+If the chosen provider is not ready (for example its secret was removed), the assistant does not fall back to the
+workspace default. The person gets "Sorry, I could not answer that: ..." in the thread, with a note that the default
+model set under System, Slack may need attention, and the failure is audited as `assistant.slack_failed`. Each
+`assistant.turn` records the provider and model that answered.
+
 ## Threads and ownership
 
 - The person who starts a thread owns it. The assistant answers them with their own Azhi Flow user and role, so it
@@ -114,7 +127,8 @@ audit log as `assistant.action` with `via: slack`. Each turn is recorded as `ass
   long threads lose their early context.
 - The assistant is asked to keep Slack answers short and to link to mission control for detail. This is a request to
   the model, not a hard limit.
-- The assistant uses the workspace's model provider, as in the web chat. If none is set, it cannot answer.
+- The assistant uses the workspace's default model provider, as in the web chat, unless an admin chose another (see
+  "Which model answers"). If none is ready, it cannot answer.
 - Message text is untrusted data. The assistant treats it as the person's own words, and a proposal still runs only
   after Confirm from the thread's owner.
 
