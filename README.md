@@ -339,6 +339,8 @@ npx azhi inspect <run-id> --context analyse
 Without a Slack workspace, point the server at a fake Slack API for local runs:
 `AZHI_SLACK_API_URL=http://127.0.0.1:<port>/api` (see `src/testing/fake-slack.ts`).
 
+To start workflows from Slack with `/azhi run` and follow them in a thread, see [docs/slack-runs.md](docs/slack-runs.md).
+
 To run the server in Docker instead: `docker compose -f deploy/docker-compose.yml --profile server up -d --wait`.
 
 ## CLI
