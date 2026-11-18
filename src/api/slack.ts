@@ -10,8 +10,8 @@ import { clip, escapeMrkdwn } from '../gateway/tools/slack-format.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
-import { isAllowed, parseRunCommand, slackCommandSettings } from '../server/slack-runs.js';
-import { startRun } from '../server/start-run.js';
+import { slackCommandSettings, stripMentions } from '../server/slack-runs.js';
+import { startFromSlack } from '../server/slack-start.js';
 import { requireRole } from './auth.js';
 
 /**
@@ -23,6 +23,7 @@ import { requireRole } from './auth.js';
  */
 export const SLACK_INTERACTIONS = '/v1/slack/interactions';
 export const SLACK_COMMANDS = '/v1/slack/commands';
+export const SLACK_EVENTS = '/v1/slack/events';
 const MAX_SKEW_S = 5 * 60;
 
 function user(req: FastifyRequest) {
@@ -67,6 +68,7 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
       slack_token_set: secrets.includes('slack-bot-token'),
       signing_secret_set: secrets.includes('slack-signing-secret'),
       command_url: `${ctx.settings.publicUrl.replace(/\/$/, '')}${SLACK_COMMANDS}`,
+      events_url: `${ctx.settings.publicUrl.replace(/\/$/, '')}${SLACK_EVENTS}`,
     };
   });
 
@@ -106,62 +108,68 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
   app.register(async (sub) => {
     sub.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => done(null, body));
 
+    // A signed Slack request names no run, so the workspace is the enabled one whose signing secret verifies it.
+    const verifiedWorkspace = async (req: FastifyRequest, raw: string) => {
+      const enabled = (await ctx.pool.query(`SELECT id FROM workspaces WHERE settings->'slack_commands'->>'enabled' = 'true'`)).rows as Array<{ id: string }>;
+      for (const w of enabled) {
+        const secret = await resolveSecret(ctx, w.id, 'slack-signing-secret');
+        if (secret && verifySlackSignature(secret.value, req.headers['x-slack-request-timestamp'] as string, req.headers['x-slack-signature'] as string, raw)) return w.id;
+      }
+      return undefined;
+    };
+
     // `/azhi run <workflow> key=value ...`: starts an allowlisted workflow as the linked Azhi Flow user.
     sub.post(SLACK_COMMANDS, async (req, reply) => {
       const raw = typeof req.body === 'string' ? req.body : '';
       const form = new URLSearchParams(raw);
-      // A signed command names no run, so the workspace is the enabled one whose signing secret verifies it.
-      let ws: string | undefined;
-      const enabled = (await ctx.pool.query(`SELECT id FROM workspaces WHERE settings->'slack_commands'->>'enabled' = 'true'`)).rows as Array<{ id: string }>;
-      for (const w of enabled) {
-        const secret = await resolveSecret(ctx, w.id, 'slack-signing-secret');
-        if (secret && verifySlackSignature(secret.value, req.headers['x-slack-request-timestamp'] as string, req.headers['x-slack-signature'] as string, raw)) {
-          ws = w.id;
-          break;
-        }
-      }
-      if (!ws) return reply.status(401).send({ error: 'authorization', message: 'invalid Slack signature' });
+      const workspace = await verifiedWorkspace(req, raw);
+      if (!workspace) return reply.status(401).send({ error: 'authorization', message: 'invalid Slack signature' });
       // Slack resends a command it thinks timed out; the first delivery is already being handled.
       if (req.headers['x-slack-retry-num']) return reply.status(200).send();
-
-      const slackUser = form.get('user_id') ?? '';
-      const channelId = form.get('channel_id') ?? '';
       const responseUrl = form.get('response_url') ?? undefined;
-      const say = (text: string) => respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text });
-      const workspace = ws;
-      void (async () => {
-        try {
-          const settings = await slackCommandSettings(ctx, workspace);
-          const linked = (await ctx.pool.query(`SELECT id, role FROM users WHERE workspace_id=$1 AND slack_user_id=$2 AND disabled_at IS NULL`, [workspace, slackUser])).rows[0] as { id: string; role: Role } | undefined;
-          if (!linked) return await say('Your Slack user is not linked to Azhi Flow, so nothing was started. An admin can link it on the Users page.');
-          const principal = { kind: 'user', workspaceId: workspace, userId: linked.id, role: linked.role } as const;
-          requireRole(principal, 'operator');
-          const { workflow, inputs } = parseRunCommand(form.get('text') ?? '');
-          if (!isAllowed(settings, workflow)) {
-            const allowed = (settings.workflows ?? []).map((s) => `\`${s}\``).join(', ') || 'none';
-            return await say(`\`${workflow}\` cannot be started from Slack. Allowed: ${allowed}.`);
-          }
-          const { runId } = await startRun(ctx, principal, { version: `${workflow}@latest`, inputs }, interpreterBuild);
-          const link = `${ctx.settings.publicUrl.replace(/\/$/, '')}/ui/runs/${encodeURIComponent(runId)}`;
-          const channel = settings.channel ?? channelId;
-          await ctx.pool.query(`INSERT INTO slack_run_threads(run_id, workspace_id, channel, requested_by, slack_user_id) VALUES ($1,$2,$3,$4,$5)`, [runId, workspace, channel, linked.id, slackUser]);
-          await audit(ctx, workspace, linked.id, 'slack.run_started', { run: runId, workflow, slack_user: slackUser });
-          try {
-            const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
-            if (!token) throw new Error("the secret 'slack-bot-token' is not set");
-            const root = await postMessage(
-              { token: token.value, apiUrl: ctx.settings.slackApiUrl },
-              { channel, text: `<@${slackUser}> started ${workflow} (${runId}). Approvals and the result will appear in this thread.\n<${link}|Open in mission control>`, dedupeKey: `run-start:${runId}` },
-            );
-            await ctx.pool.query(`UPDATE slack_run_threads SET channel=$2, thread_ts=$3 WHERE run_id=$1`, [runId, root.channel, root.ts]);
-          } catch (e) {
-            await say(`Started ${runId}, but it could not be announced in Slack: ${(e as Error).message}. Follow it in mission control: ${link}`);
-          }
-        } catch (e) {
-          await say(`Not started: ${(e as Error).message}`);
-        }
-      })();
+      void startFromSlack(ctx, workspace, {
+        slackUser: form.get('user_id') ?? '',
+        text: form.get('text') ?? '',
+        channel: form.get('channel_id') ?? '',
+        interpreterBuild,
+        say: (text) => respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text }),
+      });
       return reply.status(200).send({ response_type: 'ephemeral', text: 'Starting your run…' });
+    });
+
+    // `@azhi run <workflow> key=value ...` in a channel (Events API `app_mention`): the same start, answered in the
+    // thread of the message. Slack signs the raw JSON body, so it is read unparsed here.
+    sub.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => done(null, body));
+    sub.post(SLACK_EVENTS, async (req, reply) => {
+      const raw = typeof req.body === 'string' ? req.body : '';
+      const workspace = await verifiedWorkspace(req, raw);
+      if (!workspace) return reply.status(401).send({ error: 'authorization', message: 'invalid Slack signature' });
+      let body: { type?: string; challenge?: string; event?: { type?: string; user?: string; bot_id?: string; text?: string; channel?: string; ts?: string; thread_ts?: string } };
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        return reply.status(400).send({ error: 'invalid_input', message: 'not JSON' });
+      }
+      // Slack checks the request URL once with a challenge it expects back.
+      if (body.type === 'url_verification') return reply.status(200).send({ challenge: String(body.challenge ?? '') });
+      // A resent event is already being handled, and the app's own messages never start runs.
+      const e = body.event;
+      if (req.headers['x-slack-retry-num'] || body.type !== 'event_callback' || e?.type !== 'app_mention' || e.bot_id || !e.user || !e.channel || !e.ts) return reply.status(200).send();
+      const { user: slackUser, channel, ts } = e;
+      const threadTs = e.thread_ts ?? ts;
+      void startFromSlack(ctx, workspace, {
+        slackUser,
+        text: stripMentions(e.text ?? ''),
+        channel,
+        threadTs,
+        interpreterBuild,
+        // A mention has no private reply, so problems are answered in the thread.
+        say: async (text) => {
+          const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
+          if (token) await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel, threadTs, text, dedupeKey: `mention-reply:${channel}:${ts}:${Date.now()}` }).catch(() => undefined);
+        },
+      });
+      return reply.status(200).send();
     });
     sub.post(SLACK_INTERACTIONS, async (req, reply) => {
       const raw = typeof req.body === 'string' ? req.body : '';

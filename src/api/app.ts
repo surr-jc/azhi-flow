@@ -45,7 +45,7 @@ import { registerQuotaRoutes } from './quota.js';
 import { registerMissionRoutes } from './mission.js';
 import { decideApproval } from '../server/approvals.js';
 import { isAuthPath, registerTeamRoutes } from './team.js';
-import { registerSlackRoutes, SLACK_COMMANDS, SLACK_INTERACTIONS } from './slack.js';
+import { registerSlackRoutes, SLACK_COMMANDS, SLACK_EVENTS, SLACK_INTERACTIONS } from './slack.js';
 import { registerMcpRoutes } from './mcp.js';
 import { isHookPath, registerTriggerRoutes } from './triggers.js';
 import { registerAssetRoutes } from './assets.js';
@@ -118,7 +118,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   });
 
   app.addHook('onRequest', async (req: FastifyRequest) => {
-    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS || req.url === SLACK_COMMANDS || (req.method === 'POST' && isHookPath(req.url))) return;
+    if (req.url === '/healthz' || isWebPath(req.url) || isAuthPath(req.url) || req.url.startsWith('/v1/mcp/oauth/callback') || req.url === SLACK_INTERACTIONS || req.url === SLACK_COMMANDS || req.url === SLACK_EVENTS || (req.method === 'POST' && isHookPath(req.url))) return;
     req.principal = await authenticate(ctx, req.headers.authorization);
   });
 

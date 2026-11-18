@@ -181,7 +181,7 @@ function SlackApprovals() {
   );
 }
 
-interface CommandSettings { enabled: boolean; workflows: string[]; channel: string | null; slack_token_set: boolean; signing_secret_set: boolean; command_url: string }
+interface CommandSettings { enabled: boolean; workflows: string[]; channel: string | null; slack_token_set: boolean; signing_secret_set: boolean; command_url: string; events_url: string }
 
 /** Which workflows `/azhi run` may start, and where its thread goes. Nothing is startable until a workflow is listed. */
 function SlackCommands() {
@@ -221,6 +221,10 @@ function SlackCommands() {
       <div className="field">
         <span className="small">In the Slack app, add a slash command <code>/azhi</code> with this request URL:</span>
         <code className="mono small">{q.data.command_url}</code>
+      </div>
+      <div className="field">
+        <span className="small">To start runs by tagging the app (<code>@azhi run &lt;workflow&gt; key=value</code>), turn on Event Subscriptions with this request URL, subscribe to the <code>app_mention</code> bot event, and add the <code>app_mentions:read</code> scope:</span>
+        <code className="mono small">{q.data.events_url}</code>
       </div>
       <div className="row">
         <button type="submit" className="primary" disabled={save.isPending}>Save</button>

@@ -56,7 +56,10 @@ export function parseRunCommand(text: string): { workflow: string; inputs: Recor
   return { workflow, inputs };
 }
 
-export const isAllowed = (s: SlackCommandSettings, slug: string) => s.enabled === true && (s.workflows ?? []).includes(slug);
+/** The text of an `@azhi ...` mention without the leading `<@U...>` mention(s), ready for `parseRunCommand`. */
+export const stripMentions = (text: string) => text.replace(/^(\s*<@[A-Z0-9]+(\|[^>]*)?>)+\s*/, '').trim();
+
+export const isAllowed =(s: SlackCommandSettings, slug: string) => s.enabled === true && (s.workflows ?? []).includes(slug);
 
 /** One line for the thread: unknown values read "unavailable", never a guess. */
 export function resultText(r: { workflow: string; state: string; started_at?: string | Date | null; ended_at?: string | Date | null; error?: { message?: unknown } | null }, link: string): string {

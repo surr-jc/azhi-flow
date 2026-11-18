@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { isAllowed, parseRunCommand, resultText } from '../src/server/slack-runs.js';
+import { isAllowed, parseRunCommand, resultText, stripMentions } from '../src/server/slack-runs.js';
 import { startHarness, temporalAvailable, uploadDir, waitForRun, type Harness } from './helpers/harness.js';
 
 describe('parseRunCommand', () => {
@@ -40,6 +40,18 @@ describe('isAllowed', () => {
     expect(isAllowed({ enabled: false, workflows: ['wf'] }, 'wf')).toBe(false);
     expect(isAllowed({ enabled: true, workflows: ['wf'] }, 'wf')).toBe(true);
     expect(isAllowed({ enabled: true, workflows: ['wf'] }, 'other')).toBe(false);
+  });
+});
+
+describe('stripMentions', () => {
+  it('drops the leading mention of the app, leaving the command', () => {
+    expect(stripMentions('<@U0BOT> run wf a=1')).toBe('run wf a=1');
+    expect(stripMentions('  <@U0BOT|azhi>   run wf')).toBe('run wf');
+    expect(stripMentions('<@U0BOT> <@U0BOT> run wf')).toBe('run wf');
+  });
+  it('leaves a mention that is part of an input alone', () => {
+    expect(stripMentions('<@U0BOT> run wf note="ping <@U0ANY>"')).toBe('run wf note="ping <@U0ANY>"');
+    expect(stripMentions('run wf')).toBe('run wf');
   });
 });
 
@@ -159,4 +171,56 @@ describe.skipIf(!up)('/azhi run from Slack', () => {
     expect(sent(`run-result:${runId}`)).toHaveLength(1);
     expect(sent('run-start:')).toHaveLength(1);
   }, 90_000);
+
+  describe('tagging the app (@azhi)', () => {
+    const event = async (body: Record<string, unknown>, o: { sign?: boolean; retry?: boolean } = {}) => {
+      const raw = JSON.stringify(body);
+      const ts = String(Math.floor(Date.now() / 1000));
+      const sig = `v0=${createHmac('sha256', o.sign === false ? 'wrong' : secret).update(`v0:${ts}:${raw}`).digest('hex')}`;
+      const res = await fetch(`${h.server.url}/v1/slack/events`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': ts, 'x-slack-signature': sig, ...(o.retry ? { 'x-slack-retry-num': '1' } : {}) }, body: raw });
+      const text = await res.text();
+      return { status: res.status, json: text ? JSON.parse(text) : undefined };
+    };
+    const mention = (text: string, o: { user?: string; ts?: string; thread_ts?: string; bot_id?: string } = {}) => ({
+      type: 'event_callback',
+      event: { type: 'app_mention', user: o.user ?? 'U0OP', channel: 'C-TAG', text: `<@U0BOT> ${text}`, ts: o.ts ?? '1700000000.000100', ...(o.thread_ts ? { thread_ts: o.thread_ts } : {}), ...(o.bot_id ? { bot_id: o.bot_id } : {}) },
+    });
+    const inThread = (ts: string) => h.slack.messages.filter((m) => m.channel === 'C-TAG' && m.thread_ts === ts);
+
+    it('answers the URL check and refuses a bad signature', async () => {
+      expect(await event({ type: 'url_verification', challenge: 'abc123' })).toEqual({ status: 200, json: { challenge: 'abc123' } });
+      expect((await event({ type: 'url_verification', challenge: 'x' }, { sign: false })).status).toBe(401);
+    });
+
+    it('starts the run from a mention and follows it in the thread of that message', async () => {
+      const ts = '1700000001.000100';
+      expect((await event(mention('run approval-check team=payments', { ts }))).status).toBe(200);
+      const started = await until(() => inThread(ts).find((m) => m.text.includes('started approval-check')));
+      const runId = /\((run_[A-Za-z0-9_]+)\)/.exec(started.text)![1]!;
+      // No separate thread root: the mention is the root, and the approval is asked under it.
+      expect(sent('run-start:').every((m) => m.thread_ts === ts || !m.text.includes(runId))).toBe(true);
+      const ask = await until(() => inThread(ts).find((m) => (m.metadata?.event_payload as { action_id?: string } | undefined)?.action_id?.startsWith(`approval:${runId}:`)));
+      expect(ask.channel).toBe('C-TAG');
+      await h.api.post(`/v1/runs/${runId}/approvals`, { node: 'approve', decision: 'approved', data: {} });
+      await waitForRun(h.api, runId);
+      const result = await until(() => inThread(ts).find((m) => (m.metadata?.event_payload as { action_id?: string } | undefined)?.action_id === `run-result:${runId}`));
+      expect(result.text).toContain('succeeded');
+    }, 90_000);
+
+    it('replies in the thread when refused, ignores bots and retries, and starts nothing', async () => {
+      const runs = (await h.api.get<any[]>('/v1/runs')).length;
+      const ts = '1700000002.000100';
+      await event(mention('run some-other-workflow', { ts }));
+      const reply = await until(() => inThread(ts)[0]);
+      expect(reply.text).toContain('cannot be started from Slack');
+      await event(mention('run approval-check', { ts: '1700000003.000100', bot_id: 'B0BOT' }));
+      await event(mention('run approval-check', { ts: '1700000004.000100' }), { retry: true });
+      await event({ type: 'event_callback', event: { type: 'message', user: 'U0OP', channel: 'C-TAG', text: 'run approval-check', ts: '1700000005.000100' } });
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(inThread('1700000003.000100')).toHaveLength(0);
+      expect(inThread('1700000004.000100')).toHaveLength(0);
+      expect(inThread('1700000005.000100')).toHaveLength(0);
+      expect((await h.api.get<any[]>('/v1/runs')).length).toBe(runs);
+    });
+  });
 });
