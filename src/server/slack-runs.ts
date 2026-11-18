@@ -108,6 +108,8 @@ export function startSlackRunNotifier(ctx: AppContext, log: (m: string) => void 
     running = true;
     try {
       await postRunResults(ctx, log);
+      // Seen event ids only need to outlive Slack's retries.
+      await ctx.pool.query(`DELETE FROM slack_events WHERE received_at < now() - interval '1 day'`);
     } catch (err) {
       log(`slack runs: ${(err as Error).message}`);
     } finally {

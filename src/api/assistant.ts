@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { Message } from '../agents/providers.js';
 import { assistantTurn, checkPage } from '../assistant/assistant.js';
 import { handleMcp } from '../assistant/mcp.js';
-import { checkCall, type AssistantDeps } from '../assistant/tools.js';
+import { runConfirmedAction, tooLong } from '../assistant/actions.js';
+import { type AssistantDeps } from '../assistant/tools.js';
 import { builderProviders } from '../builder/builder.js';
 import { builderModels } from '../builder/models.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
@@ -48,9 +49,9 @@ export function registerAssistantRoutes(app: FastifyInstance, d: AssistantDeps) 
   app.post('/v1/assistant/chat', async (req) => {
     const p = user(req);
     const b = chat.parse(req.body);
-    if (b.messages.length > 200 || JSON.stringify(b.messages).length > 1_000_000) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
+    if (tooLong(b.messages as Message[])) throw new AzhiError(ErrorClass.invalidInput, 'this conversation is too long; start a new one');
     const r = await assistantTurn(d, p, { messages: b.messages as Message[], text: b.text, page: checkPage(b.page), provider: b.provider, model: b.model });
-    await audit(ctx, p.workspaceId, p.userId, 'assistant.turn', { provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
+    await audit(ctx, p.workspaceId, p.userId, 'assistant.turn', { via: 'web', provider: r.provider, model: r.model, event: r.event.kind, input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens });
     return r;
   });
 
@@ -58,10 +59,7 @@ export function registerAssistantRoutes(app: FastifyInstance, d: AssistantDeps) 
   app.post('/v1/assistant/actions', async (req) => {
     const p = user(req);
     const b = z.object({ tool: z.string().max(80), args: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
-    const { tool, args } = checkCall(p, b.tool, b.args);
-    if (tool.effect !== 'act') throw new AzhiError(ErrorClass.invalidInput, `${b.tool} is not an action`);
-    const result = await tool.run(d, p, args);
-    await audit(ctx, p.workspaceId, p.userId, 'assistant.action', { tool: tool.name, args });
+    const result = await runConfirmedAction(d, p, b.tool, b.args, 'web');
     return { ok: true, result };
   });
 

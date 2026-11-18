@@ -39,6 +39,8 @@ export interface AssistantDeps {
   ctx: AppContext;
   temporal?: Client;
   interpreterBuild: string;
+  /** Server log line; never given message text, tokens or user ids. */
+  log?: (m: string) => void;
 }
 
 export type Caller = Extract<Principal, { kind: 'user' }>;

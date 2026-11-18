@@ -19,6 +19,7 @@ export function Approvals() {
       {!q.data ? <Loading /> : !q.data.length ? <Panel><p className="muted">Nothing is waiting for a decision.</p></Panel> : q.data.map((a) => <ApprovalCard key={`${a.run_id}/${a.node_id}`} approval={a} />)}
       {atLeast(me.data?.role, 'admin') ? <details className="panel"><summary>Approvals in Slack</summary><SlackApprovals /></details> : null}
       {atLeast(me.data?.role, 'admin') ? <details className="panel"><summary>Run workflows from Slack</summary><SlackCommands /></details> : null}
+      {atLeast(me.data?.role, 'admin') ? <details className="panel"><summary>Chat with the assistant in Slack</summary><SlackAssistant /></details> : null}
     </>
   );
 }
@@ -226,6 +227,36 @@ function SlackCommands() {
         <span className="small">To start runs by tagging the app (<code>@azhi run &lt;workflow&gt; key=value</code>), turn on Event Subscriptions with this request URL, subscribe to the <code>app_mention</code> bot event, and add the <code>app_mentions:read</code> scope:</span>
         <code className="mono small">{q.data.events_url}</code>
       </div>
+      <div className="row">
+        <button type="submit" className="primary" disabled={save.isPending}>Save</button>
+        {save.isSuccess ? <span className="ok-note">Saved.</span> : null}
+      </div>
+      <ErrorNote error={save.error} />
+    </form>
+  );
+}
+
+interface AssistantSettings { enabled: boolean }
+
+/** Whether people may chat with the assistant from Slack, by DM or by mentioning the app in a channel. */
+function SlackAssistant() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['settings', 'slack-assistant'], queryFn: () => api<AssistantSettings>('/v1/settings/slack-assistant') });
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => setEnabled(q.data?.enabled ?? false), [q.data]);
+  const save = useMutation({
+    mutationFn: () => api('/v1/settings/slack-assistant', { method: 'PUT', body: { enabled } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings', 'slack-assistant'] }),
+  });
+  if (!q.data) return <Loading />;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate();
+  };
+  return (
+    <form onSubmit={submit} className="fields">
+      <p className="muted small">People can DM the app, or mention <code>@azhi</code> in a channel it has been invited to. Each conversation is a Slack thread. Actions the assistant proposes run only after a Confirm click from the person who started the thread. Slack users must be linked to an Azhi Flow user on the <Link to="/ui/users">Users</Link> page. A mention that starts with <code>run</code> still starts a workflow, as set up in "Run workflows from Slack" above.</p>
+      <label className="row small"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Allow chat with the assistant from Slack</label>
       <div className="row">
         <button type="submit" className="primary" disabled={save.isPending}>Save</button>
         {save.isSuccess ? <span className="ok-note">Saved.</span> : null}

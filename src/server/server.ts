@@ -11,6 +11,7 @@ import { startOutboxDispatcher } from './outbox.js';
 import { startScheduler } from './scheduler.js';
 import { startAlertNotifier } from './alerts.js';
 import { startSlackRunNotifier } from './slack-runs.js';
+import { startSlackSocketMode } from './slack-socket.js';
 
 export type ServerRole = 'api' | 'interpreter' | 'gateway' | 'scheduler';
 export const ALL_ROLES: ServerRole[] = ['api', 'interpreter', 'gateway', 'scheduler'];
@@ -65,9 +66,11 @@ export async function startServer(opts: { roles?: ServerRole[]; settings?: Parti
   if (roles.includes('api')) {
     const outbox = startOutboxDispatcher(ctx, client, log);
     stops.unshift(() => outbox.stop());
-    const app = buildApi({ ctx, temporal: client, interpreterBuild: build });
+    const app = buildApi({ ctx, temporal: client, interpreterBuild: build, log });
     url = await app.listen({ host: ctx.settings.host, port: ctx.settings.port });
     stops.unshift(() => app.close());
+    const socketMode = startSlackSocketMode(ctx, app, log);
+    stops.unshift(() => socketMode());
     if (ctx.settings.copilotSyncOpencode) {
       const sync = startCopilotSync(ctx, log);
       stops.unshift(() => sync.stop());

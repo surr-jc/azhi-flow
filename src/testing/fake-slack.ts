@@ -18,6 +18,8 @@ export interface FakeSlackMessage {
 export async function startFakeSlack(port = 0, opts: { token?: string; postDelayMs?: number; host?: string } = {}) {
   const messages: FakeSlackMessage[] = [];
   // Bodies posted to interaction response URLs (`<url>/response/<id>`).
+  // `chat.update` calls, in order; the message itself is changed in `messages` too.
+  const updates: Array<{ channel: string; ts: string; text: string; blocks?: unknown }> = [];
   const responses: Array<Record<string, unknown>> = [];
   // Modals opened with `views.open` (a button click's `trigger_id` plus the view).
   const views: Array<{ trigger_id: string; view: any }> = [];
@@ -45,6 +47,14 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
       if (state.postDelayMs) await new Promise((r) => setTimeout(r, state.postDelayMs));
       return send({ ok: true, channel: params.channel, ts });
     }
+    if (method === 'chat.update') {
+      const m = messages.find((x) => x.channel === params.channel && x.ts === params.ts);
+      if (!m) return send({ ok: false, error: 'message_not_found' });
+      m.text = params.text ?? '';
+      m.blocks = params.blocks;
+      updates.push({ channel: params.channel, ts: params.ts, text: m.text, blocks: params.blocks });
+      return send({ ok: true, channel: params.channel, ts: params.ts });
+    }
     if (method === 'conversations.history') {
       const includeMeta = String(params.include_all_metadata) === 'true';
       const oldest = params.oldest ? Number(params.oldest) : 0;
@@ -63,6 +73,8 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
       responses.push(params);
       return send({ ok: true });
     }
+    // Socket Mode: the websocket url is a placeholder; tests inject their own socket.
+    if (method === 'apps.connections.open') return send({ ok: true, url: 'wss://fake-slack.test/link' });
     if (method === 'auth.test') return send({ ok: true, team: 'fake', user: 'azhi-bot' });
     res.statusCode = 404;
     send({ ok: false, error: 'unknown_method' });
@@ -72,6 +84,7 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
   return {
     url: `http://127.0.0.1:${address.port}/api`,
     messages,
+    updates,
     responses,
     views,
     state,

@@ -74,6 +74,7 @@ export interface ApiOptions {
   temporal?: Client;
   interpreterBuild: string;
   logger?: boolean;
+  log?: (m: string) => void;
 }
 
 interface GithubCliLogin {
@@ -104,7 +105,7 @@ async function githubCliLogin(host: string): Promise<GithubCliLogin> {
   };
 }
 
-export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: ApiOptions) {
+export function buildApi({ ctx, temporal, interpreterBuild, logger = false, log }: ApiOptions) {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 * 1024 });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -139,7 +140,7 @@ export function buildApi({ ctx, temporal, interpreterBuild, logger = false }: Ap
   registerSigninRoutes(app, ctx);
   registerQuotaRoutes(app, ctx);
   registerTeamRoutes(app, ctx);
-  registerSlackRoutes(app, ctx, temporal, interpreterBuild);
+  registerSlackRoutes(app, { ctx, temporal, interpreterBuild, log });
   registerTriggerRoutes(app, ctx, interpreterBuild);
   registerMcpRoutes(app, ctx);
   registerAssetRoutes(app, ctx);

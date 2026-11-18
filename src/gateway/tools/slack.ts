@@ -44,6 +44,11 @@ export async function postMessage(
   return { channel: String(r.channel), ts: String(r.ts) };
 }
 
+/** Replaces the text and blocks of a message the app posted (a "Thinking…" placeholder, a decided card). */
+export async function updateMessage(cfg: SlackConfig, args: { channel: string; ts: string; text: string; blocks?: unknown }): Promise<void> {
+  await call(cfg, 'chat.update', { channel: args.channel, ts: args.ts, text: args.text, blocks: args.blocks });
+}
+
 /** Opens a modal for a Slack interaction (the `trigger_id` of a button click expires after 3 seconds). */
 export async function openView(cfg: SlackConfig, args: { trigger_id: string; view: unknown }): Promise<void> {
   await call(cfg, 'views.open', { trigger_id: args.trigger_id, view: args.view });

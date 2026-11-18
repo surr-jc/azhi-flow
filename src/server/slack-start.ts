@@ -7,6 +7,11 @@ import { resolveSecret } from './secrets.js';
 import { isAllowed, parseRunCommand, slackCommandSettings } from './slack-runs.js';
 import { startRun } from './start-run.js';
 
+/** The enabled Azhi Flow user whose Slack user id this is, if the Users page links one. */
+export async function linkedSlackUser(ctx: AppContext, workspace: string, slackUser: string) {
+  return (await ctx.pool.query(`SELECT id, role FROM users WHERE workspace_id=$1 AND slack_user_id=$2 AND disabled_at IS NULL`, [workspace, slackUser])).rows[0] as { id: string; role: Role } | undefined;
+}
+
 /**
  * Starts a run for a Slack request, from the `/azhi` slash command and from an `@azhi` mention alike:
  * the Slack user must be linked to an enabled Azhi Flow user with the operator role, the workflow must be
@@ -22,7 +27,7 @@ export async function startFromSlack(
 ): Promise<void> {
   try {
     const settings = await slackCommandSettings(ctx, workspace);
-    const linked = (await ctx.pool.query(`SELECT id, role FROM users WHERE workspace_id=$1 AND slack_user_id=$2 AND disabled_at IS NULL`, [workspace, a.slackUser])).rows[0] as { id: string; role: Role } | undefined;
+    const linked = await linkedSlackUser(ctx, workspace, a.slackUser);
     if (!linked) return void (await a.say('Your Slack user is not linked to Azhi Flow, so nothing was started. An admin can link it on the Users page.'));
     const principal = { kind: 'user', workspaceId: workspace, userId: linked.id, role: linked.role } as const;
     requireRole(principal, 'operator');

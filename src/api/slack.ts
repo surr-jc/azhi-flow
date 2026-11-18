@@ -1,7 +1,7 @@
-import type { Client } from '@temporalio/client';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { AssistantDeps } from '../assistant/tools.js';
 import type { Role } from '../db/schema.js';
 import { AzhiError, ErrorClass } from '../lib/errors.js';
 import { approvalAsk, approvalModal, approvalSettings, commentModal, decideApproval, decidedBlocks, formFields, modalData } from '../server/approvals.js';
@@ -10,7 +10,8 @@ import { clip, escapeMrkdwn } from '../gateway/tools/slack-format.js';
 import { audit } from '../server/catalog.js';
 import type { AppContext } from '../server/context.js';
 import { resolveSecret } from '../server/secrets.js';
-import { slackCommandSettings, stripMentions } from '../server/slack-runs.js';
+import { decideProposal, handleSlackChat, proposalWorkspace, slackAssistantSettings } from '../server/slack-assistant.js';
+import { parseRunCommand, slackCommandSettings, stripMentions } from '../server/slack-runs.js';
 import { startFromSlack } from '../server/slack-start.js';
 import { requireRole } from './auth.js';
 
@@ -50,13 +51,20 @@ export function verifySlackSignature(secret: string, timestamp: string | undefin
   return signature.length === expected.length && timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
+/** The headers Slack sends with a signed request; Socket Mode uses them to hand an envelope to our own routes. */
+export function signSlackRequest(secret: string, body: string, now = Date.now()): Record<string, string> {
+  const ts = String(Math.floor(now / 1000));
+  return { 'x-slack-request-timestamp': ts, 'x-slack-signature': `v0=${createHmac('sha256', secret).update(`v0:${ts}:${body}`).digest('hex')}` };
+}
+
 async function respond(url: string | undefined, body: Record<string, unknown>) {
   // The URL comes from a payload whose signature was checked, so it is Slack's.
   if (!url) return;
   await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => undefined);
 }
 
-export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, temporal: Client | undefined, interpreterBuild: string) {
+export function registerSlackRoutes(app: FastifyInstance, d: AssistantDeps) {
+  const { ctx, temporal, interpreterBuild, log } = d;
   app.get('/v1/settings/slack-commands', async (req) => {
     const p = user(req);
     const s = await slackCommandSettings(ctx, p.workspaceId);
@@ -79,6 +87,18 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
     const value = { enabled: b.enabled, workflows: [...new Set(b.workflows)], ...(b.channel ? { channel: b.channel } : {}) };
     await ctx.pool.query(`UPDATE workspaces SET settings = jsonb_set(settings, '{slack_commands}', $2::jsonb) WHERE id=$1`, [p.workspaceId, JSON.stringify(value)]);
     await audit(ctx, p.workspaceId, p.userId, 'settings.slack_commands_changed', value);
+    return value;
+  });
+
+  app.get('/v1/settings/slack-assistant', async (req) => ({ enabled: (await slackAssistantSettings(ctx, user(req).workspaceId)).enabled === true }));
+
+  app.put('/v1/settings/slack-assistant', async (req) => {
+    const p = user(req);
+    requireRole(p, 'admin');
+    const b = z.object({ enabled: z.boolean() }).parse(req.body);
+    const value = { enabled: b.enabled };
+    await ctx.pool.query(`UPDATE workspaces SET settings = jsonb_set(settings, '{slack_assistant}', $2::jsonb) WHERE id=$1`, [p.workspaceId, JSON.stringify(value)]);
+    await audit(ctx, p.workspaceId, p.userId, 'settings.slack_assistant_changed', value);
     return value;
   });
 
@@ -108,9 +128,9 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
   app.register(async (sub) => {
     sub.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_req, body, done) => done(null, body));
 
-    // A signed Slack request names no run, so the workspace is the enabled one whose signing secret verifies it.
+    // A signed Slack request names no run, so the workspace is the one with Slack commands or the Slack assistant enabled whose signing secret verifies it.
     const verifiedWorkspace = async (req: FastifyRequest, raw: string) => {
-      const enabled = (await ctx.pool.query(`SELECT id FROM workspaces WHERE settings->'slack_commands'->>'enabled' = 'true'`)).rows as Array<{ id: string }>;
+      const enabled = (await ctx.pool.query(`SELECT id FROM workspaces WHERE settings->'slack_commands'->>'enabled' = 'true' OR settings->'slack_assistant'->>'enabled' = 'true'`)).rows as Array<{ id: string }>;
       for (const w of enabled) {
         const secret = await resolveSecret(ctx, w.id, 'slack-signing-secret');
         if (secret && verifySlackSignature(secret.value, req.headers['x-slack-request-timestamp'] as string, req.headers['x-slack-signature'] as string, raw)) return w.id;
@@ -144,7 +164,7 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
       const raw = typeof req.body === 'string' ? req.body : '';
       const workspace = await verifiedWorkspace(req, raw);
       if (!workspace) return reply.status(401).send({ error: 'authorization', message: 'invalid Slack signature' });
-      let body: { type?: string; challenge?: string; event?: { type?: string; user?: string; bot_id?: string; text?: string; channel?: string; ts?: string; thread_ts?: string } };
+      let body: { type?: string; challenge?: string; event_id?: string; event?: { type?: string; subtype?: string; channel_type?: string; user?: string; bot_id?: string; text?: string; channel?: string; ts?: string; thread_ts?: string } };
       try {
         body = JSON.parse(raw);
       } catch {
@@ -152,23 +172,67 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
       }
       // Slack checks the request URL once with a challenge it expects back.
       if (body.type === 'url_verification') return reply.status(200).send({ challenge: String(body.challenge ?? '') });
-      // A resent event is already being handled, and the app's own messages never start runs.
+      // The app's own messages never start anything.
       const e = body.event;
-      if (req.headers['x-slack-retry-num'] || body.type !== 'event_callback' || e?.type !== 'app_mention' || e.bot_id || !e.user || !e.channel || !e.ts) return reply.status(200).send();
+      // Dropped events are logged by type only: no text, no ids.
+      const skip = (why: string) => {
+        log?.(`slack events: ${e?.type ?? body.type ?? 'unknown'}${e?.channel_type ? ` (${e.channel_type})` : ''} not handled: ${why}`);
+        return reply.status(200).send();
+      };
+      if (body.type !== 'event_callback' || !e || e.bot_id || !e.user || !e.channel || !e.ts) return skip(e?.bot_id ? 'bot message' : 'not a user message event');
+      const isMention = e.type === 'app_mention';
+      const isDirect = e.type === 'message' && e.channel_type === 'im' && !e.subtype;
+      if (!isMention && !isDirect) return skip('not a mention or direct message');
       const { user: slackUser, channel, ts } = e;
       const threadTs = e.thread_ts ?? ts;
-      void startFromSlack(ctx, workspace, {
-        slackUser,
-        text: stripMentions(e.text ?? ''),
-        channel,
-        threadTs,
-        interpreterBuild,
-        // A mention has no private reply, so problems are answered in the thread.
-        say: async (text) => {
-          const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
-          if (token) await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel, threadTs, text, dedupeKey: `mention-reply:${channel}:${ts}:${Date.now()}` }).catch(() => undefined);
-        },
-      });
+      const text = isMention ? stripMentions(e.text ?? '') : (e.text ?? '').trim();
+
+      // `@azhi run <workflow> ...` starts a run when Slack commands are on; anything else is a question for the assistant.
+      let runRequest = false;
+      if (isMention) {
+        try {
+          parseRunCommand(text);
+          runRequest = (await slackCommandSettings(ctx, workspace)).enabled === true;
+        } catch {
+          // Not a run command.
+        }
+      }
+      // A resent run mention is already being handled: its first delivery started the run.
+      if (runRequest && req.headers['x-slack-retry-num']) return skip('run request resent by Slack (retry)');
+      // Every other event is recorded first, so a resend of one that was received is acknowledged and nothing more.
+      if (body.event_id) {
+        const fresh = await ctx.pool.query(`INSERT INTO slack_events(event_id, workspace_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [body.event_id, workspace]);
+        if (!fresh.rowCount) return skip('duplicate event_id');
+      }
+
+      if (runRequest) {
+        void startFromSlack(ctx, workspace, {
+          slackUser,
+          text,
+          channel,
+          threadTs,
+          interpreterBuild,
+          // A mention has no private reply, so problems are answered in the thread.
+          say: async (note) => {
+            const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
+            if (token) await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel, threadTs, text: note, dedupeKey: `mention-reply:${channel}:${ts}:${Date.now()}` }).catch(() => undefined);
+          },
+        });
+      } else if (!text) {
+        log?.(`slack events: ${e.type} not handled: empty text`);
+      } else if ((await slackAssistantSettings(ctx, workspace)).enabled === true) {
+        void handleSlackChat(d, workspace, { slackUser, channel, threadTs, text });
+      } else {
+        log?.(`slack events: ${e.type} not handled: the Slack assistant is off (turn it on under Approvals)`);
+        // The request is signed, so the workspace is real: say why nothing happens.
+        const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
+        if (token) {
+          await postMessage(
+            { token: token.value, apiUrl: ctx.settings.slackApiUrl },
+            { channel, threadTs, text: 'The assistant is turned off for Slack. An admin can turn it on under Approvals, Chat with the assistant in Slack. To start a workflow, use `@azhi run <workflow>`.', dedupeKey: `assistant-off:${channel}:${ts}` },
+          ).catch(() => undefined);
+        }
+      }
       return reply.status(200).send();
     });
     sub.post(SLACK_INTERACTIONS, async (req, reply) => {
@@ -179,6 +243,32 @@ export function registerSlackRoutes(app: FastifyInstance, ctx: AppContext, tempo
         payload = JSON.parse(form.get('payload') ?? '');
       } catch {
         return reply.status(400).send({ error: 'invalid_input', message: 'no Slack payload' });
+      }
+      // Confirm and Dismiss on an assistant card: the proposal names the workspace, and the stored arguments are what run.
+      const press = payload.type === 'block_actions' ? payload.actions?.[0] : undefined;
+      if (press?.action_id === 'azhi_assistant_confirm' || press?.action_id === 'azhi_assistant_dismiss') {
+        let value: unknown;
+        try {
+          value = JSON.parse(press.value ?? '');
+        } catch {
+          return reply.status(200).send();
+        }
+        const id = z.object({ proposal: z.string() }).safeParse(value);
+        if (!id.success) return reply.status(200).send();
+        const ws = await proposalWorkspace(ctx, id.data.proposal);
+        const secret = ws ? await resolveSecret(ctx, ws, 'slack-signing-secret') : undefined;
+        if (!ws || !secret || !verifySlackSignature(secret.value, req.headers['x-slack-request-timestamp'] as string, req.headers['x-slack-signature'] as string, raw)) {
+          return reply.status(401).send({ error: 'authorization', message: 'invalid Slack signature' });
+        }
+        const responseUrl = payload.response_url;
+        void decideProposal(d, {
+          proposalId: id.data.proposal,
+          slackUser: payload.user?.id ?? '',
+          decision: press.action_id === 'azhi_assistant_confirm' ? 'confirm' : 'dismiss',
+          reply: (note) => respond(responseUrl, { response_type: 'ephemeral', replace_original: false, text: note }),
+          replace: (note, blocks) => respond(responseUrl, { replace_original: true, text: note, blocks }),
+        });
+        return reply.status(200).send();
       }
       const submitted = payload.type === 'view_submission' && payload.view?.callback_id === 'azhi_approval_form';
       const commented = payload.type === 'view_submission' && payload.view?.callback_id === 'azhi_approval_comment';

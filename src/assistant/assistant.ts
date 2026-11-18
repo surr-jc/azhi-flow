@@ -24,6 +24,8 @@ export type AssistantEvent =
   | { kind: 'action_proposal'; proposal: ActionProposal }
   | { kind: 'build_handoff'; handoff: { prompt: string; workflow?: string } };
 
+export type Surface = 'web' | 'slack';
+
 /** Where the person is in mission control, so "this run" means something. */
 export interface PageContext {
   kind: 'run' | 'workflow' | 'dataset' | 'connection' | 'page';
@@ -57,10 +59,11 @@ const RANK = { viewer: 0, operator: 1, author: 2, admin: 3, owner: 4 } as const;
 const allowed = (p: Caller, role: keyof typeof RANK) => RANK[p.role] >= RANK[role];
 
 /** The tools this person may call; tools above their role are not offered at all. */
-export function toolsFor(p: Caller): ModelTool[] {
+export function toolsFor(p: Caller, surface: Surface = 'web'): ModelTool[] {
   return [
     ...TOOLS.filter((t) => allowed(p, t.role)).map((t) => ({ name: t.name, description: t.effect === 'act' ? `[Action: the person confirms before it runs] ${t.description}` : t.description, input_schema: t.input_schema })),
-    ...(allowed(p, 'author') ? [OPEN_BUILDER] : []),
+    // The builder hand-off opens a browser page, so a Slack session gets a mission control link instead.
+    ...(allowed(p, 'author') && surface === 'web' ? [OPEN_BUILDER] : []),
   ];
 }
 
@@ -73,13 +76,13 @@ export function checkPage(raw: unknown): PageContext | undefined {
   return { kind: o.kind!, ...(o.id ? { id: o.id } : {}), path: o.path };
 }
 
-function system(p: Caller, info: { label: string; model: string }, page?: PageContext): string {
+function system(p: Caller, info: { label: string; model: string }, page?: PageContext, surface: Surface = 'web'): string {
   const where = !page
     ? ''
     : page.kind === 'page' || !page.id
       ? ` They are on ${page.path}.`
       : ` They are looking at ${page.kind} \`${page.id}\` (${page.path}); "this ${page.kind}" means it.`;
-  return `${SKILL}\n\n## This session\n\nToday is ${new Date().toISOString().slice(0, 10)}. You run on ${info.label} (${info.model}). The person has the role \`${p.role}\`.${where}`;
+  return `${SKILL}\n\n## This session\n\nToday is ${new Date().toISOString().slice(0, 10)}. You run on ${info.label} (${info.model}). The person has the role \`${p.role}\`.${where}${surface === 'slack' ? ' This session is in Slack: write Slack mrkdwn (*bold*, `code`, no tables or headings), keep answers short, and link to mission control for detail.' : ''}`;
 }
 
 const clip = (s: string) => (s.length > RESULT_CHARS ? `${s.slice(0, RESULT_CHARS)}\n…(cut at ${RESULT_CHARS} characters; ask for less, e.g. a smaller limit)` : s);
@@ -99,10 +102,10 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 export async function assistantTurn(
   d: AssistantDeps,
   p: Caller,
-  o: { messages: Message[]; text: string; page?: PageContext; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
+  o: { messages: Message[]; text: string; page?: PageContext; surface?: Surface; provider?: BuilderProviderId; model?: string; signal?: AbortSignal },
 ): Promise<{ messages: Message[]; event: AssistantEvent; provider: BuilderProviderId; model: string; usage: Usage }> {
   const { provider, info } = await providerFor(d.ctx, p.workspaceId, o.provider, o.model);
-  const tools = toolsFor(p);
+  const tools = toolsFor(p, o.surface);
   const messages = structuredClone(o.messages);
   // After tool results (or a proposed action) the transcript ends on a user message; the person's words join it.
   const last = messages.at(-1);
@@ -112,7 +115,7 @@ export async function assistantTurn(
 
   let usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: null };
   for (let call = 0; call < MAX_CALLS; call++) {
-    const res = await provider.complete({ model: info.model, system: system(p, info, o.page), messages, tools, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
+    const res = await provider.complete({ model: info.model, system: system(p, info, o.page, o.surface), messages, tools, maxTokens: MAX_OUTPUT_TOKENS, signal: o.signal });
     usage = addUsage(usage, res.usage);
     messages.push({ role: 'assistant', content: res.content.length ? res.content : [{ type: 'text', text: '(no reply)' }] });
     const uses = res.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
@@ -152,7 +155,7 @@ export async function assistantTurn(
     messages.push({ role: 'user', content: results });
     // A proposal or hand-off gets one more call for the sentence that goes with the card.
     if (event) {
-      const res2 = await provider.complete({ model: info.model, system: system(p, info, o.page), messages, tools, maxTokens: 1000, signal: o.signal });
+      const res2 = await provider.complete({ model: info.model, system: system(p, info, o.page, o.surface), messages, tools, maxTokens: 1000, signal: o.signal });
       usage = addUsage(usage, res2.usage);
       const text = res2.content.filter((b) => b.type === 'text');
       if (text.length) messages.push({ role: 'assistant', content: text });
