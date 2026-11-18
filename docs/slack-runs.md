@@ -16,6 +16,23 @@ Slack-user-to-Azhi-user link.
    started until a slug is listed. Optionally set a channel ID for the threads; otherwise the thread is created in
    the channel where the command was typed (the bot must be a member).
 
+### Tagging the app
+
+Instead of (or as well as) the slash command, people can tag the app in a channel it has been invited to:
+
+```
+@azhi run quality-report
+@azhi run pr-review repo=acme/api pr=123
+```
+
+Setup, in the Slack app: turn on **Event Subscriptions**, set the request URL to `<public url>/v1/slack/events`
+(Slack sends a signed check that the server answers, so enable the setting and set both secrets first), subscribe
+to the bot event `app_mention`, and add the scope `app_mentions:read`.
+
+The checks and the result are the same as for the command, with two differences: the message you typed is the
+thread root (so replies, approvals and the result appear under it), and a refusal is answered in that thread
+because a mention has no private reply. Mentions by bots and resent events are ignored.
+
 ## What happens
 
 | Step | Behaviour |
@@ -43,4 +60,4 @@ The result line shows the run state and duration. A duration or error that is no
 
 ## Not included
 
-Progress for individual steps, `/azhi status` and `/azhi cancel`, and mentions through the Events API.
+Progress for individual steps, and `status` or `cancel` (as a command or a mention). Only `run` is understood.
