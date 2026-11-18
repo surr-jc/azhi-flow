@@ -11,6 +11,7 @@ import { requireRole, type Principal } from '../api/auth.js';
 import { audit } from './catalog.js';
 import type { AppContext } from './context.js';
 import { resolveSecret } from './secrets.js';
+import { threadFor } from './slack-runs.js';
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 
@@ -131,15 +132,18 @@ export function commentModal(a: { run: string; node: string; intro: string }) {
  */
 export async function postApprovalToSlack(ctx: AppContext, workspaceId: string, runId: string, nodeId: string, request: { message: unknown; payload: unknown; role: string; expires_at: string; context_withheld?: string[] }) {
   const s = await approvalSettings(ctx, workspaceId);
-  if (!s.slack_channel) return;
-  const claimed = await ctx.pool.query(`INSERT INTO approval_messages(run_id, node_id, workspace_id, channel) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [runId, nodeId, workspaceId, s.slack_channel]);
+  // A run started from Slack asks in its own thread; any other run uses the approvals channel.
+  const thread = await threadFor(ctx, runId);
+  const channel = thread?.channel ?? s.slack_channel;
+  if (!channel) return;
+  const claimed = await ctx.pool.query(`INSERT INTO approval_messages(run_id, node_id, workspace_id, channel) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, [runId, nodeId, workspaceId, channel]);
   if (!claimed.rowCount) return;
   try {
     const token = await resolveSecret(ctx, workspaceId, 'slack-bot-token');
     if (!token) throw new Error("the secret 'slack-bot-token' is not set");
     const workflow = (await ctx.pool.query(`SELECT w.slug FROM runs r JOIN workflow_versions v ON v.id = r.workflow_version_id JOIN workflows w ON w.id = v.workflow_id WHERE r.id=$1`, [runId])).rows[0]?.slug ?? 'workflow';
     const blocks = approvalBlocks({ runId, nodeId, workflow, ...request, baseUrl: ctx.settings.publicUrl });
-    const r = await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel: s.slack_channel, text: `Approval needed on ${workflow} (${nodeId}): ${clip(text(request.message) || 'Approve this step?', 300)}`, blocks, dedupeKey: `approval:${runId}:${nodeId}` });
+    const r = await postMessage({ token: token.value, apiUrl: ctx.settings.slackApiUrl }, { channel, ...(thread ? { threadTs: thread.thread_ts } : {}), text: `Approval needed on ${workflow} (${nodeId}): ${clip(text(request.message) || 'Approve this step?', 300)}`, blocks, dedupeKey: `approval:${runId}:${nodeId}` });
     await ctx.pool.query(`UPDATE approval_messages SET ts=$3, channel=$4 WHERE run_id=$1 AND node_id=$2`, [runId, nodeId, r.ts, r.channel]);
   } catch (e) {
     await audit(ctx, workspaceId, null, 'approval.slack_failed', { run: runId, node: nodeId, error: (e as Error).message });

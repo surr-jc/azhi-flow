@@ -6,6 +6,8 @@ export interface FakeSlackMessage {
   text: string;
   blocks?: unknown;
   metadata?: { event_type: string; event_payload: Record<string, unknown> };
+  /** The thread the message was posted into, when it was a reply. */
+  thread_ts?: string;
 }
 
 /**
@@ -37,7 +39,7 @@ export async function startFakeSlack(port = 0, opts: { token?: string; postDelay
     if (method === 'chat.postMessage') {
       if (!params.channel) return send({ ok: false, error: 'channel_not_found' });
       const ts = `${Math.floor(Date.now() / 1000)}.${String(++seq).padStart(6, '0')}`;
-      messages.push({ ts, channel: params.channel, text: params.text ?? '', blocks: params.blocks, metadata: params.metadata });
+      messages.push({ ts, channel: params.channel, text: params.text ?? '', blocks: params.blocks, metadata: params.metadata, ...(params.thread_ts ? { thread_ts: params.thread_ts } : {}) });
       // The message is posted before the response is sent: a crash in this window is
       // exactly the "sent, no receipt" case the ledger must reconcile.
       if (state.postDelayMs) await new Promise((r) => setTimeout(r, state.postDelayMs));

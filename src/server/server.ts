@@ -10,6 +10,7 @@ import { startCopilotSync } from './copilot-sync.js';
 import { startOutboxDispatcher } from './outbox.js';
 import { startScheduler } from './scheduler.js';
 import { startAlertNotifier } from './alerts.js';
+import { startSlackRunNotifier } from './slack-runs.js';
 
 export type ServerRole = 'api' | 'interpreter' | 'gateway' | 'scheduler';
 export const ALL_ROLES: ServerRole[] = ['api', 'interpreter', 'gateway', 'scheduler'];
@@ -77,6 +78,8 @@ export async function startServer(opts: { roles?: ServerRole[]; settings?: Parti
     stops.unshift(() => scheduler!.stop());
     const alerts = startAlertNotifier(ctx, log);
     stops.unshift(() => alerts.stop());
+    const slackRuns = startSlackRunNotifier(ctx, log);
+    stops.unshift(() => slackRuns.stop());
   }
   const heartbeat = setInterval(() => void ctx.pool.query(`UPDATE interpreter_builds SET last_seen=now() WHERE build_id=$1`, [build]).catch(() => {}), 30_000);
   stops.unshift(() => clearInterval(heartbeat));

@@ -18,6 +18,7 @@ export function Approvals() {
       <ErrorNote error={q.error} />
       {!q.data ? <Loading /> : !q.data.length ? <Panel><p className="muted">Nothing is waiting for a decision.</p></Panel> : q.data.map((a) => <ApprovalCard key={`${a.run_id}/${a.node_id}`} approval={a} />)}
       {atLeast(me.data?.role, 'admin') ? <details className="panel"><summary>Approvals in Slack</summary><SlackApprovals /></details> : null}
+      {atLeast(me.data?.role, 'admin') ? <details className="panel"><summary>Run workflows from Slack</summary><SlackCommands /></details> : null}
     </>
   );
 }
@@ -173,6 +174,56 @@ function SlackApprovals() {
       </div>
       <div className="row">
         <button type="submit" className="primary" disabled={save.isPending}>Save Slack settings</button>
+        {save.isSuccess ? <span className="ok-note">Saved.</span> : null}
+      </div>
+      <ErrorNote error={save.error} />
+    </form>
+  );
+}
+
+interface CommandSettings { enabled: boolean; workflows: string[]; channel: string | null; slack_token_set: boolean; signing_secret_set: boolean; command_url: string }
+
+/** Which workflows `/azhi run` may start, and where its thread goes. Nothing is startable until a workflow is listed. */
+function SlackCommands() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['settings', 'slack-commands'], queryFn: () => api<CommandSettings>('/v1/settings/slack-commands') });
+  const [enabled, setEnabled] = useState(false);
+  const [workflows, setWorkflows] = useState('');
+  const [channel, setChannel] = useState('');
+  useEffect(() => {
+    setEnabled(q.data?.enabled ?? false);
+    setWorkflows((q.data?.workflows ?? []).join(', '));
+    setChannel(q.data?.channel ?? '');
+  }, [q.data]);
+  const save = useMutation({
+    mutationFn: () => api('/v1/settings/slack-commands', { method: 'PUT', body: { enabled, workflows: workflows.split(/[\s,]+/).filter(Boolean), channel: channel.trim() || null } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings', 'slack-commands'] }),
+  });
+  if (!q.data) return <Loading />;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate();
+  };
+  return (
+    <form onSubmit={submit} className="fields">
+      <p className="muted small">Type <code>/azhi run &lt;workflow&gt; key=value</code> in Slack to start a workflow. It runs as the Azhi Flow user linked to the Slack user (on the <Link to="/ui/users">Users</Link> page), who needs the operator role. Approvals and the result appear in a thread.</p>
+      {!q.data.slack_token_set ? <p className="warn-note">Set the <Link to="/ui/secrets">secret</Link> <code>slack-bot-token</code>.</p> : null}
+      {!q.data.signing_secret_set ? <p className="warn-note">Set the <Link to="/ui/secrets">secret</Link> <code>slack-signing-secret</code>, so commands can be verified.</p> : null}
+      <label className="row small"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Allow runs from Slack</label>
+      <div className="field">
+        <label htmlFor="slack-cmd-workflows">Workflows Slack may start (slugs, comma separated)</label>
+        <input id="slack-cmd-workflows" className="mono" value={workflows} onChange={(e) => setWorkflows(e.target.value)} placeholder="quality-report, pr-review" />
+      </div>
+      <div className="field">
+        <label htmlFor="slack-cmd-channel">Thread channel ID (optional; defaults to the channel the command was typed in)</label>
+        <input id="slack-cmd-channel" className="mono" value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="C0123456789" />
+      </div>
+      <div className="field">
+        <span className="small">In the Slack app, add a slash command <code>/azhi</code> with this request URL:</span>
+        <code className="mono small">{q.data.command_url}</code>
+      </div>
+      <div className="row">
+        <button type="submit" className="primary" disabled={save.isPending}>Save</button>
         {save.isSuccess ? <span className="ok-note">Saved.</span> : null}
       </div>
       <ErrorNote error={save.error} />

@@ -137,7 +137,7 @@ export async function upsertSchedule(ctx: AppContext, workspaceId: string, workf
 }
 
 /** Tables that hold a run's history; they go before the run itself. */
-const RUN_CHILD_TABLES = ['run_events', 'node_attempts', 'approvals', 'usage_records', 'context_manifests', 'agent_transcripts', 'approval_messages', 'alert_state'];
+const RUN_CHILD_TABLES = ['run_events', 'node_attempts', 'approvals', 'usage_records', 'context_manifests', 'agent_transcripts', 'approval_messages', 'alert_state', 'slack_run_threads'];
 
 async function runIdsOf(c: { query: (t: string, v?: unknown[]) => Promise<{ rows: any[] }> }, workspaceId: string, versionIds: string[]): Promise<string[]> {
   // The runs of these versions plus every sub-run they started.
