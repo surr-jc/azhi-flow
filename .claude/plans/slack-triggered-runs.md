@@ -52,14 +52,14 @@ Optional later (out of scope here): `app_mention` via the Events API; a `/azhi s
 - `src/server/catalog.ts` - `audit(ctx, ws, userId, kind, data)`.
 - `src/server/workflows.ts` - `resolveVersion(ctx, ws, 'slug@latest')`; workflow `slug` is the allowlist key.
 - `src/testing/fake-slack.ts` - fake Slack API (`messages`, `views`, `responses`); extend only if a new Slack method is needed (none expected).
-- `migrations/0004_team.sql` - `approval_messages` shape to mirror; latest migration is `0013_mcp_oauth_discovery.sql`, so the new one is `0014_slack_runs.sql`. Add the new table to `RUN_CHILD_TABLES` in `src/server/workflows.ts:133`.
+- `migrations/0004_team.sql` - `approval_messages` shape to mirror; latest migration was `0013_mcp_oauth_discovery.sql` when planned (renumbered after rebase), so the new one is `0016_slack_runs.sql`. Add the new table to `RUN_CHILD_TABLES` in `src/server/workflows.ts:133`.
 - `web/src/pages/Approvals.tsx` (144-170) - `SlackApprovals` settings panel to mirror for "Run from Slack".
 - `test/slack-answers.test.ts`, `test/approvals.test.ts` (1-60) - unit-test style and Temporal-gated harness style (`startHarness`, `h.slack`, `waitForRun`).
 - `docs/mission-control-plan.md`, `docs/assistant.md` - doc style; add `docs/slack-runs.md` (one file per feature, per CLAUDE.md).
 
 ### New Files to Create
 
-- `migrations/0014_slack_runs.sql` - `slack_run_threads` table.
+- `migrations/0016_slack_runs.sql` - `slack_run_threads` table.
 - `src/server/slack-runs.ts` - settings reader, command parser, allowlist check, thread record, final-result notifier.
 - `test/slack-runs.test.ts` - unit tests (parser, allowlist, text) and a harness test (command to run to thread).
 - `docs/slack-runs.md` - setup and behaviour.
@@ -96,7 +96,7 @@ Unit tests for pure helpers; harness test with fake Slack for the end-to-end flo
 
 ## STEP-BY-STEP TASKS
 
-### CREATE migrations/0014_slack_runs.sql
+### CREATE migrations/0016_slack_runs.sql
 - **IMPLEMENT**:
   ```sql
   CREATE TABLE slack_run_threads (
