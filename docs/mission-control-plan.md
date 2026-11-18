@@ -124,7 +124,7 @@ Monaco in the first release. Mission control follows it:
    email (claimed on first sign-in with a verified email, with the given role), change roles,
    disable, issue and revoke API tokens, link a Slack user; nobody changes their own role, the
    owner is never changed, and only the owner makes or changes admins (migration
-   `0004_team.sql`). Slack approval buttons: with an approvals channel set (Approvals page),
+   `0004_team.sql`). Slack approval buttons: with an approvals channel set (System > Slack page),
    each waiting approval is posted once with Approve and Reject buttons; clicks arrive at
    `/v1/slack/interactions`, are verified with the `slack-signing-secret` secret, and count only
    for a linked, enabled user, through the same role, schema and first-decision checks as the

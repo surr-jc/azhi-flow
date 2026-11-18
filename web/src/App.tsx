@@ -26,6 +26,7 @@ import { WorkflowPage, Workflows } from './pages/Workflows';
 import { UploadPackage } from './pages/Upload';
 import { ImportBundle } from './pages/ImportBundle';
 import { WorkflowBuilder } from './pages/Builder';
+import { Slack } from './pages/Slack';
 import { Users } from './pages/Users';
 import { DatasetPage } from './pages/Authoring';
 import { Assets } from './pages/Assets';
@@ -102,7 +103,7 @@ const SECTIONS: Section[] = [
   { label: 'Runs', icon: 'runs', to: '/ui/runs', items: [{ to: '/ui/runs', label: 'All runs' }, { to: '/ui/approvals', label: 'Approvals', count: 'approvals' }, { to: '/ui/alerts', label: 'Alerts', count: 'alerts' }, { to: '/ui/schedules', label: 'Schedules' }] },
   { label: 'Workflows', icon: 'flow', to: '/ui/workflows', items: [{ to: '/ui/workflows', label: 'Workflows' }, { to: '/ui/toolbox', label: 'Toolbox', also: ['/ui/datasets', '/ui/tools', '/ui/connections'] }, { to: '/ui/library', label: 'Library', also: ['/ui/assets'] }, { to: '/ui/examples', label: 'Workflow templates', need: 'admin' }] },
   { label: 'Governance', icon: 'usage', to: '/ui/usage', items: [{ to: '/ui/usage', label: 'Usage and limits' }, { to: '/ui/audit', label: 'Audit log', need: 'admin' }, { to: '/ui/signins', label: 'Sign-ins', need: 'admin' }, { to: '/ui/secrets', label: 'Secrets', need: 'admin' }] },
-  { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }] },
+  { label: 'System', icon: 'server', to: '/ui/workers', items: [{ to: '/ui/workers', label: 'Workers' }, { to: '/ui/health', label: 'Health' }, { to: '/ui/users', label: 'Users', need: 'admin' }, { to: '/ui/slack', label: 'Slack', need: 'admin' }] },
 ];
 
 const isAt = (to: string, path: string) => (to === '/ui' ? path === '/ui' : path === to || path.startsWith(to + '/'));
@@ -199,6 +200,7 @@ function Page({ path }: { path: string }): ReactNode {
   if (path === '/ui/signins') return <Signins />;
   if (path === '/ui/secrets') return <Secrets />;
   if (path === '/ui/users') return <Users />;
+  if (path === '/ui/slack') return <Slack />;
   if (path === '/ui/datasets') return <Datasets />;
   if ((m = match('/ui/datasets/:name', path))) return <DatasetRoute name={m.name!} />;
   if (path === '/ui/tools') return <Tools />;

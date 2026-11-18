@@ -10,7 +10,7 @@ Slack-user-to-Azhi-user link. To chat with the assistant in Slack instead of sta
 ## Set up
 
 1. Secrets: `slack-bot-token` (scope `chat:write`) and `slack-signing-secret` (the app's signing secret).
-2. In the Slack app, add a slash command `/azhi` with the request URL shown under **Approvals, Run workflows from
+2. In the Slack app, add a slash command `/azhi` with the request URL shown under **System, Slack, Run workflows from
    Slack** in mission control (`<public url>/v1/slack/commands`).
    Without a public URL, use [Socket Mode](slack-assistant.md#no-public-url-socket-mode) instead of request URLs.
 3. Link each person's Slack user to their Azhi Flow user on the Users page.

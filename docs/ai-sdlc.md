@@ -137,8 +137,8 @@ the web form does, and an empty or invalid form is refused inside the form. **Re
 Set up once (an admin):
 
 1. Secrets: `slack-bot-token` (already needed to post) and `slack-signing-secret` (the Slack app's signing secret).
-2. In the Slack app, turn **Interactivity** on and paste the *Request URL* shown under Mission Control > Approvals > "Approvals in Slack". It must be reachable from Slack, so a laptop needs a tunnel, with `AZHI_PUBLIC_URL` set to its address.
-3. Approvals > "Approvals in Slack": set the **approvals channel** (the bot must be in it).
+2. In the Slack app, turn **Interactivity** on and paste the *Request URL* shown under Mission Control > System > Slack > "Approvals in Slack". It must be reachable from Slack, so a laptop needs a tunnel, with `AZHI_PUBLIC_URL` set to its address.
+3. System > Slack > "Approvals in Slack": set the **approvals channel** (the bot must be in it).
 4. Users page: set each person's **Slack user** so a click maps to their Azhi role. Only roles `author` and above can answer this step; anyone else gets a private "not recorded" note.
 
 Limits: a form can hold strings, choices, yes/no and numbers; a step with objects or lists in its

@@ -223,13 +223,13 @@ export function registerSlackRoutes(app: FastifyInstance, d: AssistantDeps) {
       } else if ((await slackAssistantSettings(ctx, workspace)).enabled === true) {
         void handleSlackChat(d, workspace, { slackUser, channel, threadTs, text });
       } else {
-        log?.(`slack events: ${e.type} not handled: the Slack assistant is off (turn it on under Approvals)`);
+        log?.(`slack events: ${e.type} not handled: the Slack assistant is off (turn it on under System, Slack)`);
         // The request is signed, so the workspace is real: say why nothing happens.
         const token = await resolveSecret(ctx, workspace, 'slack-bot-token');
         if (token) {
           await postMessage(
             { token: token.value, apiUrl: ctx.settings.slackApiUrl },
-            { channel, threadTs, text: 'The assistant is turned off for Slack. An admin can turn it on under Approvals, Chat with the assistant in Slack. To start a workflow, use `@azhi run <workflow>`.', dedupeKey: `assistant-off:${channel}:${ts}` },
+            { channel, threadTs, text: 'The assistant is turned off for Slack. An admin can turn it on under System, Slack, Chat with the assistant in Slack. To start a workflow, use `@azhi run <workflow>`.', dedupeKey: `assistant-off:${channel}:${ts}` },
           ).catch(() => undefined);
         }
       }

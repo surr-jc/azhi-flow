@@ -24,7 +24,7 @@ Slack can reach the server in two ways. Pick one:
    Confirm and Dismiss buttons on the assistant's cards are sent there.
 5. In the Slack app, turn on **App Home**, then the **Messages** tab, so people can DM the app.
 6. Link each person's Slack user to their Azhi Flow user on the Users page.
-7. As an admin, under **Approvals, Chat with the assistant in Slack**, turn on **Allow chat with the assistant
+7. As an admin, under **System, Slack, Chat with the assistant in Slack**, turn on **Allow chat with the assistant
    from Slack**.
 
 Event Subscriptions sends a signed check that the server must answer, so turn the setting on only after both
@@ -93,7 +93,7 @@ audit log as `assistant.action` with `via: slack`. Each turn is recorded as `ass
 
 - Event Subscriptions must list the bot events `app_mention` and `message.im`, even in Socket Mode. Socket Mode only
   changes how events arrive, not which ones Slack sends.
-- The toggle must be on: Approvals, Chat with the assistant in Slack. If it is off, a mention or direct message gets
+- The toggle must be on: System, Slack, Chat with the assistant in Slack. If it is off, a mention or direct message gets
   a short reply saying so.
 - `slack-bot-token` must be set. Without it the assistant cannot post, and the log says
   `slack assistant: the secret 'slack-bot-token' is not set`.
