@@ -38,6 +38,31 @@ What happens next depends on the tool's declared effect class.
 
 For Slack, that lookup is how a fresh gateway finds the message a crashed one had already posted.
 
+## Across resumes
+
+A resumed run is a new run, so its actions have their own ids. If the same step reaches the same operation and the
+run it continues left that write `dispatched` or `outcome_unknown`, the resumed run does not start from nothing:
+
+| Effect class | Recovery in the resumed run |
+|---|---|
+| `write-idempotent` | Resend with the **original** idempotency key |
+| `write-dedupable` | Look the write up by the **original** dedupe key. If it is found, reuse the receipt. If not, resend under that key |
+| `write-unsafe` | **Stop** and name the earlier action. It goes ahead once that action has a settled state |
+
+This follows a chain of resumes back to the first send. These writes can still repeat on resume:
+
+- **Changed arguments.** A different operation is a different action, as in any run. An agent that words a comment
+  differently on the rerun, or a step upstream that produced new data, makes a new write.
+- **Writes already confirmed in a step that failed afterwards.** That step runs again and its writes go out again,
+  including earlier items of a `parallel` step or tool `loop`. Choosing a step with `from_node` repeats its writes the
+  same way. `azhi` warns about steps that succeeded; it does not see confirmed writes inside a failed one.
+- **Writes inside a subworkflow.** A rerun step starts a new child run, which is not linked to the earlier child.
+- **Two resumes of one run at the same time.** Both can miss the lookup and send, though under the same key.
+
+The target also has to honour the key for that long: an idempotency key the target has already forgotten protects
+nothing, and the ledger cannot tell. MCP tools receive no key at all, so a `write-idempotent` MCP tool has to be
+safe to repeat by itself, in a retry as much as in a resume.
+
 ## Proof, not a promise
 
 The alpha demo kills the gateway right after Slack accepted the post. A fresh gateway finds the message by its
