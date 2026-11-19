@@ -1,0 +1,70 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mission control B: Bento ops</title><style>
+/* B. Bento ops: dark-first bento grid. One oversized "pulse" tile, mixed tile sizes, soft depth by border then shadow. */
+:root{--bg:#0b1016;--panel:#131b25;--panel2:#18222e;--ink:#e6ecf3;--muted:#93a1b3;--line:#243141;--ok:#5ccf8c;--bad:#ff8c80;--warn:#f2b75b;--run:#79b4f2;--ok-bg:#12301f;--bad-bg:#3d1a17;--warn-bg:#3a2a0e;--run-bg:#16304d;--accent:#3cc0b4;--accent-bg:#10302e;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--ring:0 0 0 3px rgba(60,192,180,.3);color-scheme:dark}
+@media(prefers-color-scheme:light){:root.auto{--bg:#f1f3f7}}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 500px at 80% -10%,#10302e55,transparent),var(--bg);color:var(--ink);font:14px/1.5 "Public Sans",system-ui,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}:focus-visible{outline:none;box-shadow:var(--ring);border-radius:8px}
+svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.bar h1{font:600 18px/1.2 "Public Sans",system-ui,"Segoe UI",sans-serif;margin:0;display:flex;align-items:center;gap:10px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 12px;font-size:12px;cursor:pointer;color:var(--ink);font-family:inherit}
+.chip[aria-pressed=true]{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.bento{display:grid;grid-template-columns:repeat(12,1fr);grid-auto-rows:minmax(110px,auto);gap:12px}
+.t{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;position:relative;overflow:hidden;transition:transform .2s cubic-bezier(.16,1,.3,1),border-color .15s}
+a.t{color:inherit;display:block}a.t:hover{transform:translateY(-2px);border-color:var(--accent);text-decoration:none}
+.t .l{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.06em}
+.t .v{font:600 34px/1.1 "Public Sans",system-ui,"Segoe UI",sans-serif;letter-spacing:-.03em;margin-top:8px;font-variant-numeric:tabular-nums}
+.t .s{font-size:12px;color:var(--muted);margin-top:4px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.run{color:var(--run)}
+.pulse{grid-column:span 6;grid-row:span 2;background:linear-gradient(160deg,var(--panel2),var(--panel))}
+.pulse .big{font:600 72px/1 "Public Sans",system-ui,"Segoe UI",sans-serif;letter-spacing:-.05em;margin:14px 0 4px}
+.pulse .msg{font-size:15px;max-width:34ch}
+.rate{display:flex;gap:16px;margin-top:16px;flex-wrap:wrap}
+.rate div{min-width:90px}.rate b{display:block;font-size:20px}.rate span{font-size:12px;color:var(--muted)}
+.ring{position:absolute;right:20px;top:20px;width:120px;height:120px}
+.ring circle{fill:none;stroke-width:10}
+.w3{grid-column:span 3}.w4{grid-column:span 4}.w6{grid-column:span 6}.w8{grid-column:span 8}.h2{grid-row:span 2}
+.spark{position:absolute;left:0;right:0;bottom:0;height:44px;width:100%;opacity:.9}
+.badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600}.badge svg{width:12px;height:12px}
+.b-ok{background:var(--ok-bg);color:var(--ok)}.b-bad{background:var(--bad-bg);color:var(--bad)}.b-warn{background:var(--warn-bg);color:var(--warn)}.b-run{background:var(--run-bg);color:var(--run)}
+.list .it{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}.list .it:first-of-type{border-top:0}
+.list .it span.sm{font-size:12px;color:var(--muted);display:block}
+.workers{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.wk{border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px}.wk i{display:block;height:4px;border-radius:2px;background:var(--ok);margin-top:6px}.wk.off i{background:var(--bad)}
+.bars{display:flex;align-items:flex-end;gap:4px;height:90px;margin-top:12px}.bars i{flex:1;background:var(--s1);border-radius:3px 3px 0 0;min-height:4px}.bars i.f{background:var(--s2)}
+.btn{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#062421;font:600 13px "Public Sans",system-ui,"Segoe UI",sans-serif;cursor:pointer}
+.btn.g{background:transparent;color:var(--ink);border-color:var(--line)}
+@media(max-width:1000px){.pulse{grid-column:span 12}.w3{grid-column:span 6}.w4,.w6,.w8{grid-column:span 12}}
+@media(max-width:560px){.w3{grid-column:span 12}.pulse .big{font-size:54px}.ring{display:none}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head><body><div class="wrap">
+<div class="bar"><h1><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Mission control</h1>
+ <div class="chips" role="group" aria-label="Time range"><button class="chip" aria-pressed="false">24 h</button><button class="chip" aria-pressed="true">14 days</button><button class="chip" aria-pressed="false">28 days</button></div></div>
+<main class="bento">
+ <section class="t pulse" aria-label="Pulse">
+  <svg class="ring" viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="50" stroke="var(--line)"/><circle cx="60" cy="60" r="50" stroke="var(--ok)" stroke-dasharray="276 314" transform="rotate(-90 60 60)" stroke-linecap="round"/></svg>
+  <div class="l"><svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>Needs you</div>
+  <div class="big warn">3</div><div class="msg">decisions are waiting. The oldest expires in <b class="bad">38 minutes</b>.</div>
+  <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap"><button class="btn">Review approvals</button><button class="btn g">Snooze 1 h</button></div>
+  <div class="rate"><div><b class="ok">88%</b><span>success rate</span></div><div><b>212</b><span>runs started</span></div><div><b class="bad">2</b><span>failed today</span></div></div>
+ </section>
+ <a class="t w3" href="#"><div class="l"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>Running</div><div class="v run">4</div><div class="s">1 queued</div>
+  <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none"><path d="M0 24 15 18 30 22 45 10 60 14 75 6 100 12" stroke="var(--s1)" fill="none" stroke-width="2"/></svg></a>
+ <a class="t w3" href="#"><div class="l"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Waiting</div><div class="v warn">2</div><div class="s">on a person or worker</div></a>
+ <a class="t w3" href="#"><div class="l"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Succeeded 24 h</div><div class="v ok">41</div><div class="s">+12% vs prior</div>
+  <svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none"><path d="M0 22 20 20 40 14 60 16 80 8 100 4" stroke="var(--s3)" fill="none" stroke-width="2"/></svg></a>
+ <a class="t w3" href="#"><div class="l"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Failed 24 h</div><div class="v bad">2</div><div class="s">1 delivery failed</div></a>
+ <section class="t w6 h2"><div class="l">Runs per day</div>
+  <div class="bars" aria-label="Runs per day, last 14 days" role="img"><i style="height:40%"></i><i style="height:55%"></i><i style="height:48%"></i><i style="height:70%"></i><i style="height:62%"></i><i style="height:35%"></i><i style="height:30%"></i><i style="height:76%"></i><i style="height:84%"></i><i class="f" style="height:90%"></i><i style="height:72%"></i><i style="height:80%"></i><i style="height:66%"></i><i style="height:92%"></i></div>
+  <div class="s">Orange bars mark days with failures (1+). Peak: 31 runs on 18 Nov.</div></section>
+ <section class="t w3 h2 list"><div class="l">Running now</div>
+  <div class="it"><span>ai-sdlc-v2<span class="sm">4 min</span></span><span class="badge b-run"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>run</span></div>
+  <div class="it"><span>repo-triage<span class="sm">9 min</span></span><span class="badge b-run"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>run</span></div>
+  <div class="it"><span>release-notes<span class="sm">approval</span></span><span class="badge b-warn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>wait</span></div>
+  <div class="it"><span>nightly-audit<span class="sm">queued</span></span><span class="badge b-run">queue</span></div></section>
+ <section class="t w3 h2"><div class="l">Workers</div><div class="v">3<span class="s"> / 4 online</span></div>
+  <div class="workers"><div class="wk">w-1<i></i></div><div class="wk">w-2<i></i></div><div class="wk">w-3<i></i></div><div class="wk off">w-4 off<i></i></div></div>
+  <div class="s" style="margin-top:12px">Spend today <b style="color:var(--ink)">$12.40</b> · $71.10 week</div></section>
+</main></div></body></html>

@@ -1,0 +1,77 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mission control C: Ops console</title><style>
+/* C. Ops console: dense, monospaced, three-pane. Left rail = triage queue, centre = run timeline (swimlanes), right = event feed. */
+:root{--bg:#f3f4f6;--panel:#fff;--ink:#0f172a;--muted:#5b6678;--line:#dfe3ea;--ok:#17743f;--bad:#b42318;--warn:#8a5300;--run:#2463a8;--ok-bg:#e4f5ea;--bad-bg:#fde8e6;--warn-bg:#fff3dc;--run-bg:#e3eefa;--accent:#0e6f6a;--accent-bg:#e1f2f0;--rail:#0f141b;--rail-ink:#c9d1dc;--ring:0 0 0 2px var(--accent);color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0a0f15;--panel:#101720;--ink:#e6ecf3;--muted:#8d9aac;--line:#222d3b;--ok:#5ccf8c;--bad:#ff8c80;--warn:#f2b75b;--run:#79b4f2;--ok-bg:#12301f;--bad-bg:#3d1a17;--warn-bg:#3a2a0e;--run-bg:#16304d;--accent:#3cc0b4;--accent-bg:#10302e;color-scheme:dark}}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 "IBM Plex Sans","Public Sans",system-ui,sans-serif}
+.m{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+a{color:var(--accent);text-decoration:none}:focus-visible{outline:none;box-shadow:var(--ring)}
+svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.top{display:flex;align-items:center;gap:16px;padding:0 16px;height:44px;background:var(--rail);color:var(--rail-ink);border-bottom:1px solid #000}
+.top b{color:#fff;letter-spacing:.04em}.top .st{display:flex;gap:14px;margin-left:auto;font-size:12px;flex-wrap:wrap}
+.top .st span{display:inline-flex;gap:5px;align-items:center}.dot{width:8px;height:8px;border-radius:50%}
+.d-ok{background:#5ccf8c}.d-bad{background:#ff8c80}.d-warn{background:#f2b75b}
+.cols{display:grid;grid-template-columns:300px minmax(0,1fr) 300px;height:calc(100vh - 44px);min-height:640px}
+.col{overflow:auto;border-right:1px solid var(--line);background:var(--panel)}.col:last-child{border-right:0;border-left:1px solid var(--line)}
+.col h2{margin:0;padding:10px 14px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);display:flex;justify-content:space-between}
+.q{display:block;padding:10px 14px;border-bottom:1px solid var(--line);color:inherit;border-left:3px solid transparent;cursor:pointer}
+.q:hover{background:var(--bg);text-decoration:none}.q.sel{background:var(--accent-bg);border-left-color:var(--accent)}
+.q .t{font-weight:600;display:flex;gap:6px;align-items:flex-start}.q .m2{font-size:11px;color:var(--muted);margin-top:2px}
+.tag{font-size:11px;font-weight:600;border-radius:4px;padding:0 6px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap}
+.g-bad{background:var(--bad-bg);color:var(--bad)}.g-warn{background:var(--warn-bg);color:var(--warn)}.g-run{background:var(--run-bg);color:var(--run)}.g-ok{background:var(--ok-bg);color:var(--ok)}
+/* centre */
+.c{background:var(--bg);display:flex;flex-direction:column}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+.stat{background:var(--panel);padding:10px 14px;color:inherit;display:block}.stat:hover{text-decoration:none;background:var(--bg)}
+.stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.stat .v{font:600 22px/1.2 "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+.tl{padding:14px;overflow:auto;flex:1}.tl h3{margin:0 0 10px;font-size:13px;display:flex;justify-content:space-between}
+.axis{display:grid;grid-template-columns:150px 1fr;font-size:11px;color:var(--muted);margin-bottom:4px}.axis div:last-child{display:flex;justify-content:space-between}
+.lane{display:grid;grid-template-columns:150px 1fr;align-items:center;border-top:1px solid var(--line);padding:6px 0;min-height:38px}
+.lane .nm{font-weight:600;font-size:12px;padding-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{position:relative;height:22px;background:repeating-linear-gradient(90deg,transparent 0 calc(16.66% - 1px),var(--line) calc(16.66% - 1px) 16.66%)}
+.bar{position:absolute;top:3px;height:16px;border-radius:4px;font-size:10px;padding:0 5px;display:flex;align-items:center;color:#fff;overflow:hidden;white-space:nowrap}
+.bar.ok{background:#1b8f55}.bar.bad{background:#c2382b;background-image:repeating-linear-gradient(135deg,transparent 0 4px,rgba(255,255,255,.22) 4px 8px)}.bar.run{background:#2a78d6}.bar.wait{background:#b8791a;background-image:repeating-linear-gradient(90deg,transparent 0 3px,rgba(255,255,255,.25) 3px 5px)}
+.now{position:absolute;top:0;bottom:0;left:83%;width:2px;background:var(--accent)}
+.key{display:flex;gap:14px;font-size:11px;color:var(--muted);padding:8px 14px;border-top:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.key i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+/* feed */
+.ev{display:grid;grid-template-columns:56px 1fr;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);font-size:12px}
+.ev time{color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:11px}
+.kbd{font:11px "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted)}
+@media(max-width:1100px){.cols{grid-template-columns:260px 1fr;height:auto}.col:last-child{display:none}}
+@media(max-width:700px){.cols{grid-template-columns:1fr}.stats{grid-template-columns:repeat(3,1fr)}.lane,.axis{grid-template-columns:90px 1fr}.top .st{display:none}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body>
+<div class="top"><b>AZHI FLOW · MISSION CONTROL</b>
+ <div class="st"><span><i class="dot d-ok"></i>Temporal ok</span><span><i class="dot d-warn"></i>Workers 3/4</span><span><i class="dot d-bad"></i>1 critical alert</span><span class="kbd" style="color:#aab4c2;border-color:#333">J/K move · A approve · / filter</span></div></div>
+<div class="cols">
+ <aside class="col" aria-label="Triage queue"><h2>Triage <span>5 items</span></h2>
+  <a class="q sel" href="#"><span class="t"><span class="tag g-bad"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>CRIT</span> Worker win-2 offline</span><div class="m2">3 missed heartbeats · 6 min</div></a>
+  <a class="q" href="#"><span class="t"><span class="tag g-warn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>APPR</span> Merge dependency bump AZ-412</span><div class="m2">ai-sdlc-v2 · expires 38 min</div></a>
+  <a class="q" href="#"><span class="t"><span class="tag g-warn">APPR</span> Publish release notes v0.9</span><div class="m2">release-notes · expires 5 h</div></a>
+  <a class="q" href="#"><span class="t"><span class="tag g-warn">APPR</span> Billing repo write access</span><div class="m2">repo-triage · admin only</div></a>
+  <a class="q" href="#"><span class="t"><span class="tag g-bad"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>FAIL</span> nightly-audit run r_8f21</span><div class="m2">step "scan" timed out · 2 h ago</div></a></aside>
+ <main class="c">
+  <nav class="stats" aria-label="System status">
+   <a class="stat" href="#"><div class="l">Running</div><div class="v" style="color:var(--run)">4</div></a>
+   <a class="stat" href="#"><div class="l">Waiting</div><div class="v" style="color:var(--warn)">2</div></a>
+   <a class="stat" href="#"><div class="l">Needs you</div><div class="v" style="color:var(--warn)">3</div></a>
+   <a class="stat" href="#"><div class="l">Ok 24h</div><div class="v" style="color:var(--ok)">41</div></a>
+   <a class="stat" href="#"><div class="l">Failed 24h</div><div class="v" style="color:var(--bad)">2</div></a>
+   <a class="stat" href="#"><div class="l">Spend</div><div class="v">$12.40</div></a></nav>
+  <section class="tl" aria-label="Run timeline"><h3>Run timeline <span class="muted">last 6 hours</span></h3>
+   <div class="axis"><div></div><div><span>-6h</span><span>-4h</span><span>-2h</span><span>now</span></div></div>
+   <div class="lane"><div class="nm">ai-sdlc-v2</div><div class="track"><div class="bar ok" style="left:4%;width:18%">r_91a ok 11m</div><div class="bar ok" style="left:34%;width:14%">ok</div><div class="bar run" style="left:78%;width:14%">running</div><div class="now"></div></div></div>
+   <div class="lane"><div class="nm">repo-triage</div><div class="track"><div class="bar ok" style="left:10%;width:8%"></div><div class="bar ok" style="left:40%;width:8%"></div><div class="bar run" style="left:72%;width:20%">running 9m</div><div class="now"></div></div></div>
+   <div class="lane"><div class="nm">release-notes</div><div class="track"><div class="bar ok" style="left:20%;width:12%">ok</div><div class="bar wait" style="left:70%;width:22%">waiting approval</div><div class="now"></div></div></div>
+   <div class="lane"><div class="nm">nightly-audit</div><div class="track"><div class="bar bad" style="left:24%;width:20%">failed: scan timeout</div><div class="now"></div></div></div>
+   <div class="lane"><div class="nm">dependency-watch</div><div class="track"><div class="bar ok" style="left:2%;width:6%"></div><div class="bar ok" style="left:30%;width:6%"></div><div class="bar ok" style="left:58%;width:6%"></div><div class="now"></div></div></div>
+  </section>
+  <div class="key"><span><i style="background:#1b8f55"></i>Succeeded</span><span><i style="background:#2a78d6"></i>Running</span><span><i style="background:#b8791a"></i>Waiting (striped)</span><span><i style="background:#c2382b"></i>Failed (hatched)</span></div></main>
+ <aside class="col" aria-label="Event feed"><h2>Live events <span class="tag g-ok">LIVE</span></h2>
+  <div class="ev"><time>14:02</time><span>ai-sdlc-v2 started step <b class="m">implement</b></span></div>
+  <div class="ev"><time>13:58</time><span>Approval requested: dependency bump AZ-412</span></div>
+  <div class="ev"><time>13:51</time><span>Worker <b class="m">win-2</b> missed heartbeat</span></div>
+  <div class="ev"><time>13:40</time><span>repo-triage run r_77c started by schedule</span></div>
+  <div class="ev"><time>13:22</time><span>release-notes waiting for approval</span></div>
+  <div class="ev"><time>12:10</time><span>nightly-audit <b class="m">r_8f21</b> failed at scan</span></div></aside>
+</div></body></html>

@@ -1,0 +1,94 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mission control A: Decision desk</title><style>
+/* A. Decision desk: light, calm, decision-first. Minimalism + one accent. Public Sans / IBM Plex Mono. */
+:root{--bg:#f5f6f8;--panel:#fff;--ink:#13213b;--muted:#556072;--line:#e1e5ec;--ok:#17743f;--bad:#b42318;--warn:#8a5300;--run:#2463a8;--idle:#6b7686;--ok-bg:#e4f5ea;--bad-bg:#fde8e6;--warn-bg:#fff3dc;--run-bg:#e3eefa;--accent:#0e6f6a;--accent-bg:#e1f2f0;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--shadow:0 1px 2px rgba(19,33,59,.04),0 4px 12px -6px rgba(19,33,59,.07);--ring:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent);color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0e141b;--panel:#151d27;--ink:#e6ecf3;--muted:#9aa7b8;--line:#263241;--ok:#5ccf8c;--bad:#ff8c80;--warn:#f2b75b;--run:#79b4f2;--idle:#7d8a9b;--ok-bg:#12301f;--bad-bg:#3d1a17;--warn-bg:#3a2a0e;--run-bg:#16304d;--accent:#3cc0b4;--accent-bg:#10302e;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--shadow:0 0 0 1px rgba(255,255,255,.03);color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Public Sans",system-ui,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+:focus-visible{outline:none;box-shadow:var(--ring);border-radius:6px}
+.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}.small{font-size:12px}.muted{color:var(--muted)}
+.wrap{max-width:1240px;margin:0 auto;padding:24px 16px 48px}
+svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+header.top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+h1{font:600 28px/1.2 "Public Sans",system-ui,"Segoe UI",sans-serif;letter-spacing:-.025em;margin:0}
+.sub{color:var(--muted);margin-top:4px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);border:1px solid var(--line);background:var(--panel);padding:4px 10px;border-radius:999px}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+/* hero: what needs a human */
+.hero{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:16px}
+.card h2{font-size:15px;font-weight:600;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}
+.queue .count{display:inline-flex;align-items:center;gap:6px;background:var(--warn-bg);color:var(--warn);border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600}
+.dec{display:flex;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.dec:first-of-type{border-top:0}
+.dec .q{font-weight:600;display:block}.dec .what{flex:1;min-width:0}
+.btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 14px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;font:600 13px "Public Sans",system-ui,"Segoe UI",sans-serif;cursor:pointer;transition:transform .1s,background .15s}
+.btn:hover{background:var(--bg);text-decoration:none}.btn:active{transform:scale(.98)}
+.btn.p{background:var(--accent);border-color:var(--accent);color:#fff}
+@media(prefers-color-scheme:dark){.btn.p{color:#062421}}
+.soon{color:var(--bad);font-weight:600}
+/* system health, one glanceable column */
+.health .row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--line)}.health .row:first-of-type{border-top:0}
+.badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600}
+.b-ok{background:var(--ok-bg);color:var(--ok)}.b-bad{background:var(--bad-bg);color:var(--bad)}.b-warn{background:var(--warn-bg);color:var(--warn)}.b-run{background:var(--run-bg);color:var(--run)}
+.badge svg{width:12px;height:12px}
+/* KPI strip */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;color:inherit;display:block;transition:border-color .15s,transform .15s}
+.kpi:hover{border-color:var(--accent);text-decoration:none;transform:translateY(-1px)}
+.kpi .l{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center}
+.kpi .v{font:600 28px/1.2 "Public Sans",system-ui,"Segoe UI",sans-serif;letter-spacing:-.02em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.kpi .s{font-size:12px;color:var(--muted)}.kpi .v,.kpi .s{display:block}
+.t-ok{color:var(--ok)}.t-bad{color:var(--bad)}.t-warn{color:var(--warn)}.t-run{color:var(--run)}
+/* trends */
+.grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-bottom:16px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--muted)}.legend b{color:var(--ink)}
+.legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.chart{width:100%;height:auto}
+.run{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line);color:inherit}.run:first-of-type{border-top:0}
+.run:hover{text-decoration:none;background:var(--bg)}
+.run .n{font-weight:600}
+@media(max-width:1000px){.kpis{grid-template-columns:repeat(3,1fr)}.hero,.grid2{grid-template-columns:1fr}}
+@media(max-width:560px){.kpis{grid-template-columns:repeat(2,1fr)}.dec{flex-wrap:wrap}h1{font-size:22px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body><div class="wrap">
+<header class="top"><div><h1>Thursday, 19 November</h1><div class="sub">3 decisions waiting for you · 4 runs in progress · next scheduled run in 12 min</div></div>
+<span class="live"><i></i>Live · updated 4s ago</span></header>
+
+<section class="hero" aria-label="Needs attention">
+ <div class="card queue"><h2>Waiting for a decision <span class="count"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>3 to review</span></h2>
+  <div class="dec"><div class="what"><span class="q">Merge the dependency bump for ticket AZ-412?</span><span class="small muted">ai-sdlc-v2 · Engineers can decide · <span class="soon">expires in 38 min</span></span></div><a class="btn" href="#">Review</a><button class="btn p">Approve</button></div>
+  <div class="dec"><div class="what"><span class="q">Release notes for v0.9 ready to publish</span><span class="small muted">release-notes · Release managers · expires in 5 h</span></div><a class="btn" href="#">Review</a><button class="btn p">Approve</button></div>
+  <div class="dec"><div class="what"><span class="q">Agent asks for write access to billing repo</span><span class="small muted">repo-triage · Admins · expires tomorrow</span></div><a class="btn" href="#">Review</a></div>
+ </div>
+ <div class="card health"><h2>System health</h2>
+  <div class="row"><span>Workers</span><span class="badge b-warn"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg>3 of 4 online</span></div>
+  <div class="row"><span>Alerts</span><span class="badge b-bad"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>1 critical</span></div>
+  <div class="row"><span>Temporal</span><span class="badge b-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>connected</span></div>
+  <div class="row"><span>Model spend today</span><b>$12.40</b></div>
+  <div class="row"><span class="muted small">Worker "win-2" missed 3 heartbeats.</span><a class="small" href="#">Open alert</a></div>
+ </div></section>
+
+<nav class="kpis" aria-label="System status">
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>Running</span><span class="v t-run">4</span><span class="s">1 queued</span></a>
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Waiting</span><span class="v t-warn">2</span><span class="s">on a person or worker</span></a>
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/></svg>Needs you</span><span class="v t-warn">3</span><span class="s">5 pending</span></a>
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>Succeeded</span><span class="v t-ok">41</span><span class="s">last 24 hours</span></a>
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>Failed</span><span class="v t-bad">2</span><span class="s">last 24 hours</span></a>
+ <a class="kpi" href="#"><span class="l"><svg viewBox="0 0 24 24"><path d="M12 1v22M17 5H9a3 3 0 0 0 0 6h6a3 3 0 0 1 0 6H6"/></svg>Spend today</span><span class="v">$12.40</span><span class="s">$71.10 this week</span></a>
+</nav>
+
+<div class="grid2">
+ <div class="card"><h2>Run activity <span class="small muted">per day, last 14 days</span></h2>
+  <div class="legend"><span><i style="background:var(--s1)"></i>Started <b>212</b></span><span><i style="background:var(--s3)"></i>Succeeded <b>187</b></span><span><i style="background:var(--s2)"></i>Failed <b>11</b></span></div>
+  <svg class="chart" viewBox="0 0 640 200" role="img" aria-label="Runs per day" style="stroke-width:2.5;width:100%;height:auto">
+   <g stroke="var(--line)" stroke-width="1"><path d="M0 40H640M0 90H640M0 140H640M0 190H640"/></g>
+   <path d="M0 120 50 100 100 110 150 70 200 90 250 60 300 80 350 50 400 70 450 40 500 60 550 35 600 55 640 45" stroke="var(--s1)"/>
+   <path d="M0 135 50 118 100 125 150 88 200 105 250 78 300 96 350 68 400 88 450 60 500 80 550 55 600 72 640 64" stroke="var(--s3)"/>
+   <path d="M0 185 50 182 100 186 150 178 200 184 250 180 300 183 350 176 400 182 450 175 500 181 550 172 600 180 640 177" stroke="var(--s2)" stroke-dasharray="5 4"/></svg></div>
+ <div class="card"><h2>Running now <a class="small" href="#">All open runs</a></h2>
+  <a class="run" href="#"><span><span class="n">ai-sdlc-v2</span> <span class="small muted">v7</span><br><span class="small muted">ticket · started 4 min ago</span></span><span class="badge b-run"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>running</span></a>
+  <a class="run" href="#"><span><span class="n">repo-triage</span> <span class="small muted">v2</span><br><span class="small muted">schedule · started 9 min ago</span></span><span class="badge b-run"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>running</span></a>
+  <a class="run" href="#"><span><span class="n">release-notes</span> <span class="small muted">v4</span><br><span class="small muted">manual · waiting for approval</span></span><span class="badge b-warn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>waiting</span></a>
+ </div></div>
+</div></body></html>
