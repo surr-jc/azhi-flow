@@ -564,6 +564,12 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .today-sec { display: flex; flex-direction: column; gap: 8px; }
 .today-sec > header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .today-sec > header h2 { font-size: calc(13px * var(--fs, 1)); color: var(--muted); font-weight: 500; }
+/* Mission control hero: what needs a person beside the system's health, above the status strip. */
+.hero { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; margin: 0 0 16px; }
+.hero > .today-sec { gap: 8px; }
+.hero-count { margin-right: auto; background: var(--warn-bg); color: var(--warn); border-radius: 999px; padding: 0 10px; font-size: calc(12px * var(--fs, 1)); font-weight: 600; }
+.hero .card.health { box-shadow: var(--shadow); border-radius: 12px; }
+@media (max-width: 1000px) { .hero { grid-template-columns: minmax(0, 1fr); } }
 .today-empty { color: var(--muted); padding: 12px 16px; border: 1px dashed var(--line); border-radius: 8px; }
 .decision-row { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--attention); border-radius: 8px; padding: 12px 16px; display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; box-shadow: var(--shadow); }
 .decision-row .what { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

@@ -37,14 +37,29 @@ export function Overview() {
           next ? `next scheduled run ${ago(next.next_occurrence_at)}` : null,
         ].filter(Boolean).join(' · ')}
       />
+      <div className="hero">
+        <section className="today-sec" aria-labelledby="t-decisions">
+          <header>
+            <h2 id="t-decisions">Waiting for a decision</h2>
+            {mine ? <span className="hero-count">{mine} to review</span> : null}
+            {waiting.length ? <Link to="/ui/approvals" className="small">All approvals</Link> : null}
+          </header>
+          {!approvals.data ? <Loading /> : waiting.length ? waiting.slice(0, 4).map((a) => <DecisionRow key={`${a.run_id}/${a.node_id}`} a={a} />) : <p className="today-empty">No run is waiting for a person. New approvals appear here first.</p>}
+        </section>
+        <aside className="card health" aria-label="System health">
+          <h3>System health</h3>
+          <div className="kv-list">
+            <div><Link to="/ui/workers">Workers</Link><Badge tone={`s ${d.workers.online === d.workers.total && d.workers.online ? 'ok' : d.workers.online ? 'warn' : 'bad'}`}>{d.workers.online} of {d.workers.total} online</Badge></div>
+            <div><Link to="/ui/alerts">Alerts</Link>{alerts.data?.length ? <Badge tone={`s ${alerts.data.some((a) => a.level === 'critical') ? 'bad' : 'warn'}`}>{alerts.data.length} open</Badge> : <Badge tone="s ok">all clear</Badge>}</div>
+            <div><Link to="/ui/usage">Model spend today</Link><span>{money(d.spend.today.amount, d.spend.today.currency, d.spend.today.complete)}</span></div>
+          </div>
+          {alerts.data?.[0] ? <span className="small muted">{alerts.data[0].message}</span> : null}
+        </aside>
+      </div>
+
       <StatusTiles o={d} />
       <div className="today">
         <div className="today-main">
-          <section className="today-sec" aria-labelledby="t-decisions">
-            <header><h2 id="t-decisions">Waiting for a decision</h2>{waiting.length ? <Link to="/ui/approvals" className="small">All approvals</Link> : null}</header>
-            {!approvals.data ? <Loading /> : waiting.length ? waiting.map((a) => <DecisionRow key={`${a.run_id}/${a.node_id}`} a={a} />) : <p className="today-empty">No run is waiting for a person. New approvals appear here first.</p>}
-          </section>
-
           {alerts.data?.length ? (
             <section className="today-sec" aria-labelledby="t-alerts">
               <header><h2 id="t-alerts">Needs attention</h2><Link to="/ui/alerts" className="small">Alerts and Slack</Link></header>
@@ -84,13 +99,6 @@ export function Overview() {
                 ))}
               </div>
             ) : <p className="muted small">No schedules are on.</p>}
-          </div>
-          <div className="card">
-            <h3>System</h3>
-            <div className="kv-list">
-              <div><Link to="/ui/workers">Workers</Link><Badge tone={`s ${d.workers.online ? 'ok' : 'bad'}`}>{d.workers.online} of {d.workers.total} online</Badge></div>
-              <div><Link to="/ui/alerts">Alerts</Link>{alerts.data?.length ? <Badge tone={`s ${alerts.data.some((a) => a.level === 'critical') ? 'bad' : 'warn'}`}>{alerts.data.length} open</Badge> : <Badge tone="s ok">all clear</Badge>}</div>
-            </div>
           </div>
         </aside>
       </div>
