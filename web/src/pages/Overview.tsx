@@ -53,7 +53,7 @@ export function Overview() {
             <div><Link to="/ui/alerts">Alerts</Link>{alerts.data?.length ? <Badge tone={`s ${alerts.data.some((a) => a.level === 'critical') ? 'bad' : 'warn'}`}>{alerts.data.length} open</Badge> : <Badge tone="s ok">all clear</Badge>}</div>
             <div><Link to="/ui/usage">Model spend today</Link><span>{money(d.spend.today.amount, d.spend.today.currency, d.spend.today.complete)}</span></div>
           </div>
-          {alerts.data?.[0] ? <span className="small muted">{alerts.data[0].message}</span> : null}
+          {alerts.data?.[0] ? <span className="hero-note small muted" title={alerts.data[0].message}>{alerts.data[0].message}</span> : null}
         </aside>
       </div>
 
